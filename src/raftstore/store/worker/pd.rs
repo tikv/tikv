@@ -32,7 +32,7 @@ use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
 use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionStat};
+use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
@@ -287,7 +287,7 @@ impl StatsMonitor {
     }
 }
 
-pub struct Runner<T: PdClient> {
+pub struct Runner<T: PdClient + ConfigClient> {
     store_id: u64,
     pd_client: Arc<T>,
     config_handler: ConfigHandler,
@@ -306,7 +306,7 @@ pub struct Runner<T: PdClient> {
     stats_monitor: StatsMonitor,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<T: PdClient + ConfigClient> Runner<T> {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
@@ -481,7 +481,7 @@ impl<T: PdClient> Runner<T> {
 
         let f = self
             .pd_client
-            .region_heartbeat(term, region.clone(), peer.clone(), region_stat)
+            .region_heartbeat(term, region.clone(), peer, region_stat)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -806,7 +806,7 @@ impl<T: PdClient> Runner<T> {
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
@@ -1038,7 +1038,7 @@ fn send_destroy_peer_message(
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());
-    message.set_to_peer(peer.clone());
+    message.set_to_peer(peer);
     message.set_region_epoch(pd_region.get_region_epoch().clone());
     message.set_is_tombstone(true);
     if let Err(e) = router.send_raft_message(message) {
@@ -1070,8 +1070,7 @@ mod tests {
             scheduler: Scheduler<Task>,
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
-            let mut stats_monitor =
-                StatsMonitor::new(Duration::from_secs(interval), scheduler.clone());
+            let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
             if let Err(e) = stats_monitor.start() {
                 error!("failed to start stats collector, error = {:?}", e);
             }

@@ -1,8 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::timestamp::{TimeStamp, TsSet};
-use super::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use super::{Error, Result};
+use crate::timestamp::{TimeStamp, TsSet};
+use crate::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::{Error, Result};
 use byteorder::ReadBytesExt;
 use derive_new::new;
 use kvproto::kvrpcpb::{LockInfo, Op};
@@ -430,8 +430,7 @@ mod tests {
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        lock.clone()
-            .check_ts_conflict(&key, TimeStamp::max(), &empty)
+        lock.check_ts_conflict(&key, TimeStamp::max(), &empty)
             .unwrap_err();
     }
 }

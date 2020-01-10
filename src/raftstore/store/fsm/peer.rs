@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use crate::raftstore::{Error, Result};
+use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
 use engine::Peekable;
 use engine::CF_RAFT;
@@ -39,8 +39,8 @@ use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
 use crate::raftstore::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, CatchUpLogs, ChangePeer,
-    ExecResult, Fsm, RegionProposal,
+    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangePeer, ExecResult,
+    RegionProposal,
 };
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
@@ -57,6 +57,7 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use crate::raftstore::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
 pub struct DestroyPeerJob {
@@ -361,6 +362,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
             }
+            CasualMessage::SnapshotGenerated => {
+                // Resume snapshot handling again to avoid waiting another heartbeat.
+                self.fsm.peer.ping();
+                self.fsm.has_ready = true;
+            }
             CasualMessage::Test(cb) => cb(self.fsm),
         }
     }
@@ -410,25 +416,29 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 None => return,
                 Some((v, r)) => (v, r),
             };
-        if exist_version == version {
-            let ready_to_merge = ready_to_merge.unwrap();
-            // Set `ready_to_merge` to true to indicate `PrepareMerge` is finished.
-            ready_to_merge.store(true, Ordering::SeqCst);
-            let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
-            let target_region_id = state.get_target().get_id();
-            // Send an empty message to target peer to make sure it will check `ready_to_merge`
-            self.ctx
-                .router
-                .force_send(target_region_id, PeerMsg::Noop)
-                .unwrap();
-        } else if exist_version > version {
-            meta.merge_locks
-                .insert(region_id, (exist_version, ready_to_merge));
-        } else {
-            panic!(
-                "{} expects version {} but got {}",
-                self.fsm.peer.tag, version, exist_version
-            );
+        match exist_version.cmp(&version) {
+            cmp::Ordering::Equal => {
+                let ready_to_merge = ready_to_merge.unwrap();
+                // Set `ready_to_merge` to true to indicate `PrepareMerge` is finished.
+                ready_to_merge.store(true, Ordering::SeqCst);
+                let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
+                let target_region_id = state.get_target().get_id();
+                // Send an empty message to target peer to make sure it will check `ready_to_merge`
+                self.ctx
+                    .router
+                    .force_send(target_region_id, PeerMsg::Noop)
+                    .unwrap();
+            }
+            cmp::Ordering::Greater => {
+                meta.merge_locks
+                    .insert(region_id, (exist_version, ready_to_merge));
+            }
+            cmp::Ordering::Less => {
+                panic!(
+                    "{} expects version {} but got {}",
+                    self.fsm.peer.tag, version, exist_version
+                );
+            }
         }
     }
 
@@ -765,6 +775,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
+        self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
+
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.group_state == GroupState::Idle {
@@ -994,44 +1006,46 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let target = msg.get_to_peer();
-        if target.get_id() < self.fsm.peer.peer_id() {
-            info!(
-                "target peer id is smaller, msg maybe stale";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "target_peer" => ?target,
-            );
-            self.ctx.raft_metrics.message_dropped.stale_msg += 1;
-            true
-        } else if target.get_id() > self.fsm.peer.peer_id() {
-            match self.fsm.peer.maybe_destroy() {
-                Some(job) => {
-                    info!(
-                        "target peer id is larger, destroying self";
-                        "region_id" => self.fsm.region_id(),
-                        "peer_id" => self.fsm.peer_id(),
-                        "target_peer" => ?target,
-                    );
-                    if self.handle_destroy_peer(job) {
-                        if let Err(e) = self
-                            .ctx
-                            .router
-                            .send_control(StoreMsg::RaftMessage(msg.clone()))
-                        {
-                            info!(
-                                "failed to send back store message, are we shutting down?";
-                                "region_id" => self.fsm.region_id(),
-                                "peer_id" => self.fsm.peer_id(),
-                                "err" => %e,
-                            );
+        match target.get_id().cmp(&self.fsm.peer.peer_id()) {
+            cmp::Ordering::Less => {
+                info!(
+                    "target peer id is smaller, msg maybe stale";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "target_peer" => ?target,
+                );
+                self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+                true
+            }
+            cmp::Ordering::Greater => {
+                match self.fsm.peer.maybe_destroy() {
+                    Some(job) => {
+                        info!(
+                            "target peer id is larger, destroying self";
+                            "region_id" => self.fsm.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "target_peer" => ?target,
+                        );
+                        if self.handle_destroy_peer(job) {
+                            if let Err(e) = self
+                                .ctx
+                                .router
+                                .send_control(StoreMsg::RaftMessage(msg.clone()))
+                            {
+                                info!(
+                                    "failed to send back store message, are we shutting down?";
+                                    "region_id" => self.fsm.region_id(),
+                                    "peer_id" => self.fsm.peer_id(),
+                                    "err" => %e,
+                                );
+                            }
                         }
                     }
+                    None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
                 }
-                None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+                true
             }
-            true
-        } else {
-            false
+            cmp::Ordering::Equal => false,
         }
     }
 
@@ -1466,6 +1480,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
+                    // Speed up snapshot instead of waiting another heartbeat.
+                    self.fsm.peer.ping();
+                    self.fsm.has_ready = true;
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
                 self.fsm.peer.recent_conf_change_time = now;
@@ -1483,7 +1500,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.remove_peer_from_cache(peer_id);
                 self.fsm.peer.recent_conf_change_time = now;
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+                unimplemented!()
+            }
         }
 
         // In pattern matching above, if the peer is the leader,
@@ -1908,24 +1927,28 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let source_version = source.get_region_epoch().get_version();
 
         if let Some((exist_version, ready_to_merge)) = meta.merge_locks.remove(&source_region_id) {
-            if exist_version == source_version {
-                assert!(ready_to_merge.is_none());
-                // So `on_ready_prepare_merge` is executed.
-                return None;
-            } else if exist_version < source_version {
-                assert!(
-                    ready_to_merge.is_none(),
-                    "{} source region {} meets a commit merge before {} < {}",
-                    self.fsm.peer.tag,
-                    source_region_id,
-                    exist_version,
-                    source_version
-                );
-            } else {
-                panic!(
-                    "{} source region {} can't finished current merge: {} > {}",
-                    self.fsm.peer.tag, source_region_id, exist_version, source_region_id
-                );
+            match exist_version.cmp(&source_version) {
+                cmp::Ordering::Equal => {
+                    assert!(ready_to_merge.is_none());
+                    // So `on_ready_prepare_merge` is executed.
+                    return None;
+                }
+                cmp::Ordering::Less => {
+                    assert!(
+                        ready_to_merge.is_none(),
+                        "{} source region {} meets a commit merge before {} < {}",
+                        self.fsm.peer.tag,
+                        source_region_id,
+                        exist_version,
+                        source_version
+                    );
+                }
+                cmp::Ordering::Greater => {
+                    panic!(
+                        "{} source region {} can't finished current merge: {} > {}",
+                        self.fsm.peer.tag, source_region_id, exist_version, source_region_id
+                    );
+                }
             }
         }
 
@@ -2605,7 +2628,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             return;
         }
-        let task = SplitCheckTask::new(self.fsm.peer.region().clone(), true, CheckPolicy::Scan);
+        let task =
+            SplitCheckTask::split_check(self.fsm.peer.region().clone(), true, CheckPolicy::Scan);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
@@ -2764,7 +2788,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        let task = SplitCheckTask::new(region.clone(), false, policy);
+        let task = SplitCheckTask::split_check(region.clone(), false, policy);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";

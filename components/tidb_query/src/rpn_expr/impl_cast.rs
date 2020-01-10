@@ -11,7 +11,7 @@ use tipb::{Expr, FieldType};
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
-use crate::codec::mysql::Time;
+use crate::codec::mysql::{binary_literal, Time};
 use crate::codec::Error;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
@@ -77,10 +77,14 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Bytes, EvalType::Real) => {
-            if !from_field_type.is_unsigned() {
-                cast_string_as_signed_real_fn_meta()
-            } else {
-                cast_string_as_unsigned_real_fn_meta()
+            match (
+                from_field_type.is_binary_string_like(),
+                to_field_type.is_unsigned(),
+            ) {
+                (true, true) => cast_binary_string_as_unsigned_real_fn_meta(),
+                (true, false) => cast_binary_string_as_signed_real_fn_meta(),
+                (false, true) => cast_string_as_unsigned_real_fn_meta(),
+                (false, false) => cast_string_as_signed_real_fn_meta(),
             }
         }
         (EvalType::Decimal, EvalType::Real) => {
@@ -203,7 +207,6 @@ pub fn get_cast_fn_rpn_node(
         func_meta,
         args_len: 1,
         field_type: to_field_type,
-        implicit_args: Vec::new(),
         metadata: Box::new(()),
     })
 }
@@ -221,16 +224,6 @@ pub fn map_cast_func(expr: &Expr) -> Result<RpnFnMeta> {
     get_cast_fn_rpn_meta(children[0].get_field_type(), expr.get_field_type())
 }
 
-/// Indicates whether the current expression is evaluated in union statement
-///
-/// Note: The TiDB will push down the `inUnion` flag by implicit constant arguments,
-/// but some CAST expressions inserted by TiKV coprocessor use an empty vector to represent
-/// the `inUnion` flag is false.
-/// See: https://github.com/pingcap/tidb/blob/1e403873d905b2d0ad3be06bd8cd261203d84638/expression/builtin.go#L260
-fn in_union(implicit_args: &[ScalarValue]) -> bool {
-    implicit_args.get(0) == Some(&ScalarValue::Int(Some(1)))
-}
-
 // cast any as int/uint, some cast functions reuse `cast_any_as_any`
 //
 // - cast_real_as_int -> cast_any_as_any<Real, Int>
@@ -239,17 +232,17 @@ fn in_union(implicit_args: &[ScalarValue]) -> bool {
 // - cast_duration_as_int_or_uint -> cast_any_as_any<Duration, Int>
 // - cast_json_as_int -> cast_any_as_any<Json, Int>
 
-#[rpn_fn(capture = [extra])]
+#[rpn_fn(capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_signed_int_as_unsigned_int(
-    extra: &RpnFnCallExtra<'_>,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Int>,
 ) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
             let val = *val;
-            if in_union(extra.implicit_args) && val < 0i64 {
+            if metadata.get_in_union() && val < 0i64 {
                 Ok(Some(0))
             } else {
                 Ok(Some(val))
@@ -267,18 +260,18 @@ fn cast_int_as_int_others(val: &Option<Int>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_real_as_uint(
     ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Real>,
 ) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
             let val = val.into_inner();
-            if in_union(&extra.implicit_args) && val < 0f64 {
+            if metadata.get_in_union() && val < 0f64 {
                 Ok(Some(0))
             } else {
                 // FIXME: mysql's double to unsigned is very special,
@@ -293,11 +286,12 @@ fn cast_real_as_uint(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_string_as_int_or_uint(
     ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
+    extra: &RpnFnCallExtra,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Bytes>,
 ) -> Result<Option<Int>> {
     match val {
@@ -309,7 +303,7 @@ fn cast_string_as_int_or_uint(
             let val = get_valid_utf8_prefix(ctx, val.as_slice())?;
             let val = val.trim();
             let is_str_neg = val.starts_with('-');
-            if in_union(extra.implicit_args) && is_unsigned && is_str_neg {
+            if metadata.get_in_union() && is_unsigned && is_str_neg {
                 Ok(Some(0))
             } else {
                 // FIXME: if the err get_valid_int_prefix returned is overflow err,
@@ -365,18 +359,18 @@ fn cast_string_as_int_or_uint(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_decimal_as_uint(
     ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Decimal>,
 ) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
             // TODO: here TiDB round before call `val.is_negative()`
-            if in_union(extra.implicit_args) && val.is_negative() {
+            if metadata.get_in_union() && val.is_negative() {
                 Ok(Some(0))
             } else {
                 let r: u64 = val.convert(ctx)?;
@@ -414,16 +408,16 @@ fn cast_signed_int_as_signed_real(val: &Option<Int>) -> Result<Option<Real>> {
     }
 }
 
-#[rpn_fn(capture = [extra])]
+#[rpn_fn(capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_signed_int_as_unsigned_real(
-    extra: &RpnFnCallExtra,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Int>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            if in_union(extra.implicit_args) && *val < 0 {
+            if metadata.get_in_union() && *val < 0 {
                 Ok(Some(Real::zero()))
             } else {
                 // FIXME: negative number to unsigned real's logic may be wrong here.
@@ -450,16 +444,16 @@ fn cast_real_as_signed_real(val: &Option<Real>) -> Result<Option<Real>> {
     Ok(*val)
 }
 
-#[rpn_fn(capture = [extra])]
+#[rpn_fn(capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_real_as_unsigned_real(
-    extra: &RpnFnCallExtra<'_>,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Real>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            if in_union(extra.implicit_args) && val.into_inner() < 0f64 {
+            if metadata.get_in_union() && val.into_inner() < 0f64 {
                 Ok(Some(Real::zero()))
             } else {
                 // FIXME: negative number to unsigned real's logic may be wrong here.
@@ -479,8 +473,6 @@ fn cast_string_as_signed_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            // FIXME: in TiDB's builtinCastStringAsRealSig, if val is IsBinaryLiteral,
-            //  then return evalReal directly
             let r: f64 = val.convert(ctx)?;
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
@@ -490,7 +482,7 @@ fn cast_string_as_signed_real(
 
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-fn cast_string_as_unsigned_real(
+fn cast_binary_string_as_signed_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: &Option<Bytes>,
@@ -498,14 +490,29 @@ fn cast_string_as_unsigned_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            // FIXME: in TiDB's builtinCastStringAsRealSig, if val is IsBinaryLiteral,
-            //  then return evalReal directly
+            let r = binary_literal::to_uint(ctx, val)? as i64 as f64;
+            let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
+            Ok(Real::new(r).ok())
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
+#[inline]
+fn cast_string_as_unsigned_real(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &tipb::InUnionMetadata,
+    val: &Option<Bytes>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
             let mut r: f64 = val.convert(ctx)?;
-            if in_union(extra.implicit_args) && r < 0f64 {
+            if metadata.get_in_union() && r < 0f64 {
                 r = 0f64;
             }
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
-            // FIXME: negative number to unsigned real's logic may be wrong here.
             Ok(Real::new(r).ok())
         }
     }
@@ -513,15 +520,32 @@ fn cast_string_as_unsigned_real(
 
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
+fn cast_binary_string_as_unsigned_real(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Bytes>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let r = binary_literal::to_uint(ctx, val)? as f64;
+            let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
+            Ok(Real::new(r).ok())
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
+#[inline]
 fn cast_decimal_as_unsigned_real(
     ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Decimal>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            if in_union(extra.implicit_args) && val.is_negative() {
+            if metadata.get_in_union() && val.is_negative() {
                 Ok(Some(Real::zero()))
             } else {
                 // FIXME: negative number to unsigned real's logic may be wrong here.
@@ -560,7 +584,7 @@ fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable>(
 #[inline]
 fn cast_uint_as_string(
     ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
+    extra: &RpnFnCallExtra,
     val: &Option<Int>,
 ) -> Result<Option<Bytes>> {
     match val {
@@ -658,17 +682,18 @@ fn cast_unsigned_int_as_signed_or_unsigned_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_signed_int_as_unsigned_decimal(
     ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
+    extra: &RpnFnCallExtra,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<i64>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let dec = if in_union(extra.implicit_args) && *val < 0 {
+            let dec = if metadata.get_in_union() && *val < 0 {
                 Decimal::zero()
             } else {
                 Decimal::from(*val as u64)
@@ -682,18 +707,19 @@ fn cast_signed_int_as_unsigned_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_real_as_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Real>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
         Some(val) => {
             let val = val.into_inner();
-            let res = if in_union(extra.implicit_args) && val < 0f64 {
+            let res = if metadata.get_in_union() && val < 0f64 {
                 Decimal::zero()
             } else {
                 Decimal::from_f64(val)?
@@ -707,11 +733,12 @@ fn cast_real_as_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_string_as_unsigned_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Bytes>,
 ) -> Result<Option<Decimal>> {
     match val {
@@ -719,7 +746,7 @@ fn cast_string_as_unsigned_decimal(
         Some(val) => {
             // FIXME: in TiDB, if the param IsBinaryLiteral, then return the result of `evalDecimal` directly
             let d: Decimal = val.convert(ctx)?;
-            let d = if in_union(extra.implicit_args) && d.is_negative() {
+            let d = if metadata.get_in_union() && d.is_negative() {
                 Decimal::zero()
             } else {
                 d
@@ -742,31 +769,29 @@ fn cast_decimal_as_signed_decimal(
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
-        Some(val) => {
-            let val = val.clone();
-            Ok(Some(produce_dec_with_specified_tp(
-                ctx,
-                val,
-                extra.ret_field_type,
-            )?))
-        }
+        Some(val) => Ok(Some(produce_dec_with_specified_tp(
+            ctx,
+            *val,
+            extra.ret_field_type,
+        )?)),
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_decimal_as_unsigned_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
+    metadata: &tipb::InUnionMetadata,
     val: &Option<Decimal>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let res = if in_union(extra.implicit_args) && val.is_negative() {
+            let res = if metadata.get_in_union() && val.is_negative() {
                 Decimal::zero()
             } else {
-                val.clone()
+                *val
             };
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
@@ -781,7 +806,7 @@ fn cast_decimal_as_unsigned_decimal(
 #[inline]
 fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
     ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
+    extra: &RpnFnCallExtra,
     val: &Option<From>,
 ) -> Result<Option<Decimal>> {
     match val {
@@ -803,7 +828,7 @@ fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
 #[inline]
 fn cast_int_as_duration(
     ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
+    extra: &RpnFnCallExtra,
     val: &Option<Int>,
 ) -> Result<Option<Duration>> {
     match val {
@@ -858,7 +883,7 @@ macro_rules! cast_as_duration {
         #[inline]
         fn $as_uint_fn(
             ctx: &mut EvalContext,
-            extra: &RpnFnCallExtra<'_>,
+            extra: &RpnFnCallExtra,
             val: &Option<$ty>,
         ) -> Result<Option<Duration>> {
             match val {
@@ -901,7 +926,7 @@ cast_as_duration!(Json, cast_json_as_duration, val.unquote()?.as_bytes());
 #[rpn_fn(capture = [ctx, extra])]
 fn cast_int_as_time(
     ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
+    extra: &RpnFnCallExtra,
     val: &Option<Int>,
 ) -> Result<Option<Time>> {
     if let Some(val) = *val {
@@ -1109,7 +1134,7 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
 mod tests {
     use super::Result;
     use crate::codec::convert::produce_dec_with_specified_tp;
-    use crate::codec::data_type::{Bytes, Int, Real, ScalarValue};
+    use crate::codec::data_type::{Bytes, Int, Real};
     use crate::codec::error::{
         ERR_DATA_OUT_OF_RANGE, ERR_DATA_TOO_LONG, ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN,
         WARN_DATA_TRUNCATED,
@@ -1133,34 +1158,14 @@ mod tests {
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
     use tipb::ScalarFuncSig;
 
-    #[test]
-    fn test_in_union() {
-        use super::*;
-
-        assert_eq!(in_union(&[]), false);
-        assert_eq!(in_union(&[ScalarValue::Int(None)]), false);
-        assert_eq!(in_union(&[ScalarValue::Int(Some(0))]), false);
-        assert_eq!(
-            in_union(&[ScalarValue::Int(Some(0)), ScalarValue::Int(Some(1))]),
-            false
-        );
-        assert_eq!(in_union(&[ScalarValue::Int(Some(1))]), true);
-        assert_eq!(
-            in_union(&[ScalarValue::Int(Some(1)), ScalarValue::Int(Some(0))]),
-            true
-        );
-    }
-
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
     where
         F: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<Input>) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
-        let implicit_args = [ScalarValue::Int(Some(1))];
         let ret_field_type: FieldType = FieldType::default();
         let extra = RpnFnCallExtra {
             ret_field_type: &ret_field_type,
-            implicit_args: &implicit_args,
         };
         let r = func(&mut ctx, &extra, &None).unwrap();
         assert!(r.is_none());
@@ -1179,13 +1184,49 @@ mod tests {
     where
         F: Fn(&RpnFnCallExtra, &Option<Input>) -> Result<Option<Ret>>,
     {
-        let implicit_args = [ScalarValue::Int(Some(1))];
         let ret_field_type: FieldType = FieldType::default();
         let extra = RpnFnCallExtra {
             ret_field_type: &ret_field_type,
-            implicit_args: &implicit_args,
         };
         let r = func(&extra, &None).unwrap();
+        assert!(r.is_none());
+    }
+
+    fn test_none_with_metadata<F, Input, Ret>(func: F)
+    where
+        F: Fn(&tipb::InUnionMetadata, &Option<Input>) -> Result<Option<Ret>>,
+    {
+        let metadata = make_metadata(true);
+        let r = func(&metadata, &None).unwrap();
+        assert!(r.is_none());
+    }
+
+    fn test_none_with_ctx_and_metadata<F, Input, Ret>(func: F)
+    where
+        F: Fn(&mut EvalContext, &tipb::InUnionMetadata, &Option<Input>) -> Result<Option<Ret>>,
+    {
+        let mut ctx = EvalContext::default();
+        let metadata = make_metadata(true);
+        let r = func(&mut ctx, &metadata, &None).unwrap();
+        assert!(r.is_none());
+    }
+
+    fn test_none_with_ctx_and_extra_and_metadata<F, Input, Ret>(func: F)
+    where
+        F: Fn(
+            &mut EvalContext,
+            &RpnFnCallExtra,
+            &tipb::InUnionMetadata,
+            &Option<Input>,
+        ) -> Result<Option<Ret>>,
+    {
+        let mut ctx = EvalContext::default();
+        let ret_field_type: FieldType = FieldType::default();
+        let extra = RpnFnCallExtra {
+            ret_field_type: &ret_field_type,
+        };
+        let metadata = make_metadata(true);
+        let r = func(&mut ctx, &extra, &metadata, &None).unwrap();
         assert!(r.is_none());
     }
 
@@ -1240,15 +1281,13 @@ mod tests {
         }
     }
 
-    fn make_implicit_args(in_union: bool) -> [ScalarValue; 1] {
-        if in_union {
-            [ScalarValue::Int(Some(1))]
-        } else {
-            [ScalarValue::Int(Some(0))]
-        }
+    fn make_metadata(in_union: bool) -> tipb::InUnionMetadata {
+        let mut metadata = tipb::InUnionMetadata::default();
+        metadata.set_in_union(in_union);
+        metadata
     }
 
-    struct RetFieldTypeConfig {
+    struct FieldTypeConfig {
         unsigned: bool,
         flen: isize,
         decimal: isize,
@@ -1257,9 +1296,9 @@ mod tests {
         collation: Option<Collation>,
     }
 
-    impl Default for RetFieldTypeConfig {
+    impl Default for FieldTypeConfig {
         fn default() -> Self {
-            RetFieldTypeConfig {
+            FieldTypeConfig {
                 unsigned: false,
                 flen: UNSPECIFIED_LENGTH,
                 decimal: UNSPECIFIED_LENGTH,
@@ -1270,8 +1309,8 @@ mod tests {
         }
     }
 
-    impl From<RetFieldTypeConfig> for FieldType {
-        fn from(config: RetFieldTypeConfig) -> Self {
+    impl From<FieldTypeConfig> for FieldType {
+        fn from(config: FieldTypeConfig) -> Self {
             let mut ft = FieldType::default();
             if let Some(c) = config.charset {
                 ft.set_charset(String::from(c));
@@ -1292,14 +1331,8 @@ mod tests {
         }
     }
 
-    fn make_extra<'a>(
-        ret_field_type: &'a FieldType,
-        implicit_args: &'a [ScalarValue],
-    ) -> RpnFnCallExtra<'a> {
-        RpnFnCallExtra {
-            ret_field_type,
-            implicit_args,
-        }
+    fn make_extra(ret_field_type: &FieldType) -> RpnFnCallExtra {
+        RpnFnCallExtra { ret_field_type }
     }
 
     fn make_log<P: Display, R: Display + Debug>(
@@ -1400,7 +1433,7 @@ mod tests {
 
     #[test]
     fn test_signed_int_as_unsigned_int() {
-        test_none_with_extra(cast_signed_int_as_unsigned_int);
+        test_none_with_metadata(cast_signed_int_as_unsigned_int);
 
         let cs = vec![
             // (origin, result, in_union)
@@ -1416,14 +1449,8 @@ mod tests {
             (i64::MAX, i64::MAX as u64, false),
         ];
         for (input, expect, in_union) in cs {
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let ia = make_implicit_args(in_union);
-            let extra = make_extra(&rft, &ia);
-            let r = cast_signed_int_as_unsigned_int(&extra, &Some(input));
+            let metadata = make_metadata(in_union);
+            let r = cast_signed_int_as_unsigned_int(&metadata, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1462,7 +1489,7 @@ mod tests {
 
     #[test]
     fn test_real_as_uint() {
-        test_none_with_ctx_and_extra(cast_real_as_uint);
+        test_none_with_ctx_and_metadata(cast_real_as_uint);
 
         // in_union
         let cs = vec![
@@ -1475,14 +1502,8 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let ia = make_implicit_args(true);
-            let extra = make_extra(&rft, &ia);
-            let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
+            let metadata = make_metadata(true);
+            let r = cast_real_as_uint(&mut ctx, &metadata, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1509,14 +1530,8 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let ia = make_implicit_args(false);
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
-            let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
+            let metadata = make_metadata(false);
+            let r = cast_real_as_uint(&mut ctx, &metadata, &Real::new(input).ok());
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1537,14 +1552,8 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let ia = make_implicit_args(false);
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
-            let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
+            let metadata = make_metadata(false);
+            let r = cast_real_as_uint(&mut ctx, &metadata, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1554,7 +1563,7 @@ mod tests {
 
     #[test]
     fn test_string_as_int_or_uint() {
-        test_none_with_ctx_and_extra(cast_string_as_int_or_uint);
+        test_none_with_ctx_and_extra_and_metadata(cast_string_as_int_or_uint);
 
         #[derive(Debug)]
         enum Cond {
@@ -1680,16 +1689,16 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let ia = make_implicit_args(cond.in_union());
-            let rft = RetFieldTypeConfig {
+            let metadata = make_metadata(cond.in_union());
+            let rft = FieldTypeConfig {
                 unsigned: cond.is_unsigned(),
-                ..RetFieldTypeConfig::default()
+                ..FieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rft, &ia);
+            let extra = make_extra(&rft);
 
             let val = Some(Vec::from(input.as_bytes()));
-            let r = cast_string_as_int_or_uint(&mut ctx, &extra, &val);
+            let r = cast_string_as_int_or_uint(&mut ctx, &extra, &metadata, &val);
 
             let log = format!(
                 "input: {}, expect: {}, expect_err_code: {:?}, cond: {:?}, output: {:?}",
@@ -1742,7 +1751,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
             check_warning(&ctx, err_code, log.as_str());
@@ -1751,7 +1760,7 @@ mod tests {
 
     #[test]
     fn test_decimal_as_uint() {
-        test_none_with_ctx_and_extra(cast_decimal_as_uint);
+        test_none_with_ctx_and_metadata(cast_decimal_as_uint);
         // in_union
         let cs: Vec<(Decimal, u64)> = vec![
             (
@@ -1782,15 +1791,9 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let ia = make_implicit_args(true);
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
+            let metadata = make_metadata(true);
 
-            let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
+            let r = cast_decimal_as_uint(&mut ctx, &metadata, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1826,15 +1829,9 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let ia = make_implicit_args(false);
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
+            let metadata = make_metadata(false);
 
-            let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
+            let r = cast_decimal_as_uint(&mut ctx, &metadata, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2267,7 +2264,7 @@ mod tests {
 
     #[test]
     fn test_signed_int_as_unsigned_real() {
-        test_none_with_extra(cast_signed_int_as_unsigned_real);
+        test_none_with_metadata(cast_signed_int_as_unsigned_real);
 
         let cs: Vec<(i64, f64, bool)> = vec![
             // (input, expect, in_union)
@@ -2285,14 +2282,8 @@ mod tests {
             (0, 0f64, true),
         ];
         for (input, expect, in_union) in cs {
-            let ia = make_implicit_args(in_union);
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
-            let r = cast_signed_int_as_unsigned_real(&extra, &Some(input));
+            let metadata = make_metadata(in_union);
+            let r = cast_signed_int_as_unsigned_real(&metadata, &Some(input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
                 "input: {}, expect: {}, in_union: {}",
@@ -2369,14 +2360,8 @@ mod tests {
         ];
 
         for (input, expect, in_union) in cs {
-            let ia = make_implicit_args(in_union);
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
-            let r = cast_real_as_unsigned_real(&extra, &Some(Real::new(input).unwrap()));
+            let metadata = make_metadata(in_union);
+            let r = cast_real_as_unsigned_real(&metadata, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
                 "input: {}, expect: {}, in_union: {}",
@@ -2387,9 +2372,17 @@ mod tests {
     }
 
     #[test]
-    fn test_string_as_signed_real() {
-        test_none_with_ctx_and_extra(cast_string_as_signed_real);
+    fn test_cast_string_as_real() {
+        // None
+        {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(ScalarValue::Bytes(None))
+                .evaluate(ScalarFuncSig::CastStringAsReal)
+                .unwrap();
+            assert_eq!(output, None);
+        }
 
+        // signed
         let ul = UNSPECIFIED_LENGTH;
         let cs: Vec<(String, f64, isize, isize, bool, bool)> = vec![
             // (input, expect, flen, decimal, truncated, overflow)
@@ -2424,50 +2417,48 @@ mod tests {
             (String::from("-1234abc"), -0.9f64, 1, 1, true, true),
         ];
 
-        for (input, expect, flen, decimal, truncated, overflow) in cs {
-            let mut ctx = CtxConfig {
-                overflow_as_warning: true,
-                truncate_as_warning: true,
-                ..CtxConfig::default()
-            }
-            .into();
-            let ia = make_implicit_args(false);
-            let rft = RetFieldTypeConfig {
-                unsigned: false,
-                flen,
-                decimal,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
-            let r = cast_string_as_signed_real(&mut ctx, &extra, &Some(input.clone().into_bytes()));
-            let r = r.map(|x| x.map(|x| x.into_inner()));
-            let log = format!(
-                "input: {}, expect: {}, flen: {}, decimal: {}, expect_truncated: {}, expect_overflow: {}",
-                input.as_str(), expect, flen, decimal, truncated, overflow
+        for (input, expected, flen, decimal, truncated, overflow) in cs {
+            let (result, ctx) = RpnFnScalarEvaluator::new()
+                .context(CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                })
+                .push_param(input.clone().into_bytes())
+                .evaluate_raw(
+                    FieldTypeConfig {
+                        unsigned: false,
+                        flen,
+                        decimal,
+                        tp: Some(FieldTypeTp::Double),
+                        ..FieldTypeConfig::default()
+                    },
+                    ScalarFuncSig::CastStringAsReal,
+                );
+            let output: Option<Real> = result.unwrap().into();
+            assert!(
+                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                "input={:?}",
+                input
             );
-            check_result(Some(&expect), &r, log.as_str());
-            match (truncated, overflow) {
-                (true, true) => {
-                    assert_eq!(ctx.warnings.warning_cnt, 2, "{}", log.as_str());
-                    let a = ctx.warnings.warnings[0].get_code();
-                    let b = ctx.warnings.warnings[1].get_code();
-                    let (a, b) = if a > b { (b, a) } else { (a, b) };
-                    assert_eq!(a, ERR_TRUNCATE_WRONG_VALUE, "{}", log.as_str());
-                    assert_eq!(b, ERR_DATA_OUT_OF_RANGE, "{}", log.as_str());
-                }
-                (true, false) => check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str()),
-                (false, true) => check_overflow(&ctx, true, log.as_str()),
-                _ => (),
-            }
+            let (warning_cnt, warnings) = match (truncated, overflow) {
+                (true, true) => (2, vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE]),
+                (true, false) => (1, vec![ERR_TRUNCATE_WRONG_VALUE]),
+                (false, true) => (1, vec![ERR_DATA_OUT_OF_RANGE]),
+                _ => (0, vec![]),
+            };
+            assert_eq!(ctx.warnings.warning_cnt, warning_cnt);
+            let mut got_warnings = ctx
+                .warnings
+                .warnings
+                .iter()
+                .map(|w| w.get_code())
+                .collect::<Vec<i32>>();
+            got_warnings.sort();
+            assert_eq!(got_warnings, warnings);
         }
-    }
 
-    #[test]
-    fn test_string_as_unsigned_real() {
-        test_none_with_ctx_and_extra(cast_string_as_unsigned_real);
-
-        let ul = UNSPECIFIED_LENGTH;
+        // unsigned
         let cs: Vec<(String, f64, isize, isize, bool, bool, bool)> = vec![
             // (input, expect, flen, decimal, truncated, overflow, in_union)
 
@@ -2608,46 +2599,50 @@ mod tests {
             (String::from("-1234abc"), 0.0, ul, ul, true, false, true),
         ];
 
-        for (input, expect, flen, decimal, truncated, overflow, in_union) in cs {
-            let mut ctx = CtxConfig {
-                overflow_as_warning: true,
-                truncate_as_warning: true,
-                ..CtxConfig::default()
-            }
-            .into();
-            let ia = make_implicit_args(in_union);
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                flen,
-                decimal,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
-
-            let p = Some(input.clone().into_bytes());
-            let r = cast_string_as_unsigned_real(&mut ctx, &extra, &p);
-            let r = r.map(|x| x.map(|x| x.into_inner()));
-
-            let log = format!(
-                "input: {}, expect: {}, flen: {}, decimal: {}, expect_truncated: {}, expect_overflow: {}, in_union: {}",
-                input.as_str(), expect, flen, decimal, truncated, overflow, in_union
+        for (input, expected, flen, decimal, truncated, overflow, in_union) in cs {
+            let (result, ctx) = RpnFnScalarEvaluator::new()
+                .context(CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                })
+                .metadata(Box::new(make_metadata(in_union)))
+                .push_param(input.clone().into_bytes())
+                .evaluate_raw(
+                    FieldTypeConfig {
+                        unsigned: true,
+                        flen,
+                        decimal,
+                        tp: Some(FieldTypeTp::Double),
+                        ..FieldTypeConfig::default()
+                    },
+                    ScalarFuncSig::CastStringAsReal,
+                );
+            let output: Option<Real> = result.unwrap().into();
+            assert!(
+                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}",
+                input, expected, flen, decimal, truncated, overflow, in_union
             );
-
-            check_result(Some(&expect), &r, log.as_str());
-            match (truncated, overflow) {
-                (true, true) => {
-                    assert_eq!(ctx.warnings.warning_cnt, 2, "{}", log.as_str());
-                    let a = ctx.warnings.warnings[0].get_code();
-                    let b = ctx.warnings.warnings[1].get_code();
-                    let (a, b) = if a > b { (b, a) } else { (a, b) };
-                    assert_eq!(a, ERR_TRUNCATE_WRONG_VALUE, "{}", log.as_str());
-                    assert_eq!(b, ERR_DATA_OUT_OF_RANGE, "{}", log.as_str());
-                }
-                (true, false) => check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str()),
-                (false, true) => check_overflow(&ctx, true, log.as_str()),
-                _ => (),
-            }
+            let (warning_cnt, warnings) = match (truncated, overflow) {
+                (true, true) => (2, vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE]),
+                (true, false) => (1, vec![ERR_TRUNCATE_WRONG_VALUE]),
+                (false, true) => (1, vec![ERR_DATA_OUT_OF_RANGE]),
+                _ => (0, vec![]),
+            };
+            let mut got_warnings = ctx
+                .warnings
+                .warnings
+                .iter()
+                .map(|w| w.get_code())
+                .collect::<Vec<i32>>();
+            got_warnings.sort();
+            assert_eq!(
+                ctx.warnings.warning_cnt, warning_cnt,
+                "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}, warnings:{:?}",
+                input, expected, flen, decimal, truncated, overflow, in_union,got_warnings,
+            );
+            assert_eq!(got_warnings, warnings);
         }
 
         // not in union, neg
@@ -2724,48 +2719,80 @@ mod tests {
                 ],
             ),
         ];
-        for (input, expect, flen, decimal, err_codes) in cs {
-            let mut ctx = CtxConfig {
-                overflow_as_warning: true,
-                truncate_as_warning: true,
-                ..CtxConfig::default()
-            }
-            .into();
-            let ia = make_implicit_args(false);
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                flen,
-                decimal,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
+        for (input, expected, flen, decimal, err_codes) in cs {
+            let (result, ctx) = RpnFnScalarEvaluator::new()
+                .context(CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                })
+                .metadata(Box::new(make_metadata(false)))
+                .push_param(input.clone().into_bytes())
+                .evaluate_raw(
+                    FieldTypeConfig {
+                        unsigned: true,
+                        flen,
+                        decimal,
+                        tp: Some(FieldTypeTp::Double),
+                        ..FieldTypeConfig::default()
+                    },
+                    ScalarFuncSig::CastStringAsReal,
+                );
+            let output: Option<Real> = result.unwrap().into();
+            assert!(
+                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                "input={:?}",
+                input
+            );
 
-            let p = Some(input.clone().into_bytes());
-            let r = cast_string_as_unsigned_real(&mut ctx, &extra, &p);
-            let r = r.map(|x| x.map(|x| x.into_inner()));
-            let log = format!(
-                "input: {}, expect: {}, flen: {}, decimal: {}, err_code: {:?}",
-                input.as_str(),
-                expect,
-                flen,
-                decimal,
-                err_codes
-            );
-            check_result(Some(&expect), &r, log.as_str());
-            assert_eq!(
-                ctx.warnings.warning_cnt,
-                err_codes.len(),
-                "{}",
-                log.as_str()
-            );
+            assert_eq!(ctx.warnings.warning_cnt, err_codes.len());
             for (idx, err) in err_codes.iter().enumerate() {
                 assert_eq!(
                     ctx.warnings.warnings[idx].get_code(),
                     *err,
-                    "{}",
-                    log.as_str()
+                    "input: {:?}",
+                    input
+                );
+            }
+        }
+
+        // binary literal
+        let cases = vec![
+            (vec![0x01, 0x02, 0x03], Some(f64::from(0x010203))),
+            (vec![0x01, 0x02, 0x03, 0x4], Some(f64::from(0x01020304))),
+            (
+                vec![0x01, 0x02, 0x03, 0x4, 0x05, 0x06, 0x06, 0x06, 0x06],
+                None,
+            ),
+        ];
+        for (input, expected) in cases {
+            let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
+                .metadata(Box::new(make_metadata(false)))
+                .return_field_type(FieldTypeConfig {
+                    flen: tidb_query_datatype::UNSPECIFIED_LENGTH,
+                    decimal: tidb_query_datatype::UNSPECIFIED_LENGTH,
+                    tp: Some(FieldTypeTp::Double),
+                    ..FieldTypeConfig::default()
+                })
+                .push_param_with_field_type(
+                    input.clone(),
+                    FieldTypeConfig {
+                        tp: Some(FieldTypeTp::VarString),
+                        collation: Some(Collation::Binary),
+                        ..FieldTypeConfig::default()
+                    },
                 )
+                .evaluate(ScalarFuncSig::CastStringAsReal);
+
+            if let Some(exp) = expected {
+                assert!(output.is_ok(), "input: {:?}", input);
+                assert!(
+                    (output.unwrap().unwrap().into_inner() - exp).abs() < std::f64::EPSILON,
+                    "input={:?}",
+                    input
+                );
+            } else {
+                assert!(output.is_err());
             }
         }
     }
@@ -2785,7 +2812,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Decimal, Real>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Decimal, Real>(&mut ctx, &Some(input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2794,7 +2821,7 @@ mod tests {
 
     #[test]
     fn test_decimal_as_unsigned_real() {
-        test_none_with_ctx_and_extra(cast_decimal_as_unsigned_real);
+        test_none_with_ctx_and_metadata(cast_decimal_as_unsigned_real);
 
         let cs: Vec<(Decimal, f64, bool, bool)> = vec![
             // (origin, expect, in_union, overflow)
@@ -2848,14 +2875,8 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let ia = make_implicit_args(in_union);
-            let rft = RetFieldTypeConfig {
-                unsigned: true,
-                ..RetFieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft, &ia);
-            let r = cast_decimal_as_unsigned_real(&mut ctx, &extra, &Some(input.clone()));
+            let metadata = make_metadata(in_union);
+            let r = cast_decimal_as_unsigned_real(&mut ctx, &metadata, &Some(input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
                 "input: {}, expect: {}, in_union: {}, expect_overflow: {}, result: {:?}",
@@ -3191,7 +3212,6 @@ mod tests {
                     ..CtxConfig::default()
                 }
                 .into();
-                let ia = make_implicit_args(false);
                 let res_len = bytes.len();
                 let flen = match flen_type {
                     FlenType::Eq => res_len as isize,
@@ -3205,15 +3225,15 @@ mod tests {
                     FlenType::ExtraOne => (res_len + 1) as isize,
                     FlenType::Unspecified => UNSPECIFIED_LENGTH,
                 };
-                let rft = RetFieldTypeConfig {
+                let rft = FieldTypeConfig {
                     flen,
                     charset: Some(charset),
                     tp: Some(*tp),
                     collation: Some(*collation),
-                    ..RetFieldTypeConfig::default()
+                    ..FieldTypeConfig::default()
                 }
                 .into();
-                let extra = make_extra(&rft, &ia);
+                let extra = make_extra(&rft);
 
                 let r = cast_func(&mut ctx, &extra, &Some(input.clone()));
 
@@ -3568,6 +3588,12 @@ mod tests {
         }
     }
 
+    macro_rules! cast_closure_with_metadata {
+        ($cast_fn:expr) => {
+            |ctx, extra, _, val| $cast_fn(ctx, extra, val)
+        };
+    }
+
     /// base_cs
     ///   - (cast_func_input, in_union, is_res_unsigned, base_result)
     ///   - the base_result is the result **should** produce by
@@ -3578,7 +3604,12 @@ mod tests {
         input_as_debug_str_func: FnToStr,
         func_name: &str,
     ) where
-        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<T>) -> Result<Option<Decimal>>,
+        FnCast: Fn(
+            &mut EvalContext,
+            &RpnFnCallExtra,
+            &tipb::InUnionMetadata,
+            &Option<T>,
+        ) -> Result<Option<Decimal>>,
         FnToStr: Fn(&T) -> String,
     {
         #[derive(Clone, Copy, Debug)]
@@ -3828,12 +3859,12 @@ mod tests {
                         if base_res.is_negative() {
                             continue;
                         } else {
-                            base_res.clone()
+                            base_res
                         }
                     }
                     Sign::Negative => {
                         if base_res.is_negative() {
-                            base_res.clone()
+                            base_res
                         } else {
                             continue;
                         }
@@ -3870,7 +3901,7 @@ mod tests {
                 };
                 let expect = match res_type {
                     ResType::Zero => Decimal::zero(),
-                    ResType::Same => base_res.clone(),
+                    ResType::Same => base_res,
                     ResType::TruncateToMax => max_decimal(res_flen as u8, res_decimal as u8),
                     ResType::TruncateToMin => {
                         max_or_min_dec(true, res_flen as u8, res_decimal as u8)
@@ -3892,15 +3923,15 @@ mod tests {
                 let ctx_in_dml_flag = vec![Flag::IN_INSERT_STMT, Flag::IN_UPDATE_OR_DELETE_STMT];
                 for in_dml_flag in ctx_in_dml_flag {
                     let (res_flen, res_decimal) = (res_flen as isize, res_decimal as isize);
-                    let rft = RetFieldTypeConfig {
+                    let rft = FieldTypeConfig {
                         unsigned: is_unsigned,
                         flen: res_flen,
                         decimal: res_decimal,
-                        ..RetFieldTypeConfig::default()
+                        ..FieldTypeConfig::default()
                     }
                     .into();
-                    let ia = make_implicit_args(in_union);
-                    let extra = make_extra(&rft, &ia);
+                    let metadata = make_metadata(in_union);
+                    let extra = make_extra(&rft);
 
                     let mut ctx = CtxConfig {
                         overflow_as_warning,
@@ -3910,7 +3941,8 @@ mod tests {
                         ..CtxConfig::default()
                     }
                     .into();
-                    let cast_func_res = cast_func(&mut ctx, &extra, &Some(input.clone()));
+                    let cast_func_res =
+                        cast_func(&mut ctx, &extra, &metadata, &Some(input.clone()));
 
                     let mut ctx = CtxConfig {
                         overflow_as_warning,
@@ -3920,7 +3952,7 @@ mod tests {
                         ..CtxConfig::default()
                     }
                     .into();
-                    let pd_res = produce_dec_with_specified_tp(&mut ctx, base_res.clone(), &rft);
+                    let pd_res = produce_dec_with_specified_tp(&mut ctx, base_res, &rft);
 
                     // make log
                     let cast_func_res_log = cast_func_res
@@ -3966,7 +3998,7 @@ mod tests {
         ];
         test_as_decimal_helper(
             cs,
-            cast_unsigned_int_as_signed_or_unsigned_decimal,
+            cast_closure_with_metadata!(cast_unsigned_int_as_signed_or_unsigned_decimal),
             |x| x.to_string(),
             "cast_unsigned_int_as_signed_or_unsigned_decimal",
         );
@@ -3974,7 +4006,7 @@ mod tests {
 
     #[test]
     fn test_signed_int_as_unsigned_decimal() {
-        test_none_with_ctx_and_extra(cast_signed_int_as_unsigned_decimal);
+        test_none_with_ctx_and_extra_and_metadata(cast_signed_int_as_unsigned_decimal);
 
         let cs = vec![
             // (input, in_union, is_res_unsigned, base_result)
@@ -4026,7 +4058,7 @@ mod tests {
         ];
         test_as_decimal_helper(
             cs,
-            cast_any_as_decimal::<Int>,
+            cast_closure_with_metadata!(cast_any_as_decimal::<Int>),
             |x| x.to_string(),
             "cast_signed_int_as_signed_decimal",
         );
@@ -4034,7 +4066,7 @@ mod tests {
 
     #[test]
     fn test_real_as_decimal() {
-        test_none_with_ctx_and_extra(cast_real_as_decimal);
+        test_none_with_ctx_and_extra_and_metadata(cast_real_as_decimal);
 
         // TODO: add test case that make Decimal::from_f64 return err
         let cs = vec![
@@ -4077,9 +4109,9 @@ mod tests {
         ];
         test_as_decimal_helper(
             cs,
-            |ctx, extra, val| {
+            |ctx, extra, metadata, val| {
                 let val = val.map(|x| Real::new(x).unwrap());
-                cast_real_as_decimal(ctx, extra, &val)
+                cast_real_as_decimal(ctx, extra, metadata, &val)
             },
             |x| x.to_string(),
             "cast_real_as_decimal",
@@ -4335,18 +4367,18 @@ mod tests {
 
         test_as_decimal_helper(
             cs,
-            |ctx, extra, val| {
+            |ctx, extra, _, val| {
                 let val = val.map(|x| x.as_bytes().to_vec());
                 cast_any_as_decimal::<Bytes>(ctx, extra, &val)
             },
-            |x| x.to_string(),
+            |x| (*x).to_string(),
             "cast_string_as_signed_decimal",
         )
     }
 
     #[test]
     fn test_string_as_unsigned_decimal() {
-        test_none_with_ctx_and_extra(cast_string_as_unsigned_decimal);
+        test_none_with_ctx_and_extra_and_metadata(cast_string_as_unsigned_decimal);
 
         let cs = vec![
             // (input, in_union, is_res_unsigned, base_result)
@@ -4542,11 +4574,11 @@ mod tests {
 
         test_as_decimal_helper(
             cs,
-            |ctx, extra, val| {
+            |ctx, extra, metadata, val| {
                 let val = val.map(|x| x.as_bytes().to_vec());
-                cast_string_as_unsigned_decimal(ctx, extra, &val)
+                cast_string_as_unsigned_decimal(ctx, extra, metadata, &val)
             },
-            |x| x.to_string(),
+            |x| (*x).to_string(),
             "cast_string_as_unsigned_decimal",
         );
     }
@@ -4615,7 +4647,7 @@ mod tests {
 
         test_as_decimal_helper(
             cs,
-            cast_decimal_as_signed_decimal,
+            cast_closure_with_metadata!(cast_decimal_as_signed_decimal),
             |x| x.to_string(),
             "cast_decimal_as_signed_decimal",
         );
@@ -4623,7 +4655,7 @@ mod tests {
 
     #[test]
     fn test_decimal_as_unsigned_decimal() {
-        test_none_with_ctx_and_extra(cast_decimal_as_unsigned_decimal);
+        test_none_with_ctx_and_extra_and_metadata(cast_decimal_as_unsigned_decimal);
 
         // in_union and result is unsigned
         let cs = vec![
@@ -4703,7 +4735,7 @@ mod tests {
         ];
         test_as_decimal_helper(
             cs,
-            cast_any_as_decimal::<Time>,
+            cast_closure_with_metadata!(cast_any_as_decimal::<Time>),
             |x| x.to_string(),
             "cast_time_as_decimal",
         )
@@ -4743,7 +4775,7 @@ mod tests {
         ];
         test_as_decimal_helper(
             cs,
-            cast_any_as_decimal::<Duration>,
+            cast_closure_with_metadata!(cast_any_as_decimal::<Duration>),
             |x| x.to_string(),
             "cast_duration_as_int",
         )
@@ -4852,7 +4884,7 @@ mod tests {
 
         test_as_decimal_helper(
             cs,
-            cast_any_as_decimal::<Json>,
+            cast_closure_with_metadata!(cast_any_as_decimal::<Json>),
             |x| x.to_string(),
             "cast_json_as_decimal",
         );
@@ -4939,13 +4971,12 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let ia = make_implicit_args(false);
-            let rft = RetFieldTypeConfig {
+            let rft = FieldTypeConfig {
                 decimal: fsp,
-                ..RetFieldTypeConfig::default()
+                ..FieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rft, &ia);
+            let extra = make_extra(&rft);
 
             let result = cast_int_as_duration(&mut ctx, &extra, &Some(input));
 
@@ -4996,13 +5027,12 @@ mod tests {
                     ..CtxConfig::default()
                 }
                 .into();
-                let ia = make_implicit_args(false);
-                let rft = RetFieldTypeConfig {
+                let rft = FieldTypeConfig {
                     decimal: fsp as isize,
-                    ..RetFieldTypeConfig::default()
+                    ..FieldTypeConfig::default()
                 }
                 .into();
-                let extra = make_extra(&rft, &ia);
+                let extra = make_extra(&rft);
 
                 let result = func_cast(&mut ctx, &extra, &Some(val.clone()));
 
@@ -5192,13 +5222,12 @@ mod tests {
         for (s, fsp, expect_fsp, expect) in cs {
             let mut ctx = EvalContext::default();
 
-            let ia = make_implicit_args(false);
-            let rft = RetFieldTypeConfig {
+            let rft = FieldTypeConfig {
                 decimal: expect_fsp,
-                ..RetFieldTypeConfig::default()
+                ..FieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rft, &ia);
+            let extra = make_extra(&rft);
 
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let expect_time = Duration::parse(expect.as_bytes(), expect_fsp as i8).unwrap();
@@ -5227,13 +5256,12 @@ mod tests {
         ];
 
         for (input, input_fsp, output_fsp, expect) in cs {
-            let ia = make_implicit_args(false);
-            let rft = RetFieldTypeConfig {
+            let rft = FieldTypeConfig {
                 decimal: output_fsp as isize,
-                ..RetFieldTypeConfig::default()
+                ..FieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rft, &ia);
+            let extra = make_extra(&rft);
 
             let dur = Duration::parse(input.as_bytes(), input_fsp).unwrap();
             let expect = Duration::parse(expect.as_bytes(), output_fsp).unwrap();
@@ -5413,13 +5441,12 @@ mod tests {
             ("false".to_string(), Json::Boolean(false), true),
         ];
         for (input, expect, parse_to_json) in cs {
-            let ia = make_implicit_args(false);
             let mut rft = FieldType::default();
             if parse_to_json {
                 let fta = rft.as_mut_accessor();
                 fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
             }
-            let extra = make_extra(&rft, &ia);
+            let extra = make_extra(&rft);
             let result = cast_string_as_json(&extra, &Some(input.clone().into_bytes()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
@@ -5458,7 +5485,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Decimal, Json>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Decimal, Json>(&mut ctx, &Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }

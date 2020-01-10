@@ -3,11 +3,11 @@
 use std::convert::TryFrom;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
-use super::BufferVec;
 use crate::codec::data_type::VectorValue;
-use crate::codec::raw_datum::RawDatumDecoder;
+use crate::codec::datum_codec::RawDatumDecoder;
 use crate::codec::Result;
 use crate::expr::EvalContext;
 
@@ -264,8 +264,6 @@ mod tests {
             assert_eq!(col.capacity(), 0);
             assert_eq!(col.decoded().as_int_slice(), &[]);
             {
-                // Clone empty decoded LazyBatchColumn.
-                let col = col.clone();
                 assert!(col.is_decoded());
                 assert_eq!(col.len(), 0);
                 assert_eq!(col.capacity(), 0);

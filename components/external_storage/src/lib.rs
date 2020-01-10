@@ -10,10 +10,12 @@ extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use std::io::{self, Read};
+use std::io;
+use std::marker::Unpin;
 use std::path::Path;
 use std::sync::Arc;
 
+use futures_io::AsyncRead;
 #[cfg(feature = "prost-codec")]
 use kvproto::backup::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
@@ -107,19 +109,19 @@ pub fn make_noop_backend() -> StorageBackend {
 }
 
 /// An abstraction of an external storage.
+// TODO: these should all be returning a future (i.e. async fn).
 pub trait ExternalStorage: Sync + Send + 'static {
     /// Write all contents of the read to the given path.
-    // TODO: should it return a writer?
-    fn write(&self, name: &str, reader: &mut dyn Read) -> io::Result<()>;
+    fn write(&self, name: &str, reader: &mut (dyn AsyncRead + Unpin)) -> io::Result<()>;
     /// Read all contents of the given path.
-    fn read(&self, name: &str) -> io::Result<Box<dyn Read>>;
+    fn read(&self, name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>>;
 }
 
 impl ExternalStorage for Arc<dyn ExternalStorage> {
-    fn write(&self, name: &str, reader: &mut dyn Read) -> io::Result<()> {
+    fn write(&self, name: &str, reader: &mut (dyn AsyncRead + Unpin)) -> io::Result<()> {
         (**self).write(name, reader)
     }
-    fn read(&self, name: &str) -> io::Result<Box<dyn Read>> {
+    fn read(&self, name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>> {
         (**self).read(name)
     }
 }

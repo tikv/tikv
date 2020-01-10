@@ -31,6 +31,11 @@ impl RocksTablePropertiesCollection {
     pub fn from_raw(raw: RawTablePropertiesCollection) -> RocksTablePropertiesCollection {
         RocksTablePropertiesCollection(raw)
     }
+
+    // for test
+    pub fn get_raw(&self) -> &RawTablePropertiesCollection {
+        &self.0
+    }
 }
 
 impl TablePropertiesCollection for RocksTablePropertiesCollection {}

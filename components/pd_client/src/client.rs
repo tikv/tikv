@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::sync::mpsc;
+use futures::sync::oneshot;
 use futures::{future, Future, Sink, Stream};
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::configpb;
@@ -15,10 +16,11 @@ use kvproto::pdpb::{self, Member};
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Config, PdFuture, UnixSecs};
-use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
+use super::{ConfigClient, Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use tikv_util::security::SecurityManager;
 use tikv_util::time::duration_to_sec;
 use tikv_util::{Either, HandyRwLock};
+use txn_types::TimeStamp;
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -570,7 +572,62 @@ impl PdClient for RpcClient {
 
         Ok(resp)
     }
+    // TODO: The current implementation is not efficient, because it creates
+    //       a RPC for every `PdFuture<TimeStamp>`. As a duplex streaming RPC,
+    //       we could use one RPC for many `PdFuture<TimeStamp>`.
+    fn get_tso(&self) -> PdFuture<TimeStamp> {
+        let timer = Instant::now();
 
+        let mut req = pdpb::TsoRequest::default();
+        req.set_count(1);
+        req.set_header(self.header());
+        let executor = move |client: &RwLock<Inner>, req: pdpb::TsoRequest| {
+            let cli = client.read().unwrap();
+            let (req_sink, resp_stream) = cli.client_stub.tso().unwrap();
+            let (keep_req_tx, mut keep_req_rx) = oneshot::channel();
+            let send_once = req_sink.send((req, WriteFlags::default())).then(|s| {
+                let _ = keep_req_tx.send(s);
+                Ok(())
+            });
+            cli.client_stub.spawn(send_once);
+            Box::new(
+                resp_stream
+                    .into_future()
+                    .map_err(|(err, _)| Error::Grpc(err))
+                    .and_then(move |(resp, _)| {
+                        // Now we can safely drop sink without
+                        // causing a Cancel error.
+                        let _ = keep_req_rx.try_recv().unwrap();
+                        let resp = match resp {
+                            Some(r) => r,
+                            None => return Ok(TimeStamp::zero()),
+                        };
+                        PD_REQUEST_HISTOGRAM_VEC
+                            .with_label_values(&["tso"])
+                            .observe(duration_to_sec(timer.elapsed()));
+                        check_resp_header(resp.get_header())?;
+                        let ts = resp.get_timestamp();
+                        let encoded = TimeStamp::compose(ts.physical as _, ts.logical as _);
+                        Ok(encoded)
+                    }),
+            ) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn spawn(&self, future: PdFuture<()>) {
+        self.leader_client
+            .inner
+            .rl()
+            .client_stub
+            .spawn(future.map_err(|_| ()));
+    }
+}
+
+impl ConfigClient for RpcClient {
     fn register_config(
         &self,
         id: String,
