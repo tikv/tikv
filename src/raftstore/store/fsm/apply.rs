@@ -2756,7 +2756,6 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
-                CmpOrdering::Equal => {}
                 CmpOrdering::Greater => {
                     self.msg_buf.reserve(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
@@ -2765,6 +2764,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                     self.msg_buf.shrink_to(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
+                _ => {}
             }
             self.apply_ctx.enable_sync_log = incoming.sync_log;
         }
