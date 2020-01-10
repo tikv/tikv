@@ -1772,13 +1772,8 @@ pub mod tests {
         assert_eq!(size_track.load(Ordering::SeqCst), size);
 
         // Ensure a snapshot could be applied to DB.
-        let mut s4 = Snap::new_for_applying(
-            dst_dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter,
-        )
-        .unwrap();
+        let mut s4 =
+            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter).unwrap();
         assert!(s4.exists());
 
         let dst_db_dir = Builder::new()
@@ -1871,8 +1866,15 @@ pub mod tests {
         .unwrap();
         assert!(s2.exists());
 
-        Snapshot::<RocksEngine>::build(&mut s2, &snapshot, &region, &mut snap_data, &mut stat, deleter)
-            .unwrap();
+        Snapshot::<RocksEngine>::build(
+            &mut s2,
+            &snapshot,
+            &region,
+            &mut snap_data,
+            &mut stat,
+            deleter,
+        )
+        .unwrap();
         assert!(s2.exists());
     }
 
@@ -2052,13 +2054,10 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(Snap::new_for_sending(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone()
-        )
-        .is_err());
+        assert!(
+            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
+                .is_err()
+        );
 
         let mut s2 = Snap::new_for_building(
             dir.path(),
@@ -2130,13 +2129,9 @@ pub mod tests {
             Limiter::new(INFINITY),
         )
         .is_err());
-        assert!(Snap::new_for_applying(
-            dst_dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter
-        )
-        .is_err());
+        assert!(
+            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter).is_err()
+        );
     }
 
     #[test]
@@ -2183,13 +2178,10 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(Snap::new_for_sending(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone()
-        )
-        .is_err());
+        assert!(
+            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
+                .is_err()
+        );
 
         let mut s2 = Snap::new_for_building(
             dir.path(),
@@ -2303,13 +2295,8 @@ pub mod tests {
             deleter.clone(),
         )
         .unwrap();
-        let mut s = Snap::new_for_sending(
-            &path,
-            &key1,
-            Arc::clone(&size_track),
-            deleter.clone(),
-        )
-        .unwrap();
+        let mut s =
+            Snap::new_for_sending(&path, &key1, Arc::clone(&size_track), deleter.clone()).unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = Snap::new_for_receiving(
             &path,
@@ -2399,7 +2386,9 @@ pub mod tests {
 
         // Ensure the snapshot being built will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Generating);
-        let mut s1 = src_mgr.get_snapshot_for_building::<RocksEngine>(&key).unwrap();
+        let mut s1 = src_mgr
+            .get_snapshot_for_building::<RocksEngine>(&key)
+            .unwrap();
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
@@ -2475,7 +2464,9 @@ pub mod tests {
         let recv_head = {
             let mut stat = SnapshotStatistics::new();
             let mut snap_data = RaftSnapshotData::default();
-            let mut s = snap_mgr.get_snapshot_for_building::<RocksEngine>(&recv_key).unwrap();
+            let mut s = snap_mgr
+                .get_snapshot_for_building::<RocksEngine>(&recv_key)
+                .unwrap();
             s.build(
                 &snapshot,
                 &gen_test_region(100, 1, 1),
@@ -2502,7 +2493,9 @@ pub mod tests {
         for (i, region_id) in regions.into_iter().enumerate() {
             let key = SnapKey::new(region_id, 1, 1);
             let region = gen_test_region(region_id, 1, 1);
-            let mut s = snap_mgr.get_snapshot_for_building::<RocksEngine>(&key).unwrap();
+            let mut s = snap_mgr
+                .get_snapshot_for_building::<RocksEngine>(&key)
+                .unwrap();
             let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
             s.build(
