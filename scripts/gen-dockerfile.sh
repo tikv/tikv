@@ -93,11 +93,12 @@ RUN mkdir -p ./cmd/src/bin && \\
 EOT
 
 # Remove fingerprints for when we build the real binaries.
-fingerprint_dirs=(tikv $(for i in ${components[@]}; do echo ./target/release/.fingerprint/$(basename ${i})-*; done | xargs))
-echo "RUN rm -rf ${fingerprint_dirs}"
+fingerprint_dirs=$(for i in ${components[@]}; do echo ./target/release/.fingerprint/$(basename ${i})-*; done | xargs)
+echo "RUN rm -rf ${fingerprint_dirs} ./target/release/.fingerprint/tikv-*"
 for i in "${components[@]:1}"; do
     echo "COPY ${i} ${i}"
 done
+echo "COPY src src"
 
 # Build real binaries now
 cat <<EOT
