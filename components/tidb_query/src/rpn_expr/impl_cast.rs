@@ -4890,7 +4890,14 @@ mod tests {
 
     #[test]
     fn test_int_as_duration() {
-        test_none_with_ctx_and_extra(cast_int_as_duration);
+        // None
+        {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(ScalarValue::Bytes(None))
+                .evaluate(ScalarFuncSig::CastIntAsDuration)
+                .unwrap();
+            assert_eq!(output, None);
+        }
 
         // This case copy from Duration.rs::tests::test_from_i64
         let cs: Vec<(i64, isize, crate::codec::Result<Option<Duration>>, bool)> = vec![
@@ -4943,63 +4950,80 @@ mod tests {
                 Ok(Some(Duration::parse(b"-838:59:59", 6).unwrap())),
                 false,
             ),
-            // will overflow
-            (8385960, 0, Ok(None), true),
-            (8385960, 1, Ok(None), true),
-            (8385960, 5, Ok(None), true),
-            (8385960, 6, Ok(None), true),
-            (-8385960, 0, Ok(None), true),
-            (-8385960, 1, Ok(None), true),
-            (-8385960, 5, Ok(None), true),
-            (-8385960, 6, Ok(None), true),
+            // overflow as warning
+            (
+                8385960,
+                0,
+                Ok(Some(Duration::parse(b"838:59:59", 0).unwrap())),
+                true,
+            ),
+            (
+                -8385960,
+                0,
+                Ok(Some(Duration::parse(b"-838:59:59", 0).unwrap())),
+                true,
+            ),
             // will truncated
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO: add test for num>=10000000000
-            //  after Duration::from_f64 had impl logic for num>=10000000000
-            // (10000000000, 0, Ok(Duration::parse(b"0:0:0", 0).unwrap())),
-            // (10000235959, 0, Ok(Duration::parse(b"23:59:59", 0).unwrap())),
-            // (10000000000, 0, Ok(Duration::parse(b"0:0:0", 0).unwrap())),
+            (
+                10000000000,
+                0,
+                Ok(Some(Duration::parse(b"0:0:0", 0).unwrap())),
+                false,
+            ),
+            (
+                10000235959,
+                0,
+                Ok(Some(Duration::parse(b"23:59:59", 0).unwrap())),
+                false,
+            ),
+            (
+                -10000235959,
+                0,
+                Ok(Some(Duration::parse(b"-838:59:59", 0).unwrap())),
+                false,
+            ),
         ];
 
-        for (input, fsp, expect, overflow) in cs {
-            let mut ctx = CtxConfig {
-                overflow_as_warning: overflow,
-                ..CtxConfig::default()
-            }
-            .into();
-            let rft = FieldTypeConfig {
-                decimal: fsp,
-                ..FieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft);
-
-            let result = cast_int_as_duration(&mut ctx, &extra, &Some(input));
-
-            // make log
-            let expect_str = match expect.as_ref() {
-                Ok(x) => format!("{:?}", x.map(|x| x.to_string())),
-                Err(e) => format!("{:?}", e),
-            };
-            let result_str = match result {
-                Ok(Some(x)) => x.to_string(),
-                _ => format!("{:?}", result),
-            };
-            let log = format!(
-                "input: {}, fsp: {}, expect: {}, result: {:?}",
-                input, fsp, expect_str, result_str
-            );
-
-            match expect {
-                Ok(expect) => {
-                    check_result(expect.as_ref(), &result, log.as_str());
-                    check_overflow(&ctx, overflow, log.as_str());
+        for (input, fsp, expected, overflow) in cs {
+            let (result, ctx) = RpnFnScalarEvaluator::new()
+                .context(CtxConfig {
+                    overflow_as_warning: true,
+                    ..CtxConfig::default()
+                })
+                .push_param(input)
+                .evaluate_raw(
+                    FieldTypeConfig {
+                        tp: Some(FieldTypeTp::Duration),
+                        decimal: fsp,
+                        ..FieldTypeConfig::default()
+                    },
+                    ScalarFuncSig::CastIntAsDuration,
+                );
+            match expected {
+                Ok(expected) => {
+                    let result: Option<Duration> = result.unwrap().into();
+                    assert_eq!(
+                        result, expected,
+                        "input:{:?}, expected:{:?}, got:{:?}",
+                        input, expected, result,
+                    );
                 }
-                Err(e) => {
-                    assert!(result.is_err(), "log: {}, output_err: {}", log, e);
+                Err(_) => {
+                    assert!(
+                        result.is_err(),
+                        "input:{:?}, expected err:{:?}, got:{:?}",
+                        input,
+                        expected,
+                        result
+                    );
                 }
+            }
+            if overflow {
+                assert_eq!(ctx.warnings.warning_cnt, 1);
+                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
             }
         }
     }
