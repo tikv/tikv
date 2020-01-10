@@ -200,6 +200,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "batch-system"
+version = "0.1.0"
+dependencies = [
+ "crossbeam",
+ "derive_more",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -870,6 +881,7 @@ dependencies = [
 name = "engine"
 version = "0.0.1"
 dependencies = [
+ "configuration",
  "engine_traits",
  "hex 0.3.2",
  "kvproto",
@@ -3903,6 +3915,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "backtrace",
+ "batch-system",
  "bitflags",
  "byteorder",
  "bytes 0.4.12",

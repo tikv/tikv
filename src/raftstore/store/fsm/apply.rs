@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -11,6 +12,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
+use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::Writable;
@@ -51,7 +53,6 @@ use tikv_util::Either;
 use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
-use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 
 use super::super::RegionTask;
 
@@ -311,7 +312,7 @@ impl ApplyContext {
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
-        router: BatchRouter<ApplyFsm, ControlFsm>,
+        router: ApplyRouter,
         notifier: Notifier,
         cfg: &Config,
     ) -> ApplyContext {
@@ -2874,7 +2875,24 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
     }
 }
 
-pub type ApplyRouter = BatchRouter<ApplyFsm, ControlFsm>;
+#[derive(Clone)]
+pub struct ApplyRouter {
+    pub router: BatchRouter<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyRouter {
+    type Target = BatchRouter<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchRouter<ApplyFsm, ControlFsm> {
+        &self.router
+    }
+}
+
+impl DerefMut for ApplyRouter {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm, ControlFsm> {
+        &mut self.router
+    }
+}
 
 impl ApplyRouter {
     pub fn schedule_task(&self, region_id: u64, msg: Msg) {
@@ -2931,7 +2949,23 @@ impl ApplyRouter {
     }
 }
 
-pub type ApplyBatchSystem = BatchSystem<ApplyFsm, ControlFsm>;
+pub struct ApplyBatchSystem {
+    system: BatchSystem<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyBatchSystem {
+    type Target = BatchSystem<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchSystem<ApplyFsm, ControlFsm> {
+        &self.system
+    }
+}
+
+impl DerefMut for ApplyBatchSystem {
+    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm, ControlFsm> {
+        &mut self.system
+    }
+}
 
 impl ApplyBatchSystem {
     pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
@@ -2946,12 +2980,13 @@ impl ApplyBatchSystem {
 
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
-    super::batch::create_system(
+    let (router, system) = batch_system::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
         tx,
         Box::new(ControlFsm),
-    )
+    );
+    (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
 #[cfg(test)]
