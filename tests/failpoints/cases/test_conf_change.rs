@@ -276,7 +276,6 @@ fn test_redundant_conf_change_by_snapshot() {
 
     // Unpause the fail point, so peer 3 can apply the redundant conf change result.
     fail::cfg("apply_on_conf_change_3_1", "off").unwrap();
-    sleep_ms(100);
 
     cluster.must_transfer_leader(1, new_peer(3, 3));
     assert!(rx.try_recv().is_err());
