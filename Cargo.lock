@@ -3447,6 +3447,7 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "tikv_alloc",
+ "tikv_util",
  "tokio-sync",
  "txn_types",
  "uuid 0.7.4",
