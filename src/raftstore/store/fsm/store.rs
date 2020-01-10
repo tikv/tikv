@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
-use configuration::Configuration;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
@@ -62,7 +61,7 @@ use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::PdClient;
+use pd_client::{ConfigClient, PdClient};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -221,7 +220,7 @@ pub struct PollContext<T, C: 'static> {
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
-    pub snap_mgr: SnapManager<RocksEngine>,
+    pub snap_mgr: SnapManager,
     pub applying_snap_count: Arc<AtomicUsize>,
     pub coprocessor_host: Arc<CoprocessorHost>,
     pub timer: SteadyTimer,
@@ -598,7 +597,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 &incoming.messages_per_tick,
                 &self.poll_ctx.cfg.messages_per_tick,
             ) {
-                CmpOrdering::Equal => {}
                 CmpOrdering::Greater => {
                     self.store_msg_buf.reserve(incoming.messages_per_tick);
                     self.peer_msg_buf.reserve(incoming.messages_per_tick);
@@ -609,12 +607,8 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                     self.peer_msg_buf.shrink_to(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
+                _ => {}
             }
-            info!(
-                "raftstore config updated";
-                "tag" => ?self.tag,
-                "change" => ?self.poll_ctx.cfg.diff(&incoming),
-            );
             self.poll_ctx.cfg = incoming.clone();
         }
     }
@@ -735,7 +729,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     pub coprocessor_host: Arc<CoprocessorHost>,
     trans: T,
     pd_client: Arc<C>,
@@ -992,14 +986,14 @@ impl RaftBatchSystem {
         self.router.clone()
     }
 
-    pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
+    pub fn spawn<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
         &mut self,
         meta: metapb::Store,
         mut cfg: Config,
         engines: Engines,
         trans: T,
         pd_client: Arc<C>,
-        mgr: SnapManager<RocksEngine>,
+        mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
@@ -1057,7 +1051,7 @@ impl RaftBatchSystem {
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
+    fn start_system<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
         &mut self,
         mut workers: Workers,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,

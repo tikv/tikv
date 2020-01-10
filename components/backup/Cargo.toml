@@ -43,6 +43,7 @@ engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage", default-features = false }
 failure = "0.1"
 futures = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
 hex = "0.3"
 keys = { path = "../keys", default-features = false }
@@ -66,6 +67,7 @@ default-features = false
 features = ["nightly", "push", "process"]
 
 [dev-dependencies]
+futures-executor = "0.3"
 rand = "0.7"
 tempfile = "3.0"
 test_util = { path = "../test_util" }

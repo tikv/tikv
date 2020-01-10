@@ -26,6 +26,8 @@ crc32fast = "1.2"
 engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage", default-features = false }
 futures = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+futures-executor = "0.3"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
 hex = "0.3"
 keys = { path = "../keys", default-features = false }
