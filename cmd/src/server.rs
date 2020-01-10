@@ -32,7 +32,7 @@ use std::{
 use tikv::config::ConfigHandler;
 use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::{
-    config::{ConfigController, TiKvConfig},
+    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
     raftstore::{
@@ -327,6 +327,16 @@ impl TiKVServer {
         let local_reader =
             LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
+
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            "rocksdb",
+            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
+        );
+        cfg_controller.register(
+            "raftdb",
+            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
+        );
 
         let engine = RaftKv::new(raft_router.clone());
 
