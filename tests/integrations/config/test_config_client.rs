@@ -143,20 +143,13 @@ impl PdClient for MockPdClient {
     }
 }
 
-fn validated_cfg() -> TiKvConfig {
-    let mut cfg = TiKvConfig::default();
-    cfg.compatible_adjust();
-    cfg.validate().unwrap();
-    cfg
-}
-
 #[test]
 fn test_update_config() {
     let pd_client = Arc::new(MockPdClient::new());
     let id = "localhost:1080";
 
     // register config
-    let mut cfg_handler = pd_client.clone().register(id, validated_cfg());
+    let mut cfg_handler = pd_client.clone().register(id, TiKvConfig::default());
     let mut cfg = cfg_handler.get_config().clone();
 
     // refresh local config
@@ -184,7 +177,7 @@ fn test_update_not_support_config() {
     let id = "localhost:1080";
 
     // register config
-    let mut cfg_handler = pd_client.clone().register(id, validated_cfg());
+    let mut cfg_handler = pd_client.clone().register(id, TiKvConfig::default());
     let cfg = cfg_handler.get_config().clone();
 
     // update not support config on pd side
@@ -204,7 +197,7 @@ fn test_update_to_invalid() {
     let pd_client = Arc::new(MockPdClient::new());
     let id = "localhost:1080";
 
-    let mut cfg = validated_cfg();
+    let mut cfg = TiKvConfig::default();
     cfg.raft_store.raft_log_gc_threshold = 2000;
 
     // register config
@@ -237,7 +230,7 @@ fn test_compatible_config() {
     let id = "localhost:1080";
 
     // register config
-    let mut cfg_handler = pd_client.clone().register(id, validated_cfg());
+    let mut cfg_handler = pd_client.clone().register(id, TiKvConfig::default());
     let mut cfg = cfg_handler.get_config().clone();
 
     // update config on pd side with misssing config, new config and exist config
@@ -276,7 +269,7 @@ fn test_dispatch_change() {
 
     let pd_client = Arc::new(MockPdClient::new());
     let id = "localhost:1080";
-    let cfg = validated_cfg();
+    let cfg = TiKvConfig::default();
     let mgr = CfgManager(Arc::new(Mutex::new(Default::default())));
 
     // register config and raftstore config manager
