@@ -5,6 +5,9 @@ edition = "2018"
 publish = false
 
 [dependencies]
+futures-io = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+futures-executor = "0.3"
 rand = "0.7"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
