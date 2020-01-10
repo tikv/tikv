@@ -22,7 +22,6 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
 use engine::Peekable;
-use engine_rocks::RocksEngine;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
@@ -111,7 +110,7 @@ where
         &mut self,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
@@ -318,7 +317,7 @@ where
         store_id: u64,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
