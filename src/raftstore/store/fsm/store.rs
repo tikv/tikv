@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::Configuration;
+use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
@@ -18,6 +18,7 @@ use raft::{Ready, StateRole};
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,10 +38,9 @@ use crate::raftstore::store::fsm::peer::{
 #[cfg(feature = "failpoints")]
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
-    batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
 };
-use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
+use crate::raftstore::store::fsm::{ApplyNotifier, RegionProposal};
 use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
@@ -61,7 +61,7 @@ use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::PdClient;
+use pd_client::{ConfigClient, PdClient};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -141,7 +141,18 @@ impl StoreMeta {
     }
 }
 
-pub type RaftRouter = BatchRouter<PeerFsm, StoreFsm>;
+#[derive(Clone)]
+pub struct RaftRouter {
+    pub router: BatchRouter<PeerFsm, StoreFsm>,
+}
+
+impl Deref for RaftRouter {
+    type Target = BatchRouter<PeerFsm, StoreFsm>;
+
+    fn deref(&self) -> &BatchRouter<PeerFsm, StoreFsm> {
+        &self.router
+    }
+}
 
 impl RaftRouter {
     pub fn send_raft_message(
@@ -209,7 +220,7 @@ pub struct PollContext<T, C: 'static> {
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
-    pub snap_mgr: SnapManager<RocksEngine>,
+    pub snap_mgr: SnapManager,
     pub applying_snap_count: Arc<AtomicUsize>,
     pub coprocessor_host: Arc<CoprocessorHost>,
     pub timer: SteadyTimer,
@@ -586,7 +597,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 &incoming.messages_per_tick,
                 &self.poll_ctx.cfg.messages_per_tick,
             ) {
-                CmpOrdering::Equal => {}
                 CmpOrdering::Greater => {
                     self.store_msg_buf.reserve(incoming.messages_per_tick);
                     self.peer_msg_buf.reserve(incoming.messages_per_tick);
@@ -597,12 +607,8 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                     self.peer_msg_buf.shrink_to(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
+                _ => {}
             }
-            info!(
-                "raftstore config updated";
-                "tag" => ?self.tag,
-                "change" => ?self.poll_ctx.cfg.diff(&incoming),
-            );
             self.poll_ctx.cfg = incoming.clone();
         }
     }
@@ -723,7 +729,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     pub coprocessor_host: Arc<CoprocessorHost>,
     trans: T,
     pd_client: Arc<C>,
@@ -980,14 +986,14 @@ impl RaftBatchSystem {
         self.router.clone()
     }
 
-    pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
+    pub fn spawn<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
         &mut self,
         meta: metapb::Store,
         mut cfg: Config,
         engines: Engines,
         trans: T,
         pd_client: Arc<C>,
-        mgr: SnapManager<RocksEngine>,
+        mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
@@ -1045,7 +1051,7 @@ impl RaftBatchSystem {
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
+    fn start_system<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
         &mut self,
         mut workers: Workers,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
@@ -1203,20 +1209,21 @@ impl RaftBatchSystem {
 pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
-    let (router, system) = batch::create_system(
+    let (router, system) = batch_system::create_system(
         cfg.store_pool_size,
         cfg.store_max_batch_size,
         store_tx,
         store_fsm,
     );
+    let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
         system,
         workers: None,
         apply_router,
         apply_system,
-        router: router.clone(),
+        router: raft_router.clone(),
     };
-    (router, system)
+    (raft_router, system)
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
@@ -2128,6 +2135,7 @@ mod tests {
     use crate::raftstore::store::Transport;
     use crate::storage::kv::CompactedEvent;
 
+    use batch_system::*;
     use engine::ALL_CFS;
     use tempfile::{Builder, TempDir};
     use tikv_util::collections::HashMap;
@@ -2186,7 +2194,7 @@ mod tests {
             store_tx,
             store_fsm,
         );
-        (router, apply_router, system, apply_system)
+        (RaftRouter { router }, apply_router, system, apply_system)
     }
 
     fn start_raftstore(

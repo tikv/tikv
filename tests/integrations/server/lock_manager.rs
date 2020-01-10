@@ -149,7 +149,7 @@ fn must_transfer_region(
     let region = cluster.get_region(region_key);
     cluster
         .pd_client
-        .must_add_peer(region.get_id(), target_peer.clone());
+        .must_add_peer(region.get_id(), target_peer);
     must_transfer_leader(cluster, region_key, target_store_id);
     let source_peer = find_peer_of_store(&region, source_store_id);
     cluster

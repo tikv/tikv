@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
+use std::f64::INFINITY;
 use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
@@ -16,11 +16,11 @@ use kvproto::raft_cmdpb::*;
 use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::Callback;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::{RocksEngine, RocksIOLimiter};
-use engine_traits::{IOLimiter, SstExt, SstWriterBuilder};
+use engine_rocks::RocksEngine;
+use engine_traits::{SstExt, SstWriterBuilder};
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
-use tikv_util::time::Instant;
+use tikv_util::time::{Instant, Limiter};
 
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
@@ -39,7 +39,7 @@ pub struct ImportSSTService<Router> {
     threads: CpuPool,
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
-    limiter: Option<Arc<RocksIOLimiter>>,
+    limiter: Limiter,
 }
 
 impl<Router: RaftStoreRouter> ImportSSTService<Router> {
@@ -60,7 +60,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
             threads,
             importer,
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
-            limiter: None,
+            limiter: Limiter::new(INFINITY),
         }
     }
 }
@@ -312,22 +312,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "set_download_speed_limit";
         let timer = Instant::now_coarse();
 
-        let s = i64::try_from(req.get_speed_limit());
-        let s = if let Ok(s) = s {
-            s
+        let speed_limit = req.get_speed_limit();
+        self.limiter.set_speed_limit(if speed_limit > 0 {
+            speed_limit as f64
         } else {
-            warn!(
-                "SetDownloadSpeedLimitRequest out of range: {}. Using i64::max_value",
-                req.get_speed_limit()
-            );
-            i64::max_value()
-        };
-
-        match (s, &mut self.limiter) {
-            (0, limiter) => *limiter = None,
-            (s, Some(l)) => l.set_bytes_per_second(s),
-            (s, limiter) => *limiter = Some(Arc::new(RocksIOLimiter::new(s))),
-        }
+            INFINITY
+        });
 
         ctx.spawn(
             future::ok::<_, Error>(SetDownloadSpeedLimitResponse::default())

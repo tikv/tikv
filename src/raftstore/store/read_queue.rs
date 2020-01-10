@@ -5,7 +5,7 @@ use std::{cmp, u64, usize};
 
 use crate::raftstore::store::fsm::apply;
 use crate::raftstore::store::metrics::*;
-use crate::raftstore::store::Callback;
+use crate::raftstore::store::{Callback, Config};
 
 use engine_rocks::RocksEngine;
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -70,9 +70,35 @@ pub struct ReadIndexQueue {
     handled_cnt: usize,
     // map[uuid] -> offset in `reads`.
     contexts: HashMap<Uuid, usize>,
+
+    retry_countdown: usize,
 }
 
 impl ReadIndexQueue {
+    /// Check it's necessary to retry pending read requests or not.
+    /// Return true if all such conditions are satisfied:
+    /// 1. more than an election timeout elapsed from the last request push;
+    /// 2. more than an election timeout elapsed from the last retry;
+    /// 3. there are still unresolved requests in the queue.
+    pub fn check_needs_retry(&mut self, cfg: &Config) -> bool {
+        if self.reads.len() == self.ready_cnt {
+            return false;
+        }
+
+        if self.retry_countdown == usize::MAX {
+            self.retry_countdown = cfg.raft_election_timeout_ticks - 1;
+            return false;
+        }
+
+        if self.retry_countdown > 0 {
+            self.retry_countdown -= 1;
+            return false;
+        }
+
+        self.retry_countdown = cfg.raft_election_timeout_ticks;
+        true
+    }
+
     /// Clear all commands in the queue. if `notify_removed` contains an `region_id`,
     /// notify the request's callback that the region is removed.
     pub fn clear_all(&mut self, notify_removed: Option<u64>) {
@@ -111,6 +137,7 @@ impl ReadIndexQueue {
             self.contexts.insert(read.id, offset);
         }
         self.reads.push_back(read);
+        self.retry_countdown = usize::MAX;
     }
 
     pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest> {

@@ -1871,6 +1871,27 @@ impl Peer {
         Ok(())
     }
 
+    /// `ReadIndex` requests could be lost in network, so on followers commands could queue in
+    /// `pending_reads` forever. Sending a new `ReadIndex` periodically can resolve this.
+    pub fn retry_pending_reads(&mut self, cfg: &Config) {
+        if self.is_leader()
+            || !self.pending_reads.check_needs_retry(cfg)
+            || self.pre_read_index().is_err()
+        {
+            return;
+        }
+
+        let read = self.pending_reads.back_mut().unwrap();
+        debug_assert!(read.read_index.is_none());
+        self.raft_group.read_index(read.id.as_bytes().to_vec());
+        debug!(
+            "request to get a read index";
+            "request_id" => ?read.id,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
+    }
+
     // Returns a boolean to indicate whether the `read` is proposed or not.
     // For these cases it won't be proposed:
     // 1. The region is in merging or splitting;
