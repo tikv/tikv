@@ -4,8 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read};
 use std::path::Path;
 
-use openssl::hash::{self, Hasher, MessageDigest};
 use openssl::error::ErrorStack;
+use openssl::hash::{self, Hasher, MessageDigest};
 
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
