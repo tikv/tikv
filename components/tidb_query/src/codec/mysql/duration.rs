@@ -483,6 +483,10 @@ impl Duration {
             micros.unwrap_or(0),
         );
 
+        if minute >= 60 || second > 60 {
+            return Err(Error::truncated_wrong_val("time", format!("{:?}", input)));
+        }
+
         if hour == 0 && minute == 0 && second == 0 && micros == 0 {
             neg = false;
         }
@@ -932,6 +936,8 @@ mod tests {
             (b"18446744073709551615:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
+            (b"1:62:3", 0, None),
+            (b"1:02:63", 0, None),
         ];
 
         for (input, fsp, expect) in cases {
