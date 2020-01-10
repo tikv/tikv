@@ -482,17 +482,18 @@ mod parser {
                     },
                 )?;
 
-                if components[0].len() == 2 {
-                    parts[0] = adjust_year(parts[0]);
-                }
-                parts.resize(6, 0);
-
                 let (carry, frac) = if let Some(frac) = components.get(6) {
                     parse_frac(frac, fsp, round)?
                 } else {
                     (false, 0)
                 };
+
+                parts.resize(6, 0);
                 parts.push(frac);
+                // Skip a special case "00-00-00".
+                if components[0].len() == 2 && !parts.iter().all(|x| *x == 0u32) {
+                    parts[0] = adjust_year(parts[0]);
+                }
 
                 if carry {
                     round_components(&mut parts)?;
@@ -1869,6 +1870,7 @@ mod tests {
             ("2019-12-31", "2019.12.31 \t    23.59.59.999999"),
             ("2019-12-31", "2019.12.31 \t  23.59-59.999999"),
             ("2013-05-28", "1305280512.000000000000"),
+            ("0000-00-00", "00:00:00"),
         ];
 
         for (expected, actual) in cases {
@@ -1980,6 +1982,7 @@ mod tests {
                 3,
                 false,
             ),
+            ("0000-00-00 00:00:00", "00:00:00", 0, false),
         ];
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
@@ -2066,6 +2069,7 @@ mod tests {
                 3,
                 false,
             ),
+            ("0000-00-00 00:00:00", "00:00:00", 0, false),
         ];
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
