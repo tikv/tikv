@@ -2,6 +2,18 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.1.0-beta.1]
++ backup 
+    + Change the name of the backup file from `start_key` to the hash value of `start_key` to reduce the file name's length for easy reading (https://github.com/tikv/tikv/pull/6198)
+    + Disable RocksDB's `force_consistency_checks` check to avoid false positives in the consistency check [#6249](https://github.com/tikv/tikv/pull/6249)
+    + Add the incremental backup feature [#6286] (https://github.com/tikv/tikv/pull/6286)
+
++ sst_importer
+    + Fix the issue that the SST file does not have MVCC properties during  restoring [#6378](https://github.com/tikv/tikv/pull/6378)
+    + Add the monitoring items such as `tikv_import_download_duration`, `tikv_import_download_bytes`, `tikv_import_ingest_duration`, `tikv_import_ingest_bytes`, and `tikv_import_error_counter` to observe the overheads of downloading and ingesting SST files [#6404](https://github.com/tikv/tikv/pull/6404)
++ raftstore
+    + Fix the issue of Follower Read that the follower reads stale data when the leader changes, thus breaking transaction isolation [#6343](https://github.com/tikv/tikv/pull/6343)
+
 ## [3.1.0-beta]
 
 + Support the distributed backup and restore feature [#5532](https://github.com/tikv/tikv/pull/5532)
