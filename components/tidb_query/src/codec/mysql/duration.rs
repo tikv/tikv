@@ -270,17 +270,6 @@ fn round(nanos: i64, fsp: u8) -> i64 {
     }
 }
 
-fn nano_from_parts(hour: u32, minute: u32, second: u32, nanos: u32) -> Result<i64> {
-    check_hour_part(hour)?;
-    check_minute_part(minute)?;
-    check_second_part(second)?;
-    check_nanos_part(nanos)?;
-    let minute = minute as i64 + hour as i64 * 60;
-    let second = second as i64 + minute * SECS_PER_MINUTE;
-    let nanos = nanos as i64 + second * NANOS_PER_SEC;
-    Ok(nanos)
-}
-
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Duration {
@@ -426,9 +415,16 @@ impl Duration {
         nanos: u32,
         fsp: i8,
     ) -> Result<Duration> {
+        check_hour_part(hour)?;
+        check_minute_part(minute)?;
+        check_second_part(second)?;
+        check_nanos_part(nanos)?;
         let fsp = check_fsp(fsp)?;
         let signum = if neg { -1 } else { 1 };
-        let nanos = signum * nano_from_parts(hour, minute, second, nanos)?;
+        let minute = minute as i64 + hour as i64 * 60;
+        let second = second as i64 + minute * SECS_PER_MINUTE;
+        let nanos = nanos as i64 + second * NANOS_PER_SEC;
+        let nanos = signum * nanos;
         let nanos = round(nanos, fsp);
         check_nanos(nanos)?;
         Ok(Duration { nanos, fsp })
@@ -553,7 +549,7 @@ impl Duration {
                 MAX_MINUTE_PART,
                 MAX_SECOND_PART,
                 0,
-                fsp,
+                fsp as i8,
             );
         }
 
@@ -1135,9 +1131,9 @@ mod tests {
                 0,
                 Ok(Duration::new_from_parts(
                     true,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
                     0,
                     0,
                 )),
