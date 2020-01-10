@@ -5,12 +5,10 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
-prost-codec = ["kvproto/prost-codec", "prost"]
-protobuf-codec = ["kvproto/protobuf-codec"]
+prost-codec = ["prost"]
 
 [dependencies]
 configuration = { path = "../configuration" }
@@ -38,7 +36,7 @@ rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 features = ["nightly", "push", "process"]
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
 
 [dev-dependencies]
