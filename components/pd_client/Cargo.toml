@@ -33,6 +33,5 @@ rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 features = ["nightly", "push", "process"]
 
 [features]
-default = ["protobuf-codec"]
 protobuf-codec = ["kvproto/protobuf-codec"]
 prost-codec = ["kvproto/prost-codec"]

@@ -1,21 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::HashMap;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 
 pub use configuration_derive::*;
 
 pub type ConfigChange = HashMap<String, ConfigValue>;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum ConfigValue {
     Duration(u64),
     Size(u64),
     U64(u64),
     F64(f64),
+    I32(i32),
+    U32(u32),
     Usize(usize),
     Bool(bool),
     String(String),
+    // `String` represent config field that has type `String`,
+    // `Other` represent config field with type that can be
+    // coverted to `String` as temporary representation i.e enum type.
+    Other(String),
     Module(ConfigChange),
 }
 
@@ -26,11 +32,20 @@ impl Display for ConfigValue {
             ConfigValue::Size(v) => write!(f, "{}b", v),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
+            ConfigValue::I32(v) => write!(f, "{}", v),
+            ConfigValue::U32(v) => write!(f, "{}", v),
             ConfigValue::Usize(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
+            ConfigValue::Other(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
         }
+    }
+}
+
+impl Debug for ConfigValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
@@ -45,6 +60,8 @@ macro_rules! impl_from {
 }
 impl_from!(u64, U64);
 impl_from!(f64, F64);
+impl_from!(i32, I32);
+impl_from!(u32, U32);
 impl_from!(usize, Usize);
 impl_from!(bool, Bool);
 impl_from!(String, String);
@@ -69,6 +86,8 @@ macro_rules! impl_into {
 }
 impl_into!(u64, U64);
 impl_into!(f64, F64);
+impl_into!(i32, I32);
+impl_into!(u32, U32);
 impl_into!(usize, Usize);
 impl_into!(bool, Bool);
 impl_into!(String, String);
