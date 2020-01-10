@@ -81,7 +81,7 @@ nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
 chrono-tz = "0.5.1"
-lazy_static = "0.2.1"
+lazy_static = "1.4"
 backtrace = "0.2.3"
 url = "1.7.2"
 regex = "1.0"
@@ -89,6 +89,8 @@ sys-info = "0.5.7"
 indexmap = { version = "1.0", features = ["serde-1"] }
 futures = "0.1"
 futures-cpupool = "0.1"
+futures-executor = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
 tikv_alloc = { path = "components/tikv_alloc", default-features = false }
 tokio-core = "0.1"
 tokio-timer = "0.2"

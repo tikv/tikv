@@ -9,6 +9,7 @@ name = "integrations"
 path = "tests/integrations/mod.rs"
 
 [dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
 crc64fast = "0.1"
 tikv = { path = "../../", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.1" }
@@ -42,3 +43,4 @@ rand = "0.6.5"
 test_util = { path = "../test_util" }
 test_raftstore = { path = "../test_raftstore" }
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
+futures-executor = "0.3"
