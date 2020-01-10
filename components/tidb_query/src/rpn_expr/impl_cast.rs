@@ -835,16 +835,14 @@ fn cast_int_as_duration(
         None => Ok(None),
         Some(val) => {
             let fsp = extra.ret_field_type.get_decimal() as i8;
-            Duration::from_i64_without_ctx(*val, fsp)
-                .map(Some)
-                .or_else(|err| {
-                    if err.is_overflow() {
-                        ctx.handle_overflow_err(err)?;
-                        Ok(None)
-                    } else {
-                        Err(err.into())
-                    }
-                })
+            Duration::from_i64(ctx, *val, fsp).map(Some).or_else(|err| {
+                if err.is_overflow() {
+                    ctx.handle_overflow_err(err)?;
+                    Ok(None)
+                } else {
+                    Err(err.into())
+                }
+            })
         }
     }
 }

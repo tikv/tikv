@@ -9,7 +9,7 @@ use codec::prelude::*;
 use super::{check_fsp, Decimal};
 use crate::codec::convert::ConvertTo;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use crate::codec::mysql::MAX_FSP;
+use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -648,13 +648,24 @@ impl Duration {
         self.format("")
     }
 
-    /// If the error is overflow, the result will be returned, too.
-    /// Otherwise, only one of result or err will be returned
-    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> Result<Duration> {
+    pub fn from_i64(ctx: &mut EvalContext, mut n: i64, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
-            // FIXME: parse as `DateTime` if `n >= 10000000000`
-            return Err(Error::overflow("Duration", n));
+            if n >= 10000000000 {
+                if let Ok(t) = DateTime::parse_from_i64(ctx, n, TimeType::DateTime, fsp as i8) {
+                    return t.convert(ctx);
+                }
+            }
+            ctx.handle_overflow_err(Error::overflow("Duration", n))?;
+            // Returns max duration if overflow occurred
+            return Ok(Duration::new(
+                n < 0,
+                MAX_HOURS,
+                MAX_MINUTES,
+                MAX_SECONDS,
+                0,
+                fsp as u8,
+            ));
         }
 
         let negative = n < 0;
@@ -676,25 +687,6 @@ impl Duration {
             fsp,
         );
         Ok(dur)
-    }
-
-    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
-        Duration::from_i64_without_ctx(n, fsp).or_else(|e| {
-            if e.is_overflow() {
-                ctx.handle_overflow_err(e)?;
-                // Returns max duration if overflow occurred
-                Ok(Duration::new(
-                    n < 0,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    fsp as u8,
-                ))
-            } else {
-                Err(e)
-            }
-        })
     }
 }
 
@@ -1253,124 +1245,30 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO: fix these test case after Duration::from_f64
-            //  had impl logic for num>=10000000000
             (
                 10000000000,
                 0,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    0,
-                )),
-                true,
+                Ok(Duration::new(false, 0, 0, 0, 0, 0)),
+                false,
             ),
             (
                 10000235959,
                 0,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    0,
-                )),
-                true,
+                Ok(Duration::new(false, 23, 59, 59, 0, 0)),
+                false,
             ),
             (
-                10000000001,
+                -10000235959,
                 0,
                 Ok(Duration::new(
-                    false,
+                    true,
                     MAX_HOURS,
                     MAX_MINUTES,
                     MAX_SECONDS,
                     0,
                     0,
                 )),
-                true,
-            ),
-            (
-                10000000000,
-                5,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    5,
-                )),
-                true,
-            ),
-            (
-                10000235959,
-                5,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    5,
-                )),
-                true,
-            ),
-            (
-                10000000001,
-                5,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    5,
-                )),
-                true,
-            ),
-            (
-                10000000000,
-                6,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    6,
-                )),
-                true,
-            ),
-            (
-                10000235959,
-                6,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    6,
-                )),
-                true,
-            ),
-            (
-                10000000001,
-                6,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    6,
-                )),
-                true,
+                false,
             ),
         ];
         for (input, fsp, expect, overflow) in cs {
