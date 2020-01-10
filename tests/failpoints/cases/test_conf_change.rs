@@ -274,14 +274,14 @@ fn test_redundant_conf_change_by_snapshot() {
     let filter = Box::new(
         RegionPacketFilter::new(1, 3)
             .direction(Direction::Send)
-            .msg_type(MessageType::MsgAppend)
+            .msg_type(MessageType::MsgRequestVote)
             .when(Arc::new(AtomicBool::new(false)))
             .set_msg_callback(cb),
     );
     cluster.sim.wl().add_send_filter(3, filter);
 
     cluster.must_transfer_leader(1, new_peer(3, 3));
-    assert!(rx.recv_timeout(Duration::from_secs(3)).is_err());
+    assert!(rx.try_recv().is_err());
 
     fail::remove("apply_on_conf_change_3_1");
 }
