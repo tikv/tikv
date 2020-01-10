@@ -196,6 +196,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "batch-system"
+version = "0.1.0"
+dependencies = [
+ "crossbeam",
+ "derive_more",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -336,6 +347,35 @@ checksum = "4fc9a35e1f4290eb9e5fc54ba6cf40671ed2a2514c3eeb2b2a908dda2ea5a1be"
 dependencies = [
  "jobserver",
  "num_cpus",
+]
+
+[[package]]
+name = "cdc"
+version = "4.0.0-alpha"
+dependencies = [
+ "engine",
+ "engine_rocks",
+ "engine_traits",
+ "failure",
+ "futures 0.1.29",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "log",
+ "pd_client",
+ "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
+ "resolved_ts",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_raftstore",
+ "test_util",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "tokio-threadpool",
+ "txn_types",
 ]
 
 [[package]]
@@ -1604,7 +1644,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#7ca20c9dda49827a0e2d1179aefe157697eca57e"
+source = "git+https://github.com/pingcap/kvproto.git#a4dc183d2af510a7b13d477b7d341aec20123352"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -1613,7 +1653,7 @@ dependencies = [
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prost-derive 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf-build",
+ "protobuf-build 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft-proto 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2588,8 +2628,7 @@ replace = "protobuf 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)
 [[package]]
 name = "protobuf-build"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "211897988382ac761fa302992638ec837b544df73e6fb2ffc022c8515a0563f2"
+source = "git+https://github.com/tikv/protobuf-build?rev=42e52b9311f7fb31bbbe089fef5a24ec0392f9ce#42e52b9311f7fb31bbbe089fef5a24ec0392f9ce"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
@@ -2600,6 +2639,13 @@ dependencies = [
  "regex",
  "syn 0.15.44",
 ]
+
+[[package]]
+name = "protobuf-build"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "211897988382ac761fa302992638ec837b544df73e6fb2ffc022c8515a0563f2"
+replace = "protobuf-build 0.10.0 (git+https://github.com/tikv/protobuf-build?rev=42e52b9311f7fb31bbbe089fef5a24ec0392f9ce)"
 
 [[package]]
 name = "protobuf-codegen"
@@ -2698,7 +2744,7 @@ dependencies = [
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prost-derive 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf-build",
+ "protobuf-build 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3829,6 +3875,7 @@ version = "4.0.0-alpha"
 dependencies = [
  "async-stream",
  "async-trait",
+ "batch-system",
  "bitflags",
  "byteorder",
  "chrono",
@@ -4006,7 +4053,7 @@ dependencies = [
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prost-derive 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf-build",
+ "protobuf-build 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
