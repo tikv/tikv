@@ -805,10 +805,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.mut_store().flush_cache_metrics();
 
         // Keep ticking if there are still pending read requests.
-        if !self.fsm.peer.pending_reads.is_empty() ||
+        if self.fsm.peer.has_unresolved_reads() ||
             // hibernate_region is false.
             res.is_none() ||
-                !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap())
+            !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap())
         {
             self.register_raft_base_tick();
             return;

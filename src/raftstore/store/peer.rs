@@ -1871,6 +1871,10 @@ impl Peer {
         Ok(())
     }
 
+    pub fn has_unresolved_reads(&self) -> bool {
+        self.pending_reads.has_unresolved()
+    }
+
     /// `ReadIndex` requests could be lost in network, so on followers commands could queue in
     /// `pending_reads` forever. Sending a new `ReadIndex` periodically can resolve this.
     pub fn retry_pending_reads(&mut self, cfg: &Config) {

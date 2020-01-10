@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::mem;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,13 +19,8 @@ fn test_replica_read_not_applied() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
-<<<<<<< HEAD
-    configure_for_lease_read(&mut cluster, Some(50), Some(100));
-    let max_lease = Duration::from_secs(2);
-=======
     configure_for_lease_read(&mut cluster, Some(50), Some(30));
     let max_lease = Duration::from_secs(1);
->>>>>>> origin/master
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
     cluster.pd_client.disable_default_operator();
@@ -68,11 +64,7 @@ fn test_replica_read_not_applied() {
     read_request.mut_header().set_replica_read(true);
 
     // Read index on follower should be blocked instead of get an old value.
-<<<<<<< HEAD
     let resp1_ch = cluster.sim.wl().read_on_node(read_request.clone(), 3, 3);
-=======
-    let resp1_ch = read_on!(read_request, 3, 3);
->>>>>>> origin/master
     assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
 
     // Unpark all append responses so that the new leader can commit its first entry.
@@ -135,8 +127,15 @@ fn test_replica_read_on_hibernate() {
     assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
 
     let (tx, rx) = mpsc::sync_channel(1024);
+    let cb = Arc::new(move |msg: &RaftMessage| {
+        let _ = tx.send(msg.clone());
+    }) as Arc<dyn Fn(&RaftMessage) + Send + Sync>;
     for i in 1..=3 {
-        let filter = Box::new(InspectFilter::new(tx.clone()));
+        let filter = Box::new(
+            RegionPacketFilter::new(1, i)
+                .when(Arc::new(AtomicBool::new(false)))
+                .set_msg_callback(Arc::clone(&cb)),
+        );
         cluster.sim.wl().add_send_filter(i, filter);
     }
 
