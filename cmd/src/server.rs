@@ -267,6 +267,13 @@ impl TiKVServer {
                 tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
             );
         }
+
+        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space to compaction when TiKV recover. This file is created in data_dir rather than db_path, because we must not increase store size of db_path.
+        tikv_util::reserve_space_for_recover(
+            &self.config.storage.data_dir,
+            self.config.storage.reserve_space.0,
+        )
+        .unwrap();
     }
 
     fn init_engines(&mut self) {
