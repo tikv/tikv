@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use crate::raftstore::{Error, Result};
+use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
 use engine::Peekable;
 use engine::CF_RAFT;
@@ -39,8 +39,8 @@ use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
 use crate::raftstore::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, CatchUpLogs, ChangePeer,
-    ExecResult, Fsm, RegionProposal,
+    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangePeer, ExecResult,
+    RegionProposal,
 };
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
@@ -57,6 +57,7 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use crate::raftstore::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
 pub struct DestroyPeerJob {
@@ -774,12 +775,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        if self.fsm.peer.read_index_retry_countdown == 0 {
-            self.fsm.peer.read_index_retry_countdown = self.ctx.cfg.raft_election_timeout_ticks / 3;
-            self.fsm.peer.retry_pending_reads();
-        } else {
-            self.fsm.peer.read_index_retry_countdown -= 1;
-        }
+        self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
