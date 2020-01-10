@@ -9,7 +9,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
     + Add the incremental backup feature [#6286](https://github.com/tikv/tikv/pull/6286)
 
 + sst_importer
-    + Fix the issue that the SST file does not have MVCC properties during  restoring [#6378](https://github.com/tikv/tikv/pull/6378)
+    + Fix the issue that the SST file does not have MVCC properties during restoring [#6378](https://github.com/tikv/tikv/pull/6378)
     + Add the monitoring items such as `tikv_import_download_duration`, `tikv_import_download_bytes`, `tikv_import_ingest_duration`, `tikv_import_ingest_bytes`, and `tikv_import_error_counter` to observe the overheads of downloading and ingesting SST files [#6404](https://github.com/tikv/tikv/pull/6404)
 + raftstore
     + Fix the issue of Follower Read that the follower reads stale data when the leader changes, thus breaking transaction isolation [#6343](https://github.com/tikv/tikv/pull/6343)
