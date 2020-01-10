@@ -1,11 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
 use fail;
 use futures::Future;
+use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
@@ -233,7 +235,7 @@ fn test_redundant_conf_change_by_snapshot() {
     // Add voter 2 and learner 3.
     cluster.run_conf_change();
     pd_client.must_add_peer(1, new_peer(2, 2));
-    pd_client.must_add_peer(1, new_learner_peer(3, 3));
+    pd_client.must_add_peer(1, new_peer(3, 3));
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
@@ -250,17 +252,36 @@ fn test_redundant_conf_change_by_snapshot() {
 
     // Transfer leader to peer 2, and append more entries to compact raft logs.
     cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.pd_client.must_remove_peer(1, new_peer(4, 4));
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
     sleep_ms(50);
 
-    // Clear filters on peer 3, so it can receive and apply a snapshot.
+    // Clear filters on peer 3, so it can receive and restore a snapshot.
     cluster.sim.wl().clear_recv_filters(3);
+    sleep_ms(100);
 
     // Unpause the fail point, so peer 3 can apply the redundant conf change result.
-    sleep_ms(100);
     fail::cfg("apply_on_conf_change_3_1", "off").unwrap();
-
-    // Wait for any panics.
     sleep_ms(100);
+
+    // Use a filter to capture messages sent from 3 to 4.
+    let (tx, rx) = mpsc::sync_channel(128);
+    let cb = Arc::new(move |msg: &RaftMessage| {
+        if msg.get_message().get_to() == 4 {
+            let _ = tx.send(());
+        }
+    }) as Arc<dyn Fn(&RaftMessage) + Send + Sync>;
+    let filter = Box::new(
+        RegionPacketFilter::new(1, 3)
+            .direction(Direction::Send)
+            .msg_type(MessageType::MsgAppend)
+            .when(Arc::new(AtomicBool::new(false)))
+            .set_msg_callback(cb),
+    );
+    cluster.sim.wl().add_send_filter(3, filter);
+
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+    assert!(rx.recv_timeout(Duration::from_secs(3)).is_err());
+
     fail::remove("apply_on_conf_change_3_1");
 }

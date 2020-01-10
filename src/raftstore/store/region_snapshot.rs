@@ -413,8 +413,8 @@ mod tests {
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
     use keys::data_key;
     use tikv_util::config::{ReadableDuration, ReadableSize};
-    use tikv_util::worker;
     use tikv_util::time::Limiter;
+    use tikv_util::worker;
     use txn_types::Key;
 
     use super::*;

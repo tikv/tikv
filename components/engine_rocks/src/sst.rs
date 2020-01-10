@@ -242,8 +242,8 @@ impl ExternalSstFileInfo for RocksExternalSstFileInfo {
 mod tests {
     use super::*;
     use crate::util::new_default_engine;
-    use tempfile::Builder;
     use std::io::Read;
+    use tempfile::Builder;
 
     #[test]
     fn test_smoke() {
