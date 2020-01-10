@@ -427,7 +427,7 @@ mod parser {
             (&input[..fsp + round as usize], fsp + round as usize)
         };
 
-        let frac = bytes_to_u32(input)? * TEN_POW[MICRO_WIDTH.checked_sub(len).unwrap_or(0)];
+        let frac = bytes_to_u32(input)? * TEN_POW[MICRO_WIDTH.saturating_sub(len)];
 
         Some(if round {
             round_frac(frac, fsp as u8)
@@ -453,9 +453,12 @@ mod parser {
 
                 let (carry, frac) = if let Some(frac) = components.get(1) {
                     // If we have a fractional part,
-                    // we expect the `whole` is in format: `yymmddhhmmss/yyyymmddhhmmss`.
+                    // we expect the `whole` is in format: `yymmddhhmm/yymmddhhmmss/yyyymmddhhmmss`.
                     // Otherwise, the fractional part is meaningless.
-                    (components[0].len() == 12 || components[0].len() == 14).as_option()?;
+                    (components[0].len() == 10
+                        || components[0].len() == 12
+                        || components[0].len() == 14)
+                        .as_option()?;
                     parse_frac(frac, fsp, round)?
                 } else {
                     (false, 0)
@@ -659,8 +662,7 @@ impl TimeArgs {
         self.fsp = check_fsp(self.fsp).ok()? as i8;
         let (fsp, time_type) = (self.fsp, self.time_type);
         match self.time_type {
-            TimeType::Date => self.check_date(ctx),
-            TimeType::DateTime => self.check_datetime(ctx),
+            TimeType::Date | TimeType::DateTime => self.check_datetime(ctx),
             TimeType::Timestamp => self.check_timestamp(ctx),
         }
         .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
@@ -919,19 +921,19 @@ impl Time {
         time
     }
 
-    fn new(ctx: &mut EvalContext, mut config: TimeArgs) -> Result<Time> {
-        if config.time_type == TimeType::Date {
-            config.hour = 0;
-            config.minute = 0;
-            config.second = 0;
-            config.micro = 0;
-            config.fsp = 0;
-        }
-
+    fn new(ctx: &mut EvalContext, config: TimeArgs) -> Result<Time> {
         let unchecked_time = Self::unchecked_new(config.clone());
-        Ok(Self::unchecked_new(config.check(ctx).ok_or_else(|| {
-            Error::incorrect_datetime_value(unchecked_time)
-        })?))
+        let mut checked = config
+            .check(ctx)
+            .ok_or_else(|| Error::incorrect_datetime_value(unchecked_time))?;
+        if checked.time_type == TimeType::Date {
+            checked.hour = 0;
+            checked.minute = 0;
+            checked.second = 0;
+            checked.micro = 0;
+            checked.fsp = 0;
+        }
+        Ok(Self::unchecked_new(checked))
     }
 
     fn check_month_and_day(
@@ -1866,6 +1868,7 @@ mod tests {
             ("2019-12-31", "2019.12.31     23.59.59.999999"),
             ("2019-12-31", "2019.12.31 \t    23.59.59.999999"),
             ("2019-12-31", "2019.12.31 \t  23.59-59.999999"),
+            ("2013-05-28", "1305280512.000000000000"),
         ];
 
         for (expected, actual) in cases {
@@ -1876,6 +1879,29 @@ mod tests {
             assert_eq!(date.micro(), 0);
             assert_eq!(date.fsp(), 0);
             assert_eq!(expected, date.to_string());
+        }
+
+        let should_fail = vec![
+            ("11-12-13 T 12:34:56"),
+            ("11:12:13 T12:34:56"),
+            ("11:12:13 T12:34:56.12"),
+            ("11:12:13T25:34:56.12"),
+            ("11:12:13T23:61:56.12"),
+            ("11:12:13T23:59:89.12"),
+            ("11121311121.1"),
+            ("1201012736"),
+            ("1201012736.0"),
+            ("111213111.1"),
+            ("11121311.1"),
+            ("1112131.1"),
+            ("111213.1"),
+            ("111213.1"),
+            ("11121.1"),
+            ("1112"),
+        ];
+
+        for case in should_fail {
+            assert!(Time::parse_date(&mut ctx, case).is_err());
         }
         Ok(())
     }
@@ -1904,6 +1930,8 @@ mod tests {
             ("2019-09-16 10:11:12.7", "2019-09-16T10:11:12.66", 1, true),
             ("2019-09-16 10:11:13.0", "2019-09-16T10:11:12.99", 1, true),
             ("2020-01-01 00:00:00.0", "2019-12-31 23:59:59.99", 1, true),
+            ("2013-05-28 05:12:00", "1305280512.000000000000", 0, true),
+            ("2013-05-28 05:12:00", "1305280512", 0, true),
             (
                 "2020-01-01 00:00:00.0",
                 "    2019-12-31 23:59:59.99   ",
@@ -1964,8 +1992,12 @@ mod tests {
             ("11-12-13 T 12:34:56", 0),
             ("11:12:13 T12:34:56", 0),
             ("11:12:13 T12:34:56.12", 7),
+            ("11:12:13T25:34:56.12", 7),
+            ("11:12:13T23:61:56.12", 7),
+            ("11:12:13T23:59:89.12", 7),
             ("11121311121.1", 2),
-            ("1112131112.1", 2),
+            ("1201012736", 2),
+            ("1201012736.0", 2),
             ("111213111.1", 2),
             ("11121311.1", 2),
             ("1112131.1", 2),
@@ -2008,6 +2040,8 @@ mod tests {
             ("1970-01-01 00:00:00", "1970-1-1 00:00:00", 0, false),
             ("1970-01-01 12:13:09", "1970-1-1 12:13:9", 0, false),
             ("1970-01-01 09:08:09", "1970-1-1 9:8:9", 0, false),
+            ("2013-05-28 05:12:00", "1305280512.000000000000", 0, true),
+            ("2013-05-28 05:12:00", "1305280512", 0, true),
             (
                 "2020-01-01 00:00:00.000000",
                 "2019-12-31 23:59:59.9999999",

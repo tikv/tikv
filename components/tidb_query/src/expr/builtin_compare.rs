@@ -650,8 +650,8 @@ mod tests {
                 ScalarFuncSig::InJson,
                 vec![
                     Datum::Json(json1.clone()),
-                    Datum::Json(json2.clone()),
-                    Datum::Json(json1.clone()),
+                    Datum::Json(json2),
+                    Datum::Json(json1),
                 ],
                 Datum::I64(1),
             ),
@@ -662,11 +662,7 @@ mod tests {
             ),
             (
                 ScalarFuncSig::InString,
-                vec![
-                    Datum::Bytes(s1.clone()),
-                    Datum::Bytes(s2.clone()),
-                    Datum::Bytes(s1.clone()),
-                ],
+                vec![Datum::Bytes(s1.clone()), Datum::Bytes(s2), Datum::Bytes(s1)],
                 Datum::I64(1),
             ),
             (
@@ -808,7 +804,7 @@ mod tests {
             ),
             (
                 vec![
-                    Datum::Bytes(s1.clone()),
+                    Datum::Bytes(s1),
                     Datum::Bytes(s2.clone()),
                     Datum::Bytes(s3.clone()),
                 ],
@@ -852,9 +848,9 @@ mod tests {
                     Datum::Bytes(t1.clone()),
                     Datum::Bytes(t2.clone()),
                     Datum::Bytes(t3.clone()),
-                    Datum::Bytes(t5.clone()),
-                    Datum::Bytes(t6.clone()),
-                    Datum::Bytes(t7.clone()),
+                    Datum::Bytes(t5),
+                    Datum::Bytes(t6),
+                    Datum::Bytes(t7),
                 ],
                 Datum::Bytes(b"2018-04-03 00:00:00.000000".to_vec()),
                 Datum::Bytes(b"2012-12-12 12:00:38.120038".to_vec()),
@@ -926,10 +922,10 @@ mod tests {
                 .set_sql_mode(SqlMode::STRICT_ALL_TABLES);
             let mut ctx = EvalContext::new(Arc::new(eval_config));
             let row = vec![
-                Datum::Bytes(t1.clone()),
-                Datum::Bytes(t2.clone()),
-                Datum::Bytes(t3.clone()),
-                Datum::Bytes(t4.clone()),
+                Datum::Bytes(t1),
+                Datum::Bytes(t2),
+                Datum::Bytes(t3),
+                Datum::Bytes(t4),
             ];
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let mut expr = Expr::default();

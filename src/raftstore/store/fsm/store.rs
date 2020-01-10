@@ -1,12 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use configuration::Configuration;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::RocksEngine;
 use futures::Future;
-use kvproto::configpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -17,6 +19,7 @@ use raft::{Ready, StateRole};
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -36,10 +39,9 @@ use crate::raftstore::store::fsm::peer::{
 #[cfg(feature = "failpoints")]
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
-    batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
 };
-use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
+use crate::raftstore::store::fsm::{ApplyNotifier, RegionProposal};
 use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
@@ -140,7 +142,18 @@ impl StoreMeta {
     }
 }
 
-pub type RaftRouter = BatchRouter<PeerFsm, StoreFsm>;
+#[derive(Clone)]
+pub struct RaftRouter {
+    pub router: BatchRouter<PeerFsm, StoreFsm>,
+}
+
+impl Deref for RaftRouter {
+    type Target = BatchRouter<PeerFsm, StoreFsm>;
+
+    fn deref(&self) -> &BatchRouter<PeerFsm, StoreFsm> {
+        &self.router
+    }
+}
 
 impl RaftRouter {
     pub fn send_raft_message(
@@ -196,7 +209,7 @@ pub struct PollContext<T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
-    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
+    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
@@ -208,7 +221,7 @@ pub struct PollContext<T, C: 'static> {
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
-    pub snap_mgr: SnapManager,
+    pub snap_mgr: SnapManager<RocksEngine>,
     pub applying_snap_count: Arc<AtomicUsize>,
     pub coprocessor_host: Arc<CoprocessorHost>,
     pub timer: SteadyTimer,
@@ -325,7 +338,7 @@ impl<T: Transport, C> PollContext<T, C> {
         gc_msg.set_region_id(region_id);
         gc_msg.set_from_peer(to_peer.clone());
         gc_msg.set_to_peer(from_peer.clone());
-        gc_msg.set_region_epoch(cur_epoch.clone());
+        gc_msg.set_region_epoch(cur_epoch);
         if let Some(r) = target_region {
             gc_msg.set_merge_target(r);
         } else {
@@ -597,8 +610,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
             }
+            info!(
+                "raftstore config updated";
+                "tag" => ?self.tag,
+                "change" => ?self.poll_ctx.cfg.diff(&incoming),
+            );
             self.poll_ctx.cfg = incoming.clone();
-            info!("raftstore config updated!");
         }
     }
 
@@ -708,7 +725,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
+    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
@@ -718,7 +735,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
-    snap_mgr: SnapManager,
+    snap_mgr: SnapManager<RocksEngine>,
     pub coprocessor_host: Arc<CoprocessorHost>,
     trans: T,
     pd_client: Arc<C>,
@@ -952,7 +969,7 @@ where
 
 struct Workers {
     pd_worker: FutureWorker<PdTask>,
-    consistency_check_worker: Worker<ConsistencyCheckTask>,
+    consistency_check_worker: Worker<ConsistencyCheckTask<RocksEngine>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
@@ -982,7 +999,7 @@ impl RaftBatchSystem {
         engines: Engines,
         trans: T,
         pd_client: Arc<C>,
-        mgr: SnapManager,
+        mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
@@ -1124,8 +1141,9 @@ impl RaftBatchSystem {
             cfg.use_delete_range,
             cfg.clean_stale_peer_delay.0,
             Arc::clone(&workers.coprocessor_host),
+            self.router(),
         );
-        let timer = RegionRunner::new_timer();
+        let timer = region_runner.new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
@@ -1142,9 +1160,8 @@ impl RaftBatchSystem {
         box_try!(workers.cleanup_worker.start(cleanup_runner));
 
         let config_client = box_try!(ConfigHandler::start(
-            cfg_controller.get_current().server.addr.clone(),
+            cfg_controller.get_current().server.advertise_addr.clone(),
             cfg_controller,
-            configpb::Version::new(), // TODO: we can reuse the returned Version of ConfigHandler::create
             workers.pd_worker.scheduler(),
         ));
         let pd_runner = PdRunner::new(
@@ -1198,20 +1215,21 @@ impl RaftBatchSystem {
 pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
-    let (router, system) = batch::create_system(
+    let (router, system) = batch_system::create_system(
         cfg.store_pool_size,
         cfg.store_max_batch_size,
         store_tx,
         store_fsm,
     );
+    let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
         system,
         workers: None,
         apply_router,
         apply_system,
-        router: router.clone(),
+        router: raft_router.clone(),
     };
-    (router, system)
+    (raft_router, system)
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
@@ -2123,6 +2141,7 @@ mod tests {
     use crate::raftstore::store::Transport;
     use crate::storage::kv::CompactedEvent;
 
+    use batch_system::*;
     use engine::ALL_CFS;
     use tempfile::{Builder, TempDir};
     use tikv_util::collections::HashMap;
@@ -2181,7 +2200,7 @@ mod tests {
             store_tx,
             store_fsm,
         );
-        (router, apply_router, system, apply_system)
+        (RaftRouter { router }, apply_router, system, apply_system)
     }
 
     fn start_raftstore(
@@ -2213,7 +2232,7 @@ mod tests {
             .clone();
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("raft_store", Box::new(cfg_track.clone()));
         let builder = RaftPollerBuilder {
             cfg: cfg_track,

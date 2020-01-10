@@ -50,7 +50,7 @@ use engine::rocks::util::{
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, PdClient};
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
@@ -541,7 +541,7 @@ impl Default for LockCfConfig {
             block_based_bloom_filter: false,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
-            write_buffer_size: ReadableSize::mb(128),
+            write_buffer_size: ReadableSize::mb(32),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
@@ -1104,6 +1104,74 @@ pub mod log_level_serde {
     }
 }
 
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct UnifiedReadPoolConfig {
+    pub min_thread_count: usize,
+    pub max_thread_count: usize,
+    // FIXME: Add more configs when they are effective in yatp
+}
+
+impl UnifiedReadPoolConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.min_thread_count == 0 {
+            return Err("readpool.unified.min-thread-count should be > 0"
+                .to_string()
+                .into());
+        }
+        if self.max_thread_count < self.min_thread_count {
+            return Err(
+                "readpool.unified.max-thread-count should be >= readpool.unified.min-thread-count"
+                    .to_string()
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
+
+// FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
+impl Default for UnifiedReadPoolConfig {
+    fn default() -> UnifiedReadPoolConfig {
+        let cpu_num = sysinfo::get_logical_cores();
+        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
+        Self {
+            min_thread_count: 1,
+            max_thread_count: concurrency,
+        }
+    }
+}
+
+#[cfg(test)]
+mod unified_read_pool_tests {
+    use super::*;
+
+    #[test]
+    fn test_validate() {
+        let cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 2,
+        };
+        assert!(cfg.validate().is_ok());
+
+        let invalid_cfg = UnifiedReadPoolConfig {
+            min_thread_count: 0,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+
+        let invalid_cfg = UnifiedReadPoolConfig {
+            min_thread_count: 2,
+            max_thread_count: 1,
+        };
+        assert!(invalid_cfg.validate().is_err());
+    }
+}
+
 macro_rules! readpool_config {
     ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
         #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
@@ -1315,19 +1383,121 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
+    pub unify_read_pool: bool,
+    pub unified: UnifiedReadPoolConfig,
     pub storage: StorageReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.storage.validate()?;
-        self.coprocessor.validate()?;
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.unify_read_pool {
+            self.unified.validate()?;
+        } else {
+            self.storage.validate()?;
+            self.coprocessor.validate()?;
+        }
         Ok(())
+    }
+}
+
+impl Default for ReadPoolConfig {
+    fn default() -> ReadPoolConfig {
+        ReadPoolConfig {
+            unify_read_pool: false,
+            unified: Default::default(),
+            storage: Default::default(),
+            coprocessor: Default::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod readpool_tests {
+    use super::*;
+
+    #[test]
+    fn test_unified_disabled() {
+        // Allow invalid yatp config when yatp is not used.
+        let unified = UnifiedReadPoolConfig {
+            min_thread_count: 0,
+            max_thread_count: 0,
+        };
+        assert!(unified.validate().is_err());
+        let storage = StorageReadPoolConfig::default();
+        assert!(storage.validate().is_ok());
+        let coprocessor = CoprReadPoolConfig::default();
+        assert!(coprocessor.validate().is_ok());
+        let cfg = ReadPoolConfig {
+            unify_read_pool: false,
+            unified,
+            storage,
+            coprocessor,
+        };
+        assert!(cfg.validate().is_ok());
+
+        // Storage and coprocessor config must be valid when yatp is not used.
+        let unified = UnifiedReadPoolConfig::default();
+        assert!(unified.validate().is_ok());
+        let storage = StorageReadPoolConfig {
+            high_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(storage.validate().is_err());
+        let coprocessor = CoprReadPoolConfig::default();
+        let invalid_cfg = ReadPoolConfig {
+            unify_read_pool: false,
+            unified,
+            storage,
+            coprocessor,
+        };
+        assert!(invalid_cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_unified_enabled() {
+        // Allow invalid storage and coprocessor config when yatp is used.
+        let unified = UnifiedReadPoolConfig::default();
+        assert!(unified.validate().is_ok());
+        let storage = StorageReadPoolConfig {
+            high_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(storage.validate().is_err());
+        let coprocessor = CoprReadPoolConfig {
+            high_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(coprocessor.validate().is_err());
+        let cfg = ReadPoolConfig {
+            unify_read_pool: true,
+            unified,
+            storage,
+            coprocessor,
+        };
+        assert!(cfg.validate().is_ok());
+
+        // Yatp config must be valid when yatp is used.
+        let unified = UnifiedReadPoolConfig {
+            min_thread_count: 0,
+            max_thread_count: 0,
+        };
+        assert!(unified.validate().is_err());
+        let storage = StorageReadPoolConfig::default();
+        assert!(storage.validate().is_ok());
+        let coprocessor = CoprReadPoolConfig::default();
+        assert!(coprocessor.validate().is_ok());
+        let cfg = ReadPoolConfig {
+            unify_read_pool: true,
+            unified,
+            storage,
+            coprocessor,
+        };
+        assert!(cfg.validate().is_err());
     }
 }
 
@@ -1335,6 +1505,8 @@ impl ReadPoolConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[config(skip)]
+    pub dynamic_config: bool,
     #[config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
@@ -1372,13 +1544,14 @@ pub struct TiKvConfig {
     pub import: ImportConfig,
     #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub gc: GcConfig,
 }
 
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
+            dynamic_config: false,
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
@@ -1752,6 +1925,16 @@ pub trait ConfigManager: Send {
     fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
 }
 
+impl<T> ConfigManager for Arc<VersionTrack<T>>
+where
+    T: Configuration + Sync + Send + 'static,
+{
+    fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
+        self.update(|cfg: &mut T| cfg.update(change));
+        Ok(())
+    }
+}
+
 #[derive(PartialEq, Eq, Hash)]
 pub enum Module {
     Readpool,
@@ -1798,13 +1981,15 @@ impl From<&str> for Module {
 pub struct ConfigController {
     current: TiKvConfig,
     config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
+    start_version: Option<configpb::Version>,
 }
 
 impl ConfigController {
-    pub fn new(current: TiKvConfig) -> Self {
+    pub fn new(current: TiKvConfig, version: configpb::Version) -> Self {
         ConfigController {
             current,
             config_mgrs: HashMap::new(),
+            start_version: Some(version),
         }
     }
 
@@ -1812,6 +1997,9 @@ impl ConfigController {
         &mut self,
         mut incoming: TiKvConfig,
     ) -> CfgResult<Either<ConfigChange, bool>> {
+        // Config from PD have not been checked, call `compatible_adjust()`
+        // and `validate()` before use it
+        incoming.compatible_adjust();
         if incoming.validate().is_err() {
             let diff = incoming.diff(&self.current);
             return Ok(Either::Left(diff));
@@ -1839,6 +2027,7 @@ impl ConfigController {
                 }
             }
         }
+        debug!("all config change had been dispatched"; "change" => ?to_update);
         self.current.update(to_update);
         Ok(Either::Right(true))
     }
@@ -1857,6 +2046,10 @@ impl ConfigController {
     pub fn get_current(&self) -> &TiKvConfig {
         &self.current
     }
+
+    pub fn get_current_mut(&mut self) -> &mut TiKvConfig {
+        &mut self.current
+    }
 }
 
 pub struct ConfigHandler {
@@ -1868,16 +2061,15 @@ pub struct ConfigHandler {
 impl ConfigHandler {
     pub fn start(
         id: String,
-        controller: ConfigController,
-        version: configpb::Version,
-        _scheduler: FutureScheduler<PdTask>,
+        mut controller: ConfigController,
+        scheduler: FutureScheduler<PdTask>,
     ) -> CfgResult<Self> {
-        // TODO: currently we can't handle RefreshConfig task, because
-        // PD have not implement such service yet.
-
-        // if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
-        //     return Err(format!("failed to schedule refresh config task: {:?}", e).into());
-        // }
+        if controller.get_current().dynamic_config {
+            if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
+                return Err(format!("failed to schedule refresh config task: {:?}", e).into());
+            }
+        }
+        let version = controller.start_version.take().unwrap_or_default();
         Ok(ConfigHandler {
             id,
             version,
@@ -1903,24 +2095,33 @@ impl ConfigHandler {
 }
 
 impl ConfigHandler {
-    /// Register the local config to pd
+    /// Register the local config to pd and get the latest
+    /// version and config
     pub fn create(
         id: String,
         pd_client: Arc<impl PdClient>,
-        cfg: TiKvConfig,
+        local_config: TiKvConfig,
     ) -> CfgResult<(configpb::Version, TiKvConfig)> {
-        let cfg = toml::to_string(&cfg)?;
+        let cfg = toml::to_string(&local_config)?;
         let version = configpb::Version::default();
         let mut resp = pd_client.register_config(id, version, cfg)?;
         match resp.get_status().get_code() {
             StatusCode::Ok | StatusCode::WrongVersion => {
-                let cfg: TiKvConfig = toml::from_str(resp.get_config())?;
-                Ok((resp.take_version(), cfg))
+                let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
+                let mut version = resp.take_version();
+                if let Err(e) = incoming.validate() {
+                    warn!(
+                        "config from pd is invalid, fallback to local config";
+                        "version" => ?version,
+                        "error" => ?e,
+                    );
+                    version = configpb::Version::default();
+                    incoming = local_config;
+                }
+                info!("register config success"; "version" => ?version);
+                Ok((version, incoming))
             }
-            code => {
-                debug!("failed to register config"; "status" => ?code);
-                Err(format!("{:?}", resp).into())
-            }
+            _ => Err(format!("failed to register config, response: {:?}", resp).into()),
         }
     }
 
@@ -1930,12 +2131,12 @@ impl ConfigHandler {
         let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
         let version = resp.take_version();
         match resp.get_status().get_code() {
-            StatusCode::NotChange => Ok(()),
+            StatusCode::Ok => Ok(()),
             StatusCode::WrongVersion if cmp_version(&self.version, &version) == Ordering::Less => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
                 match self.config_controller.update_or_rollback(incoming)? {
                     Either::Left(rollback_change) => {
-                        debug!(
+                        warn!(
                             "tried to update local config to an invalid config";
                             "version" => ?version
                         );
@@ -1946,10 +2147,7 @@ impl ConfigHandler {
                         if updated {
                             info!("local config updated"; "version" => ?version);
                         } else {
-                            info!(
-                                "remote config upated, which will take effect after restarting the node";
-                                "version" => ?version
-                            );
+                            info!("config version upated"; "version" => ?version);
                         }
                         self.version = version;
                     }
@@ -1957,7 +2155,7 @@ impl ConfigHandler {
                 Ok(())
             }
             code => {
-                debug!(
+                warn!(
                     "failed to get remote config";
                     "status" => ?code,
                     "version" => ?version
@@ -2049,8 +2247,8 @@ mod tests {
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
         let cfg_from_file = TiKvConfig::from_file(file);
-        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2.clone());
-        assert_eq!(cfg_from_file.raftdb.wal_dir, s1.clone());
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
 
     #[test]

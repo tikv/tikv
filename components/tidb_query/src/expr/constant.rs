@@ -154,7 +154,7 @@ mod tests {
             EvalResults(Some(-1), None, None, None, None, None, None),
             EvalResults(None, Some(124.32), None, None, None, None, None),
             EvalResults(None, None, Some(dec), None, None, None, None),
-            EvalResults(None, None, None, Some(s.clone()), None, None, None),
+            EvalResults(None, None, None, Some(s), None, None, None),
             EvalResults(None, None, None, None, None, Some(dur), None),
         ];
 

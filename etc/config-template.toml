@@ -96,7 +96,7 @@
 # grpc-memory-pool-quota = "32G"
 
 ## The number of connections with each TiKV server to send Raft messages.
-# grpc-raft-conn-num = 10
+# grpc-raft-conn-num = 1
 
 ## Amount to read ahead on individual gRPC streams.
 # grpc-stream-initial-window-size = "2MB"
@@ -662,7 +662,7 @@
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
 # block-size = "16KB"
-# write-buffer-size = "128MB"
+# write-buffer-size = "32MB"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "128MB"
@@ -744,13 +744,13 @@
 
 ## The default and maximum delay in milliseconds before responding to TiDB when pessimistic
 ## transactions encounter locks
-# wait-for-lock-timeout = 3000
+# wait-for-lock-timeout = 1000
 
 ## If more than one transaction is waiting for the same lock, only the one with smallest
 ## start timestamp will be waked up immediately when the lock is released. Others will
 ## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
 ## one more likely acquires the lock.
-# wake-up-delay-duration = 100
+# wake-up-delay-duration = 20
 
 [gc]
 ## The number of keys to GC in one batch.

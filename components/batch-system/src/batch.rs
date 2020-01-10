@@ -1,49 +1,17 @@
-// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This is the core implementation of a batch system. Generally there will be two
 //! different kind of FSMs in TiKV's FSM system. One is normal FSM, which usually
 //! represents a peer, the other is control FSM, which usually represents something
 //! that controls how the former is created or metrics are collected.
 
-use super::router::{BasicMailbox, Router};
+use crate::fsm::{Fsm, FsmScheduler};
+use crate::mailbox::BasicMailbox;
+use crate::router::Router;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
-
-/// `FsmScheduler` schedules `Fsm` for later handles.
-pub trait FsmScheduler {
-    type Fsm: Fsm;
-
-    /// Schedule a Fsm for later handles.
-    fn schedule(&self, fsm: Box<Self::Fsm>);
-    /// Shutdown the scheduler, which indicates that resources like
-    /// background thread pool should be released.
-    fn shutdown(&self);
-}
-
-/// A Fsm is a finite state machine. It should be able to be notified for
-/// updating internal state according to incoming messages.
-pub trait Fsm {
-    type Message: Send;
-
-    fn is_stopped(&self) -> bool;
-
-    /// Set a mailbox to Fsm, which should be used to send message to itself.
-    fn set_mailbox(&mut self, _mailbox: Cow<'_, BasicMailbox<Self>>)
-    where
-        Self: Sized,
-    {
-    }
-    /// Take the mailbox from Fsm. Implementation should ensure there will be
-    /// no reference to mailbox after calling this method.
-    fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
-    where
-        Self: Sized,
-    {
-        None
-    }
-}
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -438,154 +406,4 @@ pub fn create_system<N: Fsm, C: Fsm>(
         workers: vec![],
     };
     (router, system)
-}
-
-#[cfg(test)]
-pub mod tests {
-    use super::super::router::*;
-    use super::*;
-    use std::borrow::Cow;
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-
-    pub type Message = Option<Box<dyn FnOnce(&mut Runner) + Send>>;
-
-    pub struct Runner {
-        is_stopped: bool,
-        recv: mpsc::Receiver<Message>,
-        mailbox: Option<BasicMailbox<Runner>>,
-        pub sender: Option<mpsc::Sender<()>>,
-    }
-
-    impl Fsm for Runner {
-        type Message = Message;
-
-        fn is_stopped(&self) -> bool {
-            self.is_stopped
-        }
-
-        fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>) {
-            self.mailbox = Some(mailbox.into_owned());
-        }
-
-        fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>> {
-            self.mailbox.take()
-        }
-    }
-
-    pub fn new_runner(cap: usize) -> (mpsc::LooseBoundedSender<Message>, Box<Runner>) {
-        let (tx, rx) = mpsc::loose_bounded(cap);
-        let fsm = Runner {
-            is_stopped: false,
-            recv: rx,
-            mailbox: None,
-            sender: None,
-        };
-        (tx, Box::new(fsm))
-    }
-
-    #[derive(Add, PartialEq, Debug, Default, AddAssign, Clone, Copy)]
-    struct HandleMetrics {
-        begin: usize,
-        control: usize,
-        normal: usize,
-    }
-
-    pub struct Handler {
-        local: HandleMetrics,
-        metrics: Arc<Mutex<HandleMetrics>>,
-    }
-
-    impl PollHandler<Runner, Runner> for Handler {
-        fn begin(&mut self, _batch_size: usize) {
-            self.local.begin += 1;
-        }
-
-        fn handle_control(&mut self, control: &mut Runner) -> Option<usize> {
-            self.local.control += 1;
-            while let Ok(r) = control.recv.try_recv() {
-                if let Some(r) = r {
-                    r(control);
-                }
-            }
-            Some(0)
-        }
-
-        fn handle_normal(&mut self, normal: &mut Runner) -> Option<usize> {
-            self.local.normal += 1;
-            while let Ok(r) = normal.recv.try_recv() {
-                if let Some(r) = r {
-                    r(normal);
-                }
-            }
-            Some(0)
-        }
-
-        fn end(&mut self, _normals: &mut [Box<Runner>]) {
-            let mut c = self.metrics.lock().unwrap();
-            *c += self.local;
-            self.local = HandleMetrics::default();
-        }
-    }
-
-    pub struct Builder {
-        metrics: Arc<Mutex<HandleMetrics>>,
-    }
-
-    impl Builder {
-        pub fn new() -> Builder {
-            Builder {
-                metrics: Arc::default(),
-            }
-        }
-    }
-
-    impl HandlerBuilder<Runner, Runner> for Builder {
-        type Handler = Handler;
-
-        fn build(&mut self) -> Handler {
-            Handler {
-                local: HandleMetrics::default(),
-                metrics: self.metrics.clone(),
-            }
-        }
-    }
-
-    #[test]
-    fn test_batch() {
-        let (control_tx, control_fsm) = new_runner(10);
-        let (router, mut system) = super::create_system(2, 2, control_tx, control_fsm);
-        let builder = Builder::new();
-        let metrics = builder.metrics.clone();
-        system.spawn("test".to_owned(), builder);
-        let mut expected_metrics = HandleMetrics::default();
-        assert_eq!(*metrics.lock().unwrap(), expected_metrics);
-        let (tx, rx) = mpsc::unbounded();
-        let tx_ = tx.clone();
-        let r = router.clone();
-        router
-            .send_control(Some(Box::new(move |_: &mut Runner| {
-                let (tx, runner) = new_runner(10);
-                let mailbox = BasicMailbox::new(tx, runner);
-                r.register(1, mailbox);
-                tx_.send(1).unwrap();
-            })))
-            .unwrap();
-        assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));
-        let tx_ = tx.clone();
-        router
-            .send(
-                1,
-                Some(Box::new(move |_: &mut Runner| {
-                    tx_.send(2).unwrap();
-                })),
-            )
-            .unwrap();
-        assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(2));
-        system.shutdown();
-        expected_metrics.control = 1;
-        expected_metrics.normal = 1;
-        expected_metrics.begin = 2;
-        assert_eq!(*metrics.lock().unwrap(), expected_metrics);
-    }
 }
