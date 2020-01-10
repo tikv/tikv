@@ -450,12 +450,12 @@ impl Snapshot for RegionSnapshot {
 }
 
 impl EngineIterator for RegionIterator {
-    fn next(&mut self) -> bool {
-        RegionIterator::next(self)
+    fn next(&mut self) -> engine::Result<bool> {
+        RegionIterator::next(self).map_err(From::from)
     }
 
-    fn prev(&mut self) -> bool {
-        RegionIterator::prev(self)
+    fn prev(&mut self) -> engine::Result<bool> {
+        RegionIterator::prev(self).map_err(From::from)
     }
 
     fn seek(&mut self, key: &Key) -> engine::Result<bool> {
@@ -472,20 +472,16 @@ impl EngineIterator for RegionIterator {
         RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
     }
 
-    fn seek_to_first(&mut self) -> bool {
-        RegionIterator::seek_to_first(self)
+    fn seek_to_first(&mut self) -> engine::Result<bool> {
+        RegionIterator::seek_to_first(self).map_err(From::from)
     }
 
-    fn seek_to_last(&mut self) -> bool {
-        RegionIterator::seek_to_last(self)
+    fn seek_to_last(&mut self) -> engine::Result<bool> {
+        RegionIterator::seek_to_last(self).map_err(From::from)
     }
 
-    fn valid(&self) -> bool {
-        RegionIterator::valid(self)
-    }
-
-    fn status(&self) -> engine::Result<()> {
-        RegionIterator::status(self).map_err(From::from)
+    fn valid(&self) -> engine::Result<bool> {
+        RegionIterator::valid(self).map_err(From::from)
     }
 
     fn validate_key(&self, key: &Key) -> engine::Result<()> {

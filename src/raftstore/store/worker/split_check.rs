@@ -97,7 +97,8 @@ impl<'a> MergedIterator<'a> {
             let iter_opt =
                 IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
             let mut iter = db.new_iterator_cf(cf, iter_opt)?;
-            if iter.seek(start_key.into()) {
+            let found: Result<bool> = iter.seek(start_key.into()).map_err(|e| box_err!(e));
+            if found? {
                 heap.push(KeyEntry::new(
                     iter.key().to_vec(),
                     pos,
@@ -116,7 +117,7 @@ impl<'a> MergedIterator<'a> {
             Some(e) => e.pos,
         };
         let (cf, iter) = &mut self.iters[pos];
-        if iter.next() {
+        if iter.next().unwrap() {
             // TODO: avoid copy key.
             let mut e = KeyEntry::new(iter.key().to_vec(), pos, iter.value().len(), cf);
             let mut front = self.heap.peek_mut().unwrap();

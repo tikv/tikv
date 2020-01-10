@@ -1205,7 +1205,7 @@ impl<E: Engine> Storage<E> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.next(statistics);
+            cursor.next(statistics)?;
         }
         Ok(pairs)
     }
@@ -1237,7 +1237,7 @@ impl<E: Engine> Storage<E> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.prev(statistics);
+            cursor.prev(statistics)?;
         }
         Ok(pairs)
     }

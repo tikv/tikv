@@ -143,14 +143,13 @@ pub trait Snapshot: Send + Debug + Clone + Sized {
 }
 
 pub trait Iterator: Send + Sized {
-    fn next(&mut self) -> bool;
-    fn prev(&mut self) -> bool;
+    fn next(&mut self) -> Result<bool>;
+    fn prev(&mut self) -> Result<bool>;
     fn seek(&mut self, key: &Key) -> Result<bool>;
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool>;
-    fn seek_to_first(&mut self) -> bool;
-    fn seek_to_last(&mut self) -> bool;
-    fn valid(&self) -> bool;
-    fn status(&self) -> Result<()>;
+    fn seek_to_first(&mut self) -> Result<bool>;
+    fn seek_to_last(&mut self) -> Result<bool>;
+    fn valid(&self) -> Result<bool>;
 
     fn validate_key(&self, _: &Key) -> Result<()> {
         Ok(())
@@ -416,22 +415,22 @@ impl<I: Iterator> Cursor<I> {
         }
         if ord == Ordering::Greater {
             near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
+                self.prev(statistics)? && self.key(statistics) > key.as_encoded().as_slice(),
                 self.seek(key, statistics),
                 statistics
             );
             if self.valid()? {
                 if self.key(statistics) < key.as_encoded().as_slice() {
-                    self.next(statistics);
+                    self.next(statistics)?;
                 }
             } else {
-                assert!(self.seek_to_first(statistics));
+                assert!(self.seek_to_first(statistics)?);
                 return Ok(true);
             }
         } else {
             // ord == Less
             near_loop!(
-                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
+                self.next(statistics)? && self.key(statistics) < key.as_encoded().as_slice(),
                 self.seek(key, statistics),
                 statistics
             );
@@ -509,21 +508,21 @@ impl<I: Iterator> Cursor<I> {
 
         if ord == Ordering::Less {
             near_loop!(
-                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
+                self.next(statistics)? && self.key(statistics) < key.as_encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
                 statistics
             );
             if self.valid()? {
                 if self.key(statistics) > key.as_encoded().as_slice() {
-                    self.prev(statistics);
+                    self.prev(statistics)?;
                 }
             } else {
-                assert!(self.seek_to_last(statistics));
+                assert!(self.seek_to_last(statistics)?);
                 return Ok(true);
             }
         } else {
             near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
+                self.prev(statistics)? && self.key(statistics) > key.as_encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
                 statistics
             );
@@ -544,7 +543,7 @@ impl<I: Iterator> Cursor<I> {
         if self.key(statistics) == &**key.as_encoded() {
             // should not update min_key here. otherwise reverse_seek_le may not
             // work as expected.
-            return Ok(self.prev(statistics));
+            return Ok(self.prev(statistics)?);
         }
 
         Ok(true)
@@ -560,7 +559,7 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if self.key(statistics) == &**key.as_encoded() {
-            return Ok(self.prev(statistics));
+            return Ok(self.prev(statistics)?);
         }
 
         Ok(true)
@@ -586,14 +585,14 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
+    pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> Result<bool> {
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek_to_first()
     }
 
     #[inline]
-    pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
+    pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> Result<bool> {
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek_to_last()
@@ -618,14 +617,14 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
+    pub fn next(&mut self, statistics: &mut CFStatistics) -> Result<bool> {
         statistics.next += 1;
         self.mark_unread();
         self.iter.next()
     }
 
     #[inline]
-    pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
+    pub fn prev(&mut self, statistics: &mut CFStatistics) -> Result<bool> {
         statistics.prev += 1;
         self.mark_unread();
         self.iter.prev()
@@ -637,14 +636,7 @@ impl<I: Iterator> Cursor<I> {
     // (2) there is an error. In this case status() is not OK().
     // So check status when iterator is invalidated.
     pub fn valid(&self) -> Result<bool> {
-        if !self.iter.valid() {
-            if let Err(e) = self.iter.status() {
-                return Err(e);
-            }
-            Ok(false)
-        } else {
-            Ok(true)
-        }
+        self.iter.valid()
     }
 }
 
@@ -1190,20 +1182,20 @@ pub mod tests {
 
         let perf_statistics = PerfStatisticsInstant::new();
         let mut statistics = CFStatistics::default();
-        iter.prev(&mut statistics);
+        iter.prev(&mut statistics).unwrap();
 
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
         assert_eq!(iter.value(&mut statistics), b"bar4");
         assert_eq!(statistics.prev, 1);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
-        iter.prev(&mut statistics);
+        iter.prev(&mut statistics).unwrap();
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo2"));
         assert_eq!(iter.value(&mut statistics), b"bar2");
         assert_eq!(statistics.prev, 2);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
 
-        iter.prev(&mut statistics);
+        iter.prev(&mut statistics).unwrap();
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo"));
         assert_eq!(iter.value(&mut statistics), b"bar1");
         assert_eq!(statistics.prev, 3);
