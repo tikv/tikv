@@ -782,7 +782,6 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
             } => self.handle_physical_scan_lock(handle, &ctx, max_ts, sender),
             #[cfg(test)]
             GcTask::Validate(f) => {
-                self.refresh_cfg();
                 f(&self.cfg, &self.limiter);
             }
         };
