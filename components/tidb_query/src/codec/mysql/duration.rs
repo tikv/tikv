@@ -8,7 +8,7 @@ use codec::prelude::*;
 use super::{check_fsp, Decimal, DEFAULT_FSP};
 use crate::codec::convert::ConvertTo;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use crate::codec::mysql::MAX_FSP;
+use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -536,11 +536,27 @@ impl Duration {
         self.format("")
     }
 
-    pub fn from_i64_without_ctx(n: i64, fsp: i8) -> Result<Duration> {
+    pub fn from_i64(ctx: &mut EvalContext, mut n: i64, fsp: i8) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
+
         if n > i64::from(MAX_DURATION_INT_VALUE) || n < -i64::from(MAX_DURATION_INT_VALUE) {
-            // FIXME: parse as `DateTime` if `n >= 10000000000`
-            return Err(Error::overflow("Duration", n));
+            if n >= 10000000000 {
+                if let Ok(t) = DateTime::parse_from_i64(ctx, n, TimeType::DateTime, fsp as i8) {
+                    return t.convert(ctx);
+                }
+            }
+            ctx.handle_overflow_err(Error::overflow("Duration", n))?;
+            // Returns max duration if overflow occurred
+            return Self::new_from_parts(
+                n.is_negative(),
+                MAX_HOUR_PART,
+                MAX_MINUTE_PART,
+                MAX_SECOND_PART,
+                0,
+                fsp,
+            );
         }
+
         let abs = n.abs();
         let hour = (abs / 10000) as u32;
         let minute = ((abs / 100) % 100) as u32;
@@ -554,25 +570,6 @@ impl Duration {
         }
 
         Self::new_from_parts(n.is_negative(), hour, minute, second, 0, fsp)
-    }
-
-    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
-        Duration::from_i64_without_ctx(n, fsp).or_else(|e| {
-            if e.is_overflow() {
-                ctx.handle_overflow_err(e)?;
-                // Returns max duration if overflow occurred
-                Self::new_from_parts(
-                    n.is_negative(),
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    fsp,
-                )
-            } else {
-                Err(e)
-            }
-        })
     }
 }
 
@@ -805,6 +802,8 @@ mod tests {
             (b"18446744073709551615:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
+            (b"1:62:3", 0, None),
+            (b"1:02:63", 0, None),
         ];
 
         for (input, fsp, expect) in cases {
@@ -1119,133 +1118,30 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO: fix these test case after Duration::from_f64
-            //  had impl logic for num>=10000000000
             (
                 10000000000,
                 0,
-                Ok(Duration::new_from_parts(
-                    false,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    0,
-                )
-                .unwrap()),
-                true,
+                Ok(Duration::new_from_parts(false, 0, 0, 0, 0, 0)),
+                false,
             ),
             (
                 10000235959,
                 0,
-                Ok(Duration::new_from_parts(
-                    false,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    0,
-                )
-                .unwrap()),
-                true,
+                Ok(Duration::new_from_parts(false, 23, 59, 59, 0, 0)),
+                false,
             ),
             (
-                10000000001,
+                -10000235959,
                 0,
                 Ok(Duration::new_from_parts(
-                    false,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
+                    true,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
                     0,
                     0,
-                )
-                .unwrap()),
-                true,
-            ),
-            (
-                10000000000,
-                5,
-                Ok(Duration::new_from_parts(
-                    false,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    5,
-                )
-                .unwrap()),
-                true,
-            ),
-            (
-                10000235959,
-                5,
-                Ok(Duration::new_from_parts(
-                    false,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    5,
-                )
-                .unwrap()),
-                true,
-            ),
-            (
-                10000000001,
-                5,
-                Ok(Duration::new_from_parts(
-                    false,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    5,
-                )
-                .unwrap()),
-                true,
-            ),
-            (
-                10000000000,
-                6,
-                Ok(Duration::new_from_parts(
-                    false,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    6,
-                )
-                .unwrap()),
-                true,
-            ),
-            (
-                10000235959,
-                6,
-                Ok(Duration::new_from_parts(
-                    false,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    6,
-                )
-                .unwrap()),
-                true,
-            ),
-            (
-                10000000001,
-                6,
-                Ok(Duration::new_from_parts(
-                    false,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    6,
-                )
-                .unwrap()),
-                true,
+                )),
+                false,
             ),
         ];
         for (input, fsp, expect, overflow) in cs {
