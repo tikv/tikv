@@ -779,13 +779,13 @@ impl<T: PdClient + ConfigClient> Runner<T> {
 
     fn handle_refresh_config(&mut self, handle: &Handle) {
         let config_handler = &mut self.config_handler;
-        info!(
+        debug!(
             "refresh config";
             "component id" => config_handler.get_id(),
             "version" => ?config_handler.get_version()
         );
         if let Err(e) = config_handler.refresh_config(self.pd_client.clone()) {
-            error!(
+            warn!(
                 "failed to refresh config";
                 "component id" => config_handler.get_id(),
                 "version" => ?config_handler.get_version(),
