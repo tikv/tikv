@@ -5,6 +5,8 @@ edition = "2018"
 publish = false
 
 [dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+futures-executor = "0.3"
 crc32fast = "1.2"
 engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage" }
@@ -35,6 +37,5 @@ tempfile = "3.0"
 test_sst_importer = { path = "../test_sst_importer" }
 
 [features]
-default = ["protobuf-codec"]
 protobuf-codec = ["kvproto/protobuf-codec", "external_storage/protobuf-codec"]
 prost-codec = ["kvproto/prost-codec", "external_storage/prost-codec"]

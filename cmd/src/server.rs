@@ -32,7 +32,7 @@ use std::{
 use tikv::config::ConfigHandler;
 use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::{
-    config::{ConfigController, TiKvConfig},
+    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
     raftstore::{
@@ -321,6 +321,16 @@ impl TiKVServer {
             LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            "rocksdb",
+            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
+        );
+        cfg_controller.register(
+            "raftdb",
+            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
+        );
+
         let engine = RaftKv::new(raft_router.clone());
 
         self.engines = Some(Engines {
@@ -331,7 +341,7 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&self) -> GcWorker<RaftKv<ServerRaftStoreRouter>> {
+    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -343,6 +353,9 @@ impl TiKVServer {
         gc_worker
             .start()
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
+        gc_worker
+            .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
+            .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
         gc_worker
     }

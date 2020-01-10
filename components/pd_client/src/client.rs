@@ -16,7 +16,7 @@ use kvproto::pdpb::{self, Member};
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Config, PdFuture, UnixSecs};
-use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
+use super::{ConfigClient, Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use tikv_util::security::SecurityManager;
 use tikv_util::time::duration_to_sec;
 use tikv_util::{Either, HandyRwLock};
@@ -572,7 +572,6 @@ impl PdClient for RpcClient {
 
         Ok(resp)
     }
-
     // TODO: The current implementation is not efficient, because it creates
     //       a RPC for every `PdFuture<TimeStamp>`. As a duplex streaming RPC,
     //       we could use one RPC for many `PdFuture<TimeStamp>`.
@@ -626,7 +625,9 @@ impl PdClient for RpcClient {
             .client_stub
             .spawn(future.map_err(|_| ()));
     }
+}
 
+impl ConfigClient for RpcClient {
     fn register_config(
         &self,
         id: String,
