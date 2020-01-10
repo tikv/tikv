@@ -212,10 +212,11 @@ fn test_stale_peer_cache() {
 // suppose there are 3 peers (1, 2, and 3) in a Raft group, and then
 // 1. propose to add peer 4 on the current leader 1;
 // 2. leader 1 appends entries to peer 3, and peer 3 applys them;
-// 3. the leadersip is transfered to peer 2, and peer 2 sends a snapshot to 3;
-// 4. peer 3 restores the snapshot into memory
-// 5. then peer 3 calling `Raft::apply_conf_change` to add peer 4;
-// 6. so the disk configuration `[1, 2, 3]` is different from memory configuration `[1, 2, 3, 4]`.
+// 3. leadersip is transfered to peer 2, and a new proposal to remove peer 4 is proposed;
+// 4. peer 2 sends a snapshot with latest configuration [1, 2, 3] to peer 3;
+// 5. peer 3 restores the snapshot into memory;
+// 6. then peer 3 calling `Raft::apply_conf_change` to add peer 4;
+// 7. so the disk configuration `[1, 2, 3]` is different from memory configuration `[1, 2, 3, 4]`.
 #[test]
 fn test_redundant_conf_change_by_snapshot() {
     let _guard = crate::setup();

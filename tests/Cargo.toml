@@ -42,7 +42,6 @@ name = "channel"
 path = "benches/channel/mod.rs"
 
 [features]
-default = ["protobuf-codec", "failpoints"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 profiling = ["profiler/profiling"]
 protobuf-codec = ["tikv/protobuf-codec", "external_storage/protobuf-codec"]
