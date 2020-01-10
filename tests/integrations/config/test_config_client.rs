@@ -8,7 +8,7 @@ use kvproto::configpb::*;
 
 use configuration::{ConfigChange, Configuration};
 use pd_client::errors::Result;
-use pd_client::PdClient;
+use pd_client::ConfigClient;
 use tikv::config::*;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv_util::config::ReadableDuration;
@@ -79,7 +79,7 @@ impl MockPdClient {
     }
 }
 
-impl PdClient for MockPdClient {
+impl ConfigClient for MockPdClient {
     fn register_config(&self, id: String, v: Version, cfg: String) -> Result<CreateResponse> {
         let old = self
             .configs

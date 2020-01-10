@@ -12,7 +12,7 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
-use configuration::Configuration;
+use configuration::{ConfigChange, Configuration};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
@@ -27,6 +27,7 @@ use log_wrappers::DisplayValue;
 use raft::StateRole;
 use tokio_core::reactor::Handle;
 
+use crate::config::ConfigManager;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
@@ -103,6 +104,23 @@ impl GcConfig {
 }
 
 pub type GcWorkerConfigManager = Arc<VersionTrack<GcConfig>>;
+
+impl ConfigManager for GcWorkerConfigManager {
+    fn dispatch(
+        &mut self,
+        change: ConfigChange,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        {
+            let change = change.clone();
+            self.update(move |cfg: &mut GcConfig| cfg.update(change));
+        }
+        info!(
+            "GC worker config changed";
+            "change" => ?change,
+        );
+        Ok(())
+    }
+}
 
 /// Provides safe point.
 /// TODO: Give it a better name?
@@ -680,10 +698,6 @@ impl<E: Engine> GcRunner<E> {
             self.limiter
                 .set_speed_limit(if limit > 0 { limit as f64 } else { INFINITY });
             self.cfg = incoming.clone();
-            info!(
-                "GC worker config changed";
-                "new config" => ?self.cfg,
-            );
         }
     }
 }
@@ -749,7 +763,6 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
             } => self.handle_physical_scan_lock(handle, &ctx, max_ts, sender),
             #[cfg(test)]
             GcTask::Validate(f) => {
-                self.refresh_cfg();
                 f(&self.cfg, &self.limiter);
             }
         };
