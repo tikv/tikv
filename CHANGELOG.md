@@ -6,7 +6,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + backup 
     + Change the name of the backup file from `start_key` to the hash value of `start_key` to reduce the file name's length for easy reading (https://github.com/tikv/tikv/pull/6198)
     + Disable RocksDB's `force_consistency_checks` check to avoid false positives in the consistency check [#6249](https://github.com/tikv/tikv/pull/6249)
-    + Add the incremental backup feature [#6286] (https://github.com/tikv/tikv/pull/6286)
+    + Add the incremental backup feature [#6286](https://github.com/tikv/tikv/pull/6286)
 
 + sst_importer
     + Fix the issue that the SST file does not have MVCC properties during  restoring [#6378](https://github.com/tikv/tikv/pull/6378)
