@@ -532,12 +532,10 @@ impl Duration {
         self.format("")
     }
 
-    pub fn from_i64(ctx: &mut EvalContext, mut n: i64, fsp: i8) -> Result<Duration> {
-        let fsp = check_fsp(fsp)?;
-
+    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
         if n > i64::from(MAX_DURATION_INT_VALUE) || n < -i64::from(MAX_DURATION_INT_VALUE) {
             if n >= 10000000000 {
-                if let Ok(t) = DateTime::parse_from_i64(ctx, n, TimeType::DateTime, fsp as i8) {
+                if let Ok(t) = DateTime::parse_from_i64(ctx, n, TimeType::DateTime, fsp) {
                     return t.convert(ctx);
                 }
             }
@@ -549,7 +547,7 @@ impl Duration {
                 MAX_MINUTE_PART,
                 MAX_SECOND_PART,
                 0,
-                fsp as i8,
+                fsp,
             );
         }
 
@@ -1117,13 +1115,13 @@ mod tests {
             (
                 10000000000,
                 0,
-                Ok(Duration::new_from_parts(false, 0, 0, 0, 0, 0)),
+                Ok(Duration::new_from_parts(false, 0, 0, 0, 0, 0).unwrap()),
                 false,
             ),
             (
                 10000235959,
                 0,
-                Ok(Duration::new_from_parts(false, 23, 59, 59, 0, 0)),
+                Ok(Duration::new_from_parts(false, 23, 59, 59, 0, 0).unwrap()),
                 false,
             ),
             (
@@ -1136,7 +1134,8 @@ mod tests {
                     MAX_SECOND_PART,
                     0,
                     0,
-                )),
+                )
+                .unwrap()),
                 false,
             ),
         ];
