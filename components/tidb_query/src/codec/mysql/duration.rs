@@ -99,7 +99,7 @@ mod parser {
         let len = input
             .iter()
             .position(|&c| !pattern(c))
-            .unwrap_or_else(||input.len());
+            .unwrap_or_else(|| input.len());
 
         if len >= n {
             Some((&input[len..], &input[..len]))
@@ -123,7 +123,7 @@ mod parser {
         let (rest, _) = space(&input[1..], 0)?;
         rest.get(0)
             .filter(|&&c| c == b'.')
-            .or_else(||rest.get(0).filter(|&&c| c.is_ascii_digit()))?;
+            .or_else(|| rest.get(0).filter(|&&c| c.is_ascii_digit()))?;
         Some((rest, true))
     }
 
@@ -201,7 +201,7 @@ mod parser {
             rest = remain;
             hhmmss
         } else {
-            let hhmmss = [day/10000, (day/100) %100,day%100,0];
+            let hhmmss = [day / 10000, (day / 100) % 100, day % 100, 0];
             day = 0;
             hhmmss
         };
