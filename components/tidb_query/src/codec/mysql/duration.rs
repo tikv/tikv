@@ -82,180 +82,143 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 }
 
 mod parser {
-    use super::{
-        check_hour_part, check_minute_part, check_second_part, Error, NANO_WIDTH, TEN_POW,
-    };
-    use nom::character::complete::{digit1, multispace0, multispace1};
-    use nom::{
-        alt, call, char, complete, cond, do_parse, eof, map, map_res, opt, peek, preceded, tag,
-        IResult,
-    };
+    use super::*;
 
-    #[inline]
-    fn buf_to_int(buf: &[u8]) -> u32 {
-        buf.iter().fold(0, |acc, c| acc * 10 + u32::from(c - b'0'))
-    }
-
-    /// Extracts a `u32` from a buffer which matches pattern: `\d+.*`
-    ///
-    /// ```ignore
-    /// assert_eq!(read_int(b"123abc"), Ok((b"abc", 123)));
-    /// assert_eq!(read_int(b"12:34"), Ok((b":34", 12)));
-    /// assert!(read_int(b"12345678:1").is_err());
-    /// ```
-    ///
-    /// NOTE:
-    /// The range of MySQL's TIME is `-838:59:59 ~ 838:59:59`, so we can at most read 7 digits
-    /// (pattern like `HHHMMSS`)
-    fn read_int(input: &[u8]) -> IResult<&[u8], u32> {
-        map_res!(input, digit1, |buf: &[u8]| {
-            if buf.len() <= 7 {
-                Ok(buf_to_int(buf))
+    fn bytes_to_u32(bytes: &[u8]) -> Option<u32> {
+        bytes.iter().try_fold(0u32, |acc, c| {
+            if c.is_ascii_digit() {
+                acc.checked_mul(10)
+                    .and_then(|t| t.checked_add(u32::from(c - b'0')))
             } else {
-                Err(Error::truncated_wrong_val("TIME DIGITS", 7))
+                None
             }
         })
     }
 
-    /// Extracts a `u32` with length `fsp` from a buffer which matches pattern: `\d+.*`
-    /// This function assumes that `fsp` is valid
-    ///
-    /// ```ignore
-    /// assert_eq!(read_int_with_fsp(b"1234567", 3), Ok(b"", 123400000));
-    /// assert_eq!(read_int_with_fsp(b"1234", 6), Ok(b"", 123400000));
-    /// ```
-    ///
-    /// NOTE:
-    /// 1. The behavior of this function is similar to `read_int` except that it's designed to read the
-    /// fractional part of a `TIME`
-    /// 2. The fractional part will be align to a 9-digit number which it's easy to round with `fsp`
-    ///
-    /// FIXME: the fraction should not be round, it's incompatible with MySQL.
-    fn read_int_with_fsp(input: &[u8], fsp: u8) -> IResult<&[u8], u32> {
-        map!(input, digit1, |buf: &[u8]| -> u32 {
-            let fsp = usize::from(fsp);
-            let (fraction, len) = if fsp >= buf.len() {
-                (buf_to_int(buf), buf.len())
+    fn repeat(input: &[u8], pattern: impl Fn(u8) -> bool, n: usize) -> Option<(&[u8], &[u8])> {
+        let len = input
+            .iter()
+            .position(|&c| !pattern(c))
+            .unwrap_or_else(||input.len());
+
+        if len >= n {
+            Some((&input[len..], &input[..len]))
+        } else {
+            None
+        }
+    }
+
+    fn digit(input: &[u8], n: usize) -> Option<(&[u8], &[u8])> {
+        repeat(input, |c| c.is_ascii_digit(), n)
+    }
+
+    fn space(input: &[u8], n: usize) -> Option<(&[u8], &[u8])> {
+        repeat(input, |c| c.is_ascii_whitespace(), n)
+    }
+
+    fn negative(input: &[u8]) -> Option<(&[u8], bool)> {
+        if input.get(0) != Some(&b'-') {
+            return Some((input, false));
+        }
+        let (rest, _) = space(&input[1..], 0)?;
+        rest.get(0)
+            .filter(|&&c| c == b'.')
+            .or_else(||rest.get(0).filter(|&&c| c.is_ascii_digit()))?;
+        Some((rest, true))
+    }
+
+    fn day(input: &[u8]) -> Option<(&[u8], u32)> {
+        if let Some((rest, day)) = digit(input, 1) {
+            let (rest, _) = space(rest, 0)?;
+            if rest.is_empty()
+                || rest.get(0).filter(|&&c| c == b'.').is_some()
+                || rest.get(0).filter(|&&c| c.is_ascii_digit()).is_some()
+            {
+                return Some((rest, bytes_to_u32(day)?));
+            }
+        }
+        Some((input, 0))
+    }
+
+    fn delimeter(input: &[u8]) -> Option<(&[u8], u8)> {
+        let (rest, _) = space(input, 0)?;
+        rest.get(0).filter(|&&c| c == b':')?;
+        let (rest, _) = space(&rest[1..], 0)?;
+        Some((rest, b':'))
+    }
+
+    fn hms(input: &[u8]) -> Option<(&[u8], [u32; 4])> {
+        let mut hms = [0; 4];
+
+        let (mut rest, hour) = digit(input, 1)?;
+        hms[0] = bytes_to_u32(hour)?;
+
+        for i in 1..=2 {
+            if let Some((remain, _)) = delimeter(rest) {
+                let (remain, digits) = digit(remain, 1)?;
+                hms[i] = bytes_to_u32(digits)?;
+                rest = remain;
             } else {
-                (buf_to_int(&buf[..=fsp]), fsp + 1)
-            };
-            fraction * TEN_POW[NANO_WIDTH.saturating_sub(len)]
-        })
+                break;
+            }
+        }
+
+        if [check_hour_part, check_minute_part, check_second_part]
+            .iter()
+            .zip(hms.iter())
+            .any(|(validator, &v)| validator(v).is_err())
+        {
+            return None;
+        }
+
+        Some((rest, hms))
     }
 
-    /// Parse the sign of `Duration`, return true if it's negative otherwise false
-    ///
-    /// ```ignore
-    /// assert_eq!(neg(b"- .123"),  Ok(b".123", true));
-    /// assert_eq!(neg(b"-.123"),   Ok(b".123", true));
-    /// assert_eq!(neg(b"- 11:21"), Ok(b"11:21", true));
-    /// assert_eq!(neg(b"-11:21"),  Ok(b"11:21", true));
-    /// assert_eq!(neg(b"11:21"),   Ok(b"11:21", false));
-    /// ```
-    fn neg(input: &[u8]) -> IResult<&[u8], bool> {
-        do_parse!(
-            input,
-            neg: map!(opt!(complete!(char!('-'))), |flag| flag.is_some())
-                >> preceded!(
-                    multispace0,
-                    alt!(complete!(peek!(call!(digit1))) | complete!(peek!(tag!("."))))
-                )
-                >> (neg)
-        )
+    fn fraction(input: &[u8], fsp: u8) -> Option<(&[u8], u32)> {
+        input.get(0).filter(|&&c| c == b'.')?;
+        let (rest, bytes) = digit(&input[1..], 0)?;
+        let fsp = usize::from(fsp);
+        let (fraction, len) = if fsp >= bytes.len() {
+            (bytes_to_u32(bytes)?, bytes.len())
+        } else {
+            (bytes_to_u32(&bytes[..=fsp])?, fsp + 1)
+        };
+        Some((rest, fraction * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
 
-    /// Parse the day/block(format like `HHMMSS`) value of the `Duration`,
-    /// further paring will determine the value we got is a `day` value or `block` value.
-    ///
-    /// ```ignore
-    /// assert_eq!(day(b"1 1:1"), Ok(b"1:1", Some(1)));
-    /// assert_eq!(day(b"1234"), Ok(b"", Some(1234)));
-    /// assert_eq!(day(b"1234.123"), Ok(b".123", Some(1234)));
-    /// assert_eq!(day(b"1:2:3"), Ok(b"1:2:3", None));
-    /// assert_eq!(day(b".123"), Ok(b".123", None));
-    /// ```
-    fn day(input: &[u8]) -> IResult<&[u8], Option<u32>> {
-        opt!(
-            input,
-            do_parse!(
-                day: read_int
-                    >> alt!(
-                        complete!(preceded!(multispace1, peek!(call!(digit1))))
-                            | complete!(preceded!(
-                                multispace0,
-                                alt!(complete!(peek!(tag!("."))) | complete!(eof!()))
-                            ))
-                    )
-                    >> (day)
-            )
-        )
-    }
+    pub fn parse(input: &[u8], fsp: u8) -> Option<Duration> {
+        let input = std::str::from_utf8(input).ok()?.trim().as_bytes();
+        if input.is_empty() {
+            return Some(Duration::zero());
+        }
 
-    /// Parse a separator ':'
-    ///
-    /// ```ignore
-    /// assert_eq!(separator(b" : "), Ok(b"", true));
-    /// assert_eq!(separator(b":"), Ok(b"", true));
-    /// assert_eq!(separator(b";"), Ok(b";", false));
-    /// ```
-    fn separator(input: &[u8]) -> IResult<&[u8], bool> {
-        do_parse!(
-            input,
-            multispace0
-                >> has_separator: map!(opt!(complete!(char!(':'))), |flag| flag.is_some())
-                >> multispace0
-                >> (has_separator)
-        )
-    }
+        let (rest, negative) = negative(input)?;
+        let (rest, mut day) = day(rest)?;
+        let (mut rest, _) = space(rest, 0)?;
 
-    /// Parse format like: `hh:mm` `hh:mm:ss`
-    ///
-    /// ```ignore
-    /// assert_eq!(hhmmss(b"12:34:56"), Ok(b"", [12, 34, 56]));
-    /// assert_eq!(hhmmss(b"12:34"), Ok(b"", [12, 34, None]));
-    /// assert_eq!(hhmmss(b"1234"), Ok(b"", [None, None, None]));
-    /// ```
-    fn hhmmss(input: &[u8]) -> IResult<&[u8], [Option<u32>; 3]> {
-        do_parse!(
-            input,
-            hour: opt!(map_res!(read_int, check_hour_part))
-                >> has_mintue: separator
-                >> minute: cond!(has_mintue, map_res!(read_int, check_minute_part))
-                >> has_second: separator
-                >> second: cond!(has_second, map_res!(read_int, check_second_part))
-                >> ([hour, minute, second])
-        )
-    }
+        let mut parts = if rest.get(0).filter(|&&c| c.is_ascii_digit()).is_some() {
+            let (remain, hhmmss) = hms(rest)?;
+            rest = remain;
+            hhmmss
+        } else {
+            let hhmmss = [day/10000, (day/100) %100,day%100,0];
+            day = 0;
+            hhmmss
+        };
 
-    /// Parse fractional part.
-    ///
-    /// ```ignore
-    /// assert_eq!(fraction(" .123", 3), Ok(b"", Some(123)));
-    /// assert_eq!(fraction("123", 3), Ok(b"", None));
-    /// ```
-    fn fraction(input: &[u8], fsp: u8) -> IResult<&[u8], Option<u32>> {
-        do_parse!(
-            input,
-            multispace0
-                >> opt!(complete!(char!('.')))
-                >> fraction: opt!(call!(read_int_with_fsp, fsp))
-                >> multispace0
-                >> (fraction)
-        )
-    }
+        parts[0] += day * 24;
+        check_hour_part(parts[0]).ok()?;
 
-    /// Parse `Duration`
-    pub fn parse(input: &[u8], fsp: u8) -> IResult<&[u8], (bool, [Option<u32>; 5])> {
-        do_parse!(
-            input,
-            multispace0
-                >> neg: neg
-                >> day: day
-                >> hhmmss: hhmmss
-                >> fraction: call!(fraction, fsp)
-                >> eof!()
-                >> (neg, [day, hhmmss[0], hhmmss[1], hhmmss[2], fraction])
-        )
+        let (mut rest, _) = space(rest, 0)?;
+        if rest.get(0).filter(|&&c| c == b'.').is_some() {
+            let (remain, frac) = fraction(rest, fsp)?;
+            rest = remain;
+            parts[3] = frac;
+        }
+        if !rest.is_empty() {
+            return None;
+        }
+        Duration::new_from_parts(negative, parts[0], parts[1], parts[2], parts[3], fsp as i8).ok()
     }
 } /* parser */
 
@@ -435,31 +398,8 @@ impl Duration {
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-
-        if input.is_empty() {
-            return Ok(Duration::zero());
-        }
-
-        let (neg, [mut day, mut hour, mut minute, mut second, nano]) =
-            self::parser::parse(input, fsp as u8)
-                .map_err(|_| Error::truncated_wrong_val("time", format!("{:?}", input)))?
-                .1;
-
-        if day.is_some() && hour.is_none() {
-            let block = day.take().unwrap();
-            hour = Some(block / 10000);
-            minute = Some(block / 100 % 100);
-            second = Some(block % 100);
-        }
-
-        Self::new_from_parts(
-            neg,
-            day.unwrap_or(0) * 24 + hour.unwrap_or(0),
-            minute.unwrap_or(0),
-            second.unwrap_or(0),
-            nano.unwrap_or(0),
-            fsp as i8,
-        )
+        parser::parse(input, fsp)
+            .ok_or_else(|| Error::truncated_wrong_val("TIME", format!("{:?}", input)))
     }
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.
@@ -798,6 +738,7 @@ mod tests {
             (b"1.23 3", 0, None),
             (b"1:62:3", 0, None),
             (b"1:02:63", 0, None),
+            (b"-231342080", 0, None),
         ];
 
         for (input, fsp, expect) in cases {
