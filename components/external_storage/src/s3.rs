@@ -1,11 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{Error, ErrorKind, Read, Result};
+use std::io::{Error, ErrorKind, Result};
+
+use bytes::Bytes;
+use futures01::stream::Stream;
+use futures_io::AsyncRead;
+use futures_util::compat::AsyncRead01CompatExt;
+use futures_util::io::AsyncReadExt;
+use tokio::codec::{BytesCodec, FramedRead};
 
 use rusoto_core::region;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::{HttpClient, HttpConfig};
-use rusoto_core::RusotoError;
+use rusoto_core::{ByteStream, RusotoError};
 use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_s3::*;
 
@@ -85,9 +92,11 @@ impl S3Storage {
 }
 
 impl ExternalStorage for S3Storage {
-    fn write(&self, name: &str, reader: &mut dyn Read) -> Result<()> {
-        let mut content = vec![];
-        reader.read_to_end(&mut content)?;
+    fn write(
+        &self,
+        name: &str,
+        reader: &mut (dyn AsyncRead + Unpin + Send + 'static),
+    ) -> Result<()> {
         let key = self.maybe_prefix_key(name);
         debug!("save file to s3 storage"; "key" => %key);
         let get_var = |s: &String| {
@@ -100,7 +109,9 @@ impl ExternalStorage for S3Storage {
         let req = PutObjectRequest {
             key,
             bucket: self.config.bucket.clone(),
-            body: Some(content.into()),
+            body: Some(ByteStream::new(
+                FramedRead::new(reader.compat(), BytesCodec::new()).map(|bytes| Bytes::from(bytes)),
+            )),
             acl: get_var(&self.config.acl),
             server_side_encryption: get_var(&self.config.sse),
             storage_class: get_var(&self.config.storage_class),
@@ -113,7 +124,7 @@ impl ExternalStorage for S3Storage {
             .map_err(|e| Error::new(ErrorKind::Other, format!("failed to put object {}", e)))
     }
 
-    fn read(&self, name: &str) -> Result<Box<dyn Read>> {
+    fn read(&self, name: &str) -> Result<Box<dyn AsyncRead + Unpin>> {
         let key = self.maybe_prefix_key(name);
         debug!("read file from s3 storage"; "key" => %key);
         let req = GetObjectRequest {
@@ -124,7 +135,7 @@ impl ExternalStorage for S3Storage {
         self.client
             .get_object(req)
             .sync()
-            .map(|out| Box::new(out.body.unwrap().into_blocking_read()) as _)
+            .map(|out| Box::new(out.body.unwrap().into_async_read().compat()) as _)
             .map_err(|e| match e.into() {
                 RusotoError::Service(GetObjectError::NoSuchKey(key)) => Error::new(
                     ErrorKind::NotFound,

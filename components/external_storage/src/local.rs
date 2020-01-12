@@ -2,7 +2,7 @@
 
 use std::fs::{self, File};
 use std::io;
-use std::marker::Unpin;
+use std::marker::{Send, Unpin};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -55,7 +55,11 @@ impl LocalStorage {
 }
 
 impl ExternalStorage for LocalStorage {
-    fn write(&self, name: &str, reader: &mut (dyn AsyncRead + Unpin)) -> io::Result<()> {
+    fn write(
+        &self,
+        name: &str,
+        reader: &mut (dyn AsyncRead + Send + Unpin + 'static),
+    ) -> io::Result<()> {
         // Storage does not support dir,
         // "a/a.sst", "/" and "" will return an error.
         if Path::new(name)

@@ -1082,6 +1082,9 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "bytes 0.4.12",
+ "futures 0.1.29",
+ "futures 0.3.1",
  "futures-executor",
  "futures-io",
  "futures-util",
@@ -1095,6 +1098,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "tikv_alloc",
+ "tokio 0.1.22",
  "url 2.1.0",
 ]
 
