@@ -2307,6 +2307,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_change_io_limit_by_config_manager() {
         let mut cfg = TiKvConfig::default();
         cfg.validate().unwrap();
@@ -2346,6 +2347,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_change_io_limit_by_debugger() {
         // Debugger use GcWorkerConfigManager to change io limit
         let mut cfg = TiKvConfig::default();
