@@ -2,36 +2,40 @@
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::{i64, u64};
 
 use codec::prelude::*;
 
-use super::{check_fsp, Decimal};
+use super::{check_fsp, Decimal, DEFAULT_FSP};
 use crate::codec::convert::ConvertTo;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use crate::codec::mysql::MAX_FSP;
+use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
-use bitfield::bitfield;
-
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
+pub const NANOS_PER_MILLI: i64 = 1_000_000;
+pub const NANOS_PER_MICRO: i64 = 1_000;
 pub const MICROS_PER_SEC: i64 = 1_000_000;
 pub const NANO_WIDTH: usize = 9;
 pub const MICRO_WIDTH: usize = 6;
 
-const SECS_PER_HOUR: u32 = 3600;
-const SECS_PER_MINUTE: u32 = 60;
+const SECS_PER_HOUR: i64 = 3600;
+const SECS_PER_MINUTE: i64 = 60;
 
-const MAX_HOURS: u32 = 838;
-const MAX_MINUTES: u32 = 59;
-const MAX_SECONDS: u32 = 59;
-const MAX_MICROS: u32 = 999_999;
-const MAX_DURATION_VALUE: u32 = MAX_HOURS * 10000 + MAX_MINUTES * 100 + MAX_SECONDS;
+const MAX_HOUR_PART: u32 = 838;
+const MAX_MINUTE_PART: u32 = 59;
+const MAX_SECOND_PART: u32 = 59;
+const MAX_NANOS_PART: u32 = 999_999_999;
+const MAX_NANOS: i64 = ((MAX_HOUR_PART as i64 * SECS_PER_HOUR)
+    + MAX_MINUTE_PART as i64 * SECS_PER_MINUTE
+    + MAX_SECOND_PART as i64)
+    * NANOS_PER_SEC
+    + MAX_NANOS_PART as i64;
+const MAX_DURATION_INT_VALUE: u32 = MAX_HOUR_PART * 10000 + MAX_MINUTE_PART * 100 + MAX_SECOND_PART;
 
 #[inline]
-fn check_hour(hour: u32) -> Result<u32> {
-    if hour > MAX_HOURS {
+fn check_hour_part(hour: u32) -> Result<u32> {
+    if hour > MAX_HOUR_PART {
         Err(Error::Eval(
             "DURATION OVERFLOW".to_string(),
             ERR_DATA_OUT_OF_RANGE,
@@ -42,8 +46,8 @@ fn check_hour(hour: u32) -> Result<u32> {
 }
 
 #[inline]
-fn check_minute(minute: u32) -> Result<u32> {
-    if minute > MAX_MINUTES {
+fn check_minute_part(minute: u32) -> Result<u32> {
+    if minute > MAX_MINUTE_PART {
         Err(Error::truncated_wrong_val("MINUTES", minute))
     } else {
         Ok(minute)
@@ -51,8 +55,8 @@ fn check_minute(minute: u32) -> Result<u32> {
 }
 
 #[inline]
-fn check_second(second: u32) -> Result<u32> {
-    if second > MAX_SECONDS {
+fn check_second_part(second: u32) -> Result<u32> {
+    if second > MAX_SECOND_PART {
         Err(Error::truncated_wrong_val("SECONDS", second))
     } else {
         Ok(second)
@@ -60,16 +64,27 @@ fn check_second(second: u32) -> Result<u32> {
 }
 
 #[inline]
-fn check_micros(micros: u32) -> Result<u32> {
-    if micros > MAX_MICROS {
-        Err(Error::truncated_wrong_val("MICROS", micros))
+fn check_nanos_part(nanos: u32) -> Result<u32> {
+    if nanos > MAX_NANOS_PART {
+        Err(Error::truncated_wrong_val("NANOS", nanos))
     } else {
-        Ok(micros)
+        Ok(nanos)
+    }
+}
+
+#[inline]
+fn check_nanos(nanos: i64) -> Result<i64> {
+    if nanos.abs() > MAX_NANOS {
+        Err(Error::truncated_wrong_val("NANOS", nanos))
+    } else {
+        Ok(nanos)
     }
 }
 
 mod parser {
-    use super::{check_hour, check_minute, check_second, Error, MICRO_WIDTH, TEN_POW};
+    use super::{
+        check_hour_part, check_minute_part, check_second_part, Error, NANO_WIDTH, TEN_POW,
+    };
     use nom::character::complete::{digit1, multispace0, multispace1};
     use nom::{
         alt, call, char, complete, cond, do_parse, eof, map, map_res, opt, peek, preceded, tag,
@@ -124,7 +139,7 @@ mod parser {
             } else {
                 (buf_to_int(&buf[..=fsp]), fsp + 1)
             };
-            fraction * TEN_POW[MICRO_WIDTH.checked_sub(len).unwrap_or(0)]
+            fraction * TEN_POW[NANO_WIDTH.saturating_sub(len)]
         })
     }
 
@@ -203,11 +218,11 @@ mod parser {
     fn hhmmss(input: &[u8]) -> IResult<&[u8], [Option<u32>; 3]> {
         do_parse!(
             input,
-            hour: opt!(map_res!(read_int, check_hour))
+            hour: opt!(map_res!(read_int, check_hour_part))
                 >> has_mintue: separator
-                >> minute: cond!(has_mintue, map_res!(read_int, check_minute))
+                >> minute: cond!(has_mintue, map_res!(read_int, check_minute_part))
                 >> has_second: separator
-                >> second: cond!(has_second, map_res!(read_int, check_second))
+                >> second: cond!(has_second, map_res!(read_int, check_second_part))
                 >> ([hour, minute, second])
         )
     }
@@ -244,217 +259,178 @@ mod parser {
     }
 } /* parser */
 
-bitfield! {
-    #[derive(Clone, Copy)]
-    pub struct Duration(u64);
-    impl Debug;
-    #[inline]
-    bool, get_neg, set_neg: 63;
-    #[inline]
-    bool, get_reserved, set_reserved: 62;
-    #[inline]
-    u32, get_hours, set_hours: 61, 48;
-    #[inline]
-    u32, get_minutes, set_minutes: 47, 40;
-    #[inline]
-    u32, get_secs, set_secs: 39, 32;
-    #[inline]
-    u32, get_micros, set_micros: 31, 8;
-    #[inline]
-    u8, get_fsp, set_fsp: 7, 0;
+#[inline]
+fn round(nanos: i64, fsp: u8) -> i64 {
+    let min_step = TEN_POW[NANO_WIDTH - fsp as usize] as i64;
+    let rem = nanos % min_step;
+    if rem.abs() < min_step / 2 {
+        nanos - rem
+    } else {
+        nanos - rem + min_step * nanos.signum()
+    }
 }
 
-/// Rounds `micros` with `fsp` and handles the carry.
-#[inline]
-fn round(
-    hours: &mut u32,
-    minutes: &mut u32,
-    secs: &mut u32,
-    micros: &mut u32,
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct Duration {
+    nanos: i64,
     fsp: u8,
-) -> Result<()> {
-    if *micros < 1_000_000 {
-        *micros *= 10;
-    }
-
-    let fsp = usize::from(fsp);
-
-    *micros = if fsp == MICRO_WIDTH {
-        (*micros + 5) / 10
-    } else {
-        let mask = TEN_POW[MICRO_WIDTH - fsp];
-        (*micros / mask + 5) / 10 * mask
-    };
-
-    if *micros >= 1_000_000 {
-        *micros -= 1_000_000;
-        *secs += 1;
-        if *secs >= 60 {
-            *secs -= 60;
-            *minutes += 1;
-        }
-        if *minutes >= 60 {
-            *minutes -= 60;
-            *hours += 1;
-        }
-    }
-
-    check_hour(*hours)?;
-    Ok(())
 }
 
 impl Duration {
-    /// Raw transmutation to u64.
     #[inline]
-    pub fn to_bits(self) -> u64 {
-        self.0
-    }
-
-    #[inline]
-    pub fn neg(self) -> bool {
-        self.get_neg()
+    pub fn is_neg(self) -> bool {
+        self.nanos < 0
     }
 
     #[inline]
     pub fn hours(self) -> u32 {
-        self.get_hours()
+        (self.to_secs().abs() / SECS_PER_HOUR) as u32
     }
 
     #[inline]
     pub fn minutes(self) -> u32 {
-        self.get_minutes()
+        (self.to_secs().abs() / SECS_PER_MINUTE % 60) as u32
     }
 
     #[inline]
     pub fn secs(self) -> u32 {
-        self.get_secs()
+        (self.to_secs().abs() % SECS_PER_MINUTE) as u32
     }
 
+    /// Returns the fractional part of `Duration` in microseconds.
     #[inline]
-    pub fn micros(self) -> u32 {
-        self.get_micros()
+    pub fn subsec_micros(self) -> u32 {
+        self.subsec_nanos() / 1_000
+    }
+
+    /// Returns the fractional part of `Duration` in nanoseconds.
+    #[inline]
+    pub fn subsec_nanos(self) -> u32 {
+        (self.nanos.abs() % NANOS_PER_SEC) as u32
     }
 
     #[inline]
     pub fn fsp(self) -> u8 {
-        self.get_fsp()
+        self.fsp
     }
 
     #[inline]
     pub fn maximize_fsp(mut self) -> Self {
-        self.set_fsp(MAX_FSP as u8);
+        self.fsp = MAX_FSP as u8;
         self
     }
 
-    /// Raw transmutation from u64.
-    pub fn from_bits(v: u64) -> Result<Duration> {
-        let mut duration = Duration(v);
-
-        check_micros(duration.micros())?;
-        check_second(duration.secs())?;
-        check_minute(duration.minutes())?;
-        check_hour(duration.hours())?;
-
-        duration.set_reserved(false);
-        Ok(duration)
-    }
-
-    /// Returns the identity element of `Duration`
-    pub fn zero() -> Duration {
-        Duration(0)
-    }
-
-    /// Returns true if self is equal to the additive identity.
-    pub fn is_zero(mut self) -> bool {
-        self.set_neg(false);
-        self.set_fsp(0);
-        self.to_bits() == 0
-    }
-
-    /// Returns the absolute value of `Duration`
-    pub fn abs(mut self) -> Self {
-        self.set_neg(false);
-        self
-    }
-
-    /// Returns the fractional part of `Duration`, in whole microseconds.
-    pub fn subsec_micros(self) -> u32 {
-        self.micros()
-    }
-
-    /// Returns the number of whole seconds contained by this Duration.
-    pub fn to_secs(self) -> i32 {
-        let secs =
-            (self.hours() * SECS_PER_HOUR + self.minutes() * SECS_PER_MINUTE + self.secs()) as i32;
-
-        if self.get_neg() {
-            -secs
-        } else {
-            secs
-        }
+    #[inline]
+    pub fn to_secs(self) -> i64 {
+        self.nanos / NANOS_PER_SEC
     }
 
     /// Returns the number of seconds contained by this Duration as f64.
     /// The returned value does include the fractional (nanosecond) part of the duration.
+    #[inline]
     pub fn to_secs_f64(self) -> f64 {
-        let secs = f64::from(self.to_secs());
-        let micros = f64::from(self.subsec_micros()) * 1e-6;
-
-        secs + if self.get_neg() { -micros } else { micros }
+        self.nanos as f64 / NANOS_PER_SEC as f64
     }
 
-    /// Returns the `Duration` in whole nanoseconds
+    #[inline]
+    pub fn to_millis(self) -> i64 {
+        self.nanos / NANOS_PER_MILLI
+    }
+
+    #[inline]
+    pub fn to_micros(self) -> i64 {
+        self.nanos / NANOS_PER_MICRO
+    }
+
+    #[inline]
     pub fn to_nanos(self) -> i64 {
-        let secs = i64::from(self.to_secs()) * NANOS_PER_SEC;
-        let micros = i64::from(self.subsec_micros());
-
-        secs + if self.get_neg() { -micros } else { micros } * 1000
+        self.nanos
     }
 
-    /// Constructs a `Duration` from `nanos` with `fsp`
-    pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
-        Duration::from_micros(nanos / 1000, fsp)
+    /// Returns the identity element of `Duration`
+    #[inline]
+    pub fn zero() -> Duration {
+        Duration {
+            nanos: 0,
+            fsp: DEFAULT_FSP as u8,
+        }
+    }
+
+    /// Returns true if self is equal to the additive identity.
+    #[inline]
+    pub fn is_zero(self) -> bool {
+        self.nanos == 0
+    }
+
+    /// Returns the absolute value of `Duration`
+    #[inline]
+    pub fn abs(self) -> Self {
+        Duration {
+            nanos: self.nanos.abs(),
+            ..self
+        }
+    }
+
+    pub fn from_secs(secs: i64, fsp: i8) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
+        let nanos = secs
+            .checked_mul(NANOS_PER_SEC)
+            .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
+        check_nanos(nanos)?;
+        Ok(Duration { nanos, fsp })
+    }
+
+    pub fn from_millis(millis: i64, fsp: i8) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
+        let nanos = millis
+            .checked_mul(NANOS_PER_MILLI)
+            .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
+        let nanos = round(nanos, fsp);
+        check_nanos(nanos)?;
+        Ok(Duration { nanos, fsp })
     }
 
     pub fn from_micros(micros: i64, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        let neg = micros < 0;
-
-        let secs = (micros / MICROS_PER_SEC).abs();
-        let mut micros = (micros % MICROS_PER_SEC).abs() as u32;
-
-        let mut hours = (secs / i64::from(SECS_PER_HOUR)) as u32;
-        let mut minutes = (secs % i64::from(SECS_PER_HOUR) / i64::from(SECS_PER_MINUTE)) as u32;
-        let mut secs = (secs % 60) as u32;
-
-        round(&mut hours, &mut minutes, &mut secs, &mut micros, fsp)?;
-        Ok(Duration::new(neg, hours, minutes, secs, micros, fsp))
+        let nanos = micros
+            .checked_mul(NANOS_PER_MICRO)
+            .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
+        let nanos = round(nanos, fsp);
+        check_nanos(nanos)?;
+        Ok(Duration { nanos, fsp })
     }
 
-    pub fn from_millis(millis: i64, fsp: i8) -> Result<Duration> {
-        Duration::from_micros(
-            millis.checked_mul(1000).ok_or_else(|| {
-                Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE)
-            })?,
-            fsp,
-        )
+    pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
+        check_nanos(nanos)?;
+        Ok(Duration { nanos, fsp })
     }
 
-    /// Constructs a `Duration` from with details without validation
-    fn new(neg: bool, hours: u32, minutes: u32, secs: u32, micros: u32, fsp: u8) -> Duration {
-        let mut duration = Duration(0);
-
-        duration.set_neg(neg);
-        duration.set_hours(hours);
-        duration.set_minutes(minutes);
-        duration.set_secs(secs);
-        duration.set_micros(micros);
-        duration.set_fsp(fsp);
-
-        duration
+    pub fn new_from_parts(
+        neg: bool,
+        hour: u32,
+        minute: u32,
+        second: u32,
+        nanos: u32,
+        fsp: i8,
+    ) -> Result<Duration> {
+        check_hour_part(hour)?;
+        check_minute_part(minute)?;
+        check_second_part(second)?;
+        check_nanos_part(nanos)?;
+        let fsp = check_fsp(fsp)?;
+        let signum = if neg { -1 } else { 1 };
+        let minute = minute as i64 + hour as i64 * 60;
+        let second = second as i64 + minute * SECS_PER_MINUTE;
+        let nanos = nanos as i64 + second * NANOS_PER_SEC;
+        let nanos = signum * nanos;
+        let nanos = round(nanos, fsp);
+        check_nanos(nanos)?;
+        Ok(Duration { nanos, fsp })
     }
 
-    /// Parses the time form a formatted string with a fractional seconds part,
+    /// Parses the time from a formatted string with a fractional seconds part,
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
@@ -464,155 +440,70 @@ impl Duration {
             return Ok(Duration::zero());
         }
 
-        let (mut neg, [mut day, mut hour, mut minute, mut second, micros]) =
-            self::parser::parse(input, fsp)
+        let (neg, [mut day, mut hour, mut minute, mut second, nano]) =
+            self::parser::parse(input, fsp as u8)
                 .map_err(|_| Error::truncated_wrong_val("time", format!("{:?}", input)))?
                 .1;
 
         if day.is_some() && hour.is_none() {
             let block = day.take().unwrap();
-            hour = Some(block / 10_000);
+            hour = Some(block / 10000);
             minute = Some(block / 100 % 100);
             second = Some(block % 100);
         }
 
-        let (mut hour, mut minute, mut second, mut micros) = (
-            hour.unwrap_or(0) + day.unwrap_or(0) * 24,
+        Self::new_from_parts(
+            neg,
+            day.unwrap_or(0) * 24 + hour.unwrap_or(0),
             minute.unwrap_or(0),
             second.unwrap_or(0),
-            micros.unwrap_or(0),
-        );
-
-        if hour == 0 && minute == 0 && second == 0 && micros == 0 {
-            neg = false;
-        }
-
-        round(&mut hour, &mut minute, &mut second, &mut micros, fsp)?;
-        Ok(Duration::new(neg, hour, minute, second, micros, fsp))
+            nano.unwrap_or(0),
+            fsp as i8,
+        )
     }
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.
     /// We will use the “round half up” rule, e.g, >= 0.5 -> 1, < 0.5 -> 0,
     /// so 10:10:10.999999 round with fsp: 1 -> 10:10:11.0
     /// and 10:10:10.000000 round with fsp: 0 -> 10:10:11
-    pub fn round_frac(mut self, fsp: i8) -> Result<Self> {
+    pub fn round_frac(self, fsp: i8) -> Result<Self> {
         let fsp = check_fsp(fsp)?;
 
-        if fsp >= self.fsp() {
-            self.set_fsp(fsp);
-            return Ok(self);
+        if fsp >= self.fsp {
+            return Ok(Duration { fsp, ..self });
         }
 
-        let mut hours = self.hours();
-        let mut minutes = self.minutes();
-        let mut secs = self.secs();
-        let mut micros = self.micros();
+        let nanos = round(self.nanos, fsp);
 
-        round(&mut hours, &mut minutes, &mut secs, &mut micros, fsp)?;
-
-        Ok(Duration::new(
-            self.get_neg(),
-            hours,
-            minutes,
-            secs,
-            micros,
-            fsp,
-        ))
+        Ok(Duration { nanos, fsp })
     }
 
     /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
     pub fn checked_add(self, rhs: Duration) -> Option<Duration> {
-        match (self.get_neg(), rhs.get_neg()) {
-            (false, true) => self.checked_sub(rhs.abs()),
-            (true, false) => rhs.checked_sub(self.abs()),
-            (true, true) => self.abs().checked_add(rhs.abs()).map(|mut res| {
-                res.set_neg(true);
-                res
-            }),
-            (false, false) => {
-                let mut micros = self.micros() + rhs.micros();
-                let mut secs = self.secs() + rhs.secs();
-                let mut minutes = self.minutes() + rhs.minutes();
-                let mut hours = self.hours() + rhs.hours();
-
-                if i64::from(micros) >= MICROS_PER_SEC {
-                    micros -= MICROS_PER_SEC as u32;
-                    secs += 1;
-                }
-                if secs >= 60 {
-                    secs -= 60;
-                    minutes += 1;
-                }
-                if minutes >= 60 {
-                    minutes -= 60;
-                    hours += 1;
-                }
-
-                check_hour(hours).ok()?;
-
-                Some(Duration::new(
-                    false,
-                    hours,
-                    minutes,
-                    secs,
-                    micros,
-                    self.fsp().max(rhs.fsp()),
-                ))
-            }
-        }
+        let nanos = self.nanos.checked_add(rhs.nanos)?;
+        check_nanos(nanos).ok()?;
+        Some(Duration {
+            nanos,
+            fsp: self.fsp.max(rhs.fsp),
+        })
     }
 
     /// Checked duration subtraction. Computes self - rhs, returning None if overflow occurred.
     pub fn checked_sub(self, rhs: Duration) -> Option<Duration> {
-        match (self.get_neg(), rhs.get_neg()) {
-            (false, true) => self.checked_add(rhs.abs()),
-            (true, false) => self.abs().checked_add(rhs.abs()).map(|mut res| {
-                res.set_neg(true);
-                res
-            }),
-            (true, true) => rhs.abs().checked_sub(self.abs()),
-            (false, false) => {
-                let neg = self < rhs;
-
-                let (l, r) = if neg { (rhs, self) } else { (self, rhs) };
-
-                let mut micros = l.micros() as i32 - r.micros() as i32;
-                let mut secs = l.secs() as i32 - r.secs() as i32;
-                let mut minutes = l.minutes() as i32 - r.minutes() as i32;
-                let mut hours = l.hours() as i32 - r.hours() as i32;
-
-                if micros < 0 {
-                    micros += MICROS_PER_SEC as i32;
-                    secs -= 1;
-                }
-
-                if secs < 0 {
-                    secs += 60;
-                    minutes -= 1;
-                }
-
-                if minutes < 0 {
-                    minutes += 60;
-                    hours -= 1;
-                }
-
-                Some(Duration::new(
-                    neg,
-                    hours as u32,
-                    minutes as u32,
-                    secs as u32,
-                    micros as u32,
-                    self.fsp().max(rhs.fsp()),
-                ))
-            }
-        }
+        let nanos = self.nanos.checked_sub(rhs.nanos)?;
+        check_nanos(nanos).ok()?;
+        Some(Duration {
+            nanos,
+            fsp: self.fsp.max(rhs.fsp),
+        })
     }
 
     fn format(self, sep: &str) -> String {
         use std::fmt::Write;
+
         let res_max_len = 8 + 2 * sep.len() + MAX_FSP as usize;
         let mut string = String::with_capacity(res_max_len);
-        if self.get_neg() {
+        if self.is_neg() {
             string.push('-');
         }
 
@@ -627,16 +518,9 @@ impl Duration {
         )
         .unwrap();
 
-        let fsp = usize::from(self.fsp());
-
-        if self.fsp() > 0 {
-            write!(
-                &mut string,
-                ".{:0width$}",
-                self.micros() / TEN_POW[MICRO_WIDTH - fsp],
-                width = fsp
-            )
-            .unwrap();
+        if self.fsp > 0 {
+            let frac = self.subsec_nanos() / TEN_POW[NANO_WIDTH - self.fsp as usize];
+            write!(&mut string, ".{:0width$}", frac, width = self.fsp as usize).unwrap();
         }
 
         string
@@ -648,53 +532,38 @@ impl Duration {
         self.format("")
     }
 
-    /// If the error is overflow, the result will be returned, too.
-    /// Otherwise, only one of result or err will be returned
-    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> Result<Duration> {
-        let fsp = check_fsp(fsp)?;
-        if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
-            // FIXME: parse as `DateTime` if `n >= 10000000000`
-            return Err(Error::overflow("Duration", n));
+    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
+        if n > i64::from(MAX_DURATION_INT_VALUE) || n < -i64::from(MAX_DURATION_INT_VALUE) {
+            if n >= 10000000000 {
+                if let Ok(t) = DateTime::parse_from_i64(ctx, n, TimeType::DateTime, fsp) {
+                    return t.convert(ctx);
+                }
+            }
+            ctx.handle_overflow_err(Error::overflow("Duration", n))?;
+            // Returns max duration if overflow occurred
+            return Self::new_from_parts(
+                n.is_negative(),
+                MAX_HOUR_PART,
+                MAX_MINUTE_PART,
+                MAX_SECOND_PART,
+                0,
+                fsp,
+            );
         }
 
-        let negative = n < 0;
-        if negative {
-            n = -n;
-        }
-        if n / 10000 > i64::from(MAX_HOURS) || n % 100 >= 60 || (n / 100) % 100 >= 60 {
+        let abs = n.abs();
+        let hour = (abs / 10000) as u32;
+        let minute = ((abs / 100) % 100) as u32;
+        let second = (abs % 100) as u32;
+
+        if hour > MAX_HOUR_PART || minute > MAX_MINUTE_PART || second > MAX_SECOND_PART {
             return Err(Error::Eval(
                 format!("invalid time format: '{}'", n),
                 ERR_TRUNCATE_WRONG_VALUE,
             ));
         }
-        let dur = Duration::new(
-            negative,
-            (n / 10000) as u32,
-            ((n / 100) % 100) as u32,
-            (n % 100) as u32,
-            0,
-            fsp,
-        );
-        Ok(dur)
-    }
 
-    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
-        Duration::from_i64_without_ctx(n, fsp).or_else(|e| {
-            if e.is_overflow() {
-                ctx.handle_overflow_err(e)?;
-                // Returns max duration if overflow occurred
-                Ok(Duration::new(
-                    n < 0,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    fsp as u8,
-                ))
-            } else {
-                Err(e)
-            }
-        })
+        Self::new_from_parts(n.is_negative(), hour, minute, second, 0, fsp)
     }
 }
 
@@ -726,57 +595,42 @@ impl Display for Duration {
 }
 
 impl PartialEq for Duration {
-    fn eq(&self, dur: &Duration) -> bool {
-        let (mut a, mut b) = (*self, *dur);
-        a.set_fsp(0);
-        b.set_fsp(0);
-        a.0 == b.0
-    }
-}
-
-impl std::hash::Hash for Duration {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let mut inner = *self;
-        inner.set_fsp(0);
-        inner.to_bits().hash(state)
-    }
-}
-
-impl PartialOrd for Duration {
-    fn partial_cmp(&self, dur: &Duration) -> Option<Ordering> {
-        let mut a = *self;
-        let mut b = *dur;
-
-        a.set_fsp(0);
-        b.set_fsp(0);
-
-        let ordering = a.0.cmp(&b.0);
-        Some(if a.get_neg() || b.get_neg() {
-            ordering.reverse()
-        } else {
-            ordering
-        })
+    fn eq(&self, rhs: &Duration) -> bool {
+        self.nanos.eq(&rhs.nanos)
     }
 }
 
 impl Eq for Duration {}
 
+impl PartialOrd for Duration {
+    fn partial_cmp(&self, rhs: &Duration) -> Option<Ordering> {
+        self.nanos.partial_cmp(&rhs.nanos)
+    }
+}
+
 impl Ord for Duration {
-    fn cmp(&self, dur: &Duration) -> Ordering {
-        self.partial_cmp(dur).unwrap()
+    fn cmp(&self, rhs: &Duration) -> Ordering {
+        self.partial_cmp(rhs).unwrap()
+    }
+}
+
+impl std::hash::Hash for Duration {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.nanos.hash(state)
     }
 }
 
 impl<T: BufferWriter> DurationEncoder for T {}
 
 pub trait DurationEncoder: NumberEncoder {
-    fn write_duration(&mut self, v: Duration) -> Result<()> {
-        self.write_i64(v.to_nanos())?;
-        self.write_i64(i64::from(v.get_fsp())).map_err(From::from)
+    fn write_duration(&mut self, val: Duration) -> Result<()> {
+        self.write_i64(val.to_nanos())?;
+        self.write_i64(val.fsp as i64)?;
+        Ok(())
     }
 
-    fn write_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
-        self.write_i64_le(v.to_nanos())?;
+    fn write_duration_to_chunk(&mut self, val: Duration) -> Result<()> {
+        self.write_i64_le(val.to_nanos())?;
         Ok(())
     }
 }
@@ -861,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn test_micros() {
+    fn test_subsec_micros() {
         let cases: Vec<(&str, i8, u32)> = vec![
             ("31 11:30:45.123", 6, 123000),
             ("11:30:45.123345", 3, 123000),
@@ -875,7 +729,7 @@ mod tests {
 
         for (input, fsp, exp) in cases {
             let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
-            let res = dur.micros();
+            let res = dur.subsec_micros();
             assert_eq!(exp, res);
         }
     }
@@ -906,6 +760,8 @@ mod tests {
             (b"-10:10:10", 0, Some("-10:10:10")),
             (b"-838:59:59", 0, Some("-838:59:59")),
             (b"838:59:59", 0, Some("838:59:59")),
+            (b"839:00:00", 0, None),
+            (b"-839:00:00", 0, None),
             (b"23:60:59", 0, None),
             (b"54:59:59", 0, Some("54:59:59")),
             (b"2011-11-11 00:00:01", 0, None),
@@ -940,6 +796,8 @@ mod tests {
             (b"18446744073709551615:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
+            (b"1:62:3", 0, None),
+            (b"1:02:63", 0, None),
         ];
 
         for (input, fsp, expect) in cases {
@@ -1109,8 +967,9 @@ mod tests {
     #[test]
     fn test_checked_add_and_sub_duration() {
         /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
-        const MAX_TIME_IN_SECS: i64 =
-            (MAX_HOURS * SECS_PER_HOUR + MAX_MINUTES * SECS_PER_MINUTE + MAX_SECONDS) as i64;
+        const MAX_TIME_IN_SECS: i64 = MAX_HOUR_PART as i64 * SECS_PER_HOUR as i64
+            + MAX_MINUTE_PART as i64 * SECS_PER_MINUTE
+            + MAX_SECOND_PART as i64;
 
         let cases = vec![
             ("11:30:45.123456", "00:00:14.876545", "11:31:00.000001"),
@@ -1253,124 +1112,31 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO: fix these test case after Duration::from_f64
-            //  had impl logic for num>=10000000000
             (
                 10000000000,
                 0,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    0,
-                )),
-                true,
+                Ok(Duration::new_from_parts(false, 0, 0, 0, 0, 0).unwrap()),
+                false,
             ),
             (
                 10000235959,
                 0,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    0,
-                )),
-                true,
+                Ok(Duration::new_from_parts(false, 23, 59, 59, 0, 0).unwrap()),
+                false,
             ),
             (
-                10000000001,
+                -10000235959,
                 0,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
+                Ok(Duration::new_from_parts(
+                    true,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
                     0,
                     0,
-                )),
-                true,
-            ),
-            (
-                10000000000,
-                5,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    5,
-                )),
-                true,
-            ),
-            (
-                10000235959,
-                5,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    5,
-                )),
-                true,
-            ),
-            (
-                10000000001,
-                5,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    5,
-                )),
-                true,
-            ),
-            (
-                10000000000,
-                6,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    6,
-                )),
-                true,
-            ),
-            (
-                10000235959,
-                6,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    6,
-                )),
-                true,
-            ),
-            (
-                10000000001,
-                6,
-                Ok(Duration::new(
-                    false,
-                    MAX_HOURS,
-                    MAX_MINUTES,
-                    MAX_SECONDS,
-                    0,
-                    6,
-                )),
-                true,
+                )
+                .unwrap()),
+                false,
             ),
         ];
         for (input, fsp, expect, overflow) in cs {

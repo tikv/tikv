@@ -596,7 +596,7 @@ mod tests {
             vec![(2, Datum::Bytes(b"b".to_vec())), (3, Datum::Dec(2.into()))],
             vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
         ];
-        let idx_data = prepare_index_data(tid, idx_id, col_infos.clone(), idx_vals);
+        let idx_data = prepare_index_data(tid, idx_id, col_infos, idx_vals);
         let idx_row_cnt = idx_data.kv_data.len();
         let wrapper = IndexTestWrapper::new(unique, idx_data);
         let is_executor = IndexScanExecutor::index_scan(

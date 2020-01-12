@@ -1,8 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -10,6 +12,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
+use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::Writable;
@@ -41,6 +44,7 @@ use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::{cmd_resp, util, Config};
 use crate::raftstore::{Error, Result};
+use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
@@ -49,7 +53,6 @@ use tikv_util::Either;
 use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
-use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 
 use super::super::RegionTask;
 
@@ -139,6 +142,7 @@ impl PendingCmdQueue {
 
 #[derive(Default, Debug)]
 pub struct ChangePeer {
+    pub index: u64,
     pub conf_change: ConfChange,
     pub peer: PeerMeta,
     pub region: Region,
@@ -308,7 +312,7 @@ impl ApplyContext {
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
-        router: BatchRouter<ApplyFsm, ControlFsm>,
+        router: ApplyRouter,
         notifier: Notifier,
         cfg: &Config,
     ) -> ApplyContext {
@@ -1375,6 +1379,11 @@ impl ApplyDelegate {
             |_| panic!("should not use return")
         );
         fail_point!(
+            "apply_on_conf_change_3_1",
+            self.id == 3 && self.region_id() == 1,
+            |_| panic!("should not use return")
+        );
+        fail_point!(
             "apply_on_conf_change_all_1",
             self.region_id() == 1,
             |_| panic!("should not use return")
@@ -1527,7 +1536,9 @@ impl ApplyDelegate {
                     "region" => ?&self.region,
                 );
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+                unimplemented!()
+            }
         }
 
         let state = if self.pending_remove {
@@ -1546,6 +1557,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
+                index: ctx.exec_ctx.as_ref().unwrap().index,
                 conf_change: Default::default(),
                 peer: peer.clone(),
                 region,
@@ -2282,7 +2294,7 @@ pub enum Msg {
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     #[cfg(test)]
-    Validate(u64, Box<dyn FnOnce(&ApplyDelegate) + Send>),
+    Validate(u64, Box<dyn FnOnce((&ApplyDelegate, bool)) + Send>),
 }
 
 impl Msg {
@@ -2678,7 +2690,7 @@ impl ApplyFsm {
                 Some(Msg::LogsUpToDate(_)) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
-                Some(Msg::Validate(_, f)) => f(&self.delegate),
+                Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
                 None => break,
             }
         }
@@ -2737,10 +2749,26 @@ pub struct ApplyPoller {
     msg_buf: Vec<Msg>,
     apply_ctx: ApplyContext,
     messages_per_tick: usize,
+    cfg_tracker: Tracker<Config>,
 }
 
 impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
-    fn begin(&mut self, _batch_size: usize) {}
+    fn begin(&mut self, _batch_size: usize) {
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
+                CmpOrdering::Greater => {
+                    self.msg_buf.reserve(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+                CmpOrdering::Less => {
+                    self.msg_buf.shrink_to(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+                _ => {}
+            }
+            self.apply_ctx.enable_sync_log = incoming.sync_log;
+        }
+    }
 
     /// There is no control fsm in apply poller.
     fn handle_control(&mut self, _: &mut ControlFsm) -> Option<usize> {
@@ -2793,7 +2821,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
 
 pub struct Builder {
     tag: String,
-    cfg: Arc<Config>,
+    cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
@@ -2825,8 +2853,9 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
     type Handler = ApplyPoller;
 
     fn build(&mut self) -> ApplyPoller {
+        let cfg = self.cfg.value();
         ApplyPoller {
-            msg_buf: Vec::with_capacity(self.cfg.messages_per_tick),
+            msg_buf: Vec::with_capacity(cfg.messages_per_tick),
             apply_ctx: ApplyContext::new(
                 self.tag.clone(),
                 self.coprocessor_host.clone(),
@@ -2835,14 +2864,32 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
                 self.engines.clone(),
                 self.router.clone(),
                 self.sender.clone(),
-                &self.cfg,
+                &cfg,
             ),
-            messages_per_tick: self.cfg.messages_per_tick,
+            messages_per_tick: cfg.messages_per_tick,
+            cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
         }
     }
 }
 
-pub type ApplyRouter = BatchRouter<ApplyFsm, ControlFsm>;
+#[derive(Clone)]
+pub struct ApplyRouter {
+    pub router: BatchRouter<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyRouter {
+    type Target = BatchRouter<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchRouter<ApplyFsm, ControlFsm> {
+        &self.router
+    }
+}
+
+impl DerefMut for ApplyRouter {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm, ControlFsm> {
+        &mut self.router
+    }
+}
 
 impl ApplyRouter {
     pub fn schedule_task(&self, region_id: u64, msg: Msg) {
@@ -2899,7 +2946,23 @@ impl ApplyRouter {
     }
 }
 
-pub type ApplyBatchSystem = BatchSystem<ApplyFsm, ControlFsm>;
+pub struct ApplyBatchSystem {
+    system: BatchSystem<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyBatchSystem {
+    type Target = BatchSystem<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchSystem<ApplyFsm, ControlFsm> {
+        &self.system
+    }
+}
+
+impl DerefMut for ApplyBatchSystem {
+    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm, ControlFsm> {
+        &mut self.system
+    }
+}
 
 impl ApplyBatchSystem {
     pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
@@ -2914,12 +2977,13 @@ impl ApplyBatchSystem {
 
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
-    super::batch::create_system(
+    let (router, system) = batch_system::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
         tx,
         Box::new(ControlFsm),
-    )
+    );
+    (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
 #[cfg(test)]
@@ -2947,6 +3011,7 @@ mod tests {
 
     use crate::raftstore::store::{Config, RegionTask};
     use test_sst_importer::*;
+    use tikv_util::config::VersionTrack;
     use tikv_util::worker::dummy_scheduler;
 
     use super::*;
@@ -3032,7 +3097,7 @@ mod tests {
             region_id,
             Msg::Validate(
                 region_id,
-                Box::new(move |delegate: &ApplyDelegate| {
+                Box::new(move |(delegate, _): (&ApplyDelegate, _)| {
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),
@@ -3082,8 +3147,8 @@ mod tests {
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
-        let cfg = Arc::new(Config::default());
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3427,8 +3492,8 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Notifier::Sender(tx);
-        let cfg = Arc::new(Config::default());
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3768,8 +3833,8 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let host = Arc::new(CoprocessorHost::default());
         let (region_scheduler, _) = dummy_scheduler();
-        let cfg = Arc::new(Config::default());
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3907,7 +3972,7 @@ mod tests {
             .mut_requests()
             .push(new_split_req(b"k32", 28, vec![29, 30, 31]));
         splits.set_right_derive(false);
-        let resp = exec_split(&router, splits.clone());
+        let resp = exec_split(&router, splits);
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         new_version = epoch.borrow().get_version() + 2;
@@ -3915,6 +3980,8 @@ mod tests {
         checker.check(b"k3", b"k31", 1, &[3, 5, 7], false);
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
+
+        system.shutdown();
     }
 
     #[test]

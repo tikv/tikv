@@ -122,9 +122,9 @@ impl BTreeEngineIterator {
             None => Unbounded,
             Some(key) => Excluded(Key::from_raw(key)),
         };
-        let bounds = (lower_bound.clone(), upper_bound.clone());
+        let bounds = (lower_bound, upper_bound);
         Self {
-            tree: tree.clone(),
+            tree,
             cur_key: None,
             cur_value: None,
             valid: false,
@@ -153,19 +153,19 @@ impl BTreeEngineIterator {
                 self.valid = false;
             }
         }
-        self.valid()
+        self.valid().unwrap()
     }
 }
 
 impl Iterator for BTreeEngineIterator {
-    fn next(&mut self) -> bool {
+    fn next(&mut self) -> EngineResult<bool> {
         let range = (Excluded(self.cur_key.clone().unwrap()), Unbounded);
-        self.seek_to_range_endpoint(range, true)
+        Ok(self.seek_to_range_endpoint(range, true))
     }
 
-    fn prev(&mut self) -> bool {
+    fn prev(&mut self) -> EngineResult<bool> {
         let range = (Unbounded, Excluded(self.cur_key.clone().unwrap()));
-        self.seek_to_range_endpoint(range, false)
+        Ok(self.seek_to_range_endpoint(range, false))
     }
 
     fn seek(&mut self, key: &Key) -> EngineResult<bool> {
@@ -178,33 +178,28 @@ impl Iterator for BTreeEngineIterator {
         Ok(self.seek_to_range_endpoint(range, false))
     }
 
-    fn seek_to_first(&mut self) -> bool {
+    fn seek_to_first(&mut self) -> EngineResult<bool> {
         let range = (self.bounds.0.clone(), self.bounds.1.clone());
-        self.seek_to_range_endpoint(range, true)
+        Ok(self.seek_to_range_endpoint(range, true))
     }
 
-    fn seek_to_last(&mut self) -> bool {
+    fn seek_to_last(&mut self) -> EngineResult<bool> {
         let range = (self.bounds.0.clone(), self.bounds.1.clone());
-        self.seek_to_range_endpoint(range, false)
+        Ok(self.seek_to_range_endpoint(range, false))
     }
 
     #[inline]
-    fn valid(&self) -> bool {
-        self.valid
-    }
-
-    #[inline]
-    fn status(&self) -> EngineResult<()> {
-        Ok(())
+    fn valid(&self) -> EngineResult<bool> {
+        Ok(self.valid)
     }
 
     fn key(&self) -> &[u8] {
-        assert!(self.valid());
+        assert!(self.valid().unwrap());
         self.cur_key.as_ref().unwrap().as_encoded()
     }
 
     fn value(&self) -> &[u8] {
-        assert!(self.valid());
+        assert!(self.valid().unwrap());
         self.cur_value.as_ref().unwrap().as_slice()
     }
 }
@@ -236,10 +231,7 @@ impl Snapshot for BTreeEngineSnapshot {
     ) -> EngineResult<Cursor<Self::Iter>> {
         let tree = self.inner_engine.get_cf(cf);
 
-        Ok(Cursor::new(
-            BTreeEngineIterator::new(tree.clone(), iter_opt),
-            mode,
-        ))
+        Ok(Cursor::new(BTreeEngineIterator::new(tree, iter_opt), mode))
     }
 }
 
@@ -362,34 +354,26 @@ pub mod tests {
         }
 
         let iter_op = IterOption::default();
-        let tree = engine.get_cf(CF_DEFAULT).clone();
+        let tree = engine.get_cf(CF_DEFAULT);
         let mut iter = BTreeEngineIterator::new(tree, iter_op);
-        assert!(!iter.valid());
+        assert!(!iter.valid().unwrap());
 
-        assert!(iter.seek_to_first());
-        assert!(iter.valid());
+        assert!(iter.seek_to_first().unwrap());
         assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
-        assert!(!iter.prev());
-        assert!(!iter.valid());
-        assert!(iter.next());
-        assert!(iter.valid());
+        assert!(!iter.prev().unwrap());
+        assert!(iter.next().unwrap());
         assert_eq!(iter.key(), Key::from_raw(b"a3").as_encoded().as_slice());
 
         assert!(iter.seek(&Key::from_raw(b"a1")).unwrap());
-        assert!(iter.valid());
         assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
 
-        assert!(iter.seek_to_last());
-        assert!(iter.valid());
+        assert!(iter.seek_to_last().unwrap());
         assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
-        assert!(!iter.next());
-        assert!(!iter.valid());
-        assert!(iter.prev());
-        assert!(iter.valid());
+        assert!(!iter.next().unwrap());
+        assert!(iter.prev().unwrap());
         assert_eq!(iter.key(), Key::from_raw(b"a5").as_encoded().as_slice());
 
         assert!(iter.seek(&Key::from_raw(b"a7")).unwrap());
-        assert!(iter.valid());
         assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
 
         assert!(!iter.seek_for_prev(&Key::from_raw(b"a0")).unwrap());

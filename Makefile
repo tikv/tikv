@@ -90,6 +90,7 @@ export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${
 export TIKV_BUILD_GIT_TAG := $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
@@ -114,6 +115,7 @@ all: format build test
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
+build: export TIKV_PROFILE=debug
 build:
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
@@ -127,6 +129,7 @@ build:
 # with RocksDB compiled with the "portable" option, for -march=x86-64 (an
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
+release: export TIKV_PROFILE=release
 release:
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
 
@@ -142,7 +145,7 @@ prof_release:
 # An optimized build instrumented with failpoints.
 # This is used for schrodinger chaos testing.
 fail_release:
-	FAIL_POINT=1 make release
+	FAIL_POINT=1 make dist_release
 
 ## Distribution builds (true release builds)
 ## -------------------
@@ -162,6 +165,7 @@ dist_release:
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
+build_dist_release: export TIKV_PROFILE=dist_release
 build_dist_release:
 	make x-build-dist
 ifeq ($(shell uname),Linux) # Macs don't have objcopy
@@ -226,18 +230,23 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
+	# TODO: remove the section after https://github.com/rust-lang/cargo/issues/5364 is resolved.
+	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
+	export LOG_LEVEL=DEBUG && \
+	export RUST_BACKTRACE=1 && \
+	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS)
 
 # This is used for CI test
 ci_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
-	bash scripts/check-bins-for-jemalloc.sh
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --all-targets --no-run --message-format=json
+	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
 
 ## Static analysis
 ## ---------------
@@ -265,7 +274,7 @@ clippy: pre-clippy
 		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
 		-A clippy::needless_range_loop -A clippy::redundant_closure \
 		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
-		-A clippy::identity_conversion
+		-A clippy::identity_conversion -A clippy::new_ret_no_self
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))

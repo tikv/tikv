@@ -20,7 +20,7 @@ use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
 use crate::into_other::IntoOther;
-use crate::raftstore::coprocessor::SeekRegionCallback;
+use crate::raftstore::coprocessor::{RegionInfo, RegionInfoCallback, SeekRegionCallback};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::compact_listener::{CompactedEvent, CompactionListener};
@@ -152,27 +152,38 @@ pub trait Snapshot: Send + Clone {
 }
 
 pub trait Iterator: Send {
-    fn next(&mut self) -> bool;
-    fn prev(&mut self) -> bool;
+    fn next(&mut self) -> Result<bool>;
+    fn prev(&mut self) -> Result<bool>;
     fn seek(&mut self, key: &Key) -> Result<bool>;
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool>;
-    fn seek_to_first(&mut self) -> bool;
-    fn seek_to_last(&mut self) -> bool;
-    fn valid(&self) -> bool;
-    fn status(&self) -> Result<()>;
+    fn seek_to_first(&mut self) -> Result<bool>;
+    fn seek_to_last(&mut self) -> Result<bool>;
+    fn valid(&self) -> Result<bool>;
 
     fn validate_key(&self, _: &Key) -> Result<()> {
         Ok(())
     }
 
+    /// Only be called when `self.valid() == Ok(true)`.
     fn key(&self) -> &[u8];
+    /// Only be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
 }
 
 pub trait RegionInfoProvider: Send + Clone + 'static {
-    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
-    /// this TiKV satisfies `filter(peer)` returns true.
-    fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> Result<()>;
+    /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
+    /// the callback to process the result.
+    fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn find_region_by_id(
+        &self,
+        _reigon_id: u64,
+        _callback: RegionInfoCallback<Option<RegionInfo>>,
+    ) -> Result<()> {
+        unimplemented!()
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -282,7 +293,9 @@ thread_local! {
 
 /// Execute the closure on the thread local engine.
 ///
-/// Safety: precondition: `TLS_ENGINE_ANY` is non-null.
+/// # Safety
+///
+/// Precondition: `TLS_ENGINE_ANY` is non-null.
 pub unsafe fn with_tls_engine<E: Engine, F, R>(f: F) -> R
 where
     F: FnOnce(&E) -> R,
@@ -309,9 +322,12 @@ pub fn set_tls_engine<E: Engine>(engine: E) {
 
 /// Destroy the thread local engine.
 ///
-/// Safety: the current tls engine must have the same type as `E` (or at least
-/// there destructors must be compatible).
 /// Postcondition: `TLS_ENGINE_ANY` is null.
+///
+/// # Safety
+///
+/// The current tls engine must have the same type as `E` (or at least
+/// there destructors must be compatible).
 pub unsafe fn destroy_tls_engine<E: Engine>() {
     // Safety: we check that `TLS_ENGINE_ANY` is non-null, we must ensure that references
     // to `TLS_ENGINE_ANY` can never be stored outside of `TLS_ENGINE_ANY`.

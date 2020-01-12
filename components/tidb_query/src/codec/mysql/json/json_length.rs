@@ -8,10 +8,12 @@ impl Json {
         match self {
             Json::Array(array) => Some(array.len() as i64),
             Json::Object(obj) => Some(obj.len() as i64),
-            Json::String(_) | Json::Boolean(_) | Json::U64(_) | Json::I64(_) | Json::Double(_) => {
-                Some(1)
-            }
-            Json::None => None,
+            Json::None
+            | Json::String(_)
+            | Json::Boolean(_)
+            | Json::U64(_)
+            | Json::I64(_)
+            | Json::Double(_) => Some(1),
         }
     }
 
@@ -28,10 +30,10 @@ impl Json {
         if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
             return None;
         }
-        self.extract(path_expr_list)
-            .or_else(|| Some(Json::None))
-            .unwrap()
-            .len()
+        if let Some(json) = self.extract(path_expr_list) {
+            return json.len();
+        }
+        None
     }
 }
 
@@ -42,7 +44,7 @@ mod tests {
     #[test]
     fn test_json_length() {
         let mut test_cases = vec![
-            ("null", None, None),
+            ("null", None, Some(1)),
             ("false", None, Some(1)),
             ("true", None, Some(1)),
             ("1", None, Some(1)),

@@ -432,8 +432,7 @@ mod tests {
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        lock.clone()
-            .check_ts_conflict(&key, TimeStamp::max(), &empty)
+        lock.check_ts_conflict(&key, TimeStamp::max(), &empty)
             .unwrap_err();
     }
 }
