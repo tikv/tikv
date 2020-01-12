@@ -1451,17 +1451,23 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
-        let change_type = cp.conf_change.get_change_type();
-        if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
-            panic!(
-                "{} apply conf change {:?} fails: {:?}",
-                self.fsm.peer.tag, cp, e
-            );
-        }
         if cp.conf_change.get_node_id() == raft::INVALID_ID {
             // Apply failed, skip.
             return;
         }
+
+        let change_type = cp.conf_change.get_change_type();
+        if cp.index >= self.fsm.peer.raft_group.raft.raft_log.first_index() {
+            match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
+                Ok(_) => {}
+                // PD could dispatch redundant conf changes.
+                Err(raft::Error::NotExists(_, _)) | Err(raft::Error::Exists(_, _)) => {}
+                _ => unreachable!(),
+            }
+        } else {
+            // Please take a look at test case test_redundant_conf_change_by_snapshot.
+        }
+
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(&self.ctx.coprocessor_host, cp.region, &mut self.fsm.peer);
