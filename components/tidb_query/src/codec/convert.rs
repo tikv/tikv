@@ -768,8 +768,30 @@ impl ConvertTo<f64> for Bytes {
 }
 
 pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
-    let vs = get_valid_float_prefix(ctx, s)?;
-    float_str_to_int_string(ctx, vs)
+    if !ctx.cfg.flag.contains(Flag::IN_SELECT_STMT) {
+        let vs = get_valid_float_prefix(ctx, s)?;
+        float_str_to_int_string(ctx, vs)
+    } else {
+        let mut valid_len = 0;
+        for (i, c) in s.chars().enumerate() {
+            if (c == '+' || c == '-') && i == 0 {
+                continue;
+            }
+            if c >= '0' && c <= '9' {
+                valid_len = i + 1;
+                continue;
+            }
+            break;
+        }
+        let mut valid = &s[..valid_len];
+        if valid == "" {
+            valid = "0";
+        }
+        if valid_len == 0 || valid_len < s.len() {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("INTEGER", s))?;
+        }
+        Ok(Cow::Borrowed(valid))
+    }
 }
 
 pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a str> {
@@ -1932,6 +1954,26 @@ mod tests {
             ("-123.45678e5", "-12345678"),
             ("+123.45678e5", "+12345678"),
             ("9e20", "900000000000000000000"),
+        ];
+
+        for (i, e) in cases {
+            let o = super::get_valid_int_prefix(&mut ctx, i);
+            assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
+        }
+        assert_eq!(ctx.take_warnings().warnings.len(), 0);
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
+            Flag::IN_SELECT_STMT | Flag::IGNORE_TRUNCATE | Flag::OVERFLOW_AS_WARNING,
+        )));
+        let cases = vec![
+            ("+0.0", "+0"),
+            ("100", "100"),
+            ("+100", "+100"),
+            ("-100", "-100"),
+            ("9e20", "9"),
+            ("+9e20", "+9"),
+            ("-9e20", "-9"),
+            ("-900e20", "-900"),
         ];
 
         for (i, e) in cases {

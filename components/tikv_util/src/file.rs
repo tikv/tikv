@@ -4,7 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read};
 use std::path::Path;
 
-use openssl::hash::{self, MessageDigest};
+use openssl::error::ErrorStack;
+use openssl::hash::{self, Hasher, MessageDigest};
 
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
@@ -81,8 +82,37 @@ pub fn calc_crc32_bytes(contents: &[u8]) -> u32 {
     digest.finalize()
 }
 
-pub fn sha256(input: &[u8]) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+pub fn sha256(input: &[u8]) -> Result<Vec<u8>, ErrorStack> {
     hash::hash(MessageDigest::sha256(), input).map(|digest| digest.to_vec())
+}
+
+/// Wrapper of a reader which computes its SHA-256 hash while reading.
+pub struct Sha256Reader<R> {
+    reader: R,
+    hasher: Hasher,
+}
+
+impl<R> Sha256Reader<R> {
+    /// Creates a new `Sha256Reader`, wrapping the given reader.
+    pub fn new(reader: R) -> Result<Self, ErrorStack> {
+        Ok(Sha256Reader {
+            reader,
+            hasher: Hasher::new(MessageDigest::sha256())?,
+        })
+    }
+
+    /// Computes the final SHA-256 hash.
+    pub fn hash(mut self) -> Result<Vec<u8>, ErrorStack> {
+        Ok(self.hasher.finish()?.to_vec())
+    }
+}
+
+impl<R: Read> Read for Sha256Reader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let len = self.reader.read(buf)?;
+        self.hasher.update(&buf[..len])?;
+        Ok(len)
+    }
 }
 
 #[cfg(test)]
@@ -213,5 +243,21 @@ mod tests {
         sync_dir(tmp_dir.path()).unwrap();
         let non_existent_file = tmp_dir.path().join("non_existent_file");
         sync_dir(non_existent_file).unwrap_err();
+    }
+
+    #[test]
+    fn test_sha256() {
+        let tmp_dir = TempDir::new().unwrap();
+        let large_file = tmp_dir.path().join("large.txt");
+        gen_rand_file(&large_file, DIGEST_BUFFER_SIZE * 4);
+
+        let large_file_bytes = fs::read(&large_file).unwrap();
+        let direct_sha256 = sha256(&large_file_bytes).unwrap();
+
+        let large_file_reader = fs::File::open(&large_file).unwrap();
+        let mut sha256_reader = Sha256Reader::new(large_file_reader).unwrap();
+        sha256_reader.read_to_end(&mut Vec::new()).unwrap();
+
+        assert_eq!(sha256_reader.hash().unwrap(), direct_sha256);
     }
 }

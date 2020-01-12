@@ -36,6 +36,7 @@ use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb;
 use tikv_util::time::UnixSecs;
+use txn_types::TimeStamp;
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
@@ -175,6 +176,7 @@ pub trait PdClient: Send + Sync {
     /// Please note that this method should only be called once.
     fn handle_region_heartbeat_response<F>(&self, _store_id: u64, _f: F) -> PdFuture<()>
     where
+        Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
         unimplemented!();
@@ -212,7 +214,11 @@ pub trait PdClient: Send + Sync {
     /// Registers a handler to the client, which will be invoked after reconnecting to PD.
     ///
     /// Please note that this method should only be called once.
-    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F) {}
+    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F)
+    where
+        Self: Sized,
+    {
+    }
 
     fn get_gc_safe_point(&self) -> PdFuture<u64> {
         unimplemented!();
@@ -228,6 +234,19 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    /// Gets a timestamp from PD.
+    fn get_tso(&self) -> PdFuture<TimeStamp> {
+        unimplemented!()
+    }
+
+    /// Spawns a PD future on the client.
+    fn spawn(&self, _: PdFuture<()>) {
+        unimplemented!()
+    }
+}
+
+/// ConfigClient used for manage config
+pub trait ConfigClient: Send + Sync {
     fn register_config(
         &self,
         _id: String,

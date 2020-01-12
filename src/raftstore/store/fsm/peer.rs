@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use crate::raftstore::{Error, Result};
+use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
 use engine::Peekable;
 use engine::CF_RAFT;
@@ -39,8 +39,8 @@ use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
 use crate::raftstore::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, CatchUpLogs, ChangePeer,
-    ExecResult, Fsm, RegionProposal,
+    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangePeer, ExecResult,
+    RegionProposal,
 };
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
@@ -57,6 +57,7 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use crate::raftstore::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
 pub struct DestroyPeerJob {
@@ -360,6 +361,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // Maybe do some safe check first?
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
+            }
+            CasualMessage::SnapshotGenerated => {
+                // Resume snapshot handling again to avoid waiting another heartbeat.
+                self.fsm.peer.ping();
+                self.fsm.has_ready = true;
             }
             CasualMessage::Test(cb) => cb(self.fsm),
         }
@@ -768,6 +774,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.register_raft_base_tick();
             return;
         }
+
+        self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
@@ -1443,17 +1451,23 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
-        let change_type = cp.conf_change.get_change_type();
-        if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
-            panic!(
-                "{} apply conf change {:?} fails: {:?}",
-                self.fsm.peer.tag, cp, e
-            );
-        }
         if cp.conf_change.get_node_id() == raft::INVALID_ID {
             // Apply failed, skip.
             return;
         }
+
+        let change_type = cp.conf_change.get_change_type();
+        if cp.index >= self.fsm.peer.raft_group.raft.raft_log.first_index() {
+            match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
+                Ok(_) => {}
+                // PD could dispatch redundant conf changes.
+                Err(raft::Error::NotExists(_, _)) | Err(raft::Error::Exists(_, _)) => {}
+                _ => unreachable!(),
+            }
+        } else {
+            // Please take a look at test case test_redundant_conf_change_by_snapshot.
+        }
+
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(&self.ctx.coprocessor_host, cp.region, &mut self.fsm.peer);
@@ -1472,6 +1486,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
+                    // Speed up snapshot instead of waiting another heartbeat.
+                    self.fsm.peer.ping();
+                    self.fsm.has_ready = true;
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
                 self.fsm.peer.recent_conf_change_time = now;

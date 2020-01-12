@@ -5,6 +5,8 @@ edition = "2018"
 publish = false
 
 [dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+futures-executor = "0.3"
 crc32fast = "1.2"
 engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage" }
