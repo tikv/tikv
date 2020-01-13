@@ -170,7 +170,7 @@ impl LazyBatchColumnVec {
         for column_idx in 0..output_offsets.len() {
             let offset = output_offsets[column_idx] as usize;
             let col = &mut self.columns[offset];
-            chunk.append_logical_column(
+            chunk.append_logical_rows(
                 ctx,
                 logical_rows.as_ref(),
                 &fields[column_idx],

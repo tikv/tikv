@@ -61,7 +61,7 @@ impl Chunk {
     }
 
     /// Append lazy column to the column
-    pub fn append_logical_column(
+    pub fn append_logical_rows(
         &mut self,
         ctx: &mut EvalContext,
         row_indexes: &[usize],
@@ -447,7 +447,7 @@ mod tests {
         let mut chunk = Chunk::new(&fields, 10);
         for (col_id, val) in raw_vec_data.iter().enumerate() {
             chunk
-                .append_logical_column(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
                 .unwrap();
         }
         for row in chunk.iter() {
