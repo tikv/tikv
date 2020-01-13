@@ -61,7 +61,6 @@ impl Chunk {
     }
 
     /// Append lazy column to the column
-    #[inline]
     pub fn append_logical_column(
         &mut self,
         ctx: &mut EvalContext,

@@ -201,6 +201,7 @@ impl Column {
     }
 
     /// Append null to the column.
+    #[inline]
     pub fn append_null(&mut self) -> Result<()> {
         self.append_null_bitmap(false);
         if self.is_fixed() {
@@ -229,6 +230,7 @@ impl Column {
     }
 
     /// Get the i64 datum of the row in the column.
+    #[inline]
     pub fn get_i64(&self, idx: usize) -> Result<i64> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -237,12 +239,14 @@ impl Column {
     }
 
     /// Append u64 datum to the column.
+    #[inline]
     pub fn append_u64(&mut self, v: u64) -> Result<()> {
         self.data.write_u64_le(v)?;
         self.finish_append_fixed()
     }
 
     /// Append datum bytes in signed int 64 format
+    #[inline]
     pub fn append_i64_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
@@ -253,9 +257,9 @@ impl Column {
         raw_datum = &raw_datum[1..];
         match flag {
             datum::NIL_FLAG => self.append_null(),
-            datum::INT_FLAG => self.append_i64(raw_datum.read_datum_payload_i64()? as i64),
+            datum::INT_FLAG => self.append_i64(raw_datum.read_datum_payload_i64()?),
             datum::UINT_FLAG => self.append_i64(raw_datum.read_datum_payload_u64()? as i64),
-            datum::VAR_INT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_i64()? as i64),
+            datum::VAR_INT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_i64()?),
             datum::VAR_UINT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_u64()? as i64),
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for Int vector",
@@ -265,6 +269,7 @@ impl Column {
     }
 
     /// Append datum bytes in unsigned int 64 format
+    #[inline]
     pub fn append_u64_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
@@ -276,9 +281,9 @@ impl Column {
         match flag {
             datum::NIL_FLAG => self.append_null(),
             datum::INT_FLAG => self.append_u64(raw_datum.read_datum_payload_i64()? as u64),
-            datum::UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_u64()? as u64),
+            datum::UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_u64()? ),
             datum::VAR_INT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_i64()? as u64),
-            datum::VAR_UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_u64()? as u64),
+            datum::VAR_UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_u64()? ),
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for Int vector",
                 flag
@@ -287,6 +292,7 @@ impl Column {
     }
 
     /// Get the u64 datum of the row in the column.
+    #[inline]
     pub fn get_u64(&self, idx: usize) -> Result<u64> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -295,17 +301,20 @@ impl Column {
     }
 
     /// Append a f64 datum to the column.
+    #[inline]
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
         self.data.write_f64_le(v)?;
         self.finish_append_fixed()
     }
 
     /// Append a f32 datum to the column.
+    #[inline]
     pub fn append_f32(&mut self, v: f32) -> Result<()> {
         self.data.write_f32_le(v)?;
         self.finish_append_fixed()
     }
 
+    #[inline]
     pub fn append_f32_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
@@ -328,6 +337,7 @@ impl Column {
         }
     }
 
+    #[inline]
     pub fn append_f64_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
@@ -351,6 +361,7 @@ impl Column {
     }
 
     /// Get the f64 datum of the row in the column.
+    #[inline]
     pub fn get_f64(&self, idx: usize) -> Result<f64> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -359,6 +370,7 @@ impl Column {
     }
 
     /// Get the f32 datum of the row in the column.
+    #[inline]
     pub fn get_f32(&self, idx: usize) -> Result<f32> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -376,12 +388,14 @@ impl Column {
     }
 
     /// Append a bytes datum to the column.
+    #[inline]
     pub fn append_bytes(&mut self, byte: &[u8]) -> Result<()> {
         self.data.extend_from_slice(byte);
         self.finished_append_var()
     }
 
     /// Append a bytes in raw datum format to the column.
+    #[inline]
     pub fn append_bytes_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
@@ -412,6 +426,7 @@ impl Column {
     }
 
     /// Get the bytes datum of the row in the column.
+    #[inline]
     pub fn get_bytes(&self, idx: usize) -> &[u8] {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
@@ -419,11 +434,13 @@ impl Column {
     }
 
     /// Append a time datum to the column.
+    #[inline]
     pub fn append_time(&mut self, t: Time) -> Result<()> {
         self.data.write_time(t)?;
         self.finish_append_fixed()
     }
 
+    #[inline]
     pub fn append_time_datum(
         &mut self,
         mut raw_datum: &[u8],
@@ -459,6 +476,7 @@ impl Column {
     }
 
     /// Get the time datum of the row in the column.
+    #[inline]
     pub fn get_time(&self, ctx: &mut EvalContext, idx: usize) -> Result<Time> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -467,12 +485,14 @@ impl Column {
     }
 
     /// Append a duration datum to the column.
+    #[inline]
     pub fn append_duration(&mut self, d: Duration) -> Result<()> {
         self.data.write_duration_to_chunk(d)?;
         self.finish_append_fixed()
     }
 
     /// Append a duration datum in raw bytes to the column.
+    #[inline]
     pub fn append_duration_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
@@ -501,6 +521,7 @@ impl Column {
     }
 
     /// Get the duration datum of the row in the column.
+    #[inline]
     pub fn get_duration(&self, idx: usize, fsp: isize) -> Result<Duration> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -509,11 +530,13 @@ impl Column {
     }
 
     /// Append a decimal datum to the column.
+    #[inline]
     pub fn append_decimal(&mut self, d: &Decimal) -> Result<()> {
         self.data.write_decimal_to_chunk(d)?;
         self.finish_append_fixed()
     }
 
+    #[inline]
     pub fn append_decimal_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
@@ -534,6 +557,7 @@ impl Column {
     }
 
     /// Get the decimal datum of the row in the column.
+    #[inline]
     pub fn get_decimal(&self, idx: usize) -> Result<Decimal> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -542,12 +566,14 @@ impl Column {
     }
 
     /// Append a json datum to the column.
+    #[inline]
     pub fn append_json(&mut self, j: &Json) -> Result<()> {
         self.data.write_json(j)?;
         self.finished_append_var()
     }
 
     /// Append a json datum in raw bytes to the column.
+    #[inline]
     pub fn append_json_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
@@ -568,6 +594,7 @@ impl Column {
     }
 
     /// Get the json datum of the row in the column.
+    #[inline]
     pub fn get_json(&self, idx: usize) -> Result<Json> {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
