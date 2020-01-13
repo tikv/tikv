@@ -32,7 +32,7 @@ use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
 use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionStat};
+use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
@@ -287,7 +287,7 @@ impl StatsMonitor {
     }
 }
 
-pub struct Runner<T: PdClient> {
+pub struct Runner<T: PdClient + ConfigClient> {
     store_id: u64,
     pd_client: Arc<T>,
     config_handler: ConfigHandler,
@@ -306,7 +306,7 @@ pub struct Runner<T: PdClient> {
     stats_monitor: StatsMonitor,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<T: PdClient + ConfigClient> Runner<T> {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
@@ -806,7 +806,7 @@ impl<T: PdClient> Runner<T> {
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
