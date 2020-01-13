@@ -2,7 +2,6 @@
 
 use std::io::{Error, ErrorKind, Result};
 
-use bytes::Bytes;
 use futures01::stream::Stream;
 use futures_io::AsyncRead;
 use futures_util::compat::AsyncRead01CompatExt;
@@ -92,11 +91,7 @@ impl S3Storage {
 }
 
 impl ExternalStorage for S3Storage {
-    fn write(
-        &self,
-        name: &str,
-        reader: &mut (dyn AsyncRead + Unpin + Send + 'static),
-    ) -> Result<()> {
+    fn write(&self, name: &str, reader: Box<dyn AsyncRead + Unpin + Send>) -> Result<()> {
         let key = self.maybe_prefix_key(name);
         debug!("save file to s3 storage"; "key" => %key);
         let get_var = |s: &String| {
@@ -110,7 +105,7 @@ impl ExternalStorage for S3Storage {
             key,
             bucket: self.config.bucket.clone(),
             body: Some(ByteStream::new(
-                FramedRead::new(reader.compat(), BytesCodec::new()).map(|bytes| Bytes::from(bytes)),
+                FramedRead::new(reader.compat(), BytesCodec::new()).map(|bytes| bytes.freeze()),
             )),
             acl: get_var(&self.config.acl),
             server_side_encryption: get_var(&self.config.sse),
@@ -198,11 +193,12 @@ mod tests {
             },
         );
         let s = S3Storage::with_request_dispatcher(&config, dispatcher).unwrap();
-        let mut reader = magic_contents.as_bytes();
-        s.write("mykey", &mut reader).unwrap();
+        s.write("mykey", Box::new(magic_contents.as_bytes()))
+            .unwrap();
         let mut reader = s.read("mykey").unwrap();
         let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).unwrap();
+        let ret = futures::executor::block_on(reader.read_to_end(&mut buf));
+        assert!(ret.unwrap() == 0);
         assert!(buf.is_empty());
     }
 }

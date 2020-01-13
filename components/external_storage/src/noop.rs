@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io;
-use std::marker::{Send, Unpin};
+use std::marker::Unpin;
 
 use futures_executor::block_on;
 use futures_io::AsyncRead;
@@ -23,11 +23,7 @@ impl NoopStorage {
 }
 
 impl ExternalStorage for NoopStorage {
-    fn write(
-        &self,
-        _name: &str,
-        reader: &mut (dyn AsyncRead + Send + Unpin + 'static),
-    ) -> io::Result<()> {
+    fn write(&self, _name: &str, reader: Box<dyn AsyncRead + Send + Unpin>) -> io::Result<()> {
         // we must still process the entire reader to run the SHA-256 hasher.
         block_on(copy(reader, &mut AllowStdIo::new(io::sink()))).map(drop)
     }
@@ -47,8 +43,8 @@ mod tests {
         let noop = NoopStorage::new();
 
         // Test save_file
-        let mut magic_contents: &[u8] = b"5678";
-        noop.write("a.log", &mut magic_contents).unwrap();
+        let magic_contents: &[u8] = b"5678";
+        noop.write("a.log", Box::new(magic_contents)).unwrap();
         let mut reader = noop.read("a.log").unwrap();
         let mut buf = vec![];
         block_on(reader.read_to_end(&mut buf)).unwrap();
