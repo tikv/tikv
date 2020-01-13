@@ -6,8 +6,10 @@ use tipb::FieldType;
 
 use super::{Error, Result};
 use crate::codec::datum;
-use crate::codec::datum_codec::{decode_date_time_from_uint, DatumPayloadDecoder};
-use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
+use crate::codec::datum_codec::{
+    decode_date_time_from_uint, DatumChunkEncoder, DatumPayloadDecoder,
+};
+use crate::codec::mysql::decimal::{DecimalPayloadDatumChunkEncoder, DECIMAL_STRUCT_SIZE};
 use crate::codec::mysql::{
     Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Json,
     JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
@@ -538,23 +540,8 @@ impl Column {
     }
 
     #[inline]
-    pub fn append_decimal_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
-        if raw_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-        let flag = raw_datum[0];
-        raw_datum = &raw_datum[1..];
-        match flag {
-            datum::NIL_FLAG => self.append_null(),
-            // In both index and record, it's flag is `DECIMAL`. See TiDB's `encode()`.
-            datum::DECIMAL_FLAG => self.append_decimal(&raw_datum.read_datum_payload_decimal()?),
-            _ => Err(Error::InvalidDataType(format!(
-                "Unsupported datum flag {} for Decimal vector",
-                flag
-            ))),
-        }
+    pub fn append_decimal_datum(&mut self, raw_datum: &[u8]) -> Result<()> {
+        self.write_decimal_to_chunk_by_datum(raw_datum)
     }
 
     /// Get the decimal datum of the row in the column.
@@ -632,6 +619,32 @@ impl Column {
         };
         col.data = buf.read_bytes(data_length)?.to_vec();
         Ok(col)
+    }
+}
+
+impl DatumChunkEncoder for Column {
+    #[inline]
+    fn write_decimal_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In both index and record, it's flag is `DECIMAL`. See TiDB's `encode()`.
+            datum::DECIMAL_FLAG => {
+                self.data
+                    .write_decimal_to_chunk_by_datum_payload(raw_datum)?;
+                self.finish_append_fixed()
+            }
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Decimal vector",
+                flag
+            ))),
+        }
     }
 }
 

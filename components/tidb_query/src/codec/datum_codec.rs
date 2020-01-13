@@ -508,3 +508,7 @@ impl<'a> RawDatumDecoder<Json> for &'a [u8] {
         decode_json_datum(self)
     }
 }
+
+pub trait DatumChunkEncoder {
+    fn write_decimal_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()>;
+}

@@ -16,6 +16,7 @@ use tikv_util::escape;
 
 use crate::codec::convert::{self, ConvertTo};
 use crate::codec::data_type::*;
+use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -2089,6 +2090,20 @@ pub trait DecimalEncoder: NumberEncoder {
 }
 
 impl<T: BufferWriter> DecimalEncoder for T {}
+
+pub trait DecimalPayloadDatumChunkEncoder: NumberEncoder {
+    fn write_decimal_to_chunk_by_datum_payload(&mut self, mut src_payload: &[u8]) -> Result<()> {
+        let v = &src_payload.read_datum_payload_decimal()?;
+        let data = unsafe {
+            let p = v as *const Decimal as *const u8;
+            std::slice::from_raw_parts(p, DECIMAL_STRUCT_SIZE)
+        };
+        self.write_bytes(data)?;
+        Ok(())
+    }
+}
+
+impl<T: BufferWriter> DecimalPayloadDatumChunkEncoder for T {}
 
 // Mark as `#[inline]` since in many cases `size` is a constant.
 #[inline]
