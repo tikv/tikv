@@ -281,9 +281,9 @@ impl Column {
         match flag {
             datum::NIL_FLAG => self.append_null(),
             datum::INT_FLAG => self.append_u64(raw_datum.read_datum_payload_i64()? as u64),
-            datum::UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_u64()? ),
+            datum::UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_u64()?),
             datum::VAR_INT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_i64()? as u64),
-            datum::VAR_UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_u64()? ),
+            datum::VAR_UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_u64()?),
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for Int vector",
                 flag
