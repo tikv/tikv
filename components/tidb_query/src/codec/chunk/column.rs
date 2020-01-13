@@ -407,6 +407,7 @@ impl Column {
         match flag {
             datum::NIL_FLAG => self.append_null(),
             // In index, it's flag is `BYTES`. See TiDB's `encode()`.
+            // TODO: this method's performance can be further improved
             datum::BYTES_FLAG => self.append_bytes(&raw_datum.read_datum_payload_bytes()?),
             // In record, it's flag is `COMPACT_BYTES`. See TiDB's `encode()`.
             datum::COMPACT_BYTES_FLAG => self.append_compact_bytes(raw_datum),
