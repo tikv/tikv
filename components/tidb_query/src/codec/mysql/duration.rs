@@ -87,13 +87,14 @@ mod parser {
     use nom::combinator::{opt, peek};
     use nom::IResult;
 
-    fn bytes_to_u32(bytes: &[u8]) -> Option<u32> {
+    fn bytes_to_u32(bytes: &[u8]) -> std::result::Result<u32, nom::Err<()>> {
         bytes.iter().try_fold(0u32, |acc, c| {
             if c.is_ascii_digit() {
                 acc.checked_mul(10)
                     .and_then(|t| t.checked_add(u32::from(c - b'0')))
+                    .ok_or_else(|| nom::Err::Error(()))
             } else {
-                None
+                Err(nom::Err::Error(()))
             }
         })
     }
@@ -126,7 +127,7 @@ mod parser {
         if let Ok((rest, day)) = digit1::<_, ()>(input) {
             let (rest, _) = space0(rest)?;
             if rest.is_empty() || followed_by_dot_or_digits(rest) {
-                return Ok((rest, bytes_to_u32(day).ok_or_else(|| nom::Err::Error(()))?));
+                return Ok((rest, bytes_to_u32(day)?));
             }
         }
         Ok((input, 0))
@@ -143,12 +144,12 @@ mod parser {
         let mut hms = [0; 4];
 
         let (mut rest, hour) = digit1(input)?;
-        hms[0] = bytes_to_u32(hour).ok_or_else(|| nom::Err::Error(()))?;
+        hms[0] = bytes_to_u32(hour)?;
 
         for i in 1..=2 {
             if let Ok((remain, _)) = delimeter(rest) {
                 let (remain, digits) = digit1(remain)?;
-                hms[i] = bytes_to_u32(digits).ok_or_else(|| nom::Err::Error(()))?;
+                hms[i] = bytes_to_u32(digits)?;
                 rest = remain;
             } else {
                 break;
@@ -171,15 +172,9 @@ mod parser {
         let (rest, bytes) = digit0(rest)?;
         let fsp = usize::from(fsp);
         let (fraction, len) = if fsp >= bytes.len() {
-            (
-                bytes_to_u32(bytes).ok_or_else(|| nom::Err::Error(()))?,
-                bytes.len(),
-            )
+            (bytes_to_u32(bytes)?, bytes.len())
         } else {
-            (
-                bytes_to_u32(&bytes[..=fsp]).ok_or_else(|| nom::Err::Error(()))?,
-                fsp + 1,
-            )
+            (bytes_to_u32(&bytes[..=fsp])?, fsp + 1)
         };
         Ok((rest, fraction * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
