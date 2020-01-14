@@ -41,7 +41,7 @@ impl ChangeData for Service {
         let region_epoch = request.get_region_epoch().clone();
         // TODO: make it a bounded channel.
         let (tx, rx) = mpsc::unbounded();
-        let downstream = Downstream::new(peer.clone(), region_epoch, tx);
+        let downstream = Downstream::new(peer, region_epoch, tx);
         let downstream_id = Some(downstream.id);
         if let Err(status) = self
             .scheduler
