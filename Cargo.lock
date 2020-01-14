@@ -2091,9 +2091,9 @@ dependencies = [
 
 [[package]]
 name = "nom"
-version = "5.0.1"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c618b63422da4401283884e6668d39f819a106ef51f5f59b81add00075da35ca"
+checksum = "c433f4d505fe6ce7ff78523d2fa13a0b9f2690e181fc26168bcbe5ccc5d14e07"
 dependencies = [
  "lexical-core",
  "memchr",
@@ -3878,7 +3878,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "match_template",
- "nom 5.0.1",
+ "nom 5.1.0",
  "num",
  "num-traits",
  "openssl",
@@ -3980,7 +3980,7 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nix 0.11.1",
- "nom 5.0.1",
+ "nom 5.1.0",
  "panic_hook",
  "pd_client",
  "pprof",

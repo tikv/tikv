@@ -83,6 +83,9 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 
 mod parser {
     use super::*;
+    use nom::character::complete::{char, digit0, digit1, space0};
+    use nom::combinator::{opt, peek};
+    use nom::IResult;
 
     fn bytes_to_u32(bytes: &[u8]) -> Option<u32> {
         bytes.iter().try_fold(0u32, |acc, c| {
@@ -95,68 +98,57 @@ mod parser {
         })
     }
 
-    fn repeat(input: &[u8], pattern: impl Fn(u8) -> bool, n: usize) -> Option<(&[u8], &[u8])> {
-        let len = input
-            .iter()
-            .position(|&c| !pattern(c))
-            .unwrap_or_else(|| input.len());
-
-        if len >= n {
-            Some((&input[len..], &input[..len]))
-        } else {
-            None
+    fn followed_by_dot_or_digits(input: &[u8]) -> bool {
+        match (
+            opt::<_, _, (), _>(peek(char('.')))(input).unwrap(),
+            opt::<_, _, (), _>(peek(digit1))(input).unwrap(),
+        ) {
+            ((_, None), (_, None)) => false,
+            _ => true,
         }
     }
 
-    fn digit(input: &[u8], n: usize) -> Option<(&[u8], &[u8])> {
-        repeat(input, |c| c.is_ascii_digit(), n)
-    }
+    fn negative(input: &[u8]) -> IResult<&[u8], bool, ()> {
+        // If the first character is '-', `negative` is true.
+        let rest = match opt(char('-'))(input)? {
+            (_, None) => return Ok((input, false)),
+            (rest, _) => rest,
+        };
 
-    fn space(input: &[u8], n: usize) -> Option<(&[u8], &[u8])> {
-        repeat(input, |c| c.is_ascii_whitespace(), n)
-    }
-
-    fn negative(input: &[u8]) -> Option<(&[u8], bool)> {
-        if input.get(0) != Some(&b'-') {
-            return Some((input, false));
+        let (rest, _) = space0(rest)?;
+        if !followed_by_dot_or_digits(rest) {
+            return Err(nom::Err::Error(()));
         }
-        let (rest, _) = space(&input[1..], 0)?;
-        rest.get(0)
-            .filter(|&&c| c == b'.')
-            .or_else(|| rest.get(0).filter(|&&c| c.is_ascii_digit()))?;
-        Some((rest, true))
+        Ok((rest, true))
     }
 
-    fn day(input: &[u8]) -> Option<(&[u8], u32)> {
-        if let Some((rest, day)) = digit(input, 1) {
-            let (rest, _) = space(rest, 0)?;
-            if rest.is_empty()
-                || rest.get(0).filter(|&&c| c == b'.').is_some()
-                || rest.get(0).filter(|&&c| c.is_ascii_digit()).is_some()
-            {
-                return Some((rest, bytes_to_u32(day)?));
+    fn day(input: &[u8]) -> IResult<&[u8], u32, ()> {
+        if let Ok((rest, day)) = digit1::<_, ()>(input) {
+            let (rest, _) = space0(rest)?;
+            if rest.is_empty() || followed_by_dot_or_digits(rest) {
+                return Ok((rest, bytes_to_u32(day).ok_or_else(|| nom::Err::Error(()))?));
             }
         }
-        Some((input, 0))
+        Ok((input, 0))
     }
 
-    fn delimeter(input: &[u8]) -> Option<(&[u8], u8)> {
-        let (rest, _) = space(input, 0)?;
-        rest.get(0).filter(|&&c| c == b':')?;
-        let (rest, _) = space(&rest[1..], 0)?;
-        Some((rest, b':'))
+    fn delimeter(input: &[u8]) -> IResult<&[u8], (), ()> {
+        let (rest, _) = space0(input)?;
+        let (rest, _) = char(':')(rest)?;
+        let (rest, _) = space0(rest)?;
+        Ok((rest, ()))
     }
 
-    fn hms(input: &[u8]) -> Option<(&[u8], [u32; 4])> {
+    fn hms(input: &[u8]) -> IResult<&[u8], [u32; 4], ()> {
         let mut hms = [0; 4];
 
-        let (mut rest, hour) = digit(input, 1)?;
-        hms[0] = bytes_to_u32(hour)?;
+        let (mut rest, hour) = digit1(input)?;
+        hms[0] = bytes_to_u32(hour).ok_or_else(|| nom::Err::Error(()))?;
 
         for i in 1..=2 {
-            if let Some((remain, _)) = delimeter(rest) {
-                let (remain, digits) = digit(remain, 1)?;
-                hms[i] = bytes_to_u32(digits)?;
+            if let Ok((remain, _)) = delimeter(rest) {
+                let (remain, digits) = digit1(remain)?;
+                hms[i] = bytes_to_u32(digits).ok_or_else(|| nom::Err::Error(()))?;
                 rest = remain;
             } else {
                 break;
@@ -168,22 +160,28 @@ mod parser {
             .zip(hms.iter())
             .any(|(validator, &v)| validator(v).is_err())
         {
-            return None;
+            return Err(nom::Err::Error(()));
         }
 
-        Some((rest, hms))
+        Ok((rest, hms))
     }
 
-    fn fraction(input: &[u8], fsp: u8) -> Option<(&[u8], u32)> {
-        input.get(0).filter(|&&c| c == b'.')?;
-        let (rest, bytes) = digit(&input[1..], 0)?;
+    fn fraction(input: &[u8], fsp: u8) -> IResult<&[u8], u32, ()> {
+        let (rest, _) = char('.')(input)?;
+        let (rest, bytes) = digit0(rest)?;
         let fsp = usize::from(fsp);
         let (fraction, len) = if fsp >= bytes.len() {
-            (bytes_to_u32(bytes)?, bytes.len())
+            (
+                bytes_to_u32(bytes).ok_or_else(|| nom::Err::Error(()))?,
+                bytes.len(),
+            )
         } else {
-            (bytes_to_u32(&bytes[..=fsp])?, fsp + 1)
+            (
+                bytes_to_u32(&bytes[..=fsp]).ok_or_else(|| nom::Err::Error(()))?,
+                fsp + 1,
+            )
         };
-        Some((rest, fraction * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
+        Ok((rest, fraction * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
 
     pub fn parse(input: &[u8], fsp: u8) -> Option<Duration> {
@@ -192,12 +190,12 @@ mod parser {
             return Some(Duration::zero());
         }
 
-        let (rest, negative) = negative(input)?;
-        let (rest, mut day) = day(rest)?;
-        let (mut rest, _) = space(rest, 0)?;
+        let (rest, negative) = negative(input).ok()?;
+        let (rest, mut day) = day(rest).ok()?;
+        let (mut rest, _) = space0::<_, ()>(rest).ok()?;
 
-        let mut parts = if rest.get(0).filter(|&&c| c.is_ascii_digit()).is_some() {
-            let (remain, hhmmss) = hms(rest)?;
+        let mut parts = if opt::<_, _, (), _>(peek(digit1))(rest).ok()?.1.is_some() {
+            let (remain, hhmmss) = hms(rest).ok()?;
             rest = remain;
             hhmmss
         } else {
@@ -209,9 +207,9 @@ mod parser {
         parts[0] += day * 24;
         check_hour_part(parts[0]).ok()?;
 
-        let (mut rest, _) = space(rest, 0)?;
-        if rest.get(0).filter(|&&c| c == b'.').is_some() {
-            let (remain, frac) = fraction(rest, fsp)?;
+        let (mut rest, _) = space0::<_, ()>(rest).ok()?;
+        if opt::<_, _, (), _>(peek(char('.')))(rest).ok()?.1.is_some() {
+            let (remain, frac) = fraction(rest, fsp).ok()?;
             rest = remain;
             parts[3] = frac;
         }
