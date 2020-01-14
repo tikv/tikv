@@ -163,7 +163,7 @@ impl Simulator for ServerCluster {
         let store = create_raft_storage(
             engine,
             &cfg.storage,
-            storage_read_pool,
+            storage_read_pool.into(),
             Some(lock_mgr.clone()),
         )?;
         self.storages.insert(node_id, raft_engine);

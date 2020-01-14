@@ -142,6 +142,7 @@ impl PendingCmdQueue {
 
 #[derive(Default, Debug)]
 pub struct ChangePeer {
+    pub index: u64,
     pub conf_change: ConfChange,
     pub peer: PeerMeta,
     pub region: Region,
@@ -1378,6 +1379,11 @@ impl ApplyDelegate {
             |_| panic!("should not use return")
         );
         fail_point!(
+            "apply_on_conf_change_3_1",
+            self.id == 3 && self.region_id() == 1,
+            |_| panic!("should not use return")
+        );
+        fail_point!(
             "apply_on_conf_change_all_1",
             self.region_id() == 1,
             |_| panic!("should not use return")
@@ -1551,6 +1557,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
+                index: ctx.exec_ctx.as_ref().unwrap().index,
                 conf_change: Default::default(),
                 peer: peer.clone(),
                 region,
