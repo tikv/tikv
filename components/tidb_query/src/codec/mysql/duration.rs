@@ -99,14 +99,15 @@ mod parser {
         })
     }
 
-    fn followed_by_dot_or_digits(input: &[u8]) -> bool {
-        match (
-            opt::<_, _, (), _>(peek(char('.')))(input).unwrap(),
-            opt::<_, _, (), _>(peek(digit1))(input).unwrap(),
-        ) {
-            ((_, None), (_, None)) => false,
-            _ => true,
-        }
+    fn followed_by_dot(input: &[u8]) -> bool {
+        opt::<_, _, (), _>(peek(char('.')))(input)
+            .unwrap()
+            .1
+            .is_some()
+    }
+
+    fn followed_by_digits(input: &[u8]) -> bool {
+        opt::<_, _, (), _>(peek(digit1))(input).unwrap().1.is_some()
     }
 
     fn negative(input: &[u8]) -> IResult<&[u8], bool, ()> {
@@ -117,7 +118,7 @@ mod parser {
         };
 
         let (rest, _) = space0(rest)?;
-        if !followed_by_dot_or_digits(rest) {
+        if !followed_by_dot(rest) && !followed_by_digits(rest) {
             return Err(nom::Err::Error(()));
         }
         Ok((rest, true))
@@ -126,7 +127,7 @@ mod parser {
     fn day(input: &[u8]) -> IResult<&[u8], u32, ()> {
         if let Ok((rest, day)) = digit1::<_, ()>(input) {
             let (rest, _) = space0(rest)?;
-            if rest.is_empty() || followed_by_dot_or_digits(rest) {
+            if rest.is_empty() || followed_by_dot(rest) || followed_by_digits(rest) {
                 return Ok((rest, bytes_to_u32(day)?));
             }
         }
@@ -189,7 +190,7 @@ mod parser {
         let (rest, mut day) = day(rest).ok()?;
         let (mut rest, _) = space0::<_, ()>(rest).ok()?;
 
-        let mut parts = if opt::<_, _, (), _>(peek(digit1))(rest).ok()?.1.is_some() {
+        let mut parts = if followed_by_digits(rest) {
             let (remain, hhmmss) = hms(rest).ok()?;
             rest = remain;
             hhmmss
@@ -203,7 +204,7 @@ mod parser {
         check_hour_part(parts[0]).ok()?;
 
         let (mut rest, _) = space0::<_, ()>(rest).ok()?;
-        if opt::<_, _, (), _>(peek(char('.')))(rest).ok()?.1.is_some() {
+        if followed_by_dot(rest) {
             let (remain, frac) = fraction(rest, fsp).ok()?;
             rest = remain;
             parts[3] = frac;
