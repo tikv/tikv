@@ -75,9 +75,6 @@ else
 ENABLE_FEATURES += protobuf-codec
 endif
 
-# Deny rustc and clippy warnings
-export RUSTFLAGS ?= "-Dwarnings"
-
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin
