@@ -177,7 +177,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         let header = Service::header();
         let fut = resp
             .send_all(req.map(move |_| {
-                let mut r = TsoResponse::new();
+                let mut r = TsoResponse::default();
                 r.set_header(header.clone());
                 r.mut_timestamp().physical = 42;
                 (r, WriteFlags::default())
