@@ -83,136 +83,103 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 
 mod parser {
     use super::*;
-    use nom::character::complete::{char, digit0, digit1, space0};
-    use nom::combinator::{opt, peek};
+    use nom::character::complete::{char, digit0, digit1, space0, space1};
+    use nom::combinator::opt;
     use nom::IResult;
 
-    fn bytes_to_u32(bytes: &[u8]) -> std::result::Result<u32, nom::Err<()>> {
-        bytes.iter().try_fold(0u32, |acc, c| {
-            if c.is_ascii_digit() {
-                acc.checked_mul(10)
-                    .and_then(|t| t.checked_add(u32::from(c - b'0')))
-                    .ok_or_else(|| nom::Err::Error(()))
-            } else {
-                Err(nom::Err::Error(()))
-            }
-        })
+    fn number(input: &str) -> IResult<&str, u32, ()> {
+        let (rest, num) = digit1(input)?;
+        Ok((rest, num.parse().map_err(|_| nom::Err::Error(()))?))
     }
 
-    fn followed_by_dot(input: &[u8]) -> bool {
-        opt::<_, _, (), _>(peek(char('.')))(input)
-            .unwrap()
-            .1
-            .is_some()
+    // If first character is '-', `negative` is true.
+    fn negative(input: &str) -> IResult<&str, bool, ()> {
+        let (rest, dash) = opt(char('-'))(input)?;
+        Ok((rest, dash.is_some()))
     }
 
-    fn followed_by_digits(input: &[u8]) -> bool {
-        opt::<_, _, (), _>(peek(digit1))(input).unwrap().1.is_some()
-    }
-
-    fn negative(input: &[u8]) -> IResult<&[u8], bool, ()> {
-        // If the first character is '-', `negative` is true.
-        let rest = match opt(char('-'))(input)? {
-            (_, None) => return Ok((input, false)),
-            (rest, _) => rest,
-        };
-
-        let (rest, _) = space0(rest)?;
-        if !followed_by_dot(rest) && !followed_by_digits(rest) {
-            return Err(nom::Err::Error(()));
-        }
-        Ok((rest, true))
-    }
-
-    fn day(input: &[u8]) -> IResult<&[u8], u32, ()> {
-        if let Ok((rest, day)) = digit1::<_, ()>(input) {
-            let (rest, _) = space0(rest)?;
-            if rest.is_empty() || followed_by_dot(rest) || followed_by_digits(rest) {
-                return Ok((rest, bytes_to_u32(day)?));
-            }
-        }
-        Ok((input, 0))
-    }
-
-    fn delimeter(input: &[u8]) -> IResult<&[u8], (), ()> {
+    fn colon(input: &str) -> IResult<&str, (), ()> {
         let (rest, _) = space0(input)?;
         let (rest, _) = char(':')(rest)?;
         let (rest, _) = space0(rest)?;
         Ok((rest, ()))
     }
 
-    fn hms(input: &[u8]) -> IResult<&[u8], [u32; 4], ()> {
-        let mut hms = [0; 4];
+    fn day_hhmmss(input: &str) -> IResult<&str, (u32, [u32; 3]), ()> {
+        let (rest, day) = number(input)?;
+        let (rest, _) = space1(rest)?;
+        let (rest, hhmmss) = hhmmss_delimited(rest, false)?;
+        Ok((rest, (day, hhmmss)))
+    }
 
-        let (mut rest, hour) = digit1(input)?;
-        hms[0] = bytes_to_u32(hour)?;
+    fn hhmmss_delimited(input: &str, require_colon: bool) -> IResult<&str, [u32; 3], ()> {
+        let mut hhmmss = [0; 3];
+
+        let (mut rest, hour) = number(input)?;
+        hhmmss[0] = hour;
 
         for i in 1..=2 {
-            if let Ok((remain, _)) = delimeter(rest) {
-                let (remain, digits) = digit1(remain)?;
-                hms[i] = bytes_to_u32(digits)?;
+            if let Ok((remain, _)) = colon(rest) {
+                let (remain, num) = number(remain)?;
+                hhmmss[i] = num;
                 rest = remain;
             } else {
+                if i == 1 && require_colon {
+                    return Err(nom::Err::Error(()));
+                }
                 break;
             }
         }
 
-        if [check_hour_part, check_minute_part, check_second_part]
-            .iter()
-            .zip(hms.iter())
-            .any(|(validator, &v)| validator(v).is_err())
-        {
-            return Err(nom::Err::Error(()));
-        }
-
-        Ok((rest, hms))
+        Ok((rest, hhmmss))
     }
 
-    fn fraction(input: &[u8], fsp: u8) -> IResult<&[u8], u32, ()> {
-        let (rest, _) = char('.')(input)?;
-        let (rest, bytes) = digit0(rest)?;
+    fn hhmmss_compact(input: &str) -> IResult<&str, [u32; 3], ()> {
+        let (rest, num) = number(input)?;
+        let hhmmss = [num / 10000, (num / 100) % 100, num % 100];
+        Ok((rest, hhmmss))
+    }
+
+    fn fraction(input: &str, fsp: u8) -> IResult<&str, u32, ()> {
         let fsp = usize::from(fsp);
-        let (fraction, len) = if fsp >= bytes.len() {
-            (bytes_to_u32(bytes)?, bytes.len())
+        let (rest, dot) = opt(char('.'))(input)?;
+
+        if dot.is_none() {
+            return Ok((rest, 0));
+        }
+
+        let (rest, digits) = digit0(rest)?;
+        let ((_, frac), len) = if fsp >= digits.len() {
+            (number(digits)?, digits.len())
         } else {
-            (bytes_to_u32(&bytes[..=fsp])?, fsp + 1)
+            (number(&digits[..=fsp])?, fsp + 1)
         };
-        Ok((rest, fraction * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
+
+        Ok((rest, frac * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
 
     pub fn parse(input: &[u8], fsp: u8) -> Option<Duration> {
-        let input = std::str::from_utf8(input).ok()?.trim().as_bytes();
+        let input = std::str::from_utf8(input).ok()?.trim();
+
         if input.is_empty() {
             return Some(Duration::zero());
         }
 
-        let (rest, negative) = negative(input).ok()?;
-        let (rest, mut day) = day(rest).ok()?;
-        let (mut rest, _) = space0::<_, ()>(rest).ok()?;
+        let (rest, neg) = negative(input).ok()?;
+        let (rest, _) = space0::<_, ()>(rest).ok()?;
+        let (rest, hhmmss) = day_hhmmss(rest)
+            .map(|(rest, (day, [hh, mm, ss]))| (rest, [day * 24 + hh, mm, ss]))
+            .or_else(|_| hhmmss_delimited(rest, true))
+            .or_else(|_| hhmmss_compact(rest))
+            .ok()?;
+        let (rest, _) = space0::<_, ()>(rest).ok()?;
+        let (rest, frac) = fraction(rest, fsp).ok()?;
 
-        let mut parts = if followed_by_digits(rest) {
-            let (remain, hhmmss) = hms(rest).ok()?;
-            rest = remain;
-            hhmmss
-        } else {
-            let hhmmss = [day / 10000, (day / 100) % 100, day % 100, 0];
-            day = 0;
-            hhmmss
-        };
-
-        parts[0] += day * 24;
-        check_hour_part(parts[0]).ok()?;
-
-        let (mut rest, _) = space0::<_, ()>(rest).ok()?;
-        if followed_by_dot(rest) {
-            let (remain, frac) = fraction(rest, fsp).ok()?;
-            rest = remain;
-            parts[3] = frac;
-        }
         if !rest.is_empty() {
             return None;
         }
-        Duration::new_from_parts(negative, parts[0], parts[1], parts[2], parts[3], fsp as i8).ok()
+
+        Duration::new_from_parts(neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8).ok()
     }
 } /* parser */
 
@@ -713,7 +680,7 @@ mod tests {
             (b"1:2:3", 0, Some("01:02:03")),
             (b"1 1:2:3", 0, Some("25:02:03")),
             (b"-1 1:2:3.123", 3, Some("-25:02:03.123")),
-            (b"-.123", 3, Some("-00:00:00.123")),
+            (b"-.123", 3, None),
             (b"12345", 0, Some("01:23:45")),
             (b"-123", 0, Some("-00:01:23")),
             (b"-23", 0, Some("-00:00:23")),
@@ -725,8 +692,13 @@ mod tests {
             (b" - 1 : 2 :  3 .123 ", 3, Some("-01:02:03.123")),
             (b" - 1 .123 ", 3, Some("-00:00:01.123")),
             (b"-", 0, None),
+            (b"- .1", 0, None),
             (b"", 0, Some("00:00:00")),
             (b"", 7, None),
+            (b"1.1", 1, Some("00:00:01.1")),
+            (b"-1.1", 1, Some("-00:00:01.1")),
+            (b"- 1.1", 1, Some("-00:00:01.1")),
+            (b"- 1 .1", 1, Some("-00:00:01.1")),
             (b"18446744073709551615:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
