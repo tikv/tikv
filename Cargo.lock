@@ -84,6 +84,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-speed-limit"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8960ff0e84c4330f6d3d882fad4a3d292cdb1729b1acbc1c22dab0af0f77e6f1"
+dependencies = [
+ "futures-core",
+ "futures-io",
+ "futures-timer",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -164,6 +176,8 @@ dependencies = [
  "external_storage",
  "failure",
  "futures 0.1.29",
+ "futures-executor",
+ "futures-util",
  "grpcio",
  "hex 0.3.2",
  "keys",
@@ -972,6 +986,9 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "futures-executor",
+ "futures-io",
+ "futures-util",
  "kvproto",
  "rand 0.7.2",
  "slog",
@@ -1195,6 +1212,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bae52d6b29cf440e298856fec3965ee6fa71b06aa7495178615953fd669e5f9"
 
 [[package]]
+name = "futures-timer"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1de7508b218029b0f01662ed8f61b1c964b3ae99d6f25462d0f55a595109df6"
+
+[[package]]
 name = "futures-util"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1212,6 +1235,7 @@ dependencies = [
  "proc-macro-hack",
  "proc-macro-nested",
  "slab",
+ "tokio-io",
 ]
 
 [[package]]
@@ -3439,6 +3463,8 @@ dependencies = [
  "engine_traits",
  "external_storage",
  "futures 0.1.29",
+ "futures-executor",
+ "futures-util",
  "grpcio",
  "hex 0.3.2",
  "keys",
@@ -3940,7 +3966,9 @@ dependencies = [
  "futures 0.1.29",
  "futures 0.3.1",
  "futures-cpupool",
+ "futures-executor",
  "futures-locks",
+ "futures-util",
  "grpcio",
  "hex 0.3.2",
  "hyper",
@@ -4025,6 +4053,7 @@ dependencies = [
 name = "tikv_util"
 version = "0.1.0"
 dependencies = [
+ "async-speed-limit",
  "backtrace",
  "byteorder",
  "chrono",
@@ -4034,6 +4063,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "fail",
+ "fs2",
  "futures 0.1.29",
  "futures 0.3.1",
  "futures-cpupool",

@@ -9,6 +9,7 @@ failpoints = ["fail/failpoints"]
 prost-codec = ["prost"]
 
 [dependencies]
+async-speed-limit = "0.2"
 backtrace = "0.3.9"
 byteorder = "1.2"
 codec = { path = "../codec" }
@@ -18,6 +19,7 @@ coarsetime = "0.1"
 crc32fast = "1.2"
 crossbeam = "0.7.2"
 fail = "0.3"
+fs2 = "0.4"
 futures = "0.1"
 futures03 = { package = "futures", version = "0.3" }
 futures-cpupool = "0.1"
