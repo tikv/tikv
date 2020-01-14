@@ -281,7 +281,7 @@ impl TestSuite {
         let mut total_bytes = 0;
         //let digest = crc64fast::Digest::new();
 
-        let (k, v) = (format!("{}", "foo"), format!("{}", "foo"));
+        let (k, v) = ("foo", "foo");
         //checksum = checksum_crc64_xor(checksum, digest.clone(), &k.as_bytes(), &v.as_bytes());
         total_kvs += 1;
         total_bytes += (k.len() + v.len()) as u64;
@@ -536,7 +536,7 @@ fn test_backup_rawkv() {
     for f in files1.clone().into_iter() {
         let mut reader = storage.read(&f.name).unwrap();
         let mut content = vec![];
-        reader.read_to_end(&mut content).unwrap();
+        block_on(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
         m.crc32 = calc_crc32_bytes(&content);
         m.length = content.len() as _;

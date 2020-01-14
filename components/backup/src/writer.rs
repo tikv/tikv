@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::{CF_DEFAULT, CF_WRITE, DB};
+use engine::{CfName, CF_DEFAULT, CF_WRITE, DB};
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
@@ -197,22 +197,22 @@ impl BackupWriter {
 /// A writer writes Raw kv into SST files.
 pub struct BackupRawKVWriter {
     name: String,
-    cf: String,
+    cf: CfName,
     writer: Writer,
     limiter: Limiter,
 }
 
 impl BackupRawKVWriter {
     /// Create a new BackupRawKVWriter.
-    pub fn new(db: Arc<DB>, name: &str, cf: &str, limiter: Limiter) -> Result<BackupRawKVWriter> {
+    pub fn new(db: Arc<DB>, name: &str, cf: CfName, limiter: Limiter) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
-            .set_cf(super::endpoint::rawkv_cf(cf)?)
+            .set_cf(cf)
             .set_db(RocksEngine::from_ref(&db))
             .build(name)?;
         Ok(BackupRawKVWriter {
             name: name.to_owned(),
-            cf: cf.to_owned(),
+            cf,
             writer: Writer::new(writer),
             limiter,
         })
@@ -246,7 +246,7 @@ impl BackupRawKVWriter {
         if !self.writer.is_empty() {
             let file = self.writer.save_and_build_file(
                 &self.name,
-                super::endpoint::rawkv_cf(&self.cf)?,
+                self.cf,
                 self.limiter.clone(),
                 storage,
             )?;

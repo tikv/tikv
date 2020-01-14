@@ -10,7 +10,6 @@ use kvproto::kvrpcpb::KeyError;
 use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::Error as StorageError;
 
 use crate::metrics::*;
 
@@ -111,8 +110,8 @@ pub enum Error {
     Txn(TxnError),
     #[fail(display = "ClusterID error current {}, request {}", current, request)]
     ClusterID { current: u64, request: u64 },
-    #[fail(display = "Storage error {}", _0)]
-    Storage(StorageError),
+    #[fail(display = "Invalid cf {}", cf)]
+    InvalidCf { cf: String },
 }
 
 macro_rules! impl_from {
@@ -134,7 +133,6 @@ impl_from! {
     EngineError => Engine,
     EngineTraitError => EngineTrait,
     TxnError => Txn,
-    StorageError => Storage,
 }
 
 pub type Result<T> = result::Result<T, Error>;

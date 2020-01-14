@@ -8,7 +8,7 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::{CfName, IterOption, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN, DB};
+use engine::{name_to_cf, CfName, IterOption, DATA_KEY_PREFIX_LEN, DB};
 use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
@@ -93,6 +93,9 @@ impl Task {
             storage: create_storage(req.get_storage_backend())?,
             limiter,
         };
+        let cf = name_to_cf(req.get_cf()).ok_or_else(|| crate::Error::InvalidCf {
+            cf: req.get_cf().to_owned(),
+        })?;
 
         Ok((
             Task {
@@ -105,7 +108,7 @@ impl Task {
                 concurrency: req.get_concurrency(),
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
-                cf: rawkv_cf(req.get_cf())?,
+                cf,
             },
             cancel,
         ))
@@ -211,7 +214,7 @@ impl BackupRange {
         if let Some(end) = self.end_key.clone() {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
-        let mut cursor = snapshot.iter_cf(rawkv_cf(&self.cf)?, option, ScanMode::Forward)?;
+        let mut cursor = snapshot.iter_cf(self.cf, option, ScanMode::Forward)?;
         if let Some(begin) = self.start_key.clone() {
             if !cursor.seek(&begin, cfstatistics)? {
                 return Ok(statistics);
@@ -459,7 +462,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             let mut progress = prs.lock().unwrap();
             let branges = progress.forward(WORKER_TAKE_RANGE);
             let is_raw_kv = progress.is_raw_kv;
-            let cf = progress.cf.clone();
             if branges.is_empty() {
                 return Ok(());
             }
@@ -482,7 +484,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     let mut writer = match BackupRawKVWriter::new(
                         db.clone(),
                         &name,
-                        &cf,
+                        progress.cf,
                         storage.limiter.clone(),
                     ) {
                         Ok(w) => w,
@@ -726,21 +728,6 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
         ),
     }
 }
-pub fn rawkv_cf(cfname: &str) -> Result<CfName> {
-    if cfname.is_empty() {
-        return Ok(CF_DEFAULT);
-    }
-    for c in DATA_CFS {
-        if cfname == *c {
-            return Ok(c);
-        }
-    }
-    let mut info = String::from("invalid cf name ");
-    info.push_str(cfname);
-    Err(errors::Error::Storage(<StorageError>::from(
-        StorageErrorInner::InvalidCf(info),
-    )))
-}
 
 #[cfg(test)]
 pub mod tests {
@@ -859,7 +846,7 @@ pub mod tests {
                     end_key,
                     endpoint.region_info.clone(),
                     false,
-                    CF_DEFAULT,
+                    engine::CF_DEFAULT,
                 );
 
                 let mut ranges = Vec::with_capacity(expect.len());
@@ -915,7 +902,7 @@ pub mod tests {
                     concurrency: 4,
                     cancel: Arc::default(),
                     is_raw_kv: false,
-                    cf: CF_DEFAULT,
+                    cf: engine::CF_DEFAULT,
                 };
                 endpoint.handle_backup_task(task);
                 let resps: Vec<_> = rx.collect().wait().unwrap();
