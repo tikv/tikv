@@ -168,10 +168,12 @@ mod parser {
         let (rest, neg) = negative(input).ok()?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
         let (rest, hhmmss) = day_hhmmss(rest)
-            .map(|(rest, (day, [hh, mm, ss]))| (rest, [day * 24 + hh, mm, ss]))
-            .or_else(|_| hhmmss_delimited(rest, true))
-            .or_else(|_| hhmmss_compact(rest))
-            .ok()?;
+            .ok()
+            .and_then(|(rest, (day, [hh, mm, ss]))| {
+                Some((rest, [day.checked_mul(24)? + hh, mm, ss]))
+            })
+            .or_else(|| hhmmss_delimited(rest, true).ok())
+            .or_else(|| hhmmss_compact(rest).ok())?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
         let (rest, frac) = fraction(rest, fsp).ok()?;
 
@@ -700,6 +702,7 @@ mod tests {
             (b"- 1.1", 1, Some("-00:00:01.1")),
             (b"- 1 .1", 1, Some("-00:00:01.1")),
             (b"18446744073709551615:59:59", 0, None),
+            (b"4294967295 0:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
             (b"1:62:3", 0, None),
