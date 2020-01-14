@@ -558,6 +558,7 @@ impl Peer {
             state != GroupState::Chaos
                 && self.raft_group.raft.leader_id != raft::INVALID_ID
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
+                && !self.has_unresolved_reads()
         }
     }
 

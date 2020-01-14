@@ -81,7 +81,7 @@ fn test_replica_read_not_applied() {
     assert_eq!(exp_value, b"v2");
 
     // New read index requests can be resolved quickly.
-    let resp2_ch = cluster.sim.wl().read_on_node(read_request.clone(), 3, 3);
+    let resp2_ch = cluster.sim.wl().read_on_node(read_request, 3, 3);
     let resp2 = resp2_ch.recv_timeout(Duration::from_secs(3)).unwrap();
     let exp_value = resp2.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
@@ -123,7 +123,7 @@ fn test_replica_read_on_hibernate() {
     read_request.mut_header().set_replica_read(true);
 
     // Read index on follower should be blocked.
-    let resp1_ch = cluster.sim.wl().read_on_node(read_request.clone(), 1, 1);
+    let resp1_ch = cluster.sim.wl().read_on_node(read_request, 1, 1);
     assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
 
     let (tx, rx) = mpsc::sync_channel(1024);
