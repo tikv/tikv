@@ -8,6 +8,8 @@ use std::time::Instant;
 
 use futures::sync::mpsc as future_mpsc;
 use futures::{Future, Stream};
+use futures_executor::block_on;
+use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
@@ -133,8 +135,8 @@ impl TestSuite {
             self.tikv_cli.raw_put(&request).unwrap(),
             !response.has_region_error() && !response.error.is_empty(),
             response,
-            10,    // retry 10 times
-            1000   // 1s timeout
+            10,   // retry 10 times
+            1000  // 1s timeout
         );
         assert!(
             !response.has_region_error(),
@@ -156,8 +158,8 @@ impl TestSuite {
             self.tikv_cli.kv_prewrite(&prewrite_req).unwrap(),
             !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
             prewrite_resp,
-            10,    // retry 10 times
-            3000   // 3s timeout
+            10,   // retry 10 times
+            3000  // 3s timeout
         );
         assert!(
             !prewrite_resp.has_region_error(),
@@ -182,7 +184,7 @@ impl TestSuite {
             self.tikv_cli.kv_commit(&commit_req).unwrap(),
             !commit_resp.has_region_error() && !commit_resp.has_error(),
             commit_resp,
-            10,    // retry 10 times
+            10,   // retry 10 times
             3000  // 3s timeout
         );
         assert!(
@@ -372,7 +374,7 @@ fn test_backup_and_import() {
     for f in files1.clone().into_iter() {
         let mut reader = storage.read(&f.name).unwrap();
         let mut content = vec![];
-        reader.read_to_end(&mut content).unwrap();
+        block_on(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
         m.crc32 = calc_crc32_bytes(&content);
         m.length = content.len() as _;

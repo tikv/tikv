@@ -13,6 +13,7 @@ use grpcio::{
 use kvproto::tikvpb::*;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
+use yatp::task::future::TaskCell;
 
 use crate::coprocessor::Endpoint;
 use crate::raftstore::router::RaftStoreRouter;
@@ -20,7 +21,6 @@ use crate::raftstore::store::SnapManager;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::RocksEngine;
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
@@ -55,12 +55,13 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     trans: ServerTransport<T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<ThreadPool>,
     grpc_thread_load: Arc<ThreadLoad>,
+    yatp_read_pool: Option<yatp::ThreadPool<TaskCell>>,
     readpool_normal_concurrency: usize,
     readpool_normal_thread_load: Arc<ThreadLoad>,
     timer: Handle,
@@ -75,8 +76,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
+        yatp_read_pool: Option<yatp::ThreadPool<TaskCell>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = ThreadPoolBuilder::new()
@@ -160,6 +162,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker,
             stats_pool: Some(stats_pool),
             grpc_thread_load,
+            yatp_read_pool,
             readpool_normal_concurrency,
             readpool_normal_thread_load,
             timer: GLOBAL_TIMER_HANDLE.clone(),
@@ -252,6 +255,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         if let Some(pool) = self.stats_pool.take() {
             let _ = pool.shutdown_now().wait();
         }
+        let _ = self.yatp_read_pool.take();
         Ok(())
     }
 
@@ -371,7 +375,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         );
-        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);
+        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool.into());
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
@@ -386,6 +390,7 @@ mod tests {
             },
             SnapManager::new("", None),
             gc_worker,
+            None,
         )
         .unwrap();
 

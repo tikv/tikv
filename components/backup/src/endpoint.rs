@@ -1,8 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
+use std::cmp;
+use std::f64::INFINITY;
+use std::fmt;
+use std::sync::atomic::*;
+use std::sync::*;
+use std::time::*;
+
 use engine::{CfName, IterOption, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN, DB};
-use engine_rocks::RocksIOLimiter;
-use engine_traits::IOLimiter;
 use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
@@ -11,17 +17,11 @@ use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
-use std::cell::RefCell;
-use std::cmp;
-use std::fmt;
-use std::sync::atomic::*;
-use std::sync::*;
-use std::time::*;
 use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider, ScanMode, Snapshot};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::Statistics;
-use tikv::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
+use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -71,7 +71,7 @@ impl fmt::Debug for Task {
 
 #[derive(Clone)]
 struct LimitedStorage {
-    limiter: Option<Arc<RocksIOLimiter>>,
+    limiter: Limiter,
     storage: Arc<dyn ExternalStorage>,
 }
 
@@ -83,11 +83,12 @@ impl Task {
     ) -> Result<(Task, Arc<AtomicBool>)> {
         let cancel = Arc::new(AtomicBool::new(false));
 
-        let limiter = if req.get_rate_limit() != 0 {
-            Some(Arc::new(RocksIOLimiter::new(req.get_rate_limit() as _)))
+        let speed_limit = req.get_rate_limit();
+        let limiter = Limiter::new(if speed_limit > 0 {
+            speed_limit as f64
         } else {
-            None
-        };
+            INFINITY
+        });
         let storage = LimitedStorage {
             storage: create_storage(req.get_storage_backend())?,
             limiter,
@@ -587,14 +588,20 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let resp = task.resp;
         for (brange, res) in res_rx {
             let start_key = if task.is_raw_kv {
-                brange.start_key.map_or_else(|| vec![], |k| k.into_encoded())
+                brange
+                    .start_key
+                    .map_or_else(|| vec![], |k| k.into_encoded())
             } else {
-                brange.start_key.map_or_else(|| vec![], |k| k.into_raw().unwrap())
+                brange
+                    .start_key
+                    .map_or_else(|| vec![], |k| k.into_raw().unwrap())
             };
             let end_key = if task.is_raw_kv {
                 brange.end_key.map_or_else(|| vec![], |k| k.into_encoded())
             } else {
-                brange.end_key.map_or_else(|| vec![], |k| k.into_raw().unwrap())
+                brange
+                    .end_key
+                    .map_or_else(|| vec![], |k| k.into_raw().unwrap())
             };
             let mut response = BackupResponse::default();
             match res {
@@ -895,7 +902,7 @@ pub mod tests {
                 let ls = LocalStorage::new(tmp.path()).unwrap();
                 let storage = LimitedStorage {
                     storage: Arc::new(ls) as _,
-                    limiter: None,
+                    limiter: Limiter::new(INFINITY),
                 };
                 let (tx, rx) = unbounded();
                 let task = Task {
@@ -993,7 +1000,7 @@ pub mod tests {
         }
 
         // TODO: check key number for each snapshot.
-        let limiter = Arc::new(RocksIOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
+        let limiter = Limiter::new(10.0 * 1024.0 * 1024.0 /* 10 MB/s */);
         for (ts, len) in backup_tss {
             let mut req = BackupRequest::default();
             req.set_start_key(vec![]);
@@ -1013,9 +1020,9 @@ pub mod tests {
             let (mut task, _) = Task::new(req, tx).unwrap();
             if len % 2 == 0 {
                 // Make sure the rate limiter is set.
-                assert!(task.storage.limiter.is_some());
+                assert!(task.storage.limiter.speed_limit().is_finite());
                 // Share the same rate limiter.
-                task.storage.limiter = Some(limiter.clone());
+                task.storage.limiter = limiter.clone();
             }
             endpoint.handle_backup_task(task);
             let (resp, rx) = rx.into_future().wait().unwrap();
