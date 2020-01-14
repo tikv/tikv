@@ -134,6 +134,7 @@ fn encoder(
     let attrs: Vec<_> = attrs.into_iter().filter(|a| is_attr("serde", a)).collect();
 
     Ok(quote! {
+        #[doc(hidden)]
         #[derive(serde::Serialize)]
         #(#attrs)*
         pub struct #encoder_name<#lt> {
