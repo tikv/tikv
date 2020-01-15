@@ -42,8 +42,3 @@ tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 txn_types = { path = "../txn_types", default-features = false }
-
-[dev-dependencies]
-tempfile = "3.0"
-test_util = { path = "../test_util" }
-test_raftstore = { path = "../test_raftstore", default-features = false }
