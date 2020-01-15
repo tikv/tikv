@@ -15,6 +15,7 @@ use grpcio::{ChannelBuilder, Environment};
 use backup::Task;
 use engine::CF_DEFAULT;
 use engine::*;
+use engine_traits::IterOptions;
 use external_storage::*;
 use kvproto::backup::*;
 use kvproto::import_sstpb::*;
@@ -217,6 +218,7 @@ impl TestSuite {
         }
         rx
     }
+
     fn backup_raw(
         &self,
         start_key: Vec<u8>,
@@ -275,22 +277,29 @@ impl TestSuite {
         (format!("key_{}", key_idx), format!("value_{}", key_idx))
     }
 
-    fn raw_admin_checksum(&self, key_count: u64) -> (u64, u64, u64) {
-        //let mut checksum = 0;
+    fn raw_kv_checksum(&self, start: String, end: String, cf: CfName) -> (u64, u64, u64) {
+        let start = start.into_bytes();
+        let end = end.into_bytes();
+
         let mut total_kvs = 0;
         let mut total_bytes = 0;
-        //let digest = crc64fast::Digest::new();
 
-        let (k, v) = ("foo", "foo");
-        //checksum = checksum_crc64_xor(checksum, digest.clone(), &k.as_bytes(), &v.as_bytes());
-        total_kvs += 1;
-        total_bytes += (k.len() + v.len()) as u64;
+        let sim = self.cluster.sim.rl();
+        let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
+        let snapshot = engine.snapshot(&self.context.clone()).unwrap();
+        let mut iter_opt = IterOptions::default();
+        if !end.is_empty() {
+            iter_opt.set_upper_bound(&end, DATA_KEY_PREFIX_LEN);
+        }
+        let mut iter = snapshot.iter_cf(cf, iter_opt).unwrap();
 
-        for i in 0..key_count {
-            let (k, v) = self.gen_raw_kv(i);
-            //checksum = checksum_crc64_xor(checksum, digest.clone(), &k.as_bytes(), &v.as_bytes());
+        if !iter.seek(&start).unwrap() {
+            return (0, 0, 0);
+        }
+        while iter.valid().unwrap() {
             total_kvs += 1;
-            total_bytes += (k.len() + v.len()) as u64;
+            total_bytes += (iter.key().len() + iter.value().len()) as u64;
+            iter.next().unwrap();
         }
         (0, total_kvs, total_bytes)
     }
@@ -597,7 +606,8 @@ fn test_backup_raw_meta() {
     }
     let backup_ts = suite.alloc_ts();
     // key are order by lexicographical order, 'a'-'z' will cover all
-    let (admin_checksum, admin_total_kvs, admin_total_bytes) = suite.raw_admin_checksum(key_count);
+    let (admin_checksum, admin_total_kvs, admin_total_bytes) =
+        suite.raw_kv_checksum("a".to_owned(), "z".to_owned(), CF_DEFAULT);
 
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();

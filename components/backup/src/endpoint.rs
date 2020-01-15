@@ -193,9 +193,7 @@ impl BackupRange {
         &self,
         writer: &mut BackupRawKVWriter,
         engine: &E,
-        backup_ts: TimeStamp,
     ) -> Result<Statistics> {
-        let _ = backup_ts;
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
@@ -493,7 +491,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             return tx.send((brange, Err(e))).map_err(|_| ());
                         }
                     };
-                    let stat = match brange.backup_raw(&mut writer, &engine, backup_ts) {
+                    let stat = match brange.backup_raw(&mut writer, &engine) {
                         Ok(s) => s,
                         Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
                     };
