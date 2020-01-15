@@ -154,3 +154,43 @@ impl StorageCallback {
         }
     }
 }
+
+pub trait StorageCallbackType: Sized {
+    fn callback(cb: Callback<Self>) -> StorageCallback;
+}
+
+impl StorageCallbackType for () {
+    fn callback(cb: Callback<Self>) -> StorageCallback {
+        StorageCallback::Boolean(cb)
+    }
+}
+
+impl StorageCallbackType for Vec<Result<()>> {
+    fn callback(cb: Callback<Self>) -> StorageCallback {
+        StorageCallback::Booleans(cb)
+    }
+}
+
+impl StorageCallbackType for MvccInfo {
+    fn callback(cb: Callback<Self>) -> StorageCallback {
+        StorageCallback::MvccInfoByKey(cb)
+    }
+}
+
+impl StorageCallbackType for Option<(Key, MvccInfo)> {
+    fn callback(cb: Callback<Self>) -> StorageCallback {
+        StorageCallback::MvccInfoByStartTs(cb)
+    }
+}
+
+impl StorageCallbackType for Vec<kvrpcpb::LockInfo> {
+    fn callback(cb: Callback<Self>) -> StorageCallback {
+        StorageCallback::Locks(cb)
+    }
+}
+
+impl StorageCallbackType for TxnStatus {
+    fn callback(cb: Callback<Self>) -> StorageCallback {
+        StorageCallback::TxnStatus(cb)
+    }
+}
