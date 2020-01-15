@@ -503,8 +503,8 @@ fn test_backup_rawkv() {
     let backup_ts = suite.alloc_ts();
     let storage_path = tmp.path().join(format!("{}", backup_ts));
     let rx = suite.backup_raw(
-        vec![], // start
-        vec![], // end
+        vec![b'a'], // start
+        vec![b'z'], // end
         cf.clone(),
         &storage_path,
     );

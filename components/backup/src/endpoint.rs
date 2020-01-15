@@ -28,7 +28,6 @@ use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{Key, TimeStamp};
 
 use crate::metrics::*;
-use crate::writer::BackupRawKVWriter;
 use crate::*;
 
 const WORKER_TAKE_RANGE: usize = 6;
@@ -139,6 +138,8 @@ impl BackupRange {
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
     ) -> Result<Statistics> {
+        assert!(!self.is_raw_kv);
+
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
@@ -194,6 +195,8 @@ impl BackupRange {
         writer: &mut BackupRawKVWriter,
         engine: &E,
     ) -> Result<Statistics> {
+        assert!(self.is_raw_kv);
+
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
@@ -245,6 +248,65 @@ impl BackupRange {
             .with_label_values(&["raw_scan"])
             .observe(start.elapsed().as_secs_f64());
         Ok(statistics)
+    }
+
+    fn backup_to_file<E: Engine>(
+        &self,
+        engine: &E,
+        db: Arc<DB>,
+        storage: &LimitedStorage,
+        file_name: String,
+        backup_ts: TimeStamp,
+        start_ts: TimeStamp,
+    ) -> Result<(Vec<File>, Statistics)> {
+        let mut writer = match BackupWriter::new(db, &file_name, storage.limiter.clone()) {
+            Ok(w) => w,
+            Err(e) => {
+                error!("backup writer failed"; "error" => ?e);
+                return Err(e);
+            }
+        };
+        let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
+        // Save sst files to storage.
+        match writer.save(&storage.storage) {
+            Ok(files) => Ok((files, stat)),
+            Err(e) => {
+                error!("backup save file failed"; "error" => ?e);
+                Err(e)
+            }
+        }
+    }
+
+    fn backup_raw_kv_to_file<E: Engine>(
+        &self,
+        engine: &E,
+        db: Arc<DB>,
+        storage: &LimitedStorage,
+        file_name: String,
+        cf: CfName,
+    ) -> Result<(Vec<File>, Statistics)> {
+        let mut writer = match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone()) {
+            Ok(w) => w,
+            Err(e) => {
+                error!("backup writer failed"; "error" => ?e);
+                return Err(e);
+            }
+        };
+        let stat = match self.backup_raw(&mut writer, engine) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
+        // Save sst files to storage.
+        match writer.save(&storage.storage) {
+            Ok(files) => Ok((files, stat)),
+            Err(e) => {
+                error!("backup save file failed"; "error" => ?e);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -469,71 +531,27 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     return Ok(());
                 }
                 // TODO: make file_name unique and short
+                let key = brange.start_key.clone().and_then(|k| {
+                    // use start_key sha256 instead of start_key to avoid file name too long os error
+                    let input = if is_raw_kv {
+                        k.into_encoded()
+                    } else {
+                        k.into_raw().unwrap()
+                    };
+                    tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
+                });
+                let name = backup_file_name(store_id, &brange.region, key);
 
-                if is_raw_kv {
-                    let key = brange.start_key.clone().and_then(|k| {
-                        // use start_key sha256 instead of start_key to avoid file name too long os error
-                        tikv_util::file::sha256(&k.into_encoded())
-                            .ok()
-                            .map(|b| hex::encode(b))
-                    });
-
-                    let name = backup_file_name(store_id, &brange.region, key);
-                    let mut writer = match BackupRawKVWriter::new(
-                        db.clone(),
-                        &name,
-                        progress.cf,
-                        storage.limiter.clone(),
-                    ) {
-                        Ok(w) => w,
-                        Err(e) => {
-                            error!("backup writer failed"; "error" => ?e);
-                            return tx.send((brange, Err(e))).map_err(|_| ());
-                        }
-                    };
-                    let stat = match brange.backup_raw(&mut writer, &engine) {
-                        Ok(s) => s,
-                        Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
-                    };
-                    // Save sst files to storage.
-                    let files = match writer.save(&storage.storage) {
-                        Ok(files) => files,
-                        Err(e) => {
-                            error!("backup save file failed"; "error" => ?e);
-                            return tx.send((brange, Err(e))).map_err(|_| ());
-                        }
-                    };
-                    let _ = tx.send((brange, Ok((files, stat)))).map_err(|_| ());
+                let res = if is_raw_kv {
+                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, progress.cf)
                 } else {
-                    let key = brange.start_key.clone().and_then(|k| {
-                        // use start_key sha256 instead of start_key to avoid file name too long os error
-                        tikv_util::file::sha256(&k.into_raw().unwrap())
-                            .ok()
-                            .map(|b| hex::encode(b))
-                    });
-
-                    let name = backup_file_name(store_id, &brange.region, key);
-                    let mut writer =
-                        match BackupWriter::new(db.clone(), &name, storage.limiter.clone()) {
-                            Ok(w) => w,
-                            Err(e) => {
-                                error!("backup writer failed"; "error" => ?e);
-                                return tx.send((brange, Err(e))).map_err(|_| ());
-                            }
-                        };
-                    let stat = match brange.backup(&mut writer, &engine, backup_ts, start_ts) {
-                        Ok(s) => s,
-                        Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
-                    };
-                    // Save sst files to storage.
-                    let files = match writer.save(&storage.storage) {
-                        Ok(files) => files,
-                        Err(e) => {
-                            error!("backup save file failed"; "error" => ?e);
-                            return tx.send((brange, Err(e))).map_err(|_| ());
-                        }
-                    };
-                    let _ = tx.send((brange, Ok((files, stat)))).map_err(|_| ());
+                    brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts)
+                };
+                match res {
+                    Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
+                    Ok((files, stat)) => {
+                        let _ = tx.send((brange, Ok((files, stat)))).map_err(|_| ());
+                    }
                 }
             }
         }));
