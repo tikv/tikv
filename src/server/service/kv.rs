@@ -114,7 +114,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     }
 }
 
-macro_rules! tikv_fn {
+macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
             let timer = GRPC_MSG_HISTOGRAM_VEC.$fn_name.start_coarse_timer();
@@ -135,116 +135,116 @@ macro_rules! tikv_fn {
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
-    tikv_fn!(kv_get, future_get, GetRequest, GetResponse);
-    tikv_fn!(kv_scan, future_scan, ScanRequest, ScanResponse);
-    tikv_fn!(
+    handle_request!(kv_get, future_get, GetRequest, GetResponse);
+    handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
+    handle_request!(
         kv_prewrite,
         future_prewrite,
         PrewriteRequest,
         PrewriteResponse
     );
-    tikv_fn!(
+    handle_request!(
         kv_pessimistic_lock,
         future_acquire_pessimistic_lock,
         PessimisticLockRequest,
         PessimisticLockResponse
     );
-    tikv_fn!(
+    handle_request!(
         kv_pessimistic_rollback,
         future_pessimistic_rollback,
         PessimisticRollbackRequest,
         PessimisticRollbackResponse
     );
-    tikv_fn!(kv_commit, future_commit, CommitRequest, CommitResponse);
-    tikv_fn!(kv_cleanup, future_cleanup, CleanupRequest, CleanupResponse);
-    tikv_fn!(
+    handle_request!(kv_commit, future_commit, CommitRequest, CommitResponse);
+    handle_request!(kv_cleanup, future_cleanup, CleanupRequest, CleanupResponse);
+    handle_request!(
         kv_batch_get,
         future_batch_get,
         BatchGetRequest,
         BatchGetResponse
     );
-    tikv_fn!(
+    handle_request!(
         kv_batch_rollback,
         future_batch_rollback,
         BatchRollbackRequest,
         BatchRollbackResponse
     );
-    tikv_fn!(
+    handle_request!(
         kv_txn_heart_beat,
         future_txn_heart_beat,
         TxnHeartBeatRequest,
         TxnHeartBeatResponse
     );
-    tikv_fn!(
+    handle_request!(
         kv_check_txn_status,
         future_check_txn_status,
         CheckTxnStatusRequest,
         CheckTxnStatusResponse
     );
-    tikv_fn!(
+    handle_request!(
         kv_scan_lock,
         future_scan_lock,
         ScanLockRequest,
         ScanLockResponse
     );
-    tikv_fn!(
+    handle_request!(
         kv_resolve_lock,
         future_resolve_lock,
         ResolveLockRequest,
         ResolveLockResponse
     );
-    tikv_fn!(
+    handle_request!(
         kv_delete_range,
         future_delete_range,
         DeleteRangeRequest,
         DeleteRangeResponse
     );
-    tikv_fn!(
+    handle_request!(
         mvcc_get_by_key,
         future_mvcc_get_by_key,
         MvccGetByKeyRequest,
         MvccGetByKeyResponse
     );
-    tikv_fn!(
+    handle_request!(
         mvcc_get_by_start_ts,
         future_mvcc_get_by_start_ts,
         MvccGetByStartTsRequest,
         MvccGetByStartTsResponse
     );
-    tikv_fn!(raw_get, future_raw_get, RawGetRequest, RawGetResponse);
-    tikv_fn!(
+    handle_request!(raw_get, future_raw_get, RawGetRequest, RawGetResponse);
+    handle_request!(
         raw_batch_get,
         future_raw_batch_get,
         RawBatchGetRequest,
         RawBatchGetResponse
     );
-    tikv_fn!(raw_scan, future_raw_scan, RawScanRequest, RawScanResponse);
-    tikv_fn!(
+    handle_request!(raw_scan, future_raw_scan, RawScanRequest, RawScanResponse);
+    handle_request!(
         raw_batch_scan,
         future_raw_batch_scan,
         RawBatchScanRequest,
         RawBatchScanResponse
     );
-    tikv_fn!(raw_put, future_raw_put, RawPutRequest, RawPutResponse);
-    tikv_fn!(
+    handle_request!(raw_put, future_raw_put, RawPutRequest, RawPutResponse);
+    handle_request!(
         raw_batch_put,
         future_raw_batch_put,
         RawBatchPutRequest,
         RawBatchPutResponse
     );
-    tikv_fn!(
+    handle_request!(
         raw_delete,
         future_raw_delete,
         RawDeleteRequest,
         RawDeleteResponse
     );
-    tikv_fn!(
+    handle_request!(
         raw_batch_delete,
         future_raw_batch_delete,
         RawBatchDeleteRequest,
         RawBatchDeleteResponse
     );
-    tikv_fn!(
+    handle_request!(
         raw_delete_range,
         future_raw_delete_range,
         RawDeleteRangeRequest,
@@ -974,7 +974,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
         Empty, future_handle_empty(), invalid;
-
     }
 }
 
@@ -1429,7 +1428,7 @@ fn future_cop<E: Engine>(
         .map_err(|_| unreachable!())
 }
 
-macro_rules! make_future {
+macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident) { $else_branch: expr }) => {
         fn $fn_name<E: Engine, L: LockManager>(
             storage: &Storage<E, L>,
@@ -1451,30 +1450,30 @@ macro_rules! make_future {
         }
     };
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($v: ident, $resp: ident) { $else_branch: expr }) => {
-        make_future!($fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp) { $else_branch });
+        txn_command_future!($fn_name, $req_ty, $resp_ty, (req) {}; ($v, $resp) { $else_branch });
     };
 }
 
-make_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp) {
+txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
 });
-make_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
+txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
 });
-make_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
+txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
 });
-make_future!(future_batch_rollback, BatchRollbackRequest, BatchRollbackResponse, (v, resp) {
+txn_command_future!(future_batch_rollback, BatchRollbackRequest, BatchRollbackResponse, (v, resp) {
     if let Err(e) = v {
         resp.set_error(extract_key_error(&e));
     }
 });
-make_future!(future_resolve_lock, ResolveLockRequest, ResolveLockResponse, (v, resp) {
+txn_command_future!(future_resolve_lock, ResolveLockRequest, ResolveLockResponse, (v, resp) {
     if let Err(e) = v {
         resp.set_error(extract_key_error(&e));
     }
 });
-make_future!(future_commit, CommitRequest, CommitResponse, (v, resp) {
+txn_command_future!(future_commit, CommitRequest, CommitResponse, (v, resp) {
     match v {
         Ok(TxnStatus::Committed { commit_ts }) => {
             resp.set_commit_version(commit_ts.into_inner())
@@ -1483,7 +1482,7 @@ make_future!(future_commit, CommitRequest, CommitResponse, (v, resp) {
         Err(e) => resp.set_error(extract_key_error(&e)),
     }
 });
-make_future!(future_cleanup, CleanupRequest, CleanupResponse, (v, resp) {
+txn_command_future!(future_cleanup, CleanupRequest, CleanupResponse, (v, resp) {
     if let Err(e) = v {
         if let Some(ts) = extract_committed(&e) {
             resp.set_commit_version(ts.into_inner());
@@ -1492,7 +1491,7 @@ make_future!(future_cleanup, CleanupRequest, CleanupResponse, (v, resp) {
         }
     }
 });
-make_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse, (v, resp) {
+txn_command_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse, (v, resp) {
     match v {
         Ok(txn_status) => {
             if let TxnStatus::Uncommitted { lock_ttl, .. } = txn_status {
@@ -1504,7 +1503,7 @@ make_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse, (
         Err(e) => resp.set_error(extract_key_error(&e)),
     }
 });
-make_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStatusResponse,
+txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStatusResponse,
     (req) let caller_start_ts = req.get_caller_start_ts().into();
     (v, resp) {
         match v {
@@ -1528,19 +1527,19 @@ make_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStatusRespo
             Err(e) => resp.set_error(extract_key_error(&e)),
         }
 });
-make_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
+txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
     match v {
         Ok(locks) => resp.set_locks(locks.into()),
         Err(e) => resp.set_error(extract_key_error(&e)),
     }
 });
-make_future!(future_mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse, (v, resp) {
+txn_command_future!(future_mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse, (v, resp) {
     match v {
         Ok(mvcc) => resp.set_info(mvcc.into_proto()),
         Err(e) => resp.set_error(format!("{}", e)),
     }
 });
-make_future!(future_mvcc_get_by_start_ts, MvccGetByStartTsRequest, MvccGetByStartTsResponse, (v, resp) {
+txn_command_future!(future_mvcc_get_by_start_ts, MvccGetByStartTsRequest, MvccGetByStartTsResponse, (v, resp) {
     match v {
         Ok(Some((k, vv))) => {
             resp.set_key(k.into_raw().unwrap());
