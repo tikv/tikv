@@ -224,14 +224,11 @@ impl TestSuite {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         cf: String,
-        backup_ts: TimeStamp,
         path: &Path,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
         let mut req = BackupRequest::default();
         req.set_start_key(start_key);
         req.set_end_key(end_key);
-        req.start_version = backup_ts.into_inner();
-        req.end_version = backup_ts.into_inner();
         req.set_storage_backend(make_local_backend(path));
         req.set_is_raw_kv(true);
         req.set_cf(cf);
@@ -509,7 +506,6 @@ fn test_backup_rawkv() {
         vec![], // start
         vec![], // end
         cf.clone(),
-        backup_ts,
         &storage_path,
     );
     let resps1 = rx.collect().wait().unwrap();
@@ -527,7 +523,6 @@ fn test_backup_rawkv() {
         vec![], // start
         vec![], // end
         cf.clone(),
-        backup_ts,
         &tmp.path().join(format!("{}", backup_ts.next())),
     );
     let resps2 = rx.collect().wait().unwrap();
@@ -585,7 +580,6 @@ fn test_backup_rawkv() {
         vec![], // start
         vec![], // end
         cf,
-        backup_ts,
         &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
     let resps3 = rx.collect().wait().unwrap();
@@ -616,7 +610,6 @@ fn test_backup_raw_meta() {
         vec![], // start
         vec![], // end
         cf,
-        backup_ts,
         &storage_path,
     );
     let resps1 = rx.collect().wait().unwrap();
