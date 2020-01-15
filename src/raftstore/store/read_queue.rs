@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
-use std::{cmp, usize};
+use std::{cmp, u64, usize};
 
 use crate::raftstore::store::fsm::apply;
 use crate::raftstore::store::metrics::*;
-use crate::raftstore::store::Callback;
+use crate::raftstore::store::{Callback, Config};
 
 use engine_rocks::RocksEngine;
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -70,32 +70,69 @@ pub struct ReadIndexQueue {
     handled_cnt: usize,
     // map[uuid] -> offset in `reads`.
     contexts: HashMap<Uuid, usize>,
+
+    retry_countdown: usize,
 }
 
 impl ReadIndexQueue {
-    pub fn is_empty(&self) -> bool {
-        self.reads.is_empty()
+    /// Check it's necessary to retry pending read requests or not.
+    /// Return true if all such conditions are satisfied:
+    /// 1. more than an election timeout elapsed from the last request push;
+    /// 2. more than an election timeout elapsed from the last retry;
+    /// 3. there are still unresolved requests in the queue.
+    pub fn check_needs_retry(&mut self, cfg: &Config) -> bool {
+        if self.reads.len() == self.ready_cnt {
+            return false;
+        }
+
+        if self.retry_countdown == usize::MAX {
+            self.retry_countdown = cfg.raft_election_timeout_ticks - 1;
+            return false;
+        }
+
+        if self.retry_countdown > 0 {
+            self.retry_countdown -= 1;
+            return false;
+        }
+
+        self.retry_countdown = cfg.raft_election_timeout_ticks;
+        true
     }
-    pub fn notify_all_removed(&mut self, region_id: u64) {
+
+    pub fn has_unresolved(&self) -> bool {
+        self.ready_cnt != self.reads.len()
+    }
+
+    /// Clear all commands in the queue. if `notify_removed` contains an `region_id`,
+    /// notify the request's callback that the region is removed.
+    pub fn clear_all(&mut self, notify_removed: Option<u64>) {
+        let mut removed = 0;
         for mut read in self.reads.drain(..) {
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-            for (_, cb) in read.cmds.drain(..) {
-                apply::notify_req_region_removed(region_id, cb);
+            removed += read.cmds.len();
+            if let Some(region_id) = notify_removed {
+                for (_, cb) in read.cmds.drain(..) {
+                    apply::notify_req_region_removed(region_id, cb);
+                }
+            } else {
+                read.cmds.clear();
             }
         }
+        RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
         self.contexts.clear();
         self.ready_cnt = 0;
         self.handled_cnt = 0;
     }
 
     pub fn clear_uncommitted(&mut self, term: u64) {
+        let mut removed = 0;
         for mut read in self.reads.drain(self.ready_cnt..) {
             self.contexts.remove(&read.id);
+            removed += read.cmds.len();
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
         }
+        RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
     }
 
     pub fn push_back(&mut self, read: ReadIndexRequest, is_leader: bool) {
@@ -104,6 +141,7 @@ impl ReadIndexQueue {
             self.contexts.insert(read.id, offset);
         }
         self.reads.push_back(read);
+        self.retry_countdown = usize::MAX;
     }
 
     pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest> {
@@ -124,6 +162,15 @@ impl ReadIndexQueue {
         ts
     }
 
+    /// A fast path for `advance_leader_reads` then `pop_front`.
+    pub fn advance_leader_read_and_pop(&mut self, uuid: Uuid, index: u64) -> ReadIndexRequest {
+        let mut read = self.reads.pop_front().unwrap();
+        self.handled_cnt += 1;
+        assert_eq!(uuid, read.id);
+        read.read_index = Some(index);
+        read
+    }
+
     /// update the read index of the requests that before the specified id.
     pub fn advance_replica_reads<T>(&mut self, states: T)
     where
@@ -133,8 +180,6 @@ impl ReadIndexQueue {
         for (uuid, index) in states {
             if let Some(offset) = self.contexts.remove(&uuid) {
                 let offset = offset.checked_sub(self.handled_cnt).unwrap();
-                self.ready_cnt = cmp::max(self.ready_cnt, offset + 1);
-
                 if let Some(occur_index) = self.reads[offset].read_index {
                     if occur_index < index {
                         continue;
@@ -151,25 +196,30 @@ impl ReadIndexQueue {
             );
         }
 
-        if self.ready_cnt > 1 && max_changed_offset > 0 {
+        if min_changed_offset != usize::MAX {
+            self.ready_cnt = cmp::max(self.ready_cnt, max_changed_offset + 1);
+        }
+        if max_changed_offset > 0 {
             self.fold(min_changed_offset, max_changed_offset);
         }
     }
 
-    pub fn fold(&mut self, mut min_changed_offset: usize, max_changed_offset: usize) {
-        let mut r_offset = max_changed_offset;
-        while r_offset >= min_changed_offset && r_offset > 0 {
-            let r_idx = self.reads[r_offset].read_index.unwrap();
-            let l_offset = r_offset - 1;
-            if self.reads[l_offset]
-                .read_index
-                .map_or(true, |l_idx| l_idx > r_idx)
-            {
-                self.reads[l_offset].read_index = Some(r_idx);
-                // Update `min_changed_offset`, it's required.
-                min_changed_offset = cmp::min(min_changed_offset, l_offset);
+    pub fn fold(&mut self, min_changed_offset: usize, max_changed_offset: usize) {
+        let mut r_idx = self.reads[max_changed_offset].read_index.unwrap();
+        let mut check_offset = max_changed_offset - 1;
+        loop {
+            let l_idx = self.reads[check_offset].read_index.unwrap_or(u64::MAX);
+            if l_idx > r_idx {
+                self.reads[check_offset].read_index = Some(r_idx);
+            } else if check_offset < min_changed_offset {
+                break;
+            } else {
+                r_idx = l_idx;
             }
-            r_offset -= 1;
+            if check_offset == 0 {
+                break;
+            }
+            check_offset -= 1;
         }
     }
 
@@ -193,6 +243,7 @@ impl ReadIndexQueue {
 
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
     pub fn push_front(&mut self, read: ReadIndexRequest) {
+        debug_assert!(read.read_index.is_some());
         self.reads.push_front(read);
         self.ready_cnt += 1;
         self.handled_cnt -= 1;
@@ -219,6 +270,9 @@ mod tests {
             let offset = queue.handled_cnt + queue.reads.len() - 1;
             queue.contexts.insert(id, offset);
         }
+
+        queue.advance_replica_reads(Vec::<(Uuid, u64)>::default());
+        assert_eq!(queue.ready_cnt, 0);
 
         queue.advance_replica_reads(vec![(queue.reads[0].id, 100)]);
         assert_eq!(queue.ready_cnt, 1);
@@ -254,6 +308,6 @@ mod tests {
             assert_eq!(queue.reads[i].read_index.unwrap(), 100, "#{} failed", i);
         }
 
-        std::mem::forget(queue);
+        queue.clear_all(None);
     }
 }

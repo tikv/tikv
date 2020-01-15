@@ -191,9 +191,7 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
-    pub pending_reads: ReadIndexQueue,
-    // Initialized as election_timeout / 3.
-    pub read_index_retry_countdown: usize,
+    pending_reads: ReadIndexQueue,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -297,7 +295,6 @@ impl Peer {
             proposals: Default::default(),
             apply_proposals: vec![],
             pending_reads: Default::default(),
-            read_index_retry_countdown: cfg.raft_election_timeout_ticks / 3,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -494,7 +491,7 @@ impl Peer {
             }
         }
 
-        self.pending_reads.notify_all_removed(region.get_id());
+        self.pending_reads.clear_all(Some(region.get_id()));
 
         for proposal in self.apply_proposals.drain(..) {
             apply::notify_req_region_removed(region.get_id(), proposal.cb);
@@ -561,6 +558,7 @@ impl Peer {
             state != GroupState::Chaos
                 && self.raft_group.raft.leader_id != raft::INVALID_ID
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
+                && !self.has_unresolved_reads()
         }
     }
 
@@ -1353,8 +1351,8 @@ impl Peer {
     }
 
     fn response_read<T, C>(
-        &mut self,
-        mut read: ReadIndexRequest,
+        &self,
+        read: &mut ReadIndexRequest,
         ctx: &mut PollContext<T, C>,
         replica_read: bool,
     ) {
@@ -1374,6 +1372,8 @@ impl Peer {
                 // We should check epoch since the range could be changed.
                 cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
             } else {
+                // The request could be proposed when the peer was leader.
+                // TODO: figure out that it's necessary to notify stale or not.
                 let term = self.term();
                 apply::notify_stale_req(term, cb);
             }
@@ -1382,17 +1382,18 @@ impl Peer {
 
     /// Responses to the ready read index request on the replica, the replica is not a leader.
     fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
-        while let Some(read) = self.pending_reads.pop_front() {
+        while let Some(mut read) = self.pending_reads.pop_front() {
             assert!(read.read_index.is_some());
             let is_read_index_request = read.cmds.len() == 1
                 && read.cmds[0].0.get_requests().len() == 1
                 && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
             if is_read_index_request {
-                self.response_read(read, ctx, false);
+                self.response_read(&mut read, ctx, false);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
-                self.response_read(read, ctx, true);
+                self.response_read(&mut read, ctx, true);
             } else {
+                // TODO: `ReadIndex` requests could be blocked.
                 self.pending_reads.push_front(read);
                 break;
             }
@@ -1415,13 +1416,14 @@ impl Peer {
             // leader. They will be cleared in `clear_uncommitted` later in the function.
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
+        } else if self.ready_to_handle_read() {
+            for (uuid, index) in states {
+                let mut read = self.pending_reads.advance_leader_read_and_pop(uuid, index);
+                propose_time = Some(read.renew_lease_time);
+                self.response_read(&mut read, ctx, false);
+            }
         } else {
             propose_time = self.pending_reads.advance_leader_reads(states);
-            if self.ready_to_handle_read() {
-                while let Some(read) = self.pending_reads.pop_front() {
-                    self.response_read(read, ctx, false);
-                }
-            }
         }
 
         // Note that only after handle read_states can we identify what requests are
@@ -1474,8 +1476,8 @@ impl Peer {
         if !self.is_leader() {
             self.post_pending_read_index_on_replica(ctx)
         } else if self.ready_to_handle_read() {
-            while let Some(read) = self.pending_reads.pop_front() {
-                self.response_read(read, ctx, false);
+            while let Some(mut read) = self.pending_reads.pop_front() {
+                self.response_read(&mut read, ctx, false);
             }
         }
         self.pending_reads.gc();
@@ -1870,23 +1872,29 @@ impl Peer {
         Ok(())
     }
 
+    pub fn has_unresolved_reads(&self) -> bool {
+        self.pending_reads.has_unresolved()
+    }
+
     /// `ReadIndex` requests could be lost in network, so on followers commands could queue in
     /// `pending_reads` forever. Sending a new `ReadIndex` periodically can resolve this.
-    pub(super) fn retry_pending_reads(&mut self) {
-        if self.is_leader() || self.pending_reads.is_empty() || self.pre_read_index().is_err() {
+    pub fn retry_pending_reads(&mut self, cfg: &Config) {
+        if self.is_leader()
+            || !self.pending_reads.check_needs_retry(cfg)
+            || self.pre_read_index().is_err()
+        {
             return;
         }
 
         let read = self.pending_reads.back_mut().unwrap();
-        if read.read_index.is_none() {
-            self.raft_group.read_index(read.id.as_bytes().to_vec());
-            debug!(
-                "request to get a read index";
-                "request_id" => ?read.id,
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-        }
+        debug_assert!(read.read_index.is_none());
+        self.raft_group.read_index(read.id.as_bytes().to_vec());
+        debug!(
+            "request to get a read index";
+            "request_id" => ?read.id,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
     }
 
     // Returns a boolean to indicate whether the `read` is proposed or not.
@@ -2269,7 +2277,7 @@ impl Peer {
     }
 
     fn handle_read<T, C>(
-        &mut self,
+        &self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
         check_epoch: bool,
@@ -2292,7 +2300,7 @@ impl Peer {
 
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
-        self.pending_reads.notify_all_removed(self.region_id);
+        self.pending_reads.clear_all(None);
     }
 }
 

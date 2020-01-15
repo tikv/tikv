@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::mem;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,8 +19,8 @@ fn test_replica_read_not_applied() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), Some(100));
-    let max_lease = Duration::from_secs(2);
+    configure_for_lease_read(&mut cluster, Some(50), Some(30));
+    let max_lease = Duration::from_secs(1);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
     cluster.pd_client.disable_default_operator();
@@ -75,12 +76,12 @@ fn test_replica_read_not_applied() {
     // The old read index request won't be blocked forever as it's retried internally.
     cluster.sim.wl().clear_send_filters(1);
     cluster.sim.wl().clear_recv_filters(2);
-    let resp1 = resp1_ch.recv_timeout(Duration::from_secs(3)).unwrap();
+    let resp1 = resp1_ch.recv_timeout(Duration::from_secs(6)).unwrap();
     let exp_value = resp1.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
 
     // New read index requests can be resolved quickly.
-    let resp2_ch = cluster.sim.wl().read_on_node(read_request.clone(), 3, 3);
+    let resp2_ch = cluster.sim.wl().read_on_node(read_request, 3, 3);
     let resp2 = resp2_ch.recv_timeout(Duration::from_secs(3)).unwrap();
     let exp_value = resp2.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
@@ -120,12 +121,19 @@ fn test_replica_read_on_hibernate() {
     read_request.mut_header().set_replica_read(true);
 
     // Read index on follower should be blocked.
-    let resp1_ch = cluster.sim.wl().read_on_node(read_request.clone(), 1, 1);
+    let resp1_ch = cluster.sim.wl().read_on_node(read_request, 1, 1);
     assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
 
     let (tx, rx) = mpsc::sync_channel(1024);
+    let cb = Arc::new(move |msg: &RaftMessage| {
+        let _ = tx.send(msg.clone());
+    }) as Arc<dyn Fn(&RaftMessage) + Send + Sync>;
     for i in 1..=3 {
-        let filter = Box::new(InspectFilter::new(tx.clone()));
+        let filter = Box::new(
+            RegionPacketFilter::new(1, i)
+                .when(Arc::new(AtomicBool::new(false)))
+                .set_msg_callback(Arc::clone(&cb)),
+        );
         cluster.sim.wl().add_send_filter(i, filter);
     }
 
