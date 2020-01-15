@@ -576,9 +576,10 @@ fn test_backup_rawkv() {
 
     // Backup file should have same contents.
     // backup ts + 2 avoid file already exist.
+    // Set non-empty range to check if it's incorrectly encoded.
     let rx = suite.backup_raw(
-        vec![], // start
-        vec![], // end
+        vec![b'a'], // start
+        vec![b'z'], // end
         cf,
         &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
@@ -599,7 +600,7 @@ fn test_backup_raw_meta() {
         suite.must_raw_put(k.clone().into_bytes(), v.clone().into_bytes(), cf.clone());
     }
     let backup_ts = suite.alloc_ts();
-    // key are order by lexicographical order, 'a'-'z' will cover all
+    // Keys are order by lexicographical order, 'a'-'z' will cover all.
     let (admin_checksum, admin_total_kvs, admin_total_bytes) =
         suite.raw_kv_checksum("a".to_owned(), "z".to_owned(), CF_DEFAULT);
 
