@@ -7,7 +7,7 @@ edition = "2018"
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = ["tidb_query/protobuf-codec"]
-prost-codec = ["tidb_query/protobuf-codec"]
+prost-codec = ["tidb_query/prost-codec"]
 
 [lib]
 path = "mod.rs"
