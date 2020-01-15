@@ -10,7 +10,6 @@ pub trait Snapshot<E>
 where
     Self: 'static + Peekable + Iterable + Send + Sync + Sized + Debug,
     E: KvEngine,
-for <'a> &'a E::TablePropertiesCollectionView: IntoIterator<Item = (E::TablePropertiesStringRef, E::TablePropertiesRef), IntoIter = E::TablePropertiesCollectionIter>,
 {
     type SyncSnapshot: SyncSnapshot<Self>;
 

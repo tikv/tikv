@@ -7,7 +7,6 @@ use crate::range::Range;
 use crate::CFHandleExt;
 
 pub trait TablePropertiesExt: CFHandleExt
-where for <'a> &'a Self::TablePropertiesCollectionView: IntoIterator<Item = (Self::TablePropertiesStringRef, Self::TablePropertiesRef), IntoIter = Self::TablePropertiesCollectionIter>
 {
     
     type TablePropertiesCollection: TablePropertiesCollection<Self::TablePropertiesCollectionView, Self::TableProperties, Self::TablePropertiesCollectionIter, Self::TablePropertiesStringRef, Self::TablePropertiesRef>;
@@ -38,7 +37,6 @@ where for <'a> &'a Self::TablePropertiesCollectionView: IntoIterator<Item = (Sel
 pub trait TablePropertiesCollection<V, P, I, SRef, PRef>
 where Self: Deref<Target = V>,
       V: TablePropertiesCollectionView<P, I, SRef, PRef>,
-      for <'a> &'a V: IntoIterator<Item = (SRef, PRef), IntoIter = I>,
       P: TableProperties,
       I: TablePropertiesCollectionIter<P, SRef, PRef>,
       SRef: TablePropertiesStringRef,
@@ -47,8 +45,8 @@ where Self: Deref<Target = V>,
 }
 
 pub trait TablePropertiesCollectionView<P, I, SRef, PRef>
-where for <'a> &'a Self: IntoIterator<Item = (SRef, PRef), IntoIter = I>,
-      P: TableProperties,
+where P: TableProperties,
+      Self: IntoIterator<Item = (SRef, PRef), IntoIter = I>,
       I: TablePropertiesCollectionIter<P, SRef, PRef>,
       SRef: TablePropertiesStringRef,
       PRef: TablePropertiesRef<P>,

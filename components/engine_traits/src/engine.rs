@@ -18,8 +18,6 @@ pub trait KvEngine:
     + Clone
     + Debug
     + 'static
-// FIXME: This higher-ranked trait bound needs to be propagated all over the place. It's really ugly and anti-abstraction. A solution that didn't require this would be nice.
-where for <'a> &'a Self::TablePropertiesCollectionView: IntoIterator<Item = (Self::TablePropertiesStringRef, Self::TablePropertiesRef), IntoIter = Self::TablePropertiesCollectionIter>,
 {
     type Snapshot: Snapshot<Self>;
     type WriteBatch: WriteBatch;

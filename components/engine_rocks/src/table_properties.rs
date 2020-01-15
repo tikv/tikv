@@ -78,7 +78,7 @@ pub struct RocksTablePropertiesCollectionView(RawTablePropertiesCollectionView);
 impl TablePropertiesCollectionView<PA, IA, SRefA, PRefA> for RocksTablePropertiesCollectionView
 {}
 
-impl<'a> IntoIterator for &'a RocksTablePropertiesCollectionView {
+impl IntoIterator for RocksTablePropertiesCollectionView {
     type Item = (RocksTablePropertiesStringRef, RocksTablePropertiesRef);
     type IntoIter = RocksTablePropertiesCollectionIter;
 
