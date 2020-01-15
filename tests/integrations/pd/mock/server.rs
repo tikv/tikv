@@ -172,8 +172,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         req: RequestStream<TsoRequest>,
         resp: DuplexSink<TsoResponse>,
     ) {
-        #[cfg(not(feature = "protobuf-codec"))]
-        use protobuf::Message;
         let header = Service::header();
         let fut = resp
             .send_all(req.map(move |_| {

@@ -47,8 +47,10 @@ failpoints = ["fail/failpoints", "tikv/failpoints"]
 profiling = ["profiler/profiling"]
 protobuf-codec = [
   "engine/protobuf-codec",
+  "grpcio/protobuf-codec",
   "kvproto/protobuf-codec",
   "pd_client/protobuf-codec",
+  "raft/protobuf-codec",
   "tikv/protobuf-codec",
   "tidb_query/protobuf-codec",
   "tipb/protobuf-codec",
@@ -56,8 +58,10 @@ protobuf-codec = [
 ]
 prost-codec = [
   "engine/prost-codec",
+  "grpcio/prost-codec",
   "kvproto/prost-codec",
   "pd_client/prost-codec",
+  "raft/prost-codec",
   "tikv/prost-codec",
   "tidb_query/prost-codec",
   "tipb/prost-codec",
