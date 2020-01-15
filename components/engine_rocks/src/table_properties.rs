@@ -76,7 +76,11 @@ impl TablePropertiesCollection<VA, PA, IA, SRefA, PRefA> for RocksTablePropertie
 pub struct RocksTablePropertiesCollectionView(RawTablePropertiesCollectionView);
 
 impl TablePropertiesCollectionView<PA, IA, SRefA, PRefA> for RocksTablePropertiesCollectionView
-{}
+{
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
 
 impl IntoIterator for RocksTablePropertiesCollectionView {
     type Item = (RocksTablePropertiesStringRef, RocksTablePropertiesRef);

@@ -50,7 +50,13 @@ where P: TableProperties,
       I: TablePropertiesCollectionIter<P, SRef, PRef>,
       SRef: TablePropertiesStringRef,
       PRef: TablePropertiesRef<P>,
-{}
+{
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 pub trait TablePropertiesCollectionIter<P, SRef, PRef>
 where Self: Iterator<Item = (SRef, PRef)>,
