@@ -179,8 +179,7 @@ impl TiKVServer {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
-        let mut version = Default::default();
-        if config.dynamic_config {
+        let version = if config.dynamic_config {
             // Advertise address and cluster id can not be changed
             if config.server.advertise_addr.is_empty() {
                 config.server.advertise_addr = config.server.addr.clone();
@@ -200,8 +199,10 @@ impl TiKVServer {
             cfg.log_file = log_file;
             cfg.dynamic_config = true;
             config = cfg;
-            version = v;
-        }
+            v
+        } else {
+            Default::default()
+        };
 
         validate_and_persist_config(&mut config, true);
         check_system_config(&config);
