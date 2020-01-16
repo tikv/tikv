@@ -126,6 +126,7 @@ vlog = "0.1.4"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
+rev = "4af9e1a8f2d4206d90d81f11e513fb03c87208bf"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
@@ -155,7 +156,7 @@ zipf = "5.0.1"
 "protobuf-build:0.10.0" = { git = "https://github.com/tikv/protobuf-build", rev="42e52b9311f7fb31bbbe089fef5a24ec0392f9ce" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 pprof = { version = "0.3", features = ["flamegraph", "protobuf"] }
 
 [workspace]
