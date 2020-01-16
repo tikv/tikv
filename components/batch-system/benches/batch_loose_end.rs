@@ -7,6 +7,8 @@ extern crate test;
 use batch_system::*;
 use std::borrow::Cow;
 use test::*;
+use std::sync::Arc;
+use std::sync::atomic::*;
 use tikv_util::mpsc;
 
 enum Message {
@@ -162,4 +164,55 @@ fn bench_imbalance(b: &mut Bencher) {
         }
     });
     system.shutdown();
+}
+
+#[bench]
+fn bench_fairness(b: &mut Bencher) {
+    let (control_tx, control_fsm) = DryRun::new(100000);
+    let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
+    system.spawn("test".to_owned(), Builder);
+    for id in 0..10 {
+        let (normal_tx, normal_fsm) = DryRun::new(100000);
+        let normal_box = BasicMailbox::new(normal_tx, normal_fsm);
+        router.register(id, normal_box);
+    }
+
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let running = Arc::new(AtomicBool::new(true));
+    let router1 = router.clone();
+    let running1 = running.clone();
+    let handle = std::thread::spawn(move || {
+        while running1.load(Ordering::SeqCst) {
+            for id in 0..4 {
+                let _ = router1.send(id, Message::Loop(16));
+            }
+        }
+        tx.send(()).unwrap();
+    });
+
+    let (tx2, rx2) = std::sync::mpsc::channel();
+    b.iter(|| {
+        for _ in 0..10 {
+            for id in 4..6 {
+                router.send(id, Message::Loop(10)).unwrap();
+            }
+        }
+        for id in 4..6 {
+            let tx = tx2.clone();
+            router
+                .send(
+                    id,
+                    Message::Callback(Box::new(move || {
+                        tx.send(()).unwrap();
+                    })),
+                )
+                .unwrap();
+        }
+        for _ in 4..6 {
+            rx2.recv().unwrap();
+        }
+    });
+    running.store(false, Ordering::SeqCst);
+    system.shutdown();
+    let _ = handle.join();
 }
