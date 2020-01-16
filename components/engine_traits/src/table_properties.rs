@@ -83,6 +83,8 @@ pub trait UserCollectedProperties<UCPI>
 where UCPI: UserCollectedPropertiesIter
 {
     fn iter(&self) -> UCPI;
+
+    fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]>;
 }
 
 pub trait UserCollectedPropertiesIter

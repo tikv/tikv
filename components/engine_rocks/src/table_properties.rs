@@ -123,6 +123,11 @@ impl UserCollectedProperties<UCPIA> for RocksUserCollectedProperties {
     fn iter(&self) -> RocksUserCollectedPropertiesIter {
         panic!()
     }
+
+    fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]> {
+        let _ = index;
+        panic!()
+    }
 }
 
 pub struct RocksUserCollectedPropertiesIter;
