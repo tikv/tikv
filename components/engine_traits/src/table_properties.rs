@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::ops::Deref;
-use std::iter::IntoIterator;
 use crate::errors::Result;
 use crate::range::Range;
 use crate::CFHandleExt;
@@ -9,8 +8,7 @@ use crate::CFHandleExt;
 pub trait TablePropertiesExt: CFHandleExt
 {
     
-    type TablePropertiesCollection: TablePropertiesCollection<Self::TablePropertiesCollectionView, Self::TableProperties, Self::TablePropertiesCollectionIter, Self::TablePropertiesStringRef, Self::TablePropertiesRef>;
-    type TablePropertiesCollectionView: TablePropertiesCollectionView<Self::TableProperties, Self::TablePropertiesCollectionIter, Self::TablePropertiesStringRef, Self::TablePropertiesRef>;
+    type TablePropertiesCollection: TablePropertiesCollection<Self::TableProperties, Self::TablePropertiesCollectionIter, Self::TablePropertiesStringRef, Self::TablePropertiesRef>;
     type TablePropertiesCollectionIter: TablePropertiesCollectionIter<Self::TableProperties, Self::TablePropertiesStringRef, Self::TablePropertiesRef>;
     type TableProperties: TableProperties;
     type TablePropertiesStringRef: TablePropertiesStringRef;
@@ -34,23 +32,14 @@ pub trait TablePropertiesExt: CFHandleExt
     }
 }
 
-pub trait TablePropertiesCollection<V, P, I, SRef, PRef>
-where Self: Deref<Target = V>,
-      V: TablePropertiesCollectionView<P, I, SRef, PRef>,
-      P: TableProperties,
-      I: TablePropertiesCollectionIter<P, SRef, PRef>,
-      SRef: TablePropertiesStringRef,
-      PRef: TablePropertiesRef<P>,
-{
-}
-
-pub trait TablePropertiesCollectionView<P, I, SRef, PRef>
+pub trait TablePropertiesCollection<P, I, SRef, PRef>
 where P: TableProperties,
-      Self: IntoIterator<Item = (SRef, PRef), IntoIter = I>,
       I: TablePropertiesCollectionIter<P, SRef, PRef>,
       SRef: TablePropertiesStringRef,
       PRef: TablePropertiesRef<P>,
 {
+    fn iter(&self) -> I;
+
     fn len(&self) -> usize;
 
     fn is_empty(&self) -> bool {

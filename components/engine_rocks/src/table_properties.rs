@@ -7,18 +7,15 @@ use engine_traits::Range;
 use engine_traits::{Error, Result};
 use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
 use engine_traits::{
-    TablePropertiesCollectionView,
     TablePropertiesCollectionIter,
     TableProperties,
     TablePropertiesStringRef,
     TablePropertiesRef
 };
 use rocksdb::TablePropertiesCollection as RawTablePropertiesCollection;
-use rocksdb::TablePropertiesCollectionView as RawTablePropertiesCollectionView;
 
 impl TablePropertiesExt for RocksEngine {
     type TablePropertiesCollection = RocksTablePropertiesCollection;
-    type TablePropertiesCollectionView = RocksTablePropertiesCollectionView;
     type TablePropertiesCollectionIter = RocksTablePropertiesCollectionIter;
     type TableProperties = RocksTableProperties;
     type TablePropertiesStringRef = RocksTablePropertiesStringRef;
@@ -52,42 +49,19 @@ impl RocksTablePropertiesCollection {
     }
 }
 
-impl Deref for RocksTablePropertiesCollection {
-    type Target = RocksTablePropertiesCollectionView;
-
-    fn deref(&self) -> &RocksTablePropertiesCollectionView {
-        // Safety: RocksTablePropertiesCollectionView is a transparent wrapper
-        // around RawTablePropertiesCollectionView and this is casting between
-        // them.
-        unsafe { &*(self.0.deref() as *const RawTablePropertiesCollectionView as *const RocksTablePropertiesCollectionView) }
-    }
-}
-
-type VA = RocksTablePropertiesCollectionView;
 type PA = RocksTableProperties;
 type IA = RocksTablePropertiesCollectionIter;
 type SRefA = RocksTablePropertiesStringRef;
 type PRefA = RocksTablePropertiesRef;
 
-impl TablePropertiesCollection<VA, PA, IA, SRefA, PRefA> for RocksTablePropertiesCollection
-{}
-
-#[repr(transparent)]
-pub struct RocksTablePropertiesCollectionView(RawTablePropertiesCollectionView);
-
-impl TablePropertiesCollectionView<PA, IA, SRefA, PRefA> for RocksTablePropertiesCollectionView
+impl TablePropertiesCollection<PA, IA, SRefA, PRefA> for RocksTablePropertiesCollection
 {
+    fn iter(&self) -> RocksTablePropertiesCollectionIter {
+        panic!()
+    }
+
     fn len(&self) -> usize {
         self.0.len()
-    }
-}
-
-impl IntoIterator for RocksTablePropertiesCollectionView {
-    type Item = (RocksTablePropertiesStringRef, RocksTablePropertiesRef);
-    type IntoIter = RocksTablePropertiesCollectionIter;
-
-    fn into_iter(self) -> RocksTablePropertiesCollectionIter {
-        panic!()
     }
 }
 
