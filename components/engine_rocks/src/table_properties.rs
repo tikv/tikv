@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(unused)]
+
 use std::ops::Deref;
 use crate::engine::RocksEngine;
-use crate::util;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
 use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
@@ -14,7 +15,6 @@ use engine_traits::{
     UserCollectedProperties,
     UserCollectedPropertiesIter,
 };
-use rocksdb::TablePropertiesCollection as RawTablePropertiesCollection;
 
 impl TablePropertiesExt for RocksEngine {
     type TablePropertiesCollection = RocksTablePropertiesCollection;
@@ -30,27 +30,13 @@ impl TablePropertiesExt for RocksEngine {
         cf: &Self::CFHandle,
         ranges: &[Range],
     ) -> Result<Self::TablePropertiesCollection> {
-        // FIXME: extra allocation
-        let ranges: Vec<_> = ranges.iter().map(util::range_to_rocks_range).collect();
-        let raw = self
-            .as_inner()
-            .get_properties_of_tables_in_range(cf.as_inner(), &ranges);
-        let raw = raw.map_err(Error::Engine)?;
-        Ok(RocksTablePropertiesCollection::from_raw(raw))
+        panic!()
     }
 }
 
-pub struct RocksTablePropertiesCollection(RawTablePropertiesCollection);
+pub struct RocksTablePropertiesCollection;
 
 impl RocksTablePropertiesCollection {
-    pub fn from_raw(raw: RawTablePropertiesCollection) -> RocksTablePropertiesCollection {
-        RocksTablePropertiesCollection(raw)
-    }
-
-    // for test
-    pub fn get_raw(&self) -> &RawTablePropertiesCollection {
-        &self.0
-    }
 }
 
 type PA = RocksTableProperties;
@@ -67,7 +53,7 @@ impl TablePropertiesCollection<PA, IA, SRefA, PRefA, UCPA, UCPIA> for RocksTable
     }
 
     fn len(&self) -> usize {
-        self.0.len()
+        panic!()
     }
 }
 
