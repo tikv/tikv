@@ -36,19 +36,19 @@ impl<'a> BinaryModifier<'a> {
     /// Replaces the existing value JSON and adds nonexisting value
     /// specified by the expression path with `new`
     pub fn set(mut self, path: &PathExpression, new: Json) -> Result<Json> {
-        let result = extract_json(self.old.clone(), path.legs.as_slice());
+        let result = extract_json(self.old.clone(), path.legs.as_slice())?;
         if !result.is_empty() {
             self.to_be_modified_ptr = result[0].as_ptr();
             self.new_value = Some(new);
         } else {
-            self.do_insert(&path.legs, new);
+            self.do_insert(&path.legs, new)?;
         }
         self.rebuild()
     }
 
     /// Replaces the existing value JSON specified by the expression path with `new`
     pub fn replace(mut self, path: &PathExpression, new: Json) -> Result<Json> {
-        let result = extract_json(self.old.clone(), path.legs.as_slice());
+        let result = extract_json(self.old.clone(), path.legs.as_slice())?;
         if result.is_empty() {
             return Ok(self.old.to_owned());
         }
@@ -60,24 +60,24 @@ impl<'a> BinaryModifier<'a> {
     /// Inserts a `new` into `old` JSON document by given expression path without replacing
     /// existing values
     pub fn insert(mut self, path: &PathExpression, new: Json) -> Result<Json> {
-        let result = extract_json(self.old.clone(), path.legs.as_slice());
+        let result = extract_json(self.old.clone(), path.legs.as_slice())?;
         if !result.is_empty() {
             // The path-value is existing. The insertion is ignored with no overwrite.
             return Ok(self.old.to_owned());
         }
-        self.do_insert(path.legs.as_slice(), new);
+        self.do_insert(path.legs.as_slice(), new)?;
         self.rebuild()
     }
 
-    fn do_insert(&mut self, path_legs: &[PathLeg], new: Json) {
+    fn do_insert(&mut self, path_legs: &[PathLeg], new: Json) -> Result<()> {
         if path_legs.is_empty() {
-            return;
+            return Ok(());
         }
         let legs_len = path_legs.len();
         let (parent_legs, last_leg) = (&path_legs[..legs_len - 1], &path_legs[legs_len - 1]);
-        let result = extract_json(self.old.clone(), parent_legs);
+        let result = extract_json(self.old.clone(), parent_legs)?;
         if result.is_empty() {
-            return;
+            return Ok(());
         }
         let parent_node = &result[0];
         match &*last_leg {
@@ -89,7 +89,7 @@ impl<'a> BinaryModifier<'a> {
                         let elem_count = parent_node.get_elem_count() as usize;
                         let mut elems = vec![];
                         for i in 0..elem_count {
-                            elems.push(parent_node.array_get_elem(i));
+                            elems.push(parent_node.array_get_elem(i)?);
                         }
                         // We can ignore the idx in the PathLeg here since we have checked the path-value existence
                         elems.push(new.as_ref());
@@ -104,7 +104,7 @@ impl<'a> BinaryModifier<'a> {
             PathLeg::Key(insert_key) => {
                 // Ignore constant
                 if parent_node.get_type() != JsonType::Object {
-                    return;
+                    return Ok(());
                 }
                 self.to_be_modified_ptr = parent_node.as_ptr();
                 let elem_count = parent_node.get_elem_count() as usize;
@@ -118,13 +118,13 @@ impl<'a> BinaryModifier<'a> {
                                 values.push(new.as_ref());
                             }
                             keys.push(parent_node.object_get_key(i));
-                            values.push(parent_node.object_get_val(i));
+                            values.push(parent_node.object_get_val(i)?);
                         }
                     }
                     None => {
                         for i in 0..elem_count {
                             keys.push(parent_node.object_get_key(i));
-                            values.push(parent_node.object_get_val(i));
+                            values.push(parent_node.object_get_val(i)?);
                         }
                         keys.push(insert_key.as_bytes());
                         values.push(new.as_ref());
@@ -134,27 +134,28 @@ impl<'a> BinaryModifier<'a> {
             }
             _ => {}
         }
+        Ok(())
     }
 
     pub fn remove(mut self, path_legs: &[PathLeg]) -> Result<Json> {
-        let result = extract_json(self.old.clone(), path_legs);
+        let result = extract_json(self.old.clone(), path_legs)?;
         if result.is_empty() {
             return Ok(self.old.to_owned());
         }
-        self.do_remove(path_legs);
+        self.do_remove(path_legs)?;
         self.rebuild()
     }
 
-    fn do_remove(&mut self, path_legs: &[PathLeg]) {
+    fn do_remove(&mut self, path_legs: &[PathLeg]) -> Result<()> {
         if path_legs.is_empty() {
-            return;
+            return Ok(());
         }
         let legs_len = path_legs.len();
         let (parent_legs, last_leg) = (&path_legs[..legs_len - 1], &path_legs[legs_len - 1]);
-        let result = extract_json(self.old.clone(), parent_legs);
+        let result = extract_json(self.old.clone(), parent_legs)?;
         if result.is_empty() {
             // No parent found, just return
-            return;
+            return Ok(());
         }
         let parent_node = &result[0];
         match &*last_leg {
@@ -166,7 +167,7 @@ impl<'a> BinaryModifier<'a> {
                     let remove_idx = *remove_idx as usize;
                     for i in 0..elems_count {
                         if i != remove_idx {
-                            elems.push(parent_node.array_get_elem(i));
+                            elems.push(parent_node.array_get_elem(i)?);
                         }
                     }
                     self.new_value = Some(Json::from_ref_array(elems));
@@ -183,7 +184,7 @@ impl<'a> BinaryModifier<'a> {
                         let key = parent_node.object_get_key(i);
                         if key != remove_key.as_bytes() {
                             keys.push(key);
-                            values.push(parent_node.object_get_val(i));
+                            values.push(parent_node.object_get_val(i)?);
                         }
                     }
                     self.new_value = Some(Json::from_kv_pairs(keys, values));
@@ -191,6 +192,7 @@ impl<'a> BinaryModifier<'a> {
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn rebuild(&mut self) -> Result<Json> {
@@ -263,7 +265,7 @@ impl<'a> BinaryModifier<'a> {
                 // Resolve values
                 for i in 0..elem_count {
                     let val_entry_offset = val_entry_start + i * VALUE_ENTRY_LEN;
-                    self.old = current.val_entry_get(val_entry_offset);
+                    self.old = current.val_entry_get(val_entry_offset)?;
                     let val_offset = buf.len() - doc_off;
                     // loop until finding the target ptr to be modified
                     let new_tp = self.rebuild_to(buf)?;

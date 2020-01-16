@@ -15,7 +15,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
-        Ok(Some(j.as_ref().as_ref().depth()))
+        Ok(Some(j.as_ref().as_ref().depth()?))
     }
 
     #[inline]
@@ -80,7 +80,7 @@ impl ScalarFunc {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
         let parser = JsonFuncArgsParser::new(row);
         let path_exprs: Vec<_> = try_opt!(parser.get_path_exprs(ctx, &self.children[1..]));
-        Ok(j.extract(&path_exprs).map(Cow::Owned))
+        Ok(j.extract(&path_exprs)?.map(Cow::Owned))
     }
 
     pub fn json_length<'a, 'b: 'a>(
@@ -94,7 +94,7 @@ impl ScalarFunc {
             Some(list) => list,
             None => return Ok(None),
         };
-        Ok(j.json_length(&path_exprs))
+        j.json_length(&path_exprs)
     }
 
     #[inline]
@@ -150,7 +150,7 @@ impl ScalarFunc {
             let j = try_opt!(parser.get_json_not_none(ctx, e));
             jsons.push(j);
         }
-        Ok(Some(Cow::Owned(Json::merge(jsons))))
+        Json::merge(jsons).map(|j| Some(Cow::Owned(j)))
     }
 
     fn json_modify<'a, 'b: 'a>(

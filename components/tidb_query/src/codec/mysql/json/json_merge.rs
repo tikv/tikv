@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{Json, JsonType};
+use crate::codec::{Error, Result};
 use std::collections::BTreeMap;
 
 impl Json {
@@ -12,7 +13,8 @@ impl Json {
     /// 2. adjacent object are merged to a single object;
     /// 3. a scalar value is autowrapped as an array before merge;
     /// 4. an adjacent array and object are merged by autowrapping the object as an array.
-    pub fn merge(mut bjs: Vec<Json>) -> Json {
+    #[allow(clippy::comparison_chain)]
+    pub fn merge(mut bjs: Vec<Json>) -> Result<Json> {
         let mut result = vec![];
         let mut objects = vec![];
         for j in bjs.drain(..) {
@@ -21,7 +23,7 @@ impl Json {
                     result.append(&mut objects);
                 } else if objects.len() > 1 {
                     // We have adjacent JSON objects, merge them into a single object
-                    result.push(merge_binary_object(&mut objects));
+                    result.push(merge_binary_object(&mut objects)?);
                 }
                 result.push(j);
             } else {
@@ -29,16 +31,16 @@ impl Json {
             }
         }
         if !objects.is_empty() {
-            result.push(merge_binary_object(&mut objects));
+            result.push(merge_binary_object(&mut objects)?);
         }
         if result.len() == 1 {
-            return result.pop().unwrap();
+            return Ok(result.pop().unwrap());
         }
         merge_binary_array(result)
     }
 }
 
-fn merge_binary_array(elems: Vec<Json>) -> Json {
+fn merge_binary_array(elems: Vec<Json>) -> Result<Json> {
     let mut buf = vec![];
     for j in elems {
         if j.as_ref().get_type() != JsonType::Array {
@@ -47,29 +49,30 @@ fn merge_binary_array(elems: Vec<Json>) -> Json {
             let child_count = j.as_ref().get_elem_count() as usize;
             for i in 0..child_count {
                 // TODO: Can we remove `to_owned`
-                buf.push(j.as_ref().array_get_elem(i).to_owned());
+                buf.push(j.as_ref().array_get_elem(i)?.to_owned());
             }
         }
     }
-    Json::from_array(buf)
+    Ok(Json::from_array(buf))
 }
 
-fn merge_binary_object(objects: &mut Vec<Json>) -> Json {
+fn merge_binary_object(objects: &mut Vec<Json>) -> Result<Json> {
     let mut kv_map = BTreeMap::new();
     for j in objects.drain(..) {
         let elem_count = j.as_ref().get_elem_count() as usize;
         for i in 0..elem_count {
             let key = j.as_ref().object_get_key(i);
-            let val = j.as_ref().object_get_val(i);
-            if let Some(old) = kv_map.remove(&String::from_utf8(key.to_owned()).unwrap()) {
-                let new = Json::merge(vec![old, val.to_owned()]);
-                kv_map.insert(String::from_utf8(key.to_owned()).unwrap(), new);
+            let val = j.as_ref().object_get_val(i)?;
+            let key = String::from_utf8(key.to_owned()).map_err(Error::from)?;
+            if let Some(old) = kv_map.remove(&key) {
+                let new = Json::merge(vec![old, val.to_owned()])?;
+                kv_map.insert(key, new);
             } else {
-                kv_map.insert(String::from_utf8(key.to_owned()).unwrap(), val.to_owned());
+                kv_map.insert(key, val.to_owned());
             }
         }
     }
-    Json::from_object(kv_map)
+    Ok(Json::from_object(kv_map))
 }
 
 #[cfg(test)]
@@ -133,7 +136,8 @@ mod tests {
                     .iter()
                     .map(|s| s.parse().unwrap())
                     .collect::<Vec<Json>>(),
-            );
+            )
+            .unwrap();
             let expect: Json = expect[0].parse().unwrap();
             assert_eq!(res, expect);
         }

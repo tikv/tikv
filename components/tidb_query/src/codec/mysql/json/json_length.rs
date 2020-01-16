@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::super::Result;
 use super::path_expr::PathExpression;
 use super::{Json, JsonType};
 
@@ -13,14 +14,14 @@ impl Json {
 
     /// `json_length` is the implementation for JSON_LENGTH in mysql
     /// https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length
-    pub fn json_length(&self, path_expr_list: &[PathExpression]) -> Option<i64> {
+    pub fn json_length(&self, path_expr_list: &[PathExpression]) -> Result<Option<i64>> {
         if path_expr_list.is_empty() {
-            return self.len();
+            return Ok(self.len());
         }
         if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
-            return None;
+            return Ok(None);
         }
-        self.extract(path_expr_list).and_then(|j| j.len())
+        Ok(self.extract(path_expr_list)?.and_then(|j| j.len()))
     }
 }
 
@@ -75,7 +76,7 @@ mod tests {
                 Some(p) => vec![parse_json_path_expr(p).unwrap()],
                 None => vec![],
             };
-            let got = j.json_length(&exprs[..]);
+            let got = j.json_length(&exprs[..]).unwrap();
             assert_eq!(
                 got, expected,
                 "#{} expect {:?}, but got {:?}",

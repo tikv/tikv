@@ -22,6 +22,7 @@ pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 
 use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::str;
 use tikv_util::is_even;
 
@@ -49,9 +50,11 @@ pub enum JsonType {
     String = 0x0c,
 }
 
-impl From<u8> for JsonType {
-    fn from(src: u8) -> JsonType {
-        num::FromPrimitive::from_u8(src).unwrap()
+impl TryFrom<u8> for JsonType {
+    type Error = Error;
+    fn try_from(src: u8) -> Result<JsonType> {
+        num_traits::FromPrimitive::from_u8(src)
+            .ok_or_else(|| Error::InvalidDataType("unexpected JSON type".to_owned()))
     }
 }
 

@@ -1,25 +1,26 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::super::Result;
 use super::{JsonRef, JsonType};
 
 impl<'a> JsonRef<'a> {
     /// Returns maximum depth of JSON document
-    pub fn depth(&self) -> i64 {
+    pub fn depth(&self) -> Result<i64> {
         match self.get_type() {
             JsonType::Object | JsonType::Array => depth_json(&self),
-            _ => 1,
+            _ => Ok(1),
         }
     }
 }
 
-fn depth_json(j: &JsonRef<'_>) -> i64 {
-    (match j.get_type() {
+fn depth_json(j: &JsonRef<'_>) -> Result<i64> {
+    Ok(match j.get_type() {
         JsonType::Object => {
             let length = j.get_elem_count() as usize;
             let mut max_depth = 0;
             for i in 0..length {
-                let val = j.object_get_val(i);
-                let depth = depth_json(&val);
+                let val = j.object_get_val(i)?;
+                let depth = depth_json(&val)?;
                 if depth > max_depth {
                     max_depth = depth;
                 }
@@ -30,8 +31,8 @@ fn depth_json(j: &JsonRef<'_>) -> i64 {
             let length = j.get_elem_count() as usize;
             let mut max_depth = 0;
             for i in 0..length {
-                let val = j.array_get_elem(i);
-                let depth = depth_json(&val);
+                let val = j.array_get_elem(i)?;
+                let depth = depth_json(&val)?;
                 if depth > max_depth {
                     max_depth = depth;
                 }
@@ -84,7 +85,7 @@ mod tests {
             let j = js.parse();
             assert!(j.is_ok(), "#{} expect parse ok but got {:?}", i, j);
             let j: Json = j.unwrap();
-            let got = j.as_ref().depth();
+            let got = j.as_ref().depth().unwrap();
             assert_eq!(
                 got, expected,
                 "#{} expect {:?}, but got {:?}",

@@ -40,7 +40,7 @@ impl<'a> Serialize for JsonRef<'a> {
                 let mut map = serializer.serialize_map(Some(elem_count))?;
                 for i in 0..elem_count {
                     let key = self.object_get_key(i);
-                    let val = self.object_get_val(i);
+                    let val = self.object_get_val(i).map_err(SerError::custom)?;
                     map.serialize_entry(str::from_utf8(key).unwrap(), &val)?;
                 }
                 map.end()
@@ -49,7 +49,7 @@ impl<'a> Serialize for JsonRef<'a> {
                 let elem_count = self.get_elem_count() as usize;
                 let mut tup = serializer.serialize_tuple(elem_count)?;
                 for i in 0..elem_count {
-                    let item = self.array_get_elem(i);
+                    let item = self.array_get_elem(i).map_err(SerError::custom)?;
                     tup.serialize_element(&item)?;
                 }
                 tup.end()

@@ -1,8 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::convert::TryInto;
 use std::{f64, str};
 
 use super::constants::*;
@@ -11,9 +10,59 @@ use crate::codec::{Error, Result};
 use codec::number::NumberCodec;
 use codec::prelude::*;
 
+///   The binary JSON format from MySQL 5.7 is as follows:
+///   JSON doc ::= type value
+///   type ::=
+///       0x01 |       // large JSON object
+///       0x03 |       // large JSON array
+///       0x04 |       // literal (true/false/null)
+///       0x05 |       // int16
+///       0x06 |       // uint16
+///       0x07 |       // int32
+///       0x08 |       // uint32
+///       0x09 |       // int64
+///       0x0a |       // uint64
+///       0x0b |       // double
+///       0x0c |       // utf8mb4 string
+///   value ::=
+///       object  |
+///       array   |
+///       literal |
+///       number  |
+///       string  |
+///   object ::= element-count size key-entry* value-entry* key* value*
+///   array ::= element-count size value-entry* value*
+///   // number of members in object or number of elements in array
+///   element-count ::= uint32
+///   // number of bytes in the binary representation of the object or array
+///   size ::= uint32
+///   key-entry ::= key-offset key-length
+///   key-offset ::= uint32
+///   key-length ::= uint16    // key length must be less than 64KB
+///   value-entry ::= type offset-or-inlined-value
+///   // This field holds either the offset to where the value is stored,
+///   // or the value itself if it is small enough to be inlined (that is,
+///   // if it is a JSON literal or a small enough [u]int).
+///   offset-or-inlined-value ::= uint32
+///   key ::= utf8mb4-data
+///   literal ::=
+///       0x00 |   // JSON null literal
+///       0x01 |   // JSON true literal
+///       0x02 |   // JSON false literal
+///   number ::=  ....    // little-endian format for [u]int(16|32|64), whereas
+///                       // double is stored in a platform-independent, eight-byte
+///                       // format using float8store()
+///   string ::= data-length utf8mb4-data
+///   data-length ::= uint8*    // If the high bit of a byte is 1, the length
+///                             // field is continued in the next byte,
+///                             // otherwise it is the last byte of the length
+///                             // field. So we need 1 byte to represent
+///                             // lengths up to 127, 2 bytes to represent
+///                             // lengths up to 16383, and so on...
+///
 impl<'a> JsonRef<'a> {
     /// Gets the ith element in JsonRef
-    pub fn array_get_elem(&self, idx: usize) -> JsonRef<'a> {
+    pub fn array_get_elem(&self, idx: usize) -> Result<JsonRef<'a>> {
         self.val_entry_get(HEADER_LEN + idx * VALUE_ENTRY_LEN)
     }
 
@@ -26,7 +75,7 @@ impl<'a> JsonRef<'a> {
     }
 
     /// Returns the JsonRef of `i`th value in current Object json
-    pub fn object_get_val(&self, i: usize) -> JsonRef<'a> {
+    pub fn object_get_val(&self, i: usize) -> Result<JsonRef<'a>> {
         let ele_count = self.get_elem_count() as usize;
         let val_entry_off = HEADER_LEN + ele_count * KEY_ENTRY_LEN + i * VALUE_ENTRY_LEN;
         self.val_entry_get(val_entry_off)
@@ -39,24 +88,24 @@ impl<'a> JsonRef<'a> {
         let mut i = 0;
         while i < j {
             let mid = (i + j) >> 1;
-            if self.object_get_key(mid).cmp(key) == Ordering::Less {
+            if self.object_get_key(mid) < key {
                 i = mid + 1;
             } else {
                 j = mid;
             }
         }
-        if i < len && self.object_get_key(i).cmp(key) == Ordering::Equal {
+        if i < len && self.object_get_key(i) == key {
             return Some(i);
         }
         None
     }
 
     /// Gets the value (JsonRef) by the given offset of the value entry
-    pub fn val_entry_get(&self, val_entry_off: usize) -> JsonRef<'a> {
-        let val_type: JsonType = self.value()[val_entry_off].into();
+    pub fn val_entry_get(&self, val_entry_off: usize) -> Result<JsonRef<'a>> {
+        let val_type: JsonType = self.value()[val_entry_off].try_into()?;
         let val_offset =
             NumberCodec::decode_u32_le(&self.value()[val_entry_off + TYPE_LEN as usize..]) as usize;
-        match val_type {
+        Ok(match val_type {
             JsonType::Literal => {
                 let offset = val_entry_off + TYPE_LEN;
                 #[allow(clippy::range_plus_one)]
@@ -79,7 +128,7 @@ impl<'a> JsonRef<'a> {
                         as usize;
                 JsonRef::new(val_type, &self.value()[val_offset..val_offset + data_size])
             }
-        }
+        })
     }
 
     // Returns a raw pointer to the underlying values buffer.
@@ -103,6 +152,15 @@ impl<'a> JsonRef<'a> {
     pub fn binary_len(&self) -> usize {
         TYPE_LEN + self.value.len()
     }
+
+    fn encoded_len(&self) -> usize {
+        match self.type_code {
+            // Literal is encoded inline with value-entry, so nothing will be
+            // appended in value part
+            JsonType::Literal => 0,
+            _ => self.value.len(),
+        }
+    }
 }
 
 pub trait JsonEncoder: NumberEncoder {
@@ -122,34 +180,41 @@ pub trait JsonEncoder: NumberEncoder {
         let key_entries_len = KEY_ENTRY_LEN * element_count;
         // value-entry ::= type(byte) offset-or-inlined-value(uint32)
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
-        let mut key_entries = Vec::with_capacity(key_entries_len);
-        let mut encode_keys = Vec::new();
+        let kv_encoded_len = keys
+            .iter()
+            .zip(&values)
+            .fold(0, |acc, (k, v)| acc + k.len() + v.encoded_len());
+        let size =
+            ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len + kv_encoded_len;
+        self.write_u32_le(element_count as u32)?;
+        self.write_u32_le(size as u32)?;
         let mut key_offset = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len;
-        for key in keys {
-            let key_len = encode_keys.write(key)?;
-            key_entries.write_u32_le(key_offset as u32)?;
-            key_entries.write_u16_le(key_len as u16)?;
+
+        // Write key entries
+        for key in keys.iter() {
+            let key_len = key.len();
+            self.write_u32_le(key_offset as u32)?;
+            self.write_u16_le(key_len as u16)?;
             key_offset += key_len;
         }
 
         let mut value_offset = key_offset as u32;
-        let mut value_entries = Vec::with_capacity(value_entries_len);
-        let mut encode_values = vec![];
-        for value in values {
-            value_entries.write_json_item(&value, &mut value_offset, &mut encode_values)?;
+        // Write value entries
+        for v in values.iter() {
+            self.write_value_entry(&mut value_offset, v)?;
         }
-        let size = ELEMENT_COUNT_LEN
-            + SIZE_LEN
-            + key_entries_len
-            + value_entries_len
-            + encode_keys.len()
-            + encode_values.len();
-        self.write_u32_le(element_count as u32)?;
-        self.write_u32_le(size as u32)?;
-        self.write_bytes(key_entries.as_mut())?;
-        self.write_bytes(value_entries.as_mut())?;
-        self.write_bytes(encode_keys.as_mut())?;
-        self.write_bytes(encode_values.as_mut())?;
+
+        // Write keys
+        for key in keys {
+            self.write_bytes(key)?;
+        }
+
+        // Write values
+        for v in values {
+            if v.get_type() != JsonType::Literal {
+                self.write_bytes(v.value)?;
+            }
+        }
         Ok(())
     }
 
@@ -160,56 +225,61 @@ pub trait JsonEncoder: NumberEncoder {
         let key_entries_len = KEY_ENTRY_LEN * element_count;
         // value-entry ::= type(byte) offset-or-inlined-value(uint32)
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
-        let mut key_entries = Vec::with_capacity(key_entries_len);
-        let mut encode_keys = Vec::new();
+        let kv_encoded_len = data
+            .iter()
+            .fold(0, |acc, (k, v)| acc + k.len() + v.as_ref().encoded_len());
+        let size =
+            ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len + kv_encoded_len;
+        self.write_u32_le(element_count as u32)?;
+        self.write_u32_le(size as u32)?;
         let mut key_offset = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len;
+
+        // Write key entries
         for key in data.keys() {
-            let encode_key = key.as_bytes();
-            let key_len = encode_keys.write(encode_key)?;
-            key_entries.write_u32_le(key_offset as u32)?;
-            key_entries.write_u16_le(key_len as u16)?;
+            let key_len = key.len();
+            self.write_u32_le(key_offset as u32)?;
+            self.write_u16_le(key_len as u16)?;
             key_offset += key_len;
         }
 
         let mut value_offset = key_offset as u32;
-        let mut value_entries = Vec::with_capacity(value_entries_len);
-        let mut encode_values = vec![];
-        for value in data.values() {
-            value_entries.write_json_item(
-                &value.as_ref(),
-                &mut value_offset,
-                &mut encode_values,
-            )?;
+        // Write value entries
+        for v in data.values() {
+            self.write_value_entry(&mut value_offset, &v.as_ref())?;
         }
-        let size = ELEMENT_COUNT_LEN
-            + SIZE_LEN
-            + key_entries_len
-            + value_entries_len
-            + encode_keys.len()
-            + encode_values.len();
-        self.write_u32_le(element_count as u32)?;
-        self.write_u32_le(size as u32)?;
-        self.write_bytes(key_entries.as_mut())?;
-        self.write_bytes(value_entries.as_mut())?;
-        self.write_bytes(encode_keys.as_mut())?;
-        self.write_bytes(encode_values.as_mut())?;
+
+        // Write keys
+        for key in data.keys() {
+            self.write_bytes(key.as_bytes())?;
+        }
+
+        // Write values
+        for v in data.values() {
+            if v.as_ref().get_type() != JsonType::Literal {
+                self.write_bytes(v.as_ref().value())?;
+            }
+        }
         Ok(())
     }
 
     fn write_json_ref_array<'a>(&mut self, data: &[JsonRef<'a>]) -> Result<()> {
         let element_count = data.len();
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
-        let mut value_offset = (ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len) as u32;
-        let mut value_entries = Vec::with_capacity(value_entries_len);
-        let mut encode_values = vec![];
-        for value in data {
-            value_entries.write_json_item(value, &mut value_offset, &mut encode_values)?;
-        }
-        let total_size = ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + encode_values.len();
+        let values_len = data.iter().fold(0, |acc, v| acc + v.encoded_len());
+        let total_size = ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + values_len;
         self.write_u32_le(element_count as u32)?;
         self.write_u32_le(total_size as u32)?;
-        self.write_bytes(value_entries.as_mut())?;
-        self.write_bytes(encode_values.as_mut())?;
+        let mut value_offset = (ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len) as u32;
+        // Write value entries
+        for v in data {
+            self.write_value_entry(&mut value_offset, v)?;
+        }
+        // Write value data
+        for v in data {
+            if v.get_type() != JsonType::Literal {
+                self.write_bytes(v.value())?;
+            }
+        }
         Ok(())
     }
 
@@ -217,21 +287,40 @@ pub trait JsonEncoder: NumberEncoder {
         // array ::= element-count size value-entry* value*
         let element_count = data.len();
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
-        let mut value_offset = (ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len) as u32;
-        let mut value_entries = Vec::with_capacity(value_entries_len);
-        let mut encode_values = vec![];
-        for value in data {
-            value_entries.write_json_item(
-                &value.as_ref(),
-                &mut value_offset,
-                &mut encode_values,
-            )?;
-        }
-        let total_size = ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + encode_values.len();
+        let values_len = data.iter().fold(0, |acc, v| acc + v.as_ref().encoded_len());
+        let total_size = ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + values_len;
         self.write_u32_le(element_count as u32)?;
         self.write_u32_le(total_size as u32)?;
-        self.write_bytes(value_entries.as_mut())?;
-        self.write_bytes(encode_values.as_mut())?;
+        let mut value_offset = (ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len) as u32;
+        // Write value entries
+        for v in data {
+            self.write_value_entry(&mut value_offset, &v.as_ref())?;
+        }
+        // Write value data
+        for v in data {
+            if v.as_ref().get_type() != JsonType::Literal {
+                self.write_bytes(v.as_ref().value())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_value_entry<'a>(&mut self, value_offset: &mut u32, v: &JsonRef<'a>) -> Result<()> {
+        let tp = v.get_type();
+        self.write_u8(tp as u8)?;
+        match tp {
+            JsonType::Literal => {
+                self.write_u8(v.value()[0])?;
+                let left = U32_LEN - LITERAL_LEN;
+                for _ in 0..left {
+                    self.write_u8(JSON_LITERAL_NIL)?;
+                }
+            }
+            _ => {
+                self.write_u32_le(*value_offset)?;
+                *value_offset += v.value().len() as u32;
+            }
+        }
         Ok(())
     }
 
@@ -258,34 +347,6 @@ pub trait JsonEncoder: NumberEncoder {
         self.write_bytes(bytes)?;
         Ok(())
     }
-
-    fn write_json_item<'a>(
-        &mut self,
-        data: &JsonRef<'a>,
-        offset: &mut u32,
-        data_buf: &mut Vec<u8>,
-    ) -> Result<()> {
-        let code = data.get_type();
-        self.write_u8(code as u8)?;
-        match code {
-            // If the data has length in (0, 4], it could be inline here.
-            // And padding 0x00 to 4 bytes if needed.
-            JsonType::Literal => {
-                let v = data.as_literal()?;
-                self.write_u8(v)?;
-                let left = U32_LEN - LITERAL_LEN;
-                for _ in 0..left {
-                    self.write_u8(JSON_LITERAL_NIL)?;
-                }
-            }
-            _ => {
-                self.write_u32_le(*offset)?;
-                data_buf.write_bytes(data.value)?;
-                *offset += data.value.len() as u32;
-            }
-        };
-        Ok(())
-    }
 }
 
 impl<T: BufferWriter> JsonEncoder for T {}
@@ -305,7 +366,7 @@ pub trait JsonDecoder: NumberDecoder {
         if self.bytes().is_empty() {
             return Err(box_err!("Cant read json from empty bytes"));
         }
-        let tp: JsonType = self.read_u8()?.into();
+        let tp: JsonType = self.read_u8()?.try_into()?;
         let value = match tp {
             JsonType::Object | JsonType::Array => {
                 let value = self.bytes();

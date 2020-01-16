@@ -60,7 +60,8 @@ impl<'a> Ord for JsonRef<'a> {
 
 impl<'a> PartialEq for JsonRef<'a> {
     fn eq<'b>(&self, right: &JsonRef<'b>) -> bool {
-        self.partial_cmp(right).unwrap() == Ordering::Equal
+        self.partial_cmp(right)
+            .map_or(false, |r| r == Ordering::Equal)
     }
 }
 impl<'a> PartialOrd for JsonRef<'a> {
@@ -97,13 +98,19 @@ impl<'a> PartialOrd for JsonRef<'a> {
                     let right_count = right.get_elem_count();
                     let mut i = 0;
                     while i < left_count && i < right_count {
-                        let left_ele = self.array_get_elem(i as usize);
-                        let right_ele = right.array_get_elem(i as usize);
-                        let res = left_ele.partial_cmp(&right_ele).unwrap();
-                        if res != Ordering::Equal {
-                            return Some(res);
+                        if let (Ok(left_ele), Ok(right_ele)) = (
+                            self.array_get_elem(i as usize),
+                            right.array_get_elem(i as usize),
+                        ) {
+                            match left_ele.partial_cmp(&right_ele) {
+                                order @ None
+                                | order @ Some(Ordering::Greater)
+                                | order @ Some(Ordering::Less) => return order,
+                                Some(Ordering::Equal) => i += 1,
+                            }
+                        } else {
+                            return None;
                         }
-                        i += 1;
                     }
                     Some(left_count.cmp(&right_count))
                 }

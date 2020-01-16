@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::super::Result;
 use super::path_expr::{
     PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK,
 };
@@ -9,29 +10,29 @@ impl Json {
     /// `extract` receives several path expressions as arguments, matches them in j, and returns
     /// the target JSON matched any path expressions, which may be autowrapped as an array.
     /// If there is no any expression matched, it returns None.
-    pub fn extract(&self, path_expr_list: &[PathExpression]) -> Option<Json> {
+    pub fn extract(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {
         let mut elem_list = Vec::with_capacity(path_expr_list.len());
         for path_expr in path_expr_list {
-            elem_list.append(&mut extract_json(self.as_ref(), &path_expr.legs))
+            elem_list.append(&mut extract_json(self.as_ref(), &path_expr.legs)?)
         }
         if elem_list.is_empty() {
-            return None;
+            return Ok(None);
         }
         if path_expr_list.len() == 1 && elem_list.len() == 1 {
             // If path_expr contains asterisks, elem_list.len() won't be 1
             // even if path_expr_list.len() equals to 1.
-            return Some(elem_list.remove(0).to_owned());
+            return Ok(Some(elem_list.remove(0).to_owned()));
         }
-        Some(Json::from_array(
+        Ok(Some(Json::from_array(
             elem_list.drain(..).map(|j| j.to_owned()).collect(),
-        ))
+        )))
     }
 }
 
 /// `extract_json` is used by JSON::extract().
-pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Vec<JsonRef<'a>> {
+pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<JsonRef<'a>>> {
     if path_legs.is_empty() {
-        return vec![j];
+        return Ok(vec![j]);
     }
     let (current_leg, sub_path_legs) = (&path_legs[0], &path_legs[1..]);
     let mut ret = vec![];
@@ -41,18 +42,18 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Vec<JsonRef<'a
                 let elem_count = j.get_elem_count() as usize;
                 if i == PATH_EXPR_ARRAY_INDEX_ASTERISK {
                     for k in 0..elem_count {
-                        ret.append(&mut extract_json(j.array_get_elem(k), sub_path_legs))
+                        ret.append(&mut extract_json(j.array_get_elem(k)?, sub_path_legs)?)
                     }
                 } else if (i as usize) < elem_count {
                     ret.append(&mut extract_json(
-                        j.array_get_elem(i as usize),
+                        j.array_get_elem(i as usize)?,
                         sub_path_legs,
-                    ))
+                    )?)
                 }
             }
             _ => {
                 if i as usize == 0 {
-                    ret.append(&mut extract_json(j, sub_path_legs))
+                    ret.append(&mut extract_json(j, sub_path_legs)?)
                 }
             }
         },
@@ -61,34 +62,34 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Vec<JsonRef<'a
                 if key == PATH_EXPR_ASTERISK {
                     let elem_count = j.get_elem_count() as usize;
                     for i in 0..elem_count {
-                        ret.append(&mut extract_json(j.object_get_val(i), sub_path_legs))
+                        ret.append(&mut extract_json(j.object_get_val(i)?, sub_path_legs)?)
                     }
                 } else if let Some(idx) = j.object_search_key(key.as_bytes()) {
-                    let val = j.object_get_val(idx);
-                    ret.append(&mut extract_json(val, sub_path_legs))
+                    let val = j.object_get_val(idx)?;
+                    ret.append(&mut extract_json(val, sub_path_legs)?)
                 }
             }
         }
         PathLeg::DoubleAsterisk => {
-            ret.append(&mut extract_json(j.clone(), sub_path_legs));
+            ret.append(&mut extract_json(j.clone(), sub_path_legs)?);
             match j.get_type() {
                 JsonType::Array => {
                     let elem_count = j.get_elem_count() as usize;
                     for k in 0..elem_count {
-                        ret.append(&mut extract_json(j.array_get_elem(k), sub_path_legs))
+                        ret.append(&mut extract_json(j.array_get_elem(k)?, sub_path_legs)?)
                     }
                 }
                 JsonType::Object => {
                     let elem_count = j.get_elem_count() as usize;
                     for i in 0..elem_count {
-                        ret.append(&mut extract_json(j.object_get_val(i), sub_path_legs))
+                        ret.append(&mut extract_json(j.object_get_val(i)?, sub_path_legs)?)
                     }
                 }
                 _ => {}
             }
         }
     }
-    ret
+    Ok(ret)
 }
 
 #[cfg(test)]
@@ -273,7 +274,7 @@ mod tests {
                 }
                 None => None,
             };
-            let got = j.extract(&exprs[..]);
+            let got = j.extract(&exprs[..]).unwrap();
             assert_eq!(
                 got, expected,
                 "#{} expect {:?}, but got {:?}",

@@ -12,7 +12,10 @@ use crate::Result;
 #[rpn_fn]
 #[inline]
 fn json_depth(arg: &Option<Json>) -> Result<Option<i64>> {
-    Ok(arg.as_ref().map(|json_arg| json_arg.as_ref().depth()))
+    match arg {
+        Some(j) => Ok(Some(j.as_ref().depth()?)),
+        None => Ok(None),
+    }
 }
 
 #[rpn_fn]
@@ -154,7 +157,7 @@ pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
                 Some(json) => json.to_owned(),
             })
             .collect(),
-    )))
+    )?))
 }
 
 #[rpn_fn]
@@ -193,7 +196,7 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 
     let path_expr_list = try_opt!(parse_json_path_list(&args[1..]));
 
-    Ok(j.extract(&path_expr_list))
+    Ok(j.extract(&path_expr_list)?)
 }
 
 // Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
@@ -211,7 +214,10 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
-    Ok(parse_json_path_list(&args[1..])?.and_then(|path_expr_list| j.json_length(&path_expr_list)))
+    Ok(match parse_json_path_list(&args[1..])? {
+        Some(path_expr_list) => j.json_length(&path_expr_list)?,
+        None => None,
+    })
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
