@@ -53,18 +53,10 @@ fn test_replica_read_not_applied() {
     cluster.sim.wl().add_recv_filter(2, filter);
 
     cluster.must_transfer_leader(1, new_peer(2, 2));
-
     let r1 = cluster.get_region(b"k1");
-    let mut read_request = new_request(
-        r1.get_id(),
-        r1.get_region_epoch().clone(),
-        vec![new_get_cmd(b"k1")],
-        true, // read quorum
-    );
-    read_request.mut_header().set_replica_read(true);
 
     // Read index on follower should be blocked instead of get an old value.
-    let resp1_ch = cluster.sim.wl().read_on_node(read_request.clone(), 3, 3);
+    let resp1_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k1", true, true);
     assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
 
     // Unpark all append responses so that the new leader can commit its first entry.
@@ -81,7 +73,7 @@ fn test_replica_read_not_applied() {
     assert_eq!(exp_value, b"v2");
 
     // New read index requests can be resolved quickly.
-    let resp2_ch = cluster.sim.wl().read_on_node(read_request, 3, 3);
+    let resp2_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1, b"k1", true, true);
     let resp2 = resp2_ch.recv_timeout(Duration::from_secs(3)).unwrap();
     let exp_value = resp2.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
@@ -112,16 +104,9 @@ fn test_replica_read_on_hibernate() {
     cluster.must_transfer_leader(1, new_peer(3, 3));
 
     let r1 = cluster.get_region(b"k1");
-    let mut read_request = new_request(
-        r1.get_id(),
-        r1.get_region_epoch().clone(),
-        vec![new_get_cmd(b"k1")],
-        true, // read quorum
-    );
-    read_request.mut_header().set_replica_read(true);
 
     // Read index on follower should be blocked.
-    let resp1_ch = cluster.sim.wl().read_on_node(read_request, 1, 1);
+    let resp1_ch = async_read_on_peer(&mut cluster, new_peer(1, 1), r1, b"k1", true, true);
     assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
 
     let (tx, rx) = mpsc::sync_channel(1024);

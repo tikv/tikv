@@ -59,18 +59,6 @@ pub trait Simulator {
         request: RaftCmdRequest,
         cb: Callback<RocksEngine>,
     ) -> Result<()>;
-    fn read_on_node(
-        &self,
-        mut req: RaftCmdRequest,
-        node_id: u64,
-        store_id: u64,
-    ) -> mpsc::Receiver<RaftCmdResponse> {
-        req.mut_header().set_peer(new_peer(store_id, node_id));
-        let (tx, rx) = mpsc::sync_channel(1);
-        let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
-        self.async_command_on_node(node_id, req, cb).unwrap();
-        rx
-    }
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_router(&self, node_id: u64) -> Option<RaftRouter>;
