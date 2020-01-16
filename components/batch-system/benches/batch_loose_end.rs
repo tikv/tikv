@@ -142,11 +142,11 @@ fn bench_imbalance(b: &mut Bencher) {
 
     b.iter(|| {
         for _ in 0..1024 {
-            for id in 0..3 {
+            for id in 0..2 {
                 router.send(id, Message::Loop(1024)).unwrap();
             }
         }
-        for id in 0..3 {
+        for id in 0..2 {
             let tx = tx.clone();
             router
                 .send(
@@ -157,7 +157,7 @@ fn bench_imbalance(b: &mut Bencher) {
                 )
                 .unwrap();
         }
-        for _ in 0..3 {
+        for _ in 0..2 {
             rx.recv().unwrap();
         }
     });
