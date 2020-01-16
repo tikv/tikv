@@ -20,6 +20,7 @@ use crate::Error as CdcError;
 pub struct CdcObserver {
     sched: Scheduler<Task>,
     // A shared registry for managing observed regions.
+    // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashSet<u64>>>,
 }
 
@@ -52,10 +53,7 @@ impl CdcObserver {
     }
 }
 
-impl Coprocessor for CdcObserver {
-    fn start(&self) {}
-    fn stop(&self) {}
-}
+impl Coprocessor for CdcObserver {}
 
 impl RoleObserver for CdcObserver {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
