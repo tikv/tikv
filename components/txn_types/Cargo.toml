@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 byteorder = "1.2"
 farmhash = "1.1.5"
-derive_more = "0.15.0"
 hex = "0.3"
 derive-new = "0.5"
 codec = { path = "../codec" }
