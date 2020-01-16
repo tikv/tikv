@@ -76,7 +76,7 @@ fn test_replica_read_not_applied() {
     // The old read index request won't be blocked forever as it's retried internally.
     cluster.sim.wl().clear_send_filters(1);
     cluster.sim.wl().clear_recv_filters(2);
-    let resp1 = resp1_ch.recv_timeout(Duration::from_secs(6)).unwrap();
+    let resp1 = resp1_ch.recv_timeout(Duration::from_secs(10)).unwrap();
     let exp_value = resp1.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
 
