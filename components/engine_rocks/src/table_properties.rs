@@ -10,7 +10,9 @@ use engine_traits::{
     TablePropertiesCollectionIter,
     TableProperties,
     TablePropertiesStringRef,
-    TablePropertiesRef
+    TablePropertiesRef,
+    UserCollectedProperties,
+    UserCollectedPropertiesIter,
 };
 use rocksdb::TablePropertiesCollection as RawTablePropertiesCollection;
 
@@ -20,6 +22,8 @@ impl TablePropertiesExt for RocksEngine {
     type TableProperties = RocksTableProperties;
     type TablePropertiesStringRef = RocksTablePropertiesStringRef;
     type TablePropertiesRef = RocksTablePropertiesRef;
+    type UserCollectedProperties = RocksUserCollectedProperties;
+    type UserCollectedPropertiesIter = RocksUserCollectedPropertiesIter;
 
     fn get_properties_of_tables_in_range(
         &self,
@@ -53,8 +57,10 @@ type PA = RocksTableProperties;
 type IA = RocksTablePropertiesCollectionIter;
 type SRefA = RocksTablePropertiesStringRef;
 type PRefA = RocksTablePropertiesRef;
+type UCPA = RocksUserCollectedProperties;
+type UCPIA = RocksUserCollectedPropertiesIter;
 
-impl TablePropertiesCollection<PA, IA, SRefA, PRefA> for RocksTablePropertiesCollection
+impl TablePropertiesCollection<PA, IA, SRefA, PRefA, UCPA, UCPIA> for RocksTablePropertiesCollection
 {
     fn iter(&self) -> RocksTablePropertiesCollectionIter {
         panic!()
@@ -67,7 +73,7 @@ impl TablePropertiesCollection<PA, IA, SRefA, PRefA> for RocksTablePropertiesCol
 
 pub struct RocksTablePropertiesCollectionIter;
 
-impl TablePropertiesCollectionIter<PA, SRefA, PRefA> for RocksTablePropertiesCollectionIter
+impl TablePropertiesCollectionIter<PA, SRefA, PRefA, UCPA, UCPIA> for RocksTablePropertiesCollectionIter
 {}
 
 impl Iterator for RocksTablePropertiesCollectionIter {
@@ -80,7 +86,11 @@ impl Iterator for RocksTablePropertiesCollectionIter {
 
 pub struct RocksTableProperties;
 
-impl TableProperties for RocksTableProperties { }
+impl TableProperties<UCPA, UCPIA> for RocksTableProperties {
+    fn user_collected_properties(&self) -> RocksUserCollectedProperties {
+        panic!()
+    }
+}
 
 pub struct RocksTablePropertiesStringRef;
 
@@ -96,7 +106,7 @@ impl Deref for RocksTablePropertiesStringRef {
 
 pub struct RocksTablePropertiesRef;
 
-impl TablePropertiesRef<PA> for RocksTablePropertiesRef
+impl TablePropertiesRef<PA, UCPA, UCPIA> for RocksTablePropertiesRef
 {}
 
 impl Deref for RocksTablePropertiesRef {
@@ -106,3 +116,16 @@ impl Deref for RocksTablePropertiesRef {
         panic!()
     }
 }
+
+pub struct RocksUserCollectedProperties;
+
+impl UserCollectedProperties<UCPIA> for RocksUserCollectedProperties {
+    fn iter(&self) -> RocksUserCollectedPropertiesIter {
+        panic!()
+    }
+}
+
+pub struct RocksUserCollectedPropertiesIter;
+
+impl UserCollectedPropertiesIter for RocksUserCollectedPropertiesIter { }
+
