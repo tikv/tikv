@@ -11,6 +11,8 @@ use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory,
     TitanBlobIndex, UserCollectedProperties, DB,
 };
+use engine_rocks::RocksUserCollectedProperties;
+use engine_traits::UserCollectedProperties as UserCollectedPropertiesTrait;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
 use txn_types::Key;
@@ -340,6 +342,15 @@ impl DecodeProperties for UserProperties {
 }
 
 impl DecodeProperties for UserCollectedProperties {
+    fn decode(&self, k: &str) -> Result<&[u8]> {
+        match self.get(k.as_bytes()) {
+            Some(v) => Ok(v),
+            None => Err(Error::KeyNotFound),
+        }
+    }
+}
+
+impl DecodeProperties for RocksUserCollectedProperties {
     fn decode(&self, k: &str) -> Result<&[u8]> {
         match self.get(k.as_bytes()) {
             Some(v) => Ok(v),
