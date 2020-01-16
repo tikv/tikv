@@ -6,7 +6,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
 
 use kvproto::backup::StorageBackend;
@@ -15,11 +14,13 @@ use uuid::Uuid;
 
 use crate::storage::mvcc::Write;
 use crate::storage::Key;
-use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
 use engine::rocks::util::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 use engine::rocks::{IngestExternalFileOptions, SeekKey, SstReader, SstWriter, DB};
 use engine::CF_WRITE;
 use external_storage::{create_storage, url_of_backend};
+use futures_executor::block_on;
+use futures_util::io::{copy, AllowStdIo};
+use tikv_util::time::Limiter;
 
 use super::{Error, Result};
 use super::metrics::*;
@@ -103,7 +104,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limiter: Option<Arc<IOLimiter>>,
+        speed_limiter: Limiter,
         sst_writer: SstWriter,
     ) -> Result<Option<Range>> {
         debug!("download start";
@@ -111,7 +112,7 @@ impl SSTImporter {
             "url" => %(url_of_backend(backend)),
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
-            "speed_limit" => speed_limiter.as_ref().map_or(0, |l| l.get_bytes_per_second()),
+            "speed_limit" => speed_limiter.speed_limit(),
         );
         match self.do_download(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
@@ -131,7 +132,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limiter: Option<Arc<IOLimiter>>,
+        speed_limiter: Limiter,
         mut sst_writer: SstWriter,
     ) -> Result<Option<Range>> {
         let start = Instant::now();
@@ -140,21 +141,21 @@ impl SSTImporter {
 
         // prepare to download the file from the external_storage
         let ext_storage = create_storage(backend)?;
-        let mut ext_reader = ext_storage
+        let ext_reader = ext_storage
             .read(name)
             .map_err(|e| Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e))?;
-        let mut ext_reader = LimitReader::new(speed_limiter, &mut ext_reader);
+        let ext_reader = speed_limiter.limit(ext_reader);
 
         // do the I/O copy from external_storage to the local file.
         {
-            let mut file_writer = File::create(&path.temp)?;
-            let file_length = std::io::copy(&mut ext_reader, &mut file_writer)?;
+            let mut file_writer = AllowStdIo::new(File::create(&path.temp)?);
+            let file_length = block_on(copy(ext_reader, &mut file_writer))?;
             if meta.length != 0 && meta.length != file_length {
                 let reason = format!("length {}, expect {}", file_length, meta.length);
                 return Err(Error::FileCorrupted(path.temp, reason));
             }
             IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
-            file_writer.sync_data()?;
+            file_writer.into_inner().sync_data()?;
         }
 
         // now validate the SST file.
@@ -594,6 +595,10 @@ mod tests {
     use super::*;
     use crate::import::test_helpers::*;
 
+    use std::collections::HashMap;
+    use std::f64::INFINITY;
+    use std::sync::Arc;
+
     use crate::storage::mvcc::WriteType;
     use crate::storage::Value;
     use engine::rocks::util::{new_engine, CFOptions};
@@ -605,8 +610,6 @@ mod tests {
     use engine::{name_to_cf, CF_DEFAULT, CF_WRITE, DATA_CFS};
     use tempdir::TempDir;
     use tikv_util::file::calc_crc32_bytes;
-
-    use std::collections::HashMap;
 
     const PROP_TEST_MARKER_CF_NAME: &[u8] = b"tikv.test_marker_cf_name";
 
@@ -948,7 +951,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -997,7 +1000,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567", 0),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1042,7 +1045,7 @@ mod tests {
                 &backend,
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1083,7 +1086,7 @@ mod tests {
                 &backend,
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1144,7 +1147,7 @@ mod tests {
                     &backend,
                     "sample.sst",
                     &new_rewrite_rule(b"t123", b"t9102", 0),
-                    None,
+                    Limiter::new(INFINITY),
                     sst_writer,
                 )
                 .unwrap()
@@ -1209,7 +1212,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1253,7 +1256,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5", 0),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1298,7 +1301,7 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
-            None,
+            Limiter::new(INFINITY),
             sst_writer,
         );
         match &result {
@@ -1322,7 +1325,7 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
-            None,
+            Limiter::new(INFINITY),
             sst_writer,
         );
 
@@ -1344,7 +1347,7 @@ mod tests {
             &backend,
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
-            None,
+            Limiter::new(INFINITY),
             sst_writer,
         );
 
