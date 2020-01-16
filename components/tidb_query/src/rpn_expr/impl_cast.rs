@@ -12,7 +12,7 @@ use tipb::{Expr, FieldType};
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
-use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use crate::codec::mysql::{binary_literal, Time};
 use crate::codec::Error;
 use crate::expr::EvalContext;
@@ -917,11 +917,11 @@ macro_rules! cast_as_duration {
                         Err(e) => match e.code() {
                             ERR_DATA_OUT_OF_RANGE => {
                                 ctx.handle_overflow_err(e)?;
-                                Ok(Some(Duration::zero()))
+                                Ok(None)
                             }
-                            WARN_DATA_TRUNCATED => {
+                            ERR_TRUNCATE_WRONG_VALUE => {
                                 ctx.handle_truncate_err(e)?;
-                                Ok(Some(Duration::zero()))
+                                Ok(None)
                             }
                             _ => Err(e.into()),
                         },
