@@ -655,7 +655,7 @@ impl DatumChunkEncoder for Column {
             // In both index and record, it's flag is `JSON`. See TiDB's `encode()`.
             datum::JSON_FLAG => {
                 self.data.write_json_to_chunk_by_datum_payload(raw_datum)?;
-                self.finish_append_fixed()
+                self.finished_append_var()
             }
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for Json vector",
