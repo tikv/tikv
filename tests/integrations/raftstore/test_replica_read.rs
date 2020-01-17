@@ -16,12 +16,18 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_replica_read_not_applied() {
+    test_util::setup_for_ci();
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster, Some(50), Some(30));
     let max_lease = Duration::from_secs(1);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
+    // After the leader has committed to its term, pending reads on followers can be responsed.
+    // However followers can receive `ReadIndexResp` after become candidate if the leader has
+    // hibernated. So, disable the feature to avoid read requests on followers to be cleared as
+    // stale.
+    cluster.cfg.raft_store.hibernate_regions = false;
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -68,7 +74,7 @@ fn test_replica_read_not_applied() {
     // The old read index request won't be blocked forever as it's retried internally.
     cluster.sim.wl().clear_send_filters(1);
     cluster.sim.wl().clear_recv_filters(2);
-    let resp1 = resp1_ch.recv_timeout(Duration::from_secs(10)).unwrap();
+    let resp1 = resp1_ch.recv_timeout(Duration::from_secs(6)).unwrap();
     let exp_value = resp1.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
 
