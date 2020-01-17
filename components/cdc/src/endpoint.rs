@@ -24,6 +24,7 @@ use tokio_threadpool::{Builder, Sender as PoolSender, ThreadPool};
 use txn_types::TimeStamp;
 
 use crate::delegate::{Delegate, Downstream, DownstreamID};
+use crate::Error;
 
 pub enum Task {
     Register {
