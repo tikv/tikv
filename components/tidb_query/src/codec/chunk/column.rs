@@ -640,13 +640,13 @@ impl DatumChunkEncoder for Column {
             // In index, it's flag is `UINT`. See TiDB's `encode()`.
             datum::UINT_FLAG => {
                 self.data
-                    .write_time_to_chunk_by_datum_payload(raw_datum, true, ctx, field_type)?;
+                    .write_time_to_chunk_by_datum_payload(raw_datum, false, ctx, field_type)?;
                 self.finish_append_fixed()
             }
             // In record, it's flag is `VAR_UINT`. See TiDB's `flatten()` and `encode()`.
             datum::VAR_UINT_FLAG => {
                 self.data
-                    .write_time_to_chunk_by_datum_payload(raw_datum, false, ctx, field_type)?;
+                    .write_time_to_chunk_by_datum_payload(raw_datum, true, ctx, field_type)?;
                 self.finish_append_fixed()
             }
             _ => Err(Error::InvalidDataType(format!(
