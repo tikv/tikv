@@ -16,7 +16,6 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_replica_read_not_applied() {
-    test_util::setup_for_ci();
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
