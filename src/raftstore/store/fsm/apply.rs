@@ -3488,7 +3488,7 @@ mod tests {
         let (_path, engines) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
         let obs = ApplyObserver::default();
-        let host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::default();
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
 

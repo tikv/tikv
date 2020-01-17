@@ -13,6 +13,7 @@ use tikv::raftstore::coprocessor::{
 use tikv::raftstore::store::util::{find_peer, new_peer};
 use tikv_util::HandyRwLock;
 
+#[derive(Clone)]
 struct TestObserver {
     sender: SyncSender<(Region, RegionChangeEvent)>,
 }
@@ -27,6 +28,10 @@ impl RegionChangeObserver for TestObserver {
         _: StateRole,
     ) {
         self.sender.send((ctx.region().clone(), event)).unwrap();
+    }
+
+    fn box_clone(&self) -> Box<dyn RegionChangeObserver> {
+        Box::new((*self).clone())
     }
 }
 
