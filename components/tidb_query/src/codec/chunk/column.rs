@@ -248,48 +248,14 @@ impl Column {
 
     /// Append datum bytes in signed int 64 format
     #[inline]
-    pub fn append_i64_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
-        if raw_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-        let flag = raw_datum[0];
-        raw_datum = &raw_datum[1..];
-        match flag {
-            datum::NIL_FLAG => self.append_null(),
-            datum::INT_FLAG => self.append_i64(raw_datum.read_datum_payload_i64()?),
-            datum::UINT_FLAG => self.append_i64(raw_datum.read_datum_payload_u64()? as i64),
-            datum::VAR_INT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_i64()?),
-            datum::VAR_UINT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_u64()? as i64),
-            _ => Err(Error::InvalidDataType(format!(
-                "Unsupported datum flag {} for Int vector",
-                flag
-            ))),
-        }
+    pub fn append_i64_datum(&mut self, raw_datum: &[u8]) -> Result<()> {
+        self.write_i64_to_chunk_by_datum(raw_datum)
     }
 
     /// Append datum bytes in unsigned int 64 format
     #[inline]
-    pub fn append_u64_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
-        if raw_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-        let flag = raw_datum[0];
-        raw_datum = &raw_datum[1..];
-        match flag {
-            datum::NIL_FLAG => self.append_null(),
-            datum::INT_FLAG => self.append_u64(raw_datum.read_datum_payload_i64()? as u64),
-            datum::UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_u64()?),
-            datum::VAR_INT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_i64()? as u64),
-            datum::VAR_UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_u64()?),
-            _ => Err(Error::InvalidDataType(format!(
-                "Unsupported datum flag {} for Int vector",
-                flag
-            ))),
-        }
+    pub fn append_u64_datum(&mut self, raw_datum: &[u8]) -> Result<()> {
+        self.write_u64_to_chunk_by_datum(raw_datum)
     }
 
     /// Get the u64 datum of the row in the column.
@@ -316,51 +282,13 @@ impl Column {
     }
 
     #[inline]
-    pub fn append_f32_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
-        if raw_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-        let flag = raw_datum[0];
-        raw_datum = &raw_datum[1..];
-        match flag {
-            datum::NIL_FLAG => self.append_null(),
-            // In both index and record, it's flag is `FLOAT`. See TiDB's `encode()`.
-            datum::FLOAT_FLAG => {
-                let v = raw_datum.read_datum_payload_f64()?;
-                self.append_f32(v as f32)
-            }
-            _ => Err(Error::InvalidDataType(format!(
-                "Unsupported datum flag {} for Real vector",
-                flag
-            ))),
-        }
+    pub fn append_f32_datum(&mut self, raw_datum: &[u8]) -> Result<()> {
+        self.write_f32_to_chunk_by_datum(raw_datum)
     }
-
     #[inline]
-    pub fn append_f64_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
-        if raw_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-        let flag = raw_datum[0];
-        raw_datum = &raw_datum[1..];
-        match flag {
-            datum::NIL_FLAG => self.append_null(),
-            // In both index and record, it's flag is `FLOAT`. See TiDB's `encode()`.
-            datum::FLOAT_FLAG => {
-                let v = raw_datum.read_datum_payload_f64()?;
-                self.append_f64(v)
-            }
-            _ => Err(Error::InvalidDataType(format!(
-                "Unsupported datum flag {} for Real vector",
-                flag
-            ))),
-        }
+    pub fn append_f64_datum(&mut self, raw_datum: &[u8]) -> Result<()> {
+        self.write_f64_to_chunk_by_datum(raw_datum)
     }
-
     /// Get the f64 datum of the row in the column.
     #[inline]
     pub fn get_f64(&self, idx: usize) -> Result<f64> {
@@ -397,28 +325,9 @@ impl Column {
 
     /// Append a bytes in raw datum format to the column.
     #[inline]
-    pub fn append_bytes_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
-        if raw_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-        let flag = raw_datum[0];
-        raw_datum = &raw_datum[1..];
-        match flag {
-            datum::NIL_FLAG => self.append_null(),
-            // In index, it's flag is `BYTES`. See TiDB's `encode()`.
-            // TODO: this method's performance can be further improved
-            datum::BYTES_FLAG => self.append_bytes(&raw_datum.read_datum_payload_bytes()?),
-            // In record, it's flag is `COMPACT_BYTES`. See TiDB's `encode()`.
-            datum::COMPACT_BYTES_FLAG => self.append_compact_bytes(raw_datum),
-            _ => Err(Error::InvalidDataType(format!(
-                "Unsupported datum flag {} for Bytes vector",
-                flag
-            ))),
-        }
+    pub fn append_bytes_datum(&mut self, raw_datum: &[u8]) -> Result<()> {
+        self.write_bytes_to_chunk_by_datum(raw_datum)
     }
-
     #[inline]
     fn append_compact_bytes(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         let vn = raw_datum.read_var_i64()? as usize;
@@ -470,33 +379,9 @@ impl Column {
 
     /// Append a duration datum in raw bytes to the column.
     #[inline]
-    pub fn append_duration_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
-        if raw_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-        let flag = raw_datum[0];
-        raw_datum = &raw_datum[1..];
-        match flag {
-            datum::NIL_FLAG => self.append_null(),
-            // In index, it's flag is `DURATION`. See TiDB's `encode()`.
-            datum::DURATION_FLAG => {
-                let v = raw_datum.read_datum_payload_i64()?;
-                self.append_i64(v)
-            }
-            // In record, it's flag is `VAR_INT`. See TiDB's `flatten()` and `encode()`.
-            datum::VAR_INT_FLAG => {
-                let v = raw_datum.read_datum_payload_var_i64()?;
-                self.append_i64(v)
-            }
-            _ => Err(Error::InvalidDataType(format!(
-                "Unsupported datum flag {} for Duration vector",
-                flag
-            ))),
-        }
+    pub fn append_duration_datum(&mut self, raw_datum: &[u8]) -> Result<()> {
+        self.write_duration_to_chunk_by_datum(raw_datum)
     }
-
     /// Get the duration datum of the row in the column.
     #[inline]
     pub fn get_duration(&self, idx: usize, fsp: isize) -> Result<Duration> {
@@ -600,6 +485,147 @@ impl DatumChunkEncoder for Column {
             }
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for Decimal vector",
+                flag
+            ))),
+        }
+    }
+
+    #[inline]
+    fn write_i64_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let mut raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::INT_FLAG => self.append_i64(raw_datum.read_datum_payload_i64()?),
+            datum::UINT_FLAG => self.append_i64(raw_datum.read_datum_payload_u64()? as i64),
+            datum::VAR_INT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_i64()?),
+            datum::VAR_UINT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_u64()? as i64),
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Int vector",
+                flag
+            ))),
+        }
+    }
+
+    #[inline]
+    fn write_u64_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let mut raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::INT_FLAG => self.append_u64(raw_datum.read_datum_payload_i64()? as u64),
+            datum::UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_u64()?),
+            datum::VAR_INT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_i64()? as u64),
+            datum::VAR_UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_u64()?),
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Int vector",
+                flag
+            ))),
+        }
+    }
+
+    #[inline]
+    fn write_f32_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let mut raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In both index and record, it's flag is `FLOAT`. See TiDB's `encode()`.
+            datum::FLOAT_FLAG => {
+                let v = raw_datum.read_datum_payload_f64()?;
+                self.append_f32(v as f32)
+            }
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Real vector",
+                flag
+            ))),
+        }
+    }
+
+    #[inline]
+    fn write_f64_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let mut raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In both index and record, it's flag is `FLOAT`. See TiDB's `encode()`.
+            datum::FLOAT_FLAG => {
+                let v = raw_datum.read_datum_payload_f64()?;
+                self.append_f64(v)
+            }
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Real vector",
+                flag
+            ))),
+        }
+    }
+
+    #[inline]
+    fn write_bytes_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let mut raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In index, it's flag is `BYTES`. See TiDB's `encode()`.
+            // TODO: this method's performance can be further improved
+            datum::BYTES_FLAG => self.append_bytes(&raw_datum.read_datum_payload_bytes()?),
+            // In record, it's flag is `COMPACT_BYTES`. See TiDB's `encode()`.
+            datum::COMPACT_BYTES_FLAG => self.append_compact_bytes(raw_datum),
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Bytes vector",
+                flag
+            ))),
+        }
+    }
+
+    #[inline]
+    fn write_duration_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let mut raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In index, it's flag is `DURATION`. See TiDB's `encode()`.
+            datum::DURATION_FLAG => {
+                let v = raw_datum.read_datum_payload_i64()?;
+                self.append_i64(v)
+            }
+            // In record, it's flag is `VAR_INT`. See TiDB's `flatten()` and `encode()`.
+            datum::VAR_INT_FLAG => {
+                let v = raw_datum.read_datum_payload_var_i64()?;
+                self.append_i64(v)
+            }
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Duration vector",
                 flag
             ))),
         }

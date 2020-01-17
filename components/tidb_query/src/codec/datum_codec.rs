@@ -511,6 +511,12 @@ impl<'a> RawDatumDecoder<Json> for &'a [u8] {
 
 pub trait DatumChunkEncoder {
     fn write_decimal_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()>;
+    fn write_i64_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()>;
+    fn write_u64_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()>;
+    fn write_f32_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()>;
+    fn write_f64_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()>;
+    fn write_bytes_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()>;
+    fn write_duration_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()>;
     fn write_time_to_chunk_by_datum(
         &mut self,
         src_datum: &[u8],
