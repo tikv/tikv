@@ -1979,7 +1979,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
-            Arc::new(CoprocessorHost::default()),
+            CoprocessorHost::default(),
             router,
         );
         worker.start(runner).unwrap();

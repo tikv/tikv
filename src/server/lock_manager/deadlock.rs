@@ -430,6 +430,10 @@ impl RoleObserver for RoleChangeNotifier {
             self.scheduler.change_role(role.into());
         }
     }
+
+    fn box_clone(&self) -> Box<dyn RoleObserver> {
+        Box::new((*self).clone())
+    }
 }
 
 impl RegionChangeObserver for RoleChangeNotifier {
@@ -463,6 +467,10 @@ impl RegionChangeObserver for RoleChangeNotifier {
                 }
             }
         }
+    }
+
+    fn box_clone(&self) -> Box<dyn RegionChangeObserver> {
+        Box::new((*self).clone())
     }
 }
 

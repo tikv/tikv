@@ -969,7 +969,7 @@ struct Workers {
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     region_worker: Worker<RegionTask>,
-    coprocessor_host: Arc<CoprocessorHost>,
+    coprocessor_host: CoprocessorHost,
     future_poller: ThreadPool,
 }
 
@@ -1016,7 +1016,7 @@ impl RaftBatchSystem {
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
-            coprocessor_host: Arc::new(coprocessor_host),
+            coprocessor_host,
             future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
                 .pool_size(cfg.future_poll_size)
@@ -1123,7 +1123,7 @@ impl RaftBatchSystem {
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             self.router.clone(),
-            Arc::clone(&workers.coprocessor_host),
+            workers.coprocessor_host.clone(),
             cfg_controller.get_current().coprocessor.clone(),
         );
         box_try!(workers.split_check_worker.start(split_check_runner));
@@ -1134,7 +1134,7 @@ impl RaftBatchSystem {
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
             cfg.clean_stale_peer_delay.0,
-            Arc::clone(&workers.coprocessor_host),
+            workers.coprocessor_host.clone(),
             self.router(),
         );
         let timer = region_runner.new_timer();

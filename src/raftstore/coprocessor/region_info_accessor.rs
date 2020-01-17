@@ -129,6 +129,10 @@ impl RegionChangeObserver for RegionEventListener {
             .schedule(RegionInfoQuery::RaftStoreEvent(event))
             .unwrap();
     }
+
+    fn box_clone(&self) -> Box<dyn RegionChangeObserver> {
+        Box::new((*self).clone())
+    }
 }
 
 impl RoleObserver for RegionEventListener {
@@ -138,6 +142,10 @@ impl RoleObserver for RegionEventListener {
         self.scheduler
             .schedule(RegionInfoQuery::RaftStoreEvent(event))
             .unwrap();
+    }
+
+    fn box_clone(&self) -> Box<dyn RoleObserver> {
+        Box::new((*self).clone())
     }
 }
 

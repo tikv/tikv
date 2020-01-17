@@ -7,7 +7,7 @@ use engine::util;
 use engine::CF_WRITE;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::super::error::Result;
 use super::super::metrics::*;
@@ -81,21 +81,22 @@ impl SplitChecker for Checker {
     }
 }
 
-pub struct KeysCheckObserver<C> {
-    router: Mutex<C>,
+#[derive(Clone)]
+pub struct KeysCheckObserver<C: Clone> {
+    router: Arc<Mutex<C>>,
 }
 
-impl<C: CasualRouter> KeysCheckObserver<C> {
+impl<C: CasualRouter + Clone> KeysCheckObserver<C> {
     pub fn new(router: C) -> KeysCheckObserver<C> {
         KeysCheckObserver {
-            router: Mutex::new(router),
+            router: Arc::new(Mutex::new(router)),
         }
     }
 }
 
-impl<C> Coprocessor for KeysCheckObserver<C> {}
+impl<C: Send + Clone> Coprocessor for KeysCheckObserver<C> {}
 
-impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<C: 'static + CasualRouter + Send + Clone> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -157,6 +158,10 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
                 "threshold" => host.cfg.region_max_keys,
             );
         }
+    }
+
+    fn box_clone(&self) -> Box<dyn SplitCheckObserver> {
+        Box::new((*self).clone())
     }
 }
 

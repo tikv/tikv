@@ -68,6 +68,7 @@ impl SplitChecker for Checker {
     }
 }
 
+#[derive(Clone)]
 pub struct HalfCheckObserver;
 
 impl Coprocessor for HalfCheckObserver {}
@@ -87,6 +88,10 @@ impl SplitCheckObserver for HalfCheckObserver {
             half_split_bucket_size(host.cfg.region_max_size.0),
             policy,
         )))
+    }
+
+    fn box_clone(&self) -> Box<dyn SplitCheckObserver> {
+        Box::new((*self).clone())
     }
 }
 

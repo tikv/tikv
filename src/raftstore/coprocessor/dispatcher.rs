@@ -16,16 +16,35 @@ struct Entry<T> {
     observer: T,
 }
 
-// TODO: change it to Send + Clone.
-pub type BoxAdminObserver = Box<dyn AdminObserver + Send + Sync>;
-pub type BoxQueryObserver = Box<dyn QueryObserver + Send + Sync>;
-pub type BoxApplySnapshotObserver = Box<dyn ApplySnapshotObserver + Send + Sync>;
-pub type BoxSplitCheckObserver = Box<dyn SplitCheckObserver + Send + Sync>;
-pub type BoxRoleObserver = Box<dyn RoleObserver + Send + Sync>;
-pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
+impl<T: Clone> Clone for Entry<T> {
+    fn clone(&self) -> Self {
+        Self {
+            priority: self.priority,
+            observer: self.observer.clone(),
+        }
+    }
+}
+
+macro_rules! impl_box_observer {
+    ($name:ident, $obs: ident) => {
+        pub type $name = Box<dyn $obs>;
+        impl Clone for $name {
+            fn clone(&self) -> $name {
+                self.box_clone()
+            }
+        }
+    };
+}
+
+impl_box_observer!(BoxAdminObserver, AdminObserver);
+impl_box_observer!(BoxQueryObserver, QueryObserver);
+impl_box_observer!(BoxApplySnapshotObserver, ApplySnapshotObserver);
+impl_box_observer!(BoxSplitCheckObserver, SplitCheckObserver);
+impl_box_observer!(BoxRoleObserver, RoleObserver);
+impl_box_observer!(BoxRegionChangeObserver, RegionChangeObserver);
 
 /// Registry contains all registered coprocessors.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Registry {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
@@ -124,7 +143,7 @@ macro_rules! loop_ob {
 }
 
 /// Admin and invoke all coprocessors.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CoprocessorHost {
     pub registry: Registry,
 }
@@ -268,13 +287,13 @@ impl CoprocessorHost {
 
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
-            entry.observer.stop();
+            entry.observer.notify_stop();
         }
         for entry in &self.registry.query_observers {
-            entry.observer.stop();
+            entry.observer.notify_stop();
         }
         for entry in &self.registry.split_check_observers {
-            entry.observer.stop();
+            entry.observer.notify_stop();
         }
     }
 }
@@ -322,6 +341,10 @@ mod tests {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
+
+        fn box_clone(&self) -> Box<dyn AdminObserver> {
+            Box::new((*self).clone())
+        }
     }
 
     impl QueryObserver for TestCoprocessor {
@@ -347,12 +370,20 @@ mod tests {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
+
+        fn box_clone(&self) -> Box<dyn QueryObserver> {
+            Box::new((*self).clone())
+        }
     }
 
     impl RoleObserver for TestCoprocessor {
         fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: StateRole) {
             self.called.fetch_add(7, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn box_clone(&self) -> Box<dyn RoleObserver> {
+            Box::new((*self).clone())
         }
     }
 
@@ -365,6 +396,10 @@ mod tests {
         ) {
             self.called.fetch_add(8, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn box_clone(&self) -> Box<dyn RegionChangeObserver> {
+            Box::new((*self).clone())
         }
     }
 
@@ -382,6 +417,10 @@ mod tests {
         fn pre_apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
             self.called.fetch_add(10, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn box_clone(&self) -> Box<dyn ApplySnapshotObserver> {
+            Box::new((*self).clone())
         }
     }
 

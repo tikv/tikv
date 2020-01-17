@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use engine::rocks;
 use engine::rocks::DB;
@@ -97,21 +97,22 @@ impl SplitChecker for Checker {
     }
 }
 
-pub struct SizeCheckObserver<C> {
-    router: Mutex<C>,
+#[derive(Clone)]
+pub struct SizeCheckObserver<C: Clone> {
+    router: Arc<Mutex<C>>,
 }
 
-impl<C: CasualRouter> SizeCheckObserver<C> {
+impl<C: CasualRouter + Clone> SizeCheckObserver<C> {
     pub fn new(router: C) -> SizeCheckObserver<C> {
         SizeCheckObserver {
-            router: Mutex::new(router),
+            router: Arc::new(Mutex::new(router)),
         }
     }
 }
 
-impl<C> Coprocessor for SizeCheckObserver<C> {}
+impl<C: Send + Clone> Coprocessor for SizeCheckObserver<C> {}
 
-impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
+impl<C: 'static + CasualRouter + Send + Clone> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -178,6 +179,10 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 "threshold" => host.cfg.region_max_size.0,
             );
         }
+    }
+
+    fn box_clone(&self) -> Box<dyn SplitCheckObserver> {
+        Box::new((*self).clone())
     }
 }
 

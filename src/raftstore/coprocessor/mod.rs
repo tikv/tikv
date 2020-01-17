@@ -33,7 +33,7 @@ pub use crate::raftstore::store::KeyEntry;
 
 /// Coprocessor is used to provide a convenient way to inject code to
 /// KV processing.
-pub trait Coprocessor {
+pub trait Coprocessor: Send {
     fn start(&self) {}
     fn stop(&self) {}
 }
@@ -69,6 +69,8 @@ pub trait AdminObserver: Coprocessor {
 
     /// Hook to call after applying admin request.
     fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminResponse) {}
+
+    fn box_clone(&self) -> Box<dyn AdminObserver>;
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -84,6 +86,8 @@ pub trait QueryObserver: Coprocessor {
 
     /// Hook to call after applying write request.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {}
+
+    fn box_clone(&self) -> Box<dyn QueryObserver>;
 }
 
 pub trait ApplySnapshotObserver: Coprocessor {
@@ -101,6 +105,8 @@ pub trait ApplySnapshotObserver: Coprocessor {
     /// Hook to call before applying sst file. Currently the content of the snapshot can't be
     /// passed to the observer.
     fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
+
+    fn box_clone(&self) -> Box<dyn ApplySnapshotObserver>;
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
@@ -134,6 +140,8 @@ pub trait SplitCheckObserver: Coprocessor {
         _: &DB,
         policy: CheckPolicy,
     );
+
+    fn box_clone(&self) -> Box<dyn SplitCheckObserver>;
 }
 
 pub trait RoleObserver: Coprocessor {
@@ -143,6 +151,8 @@ pub trait RoleObserver: Coprocessor {
     /// situation that the hook is not called yet, however the role of some peers
     /// have changed.
     fn on_role_change(&self, _: &mut ObserverContext<'_>, _: StateRole) {}
+
+    fn box_clone(&self) -> Box<dyn RoleObserver>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -155,4 +165,6 @@ pub enum RegionChangeEvent {
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
+
+    fn box_clone(&self) -> Box<dyn RegionChangeObserver>;
 }
