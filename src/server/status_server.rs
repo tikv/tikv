@@ -213,7 +213,10 @@ impl StatusServer {
         pd_sender: &FutureScheduler<PdTask>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let (cfg_sender, rx) = oneshot::channel();
-        if let Err(_) = pd_sender.schedule(PdTask::GetConfig { cfg_sender }) {
+        if pd_sender
+            .schedule(PdTask::GetConfig { cfg_sender })
+            .is_err()
+        {
             error!("failed to schedule GetConfig task");
         }
         let res = rx.then(|res| {
