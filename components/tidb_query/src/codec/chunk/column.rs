@@ -537,24 +537,8 @@ impl Column {
     /// Append a json datum in raw bytes to the column.
     #[inline]
     pub fn append_json_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
-        if raw_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-        let flag = raw_datum[0];
-        raw_datum = &raw_datum[1..];
-        match flag {
-            datum::NIL_FLAG => self.append_null(),
-            // In both index and record, it's flag is `JSON`. See TiDB's `encode()`.
-            datum::JSON_FLAG => self.append_bytes(raw_datum),
-            _ => Err(Error::InvalidDataType(format!(
-                "Unsupported datum flag {} for Json vector",
-                flag
-            ))),
-        }
+        self.write_json_to_chunk_by_datum(raw_datum)
     }
-
     /// Get the json datum of the row in the column.
     #[inline]
     pub fn get_json(&self, idx: usize) -> Result<Json> {
