@@ -287,13 +287,13 @@ impl CoprocessorHost {
 
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
-            entry.observer.notify_stop();
+            entry.observer.stop();
         }
         for entry in &self.registry.query_observers {
-            entry.observer.notify_stop();
+            entry.observer.stop();
         }
         for entry in &self.registry.split_check_observers {
-            entry.observer.notify_stop();
+            entry.observer.stop();
         }
     }
 }

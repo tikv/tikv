@@ -3478,7 +3478,7 @@ mod tests {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn box_clone(&self) -> Box<dyn ApplySnapshotObserver> {
+        fn box_clone(&self) -> Box<dyn QueryObserver> {
             Box::new((*self).clone())
         }
     }
@@ -3488,6 +3488,7 @@ mod tests {
         let (_path, engines) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
         let obs = ApplyObserver::default();
+        let host = CoprocessorHost::default()
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
 
@@ -3501,7 +3502,7 @@ mod tests {
             cfg,
             sender,
             region_scheduler,
-            coprocessor_host: CoprocessorHost::default(),
+            coprocessor_host: host,
             importer: importer.clone(),
             engines: engines.clone(),
             router: router.clone(),

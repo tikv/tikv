@@ -419,7 +419,7 @@ pub mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(tx)),
+            CoprocessorHost::new(tx),
             cfg,
         );
 
