@@ -8,11 +8,10 @@ use crate::CFHandleExt;
 pub trait TablePropertiesExt: CFHandleExt
 {
     
-    type TablePropertiesCollection: TablePropertiesCollection<Self::TableProperties, Self::TablePropertiesCollectionIter, Self::TablePropertiesStringRef, Self::TablePropertiesRef, Self::UserCollectedProperties, Self::UserCollectedPropertiesIter>;
-    type TablePropertiesCollectionIter: TablePropertiesCollectionIter<Self::TableProperties, Self::TablePropertiesStringRef, Self::TablePropertiesRef, Self::UserCollectedProperties, Self::UserCollectedPropertiesIter>;
+    type TablePropertiesCollection: TablePropertiesCollection<Self::TablePropertiesCollectionIter, Self::TablePropertiesKey, Self::TableProperties, Self::UserCollectedProperties, Self::UserCollectedPropertiesIter>;
+    type TablePropertiesCollectionIter: TablePropertiesCollectionIter<Self::TablePropertiesKey, Self::TableProperties, Self::UserCollectedProperties, Self::UserCollectedPropertiesIter>;
+    type TablePropertiesKey: TablePropertiesKey;
     type TableProperties: TableProperties<Self::UserCollectedProperties, Self::UserCollectedPropertiesIter>;
-    type TablePropertiesStringRef: TablePropertiesStringRef;
-    type TablePropertiesRef: TablePropertiesRef<Self::TableProperties, Self::UserCollectedProperties, Self::UserCollectedPropertiesIter>;
     type UserCollectedProperties: UserCollectedProperties<Self::UserCollectedPropertiesIter>;
     type UserCollectedPropertiesIter: UserCollectedPropertiesIter;
 
@@ -34,11 +33,10 @@ pub trait TablePropertiesExt: CFHandleExt
     }
 }
 
-pub trait TablePropertiesCollection<P, I, SRef, PRef, UCP, UCPI,>
-where P: TableProperties<UCP, UCPI>,
-      I: TablePropertiesCollectionIter<P, SRef, PRef, UCP, UCPI>,
-      SRef: TablePropertiesStringRef,
-      PRef: TablePropertiesRef<P, UCP, UCPI>,
+pub trait TablePropertiesCollection<I, PKey, P, UCP, UCPI,>
+where I: TablePropertiesCollectionIter<PKey, P, UCP, UCPI>,
+      PKey: TablePropertiesKey,
+      P: TableProperties<UCP, UCPI>,
       UCP: UserCollectedProperties<UCPI>,
       UCPI: UserCollectedPropertiesIter,
 {
@@ -51,11 +49,10 @@ where P: TableProperties<UCP, UCPI>,
     }
 }
 
-pub trait TablePropertiesCollectionIter<P, SRef, PRef, UCP, UCPI>
-where Self: Iterator<Item = (SRef, PRef)>,
+pub trait TablePropertiesCollectionIter<PKey, P, UCP, UCPI>
+where Self: Iterator<Item = (PKey, P)>,
+      PKey: TablePropertiesKey,
       P: TableProperties<UCP, UCPI>,
-      SRef: TablePropertiesStringRef,
-      PRef: TablePropertiesRef<P, UCP, UCPI>,
       UCP: UserCollectedProperties<UCPI>,
       UCPI: UserCollectedPropertiesIter,
 {
@@ -68,7 +65,7 @@ where UCP: UserCollectedProperties<UCPI>,
     fn user_collected_properties(&self) -> UCP;
 }
 
-pub trait TablePropertiesStringRef
+pub trait TablePropertiesKey
 where Self: Deref<Target = str>
 {}
 

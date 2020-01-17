@@ -4,24 +4,24 @@
 
 use std::ops::Deref;
 use crate::engine::RocksEngine;
+use crate::util;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
 use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
 use engine_traits::{
     TablePropertiesCollectionIter,
     TableProperties,
-    TablePropertiesStringRef,
-    TablePropertiesRef,
+    TablePropertiesKey,
     UserCollectedProperties,
     UserCollectedPropertiesIter,
 };
+use rocksdb::table_properties_rc as raw;
 
 impl TablePropertiesExt for RocksEngine {
     type TablePropertiesCollection = RocksTablePropertiesCollection;
     type TablePropertiesCollectionIter = RocksTablePropertiesCollectionIter;
+    type TablePropertiesKey = RocksTablePropertiesKey;
     type TableProperties = RocksTableProperties;
-    type TablePropertiesStringRef = RocksTablePropertiesStringRef;
-    type TablePropertiesRef = RocksTablePropertiesRef;
     type UserCollectedProperties = RocksUserCollectedProperties;
     type UserCollectedPropertiesIter = RocksUserCollectedPropertiesIter;
 
@@ -30,93 +30,90 @@ impl TablePropertiesExt for RocksEngine {
         cf: &Self::CFHandle,
         ranges: &[Range],
     ) -> Result<Self::TablePropertiesCollection> {
-        panic!()
+        // FIXME: extra allocation
+        let ranges: Vec<_> = ranges.iter().map(util::range_to_rocks_range).collect();
+        let raw = self
+            .as_inner()
+            .get_properties_of_tables_in_range_rc(cf.as_inner(), &ranges);
+        let raw = raw.map_err(Error::Engine)?;
+        Ok(RocksTablePropertiesCollection::from_raw(raw))
     }
 }
 
-pub struct RocksTablePropertiesCollection;
+pub struct RocksTablePropertiesCollection(raw::TablePropertiesCollection);
 
 impl RocksTablePropertiesCollection {
+    fn from_raw(raw: raw::TablePropertiesCollection) -> RocksTablePropertiesCollection {
+        RocksTablePropertiesCollection(raw)
+    }
 }
 
-type PA = RocksTableProperties;
 type IA = RocksTablePropertiesCollectionIter;
-type SRefA = RocksTablePropertiesStringRef;
-type PRefA = RocksTablePropertiesRef;
+type PKeyA = RocksTablePropertiesKey;
+type PA = RocksTableProperties;
 type UCPA = RocksUserCollectedProperties;
 type UCPIA = RocksUserCollectedPropertiesIter;
 
-impl TablePropertiesCollection<PA, IA, SRefA, PRefA, UCPA, UCPIA> for RocksTablePropertiesCollection
+impl TablePropertiesCollection<IA, PKeyA, PA, UCPA, UCPIA> for RocksTablePropertiesCollection
 {
     fn iter(&self) -> RocksTablePropertiesCollectionIter {
-        panic!()
+        RocksTablePropertiesCollectionIter(self.0.iter())
     }
 
     fn len(&self) -> usize {
-        panic!()
+        self.0.len()
     }
 }
 
-pub struct RocksTablePropertiesCollectionIter;
+pub struct RocksTablePropertiesCollectionIter(raw::TablePropertiesCollectionIter);
 
-impl TablePropertiesCollectionIter<PA, SRefA, PRefA, UCPA, UCPIA> for RocksTablePropertiesCollectionIter
+impl TablePropertiesCollectionIter<PKeyA, PA, UCPA, UCPIA> for RocksTablePropertiesCollectionIter
 {}
 
 impl Iterator for RocksTablePropertiesCollectionIter {
-    type Item = (RocksTablePropertiesStringRef, RocksTablePropertiesRef);
+    type Item = (RocksTablePropertiesKey, RocksTableProperties);
 
     fn next(&mut self) -> Option<Self::Item> {
-        panic!()
+        self.0.next().map(|(key, props)| (
+            RocksTablePropertiesKey(key),
+            RocksTableProperties(props),
+        ))
     }
 }
 
-pub struct RocksTableProperties;
+pub struct RocksTablePropertiesKey(raw::TablePropertiesKey);
 
-impl TableProperties<UCPA, UCPIA> for RocksTableProperties {
-    fn user_collected_properties(&self) -> RocksUserCollectedProperties {
-        panic!()
-    }
-}
+impl TablePropertiesKey for RocksTablePropertiesKey { }
 
-pub struct RocksTablePropertiesStringRef;
-
-impl TablePropertiesStringRef for RocksTablePropertiesStringRef { }
-
-impl Deref for RocksTablePropertiesStringRef {
+impl Deref for RocksTablePropertiesKey {
     type Target = str;
 
     fn deref(&self) -> &str {
-        panic!()
+        self.0.deref()
     }
 }
 
-pub struct RocksTablePropertiesRef;
+pub struct RocksTableProperties(raw::TableProperties);
 
-impl TablePropertiesRef<PA, UCPA, UCPIA> for RocksTablePropertiesRef
-{}
-
-impl Deref for RocksTablePropertiesRef {
-    type Target = RocksTableProperties;
-
-    fn deref(&self) -> &RocksTableProperties {
-        panic!()
+impl TableProperties<UCPA, UCPIA> for RocksTableProperties {
+    fn user_collected_properties(&self) -> RocksUserCollectedProperties {
+        RocksUserCollectedProperties(self.0.user_collected_properties())
     }
 }
 
-pub struct RocksUserCollectedProperties;
+pub struct RocksUserCollectedProperties(raw::UserCollectedProperties);
 
 impl UserCollectedProperties<UCPIA> for RocksUserCollectedProperties {
     fn iter(&self) -> RocksUserCollectedPropertiesIter {
-        panic!()
+        RocksUserCollectedPropertiesIter(self.0.iter())
     }
 
     fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]> {
-        let _ = index;
-        panic!()
+        self.0.get(index)
     }
 }
 
-pub struct RocksUserCollectedPropertiesIter;
+pub struct RocksUserCollectedPropertiesIter(raw::UserCollectedPropertiesIter);
 
 impl UserCollectedPropertiesIter for RocksUserCollectedPropertiesIter { }
 
