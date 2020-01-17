@@ -517,4 +517,6 @@ pub trait DatumChunkEncoder {
         ctx: &mut EvalContext,
         field_type: &FieldType,
     ) -> Result<()>;
+
+    fn write_json_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()>;
 }

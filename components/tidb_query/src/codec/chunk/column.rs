@@ -11,7 +11,7 @@ use crate::codec::mysql::decimal::{DecimalPayloadDatumChunkEncoder, DECIMAL_STRU
 use crate::codec::mysql::time::TimePayloadDatumnChunkEncoder;
 use crate::codec::mysql::{
     Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Json,
-    JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
+    JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
 };
 use crate::codec::Datum;
 use crate::expr::EvalContext;
@@ -621,6 +621,7 @@ impl DatumChunkEncoder for Column {
         }
     }
 
+    #[inline]
     fn write_time_to_chunk_by_datum(
         &mut self,
         src_datum: &[u8],
@@ -651,6 +652,29 @@ impl DatumChunkEncoder for Column {
             }
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for DateTime vector.",
+                flag
+            ))),
+        }
+    }
+
+    #[inline]
+    fn write_json_to_chunk_by_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In both index and record, it's flag is `JSON`. See TiDB's `encode()`.
+            datum::JSON_FLAG => {
+                self.data.write_json_to_chunk_by_datum_payload(raw_datum)?;
+                self.finish_append_fixed()
+            }
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Json vector",
                 flag
             ))),
         }
