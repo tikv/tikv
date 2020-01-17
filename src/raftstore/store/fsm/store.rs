@@ -2209,7 +2209,7 @@ mod tests {
         let (raft_router, apply_router, mut system, mut apply_system) =
             create_batch_system(&cfg.raft_store);
         let (_, engines) = create_tmp_engine("store-config");
-        let host = Arc::new(CoprocessorHost::default());
+        let host = CoprocessorHost::default();
         let importer = {
             let dir = Builder::new().prefix("store-config").tempdir().unwrap();
             Arc::new(SSTImporter::new(dir.path()).unwrap())
