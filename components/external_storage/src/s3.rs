@@ -131,7 +131,7 @@ impl ExternalStorage for S3Storage {
             .get_object(req)
             .sync()
             .map(|out| Box::new(out.body.unwrap().into_async_read().compat()) as _)
-            .map_err(|e| match e.into() {
+            .map_err(|e| match e {
                 RusotoError::Service(GetObjectError::NoSuchKey(key)) => Error::new(
                     ErrorKind::NotFound,
                     format!("not key {} not at bucket {}", key, self.config.bucket),

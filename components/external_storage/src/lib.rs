@@ -37,7 +37,7 @@ pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalSt
             let p = Path::new(&local.path);
             LocalStorage::new(p).map(|s| Arc::new(s) as _)
         }
-        Some(Backend::Noop(_)) => Ok(Arc::new(NoopStorage::new()) as _),
+        Some(Backend::Noop(_)) => Ok(Arc::new(NoopStorage::default()) as _),
         Some(Backend::S3(config)) => S3Storage::new(config).map(|s| Arc::new(s) as _),
         _ => {
             let u = url_of_backend(backend);

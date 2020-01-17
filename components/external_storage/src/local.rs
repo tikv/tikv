@@ -124,15 +124,14 @@ mod tests {
 
         // Test save_file
         let magic_contents: &[u8] = b"5678";
-        ls.write("a.log", Box::new(magic_contents.clone())).unwrap();
+        ls.write("a.log", Box::new(magic_contents)).unwrap();
         assert_eq!(fs::read(path.join("a.log")).unwrap(), magic_contents);
 
         // Names contain parent is not allowed.
-        ls.write("a/a.log", Box::new(magic_contents.clone()))
-            .unwrap_err();
+        ls.write("a/a.log", Box::new(magic_contents)).unwrap_err();
         // Empty name is not allowed.
-        ls.write("", Box::new(magic_contents.clone())).unwrap_err();
+        ls.write("", Box::new(magic_contents)).unwrap_err();
         // root is not allowed.
-        ls.write("/", Box::new(magic_contents.clone())).unwrap_err();
+        ls.write("/", Box::new(magic_contents)).unwrap_err();
     }
 }
