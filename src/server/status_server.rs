@@ -536,11 +536,13 @@ fn handle_fail_points_request(
 #[cfg(test)]
 mod tests {
     use crate::config::TiKvConfig;
+    use crate::raftstore::store::PdTask;
     use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
     use futures::Stream;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
-    use tikv_util::worker::dummy_future_scheduler;
+    use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
+    use tokio_core::reactor::Handle;
 
     #[test]
     fn test_status_service() {
@@ -570,7 +572,21 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
+        struct Runner;
+        impl FutureRunnable<PdTask> for Runner {
+            fn run(&mut self, t: PdTask, _: &Handle) {
+                match t {
+                    PdTask::GetConfig { cfg_sender } => {
+                        cfg_sender.send(TiKvConfig::default()).unwrap()
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+        let mut worker = FutureWorker::new("test-worker");
+        worker.start(Runner).unwrap();
+
+        let mut status_server = StatusServer::new(1, worker.scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let uri = Uri::builder()
