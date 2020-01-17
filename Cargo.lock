@@ -217,6 +217,7 @@ dependencies = [
 name = "batch-system"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "crossbeam",
  "derive_more",
  "slog",
