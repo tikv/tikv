@@ -134,7 +134,7 @@ impl RpnExpression {
     }
 
     /// Returns true if the last element of expression is a `Constant` variant.
-    pub fn is_constant(&self) -> bool {
+    pub fn is_last_constant(&self) -> bool {
         assert!(!self.0.is_empty());
         match self.0.last().unwrap() {
             RpnExpressionNode::Constant { .. } => true,
