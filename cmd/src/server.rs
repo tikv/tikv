@@ -180,8 +180,7 @@ impl TiKVServer {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
-        let mut version = Default::default();
-        if config.dynamic_config {
+        let version = if config.dynamic_config {
             // Advertise address and cluster id can not be changed
             if config.server.advertise_addr.is_empty() {
                 config.server.advertise_addr = config.server.addr.clone();
@@ -201,8 +200,10 @@ impl TiKVServer {
             cfg.log_file = log_file;
             cfg.dynamic_config = true;
             config = cfg;
-            version = v;
-        }
+            v
+        } else {
+            Default::default()
+        };
 
         validate_and_persist_config(&mut config, true);
         check_system_config(&config);
@@ -268,6 +269,13 @@ impl TiKVServer {
                 tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
             );
         }
+
+        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space to compaction when TiKV recover. This file is created in data_dir rather than db_path, because we must not increase store size of db_path.
+        tikv_util::reserve_space_for_recover(
+            &self.config.storage.data_dir,
+            self.config.storage.reserve_space.0,
+        )
+        .unwrap();
     }
 
     fn init_engines(&mut self) {
@@ -384,11 +392,36 @@ impl TiKVServer {
 
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
-        let storage_read_pool = storage::build_read_pool(
-            &self.config.readpool.storage,
-            pd_sender.clone(),
-            engines.engine.clone(),
-        );
+
+        let unified_read_pool = if self.config.readpool.unify_read_pool {
+            let unified_read_pool_cfg = &self.config.readpool.unified;
+            let mut builder = yatp::Builder::new("unified-read-pool");
+            builder
+                .min_thread_count(unified_read_pool_cfg.min_thread_count)
+                .max_thread_count(unified_read_pool_cfg.max_thread_count);
+            let multilevel_builder = multilevel::Builder::new(Default::default());
+            let read_pool_runner = ReadPoolRunner::new(engines.engine.clone(), Default::default());
+            let runner_builder =
+                multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+            Some(builder.build_with_queue_and_runner(
+                QueueType::Multilevel(multilevel_builder),
+                runner_builder,
+            ))
+        } else {
+            None
+        };
+
+        let storage_read_pool = if self.config.readpool.unify_read_pool {
+            ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
+        } else {
+            let cop_read_pools = storage::build_read_pool(
+                &self.config.readpool.storage,
+                pd_sender.clone(),
+                engines.engine.clone(),
+            );
+            ReadPool::from(cop_read_pools)
+        };
+
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
@@ -413,27 +446,9 @@ impl TiKVServer {
             .max_total_size(self.config.server.snap_max_total_size.0)
             .build(snap_path, Some(self.router.clone()));
 
-        let yatp_read_pool = if self.config.readpool.unify_read_pool {
-            let unified_read_pool_cfg = &self.config.readpool.unified;
-            let mut builder = yatp::Builder::new("yatp-read-pool");
-            builder
-                .min_thread_count(unified_read_pool_cfg.min_thread_count)
-                .max_thread_count(unified_read_pool_cfg.max_thread_count);
-            let multilevel_builder = multilevel::Builder::new(Default::default());
-            let read_pool_runner = ReadPoolRunner::new(engines.engine.clone(), Default::default());
-            let runner_builder =
-                multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-            Some(builder.build_with_queue_and_runner(
-                QueueType::Multilevel(multilevel_builder),
-                runner_builder,
-            ))
-        } else {
-            None
-        };
-
         // Create coprocessor endpoint.
         let cop_read_pool = if self.config.readpool.unify_read_pool {
-            ReadPool::from(yatp_read_pool.as_ref().unwrap().remote().clone())
+            ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
         } else {
             let cop_read_pools = coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.coprocessor,
@@ -455,7 +470,7 @@ impl TiKVServer {
             self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
-            yatp_read_pool,
+            unified_read_pool,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
