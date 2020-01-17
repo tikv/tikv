@@ -13,6 +13,7 @@ extern crate failure;
 mod delegate;
 mod endpoint;
 mod errors;
+mod observer;
 mod service;
 
 pub use endpoint::{Endpoint, Task};

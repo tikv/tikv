@@ -1653,7 +1653,7 @@ mod tests {
         self, Callback as EngineCallback, Modify, Result as EngineResult, TestEngineBuilder,
     };
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{Storage, TestStorageBuilder};
+    use crate::storage::{txn::commands, Storage, TestStorageBuilder};
     use futures::Future;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
@@ -2108,25 +2108,21 @@ mod tests {
         let start_ts = start_ts.into();
 
         // Write these data to the storage.
-        wait_op!(|cb| storage.prewrite(
-            Context::default(),
-            mutations,
-            primary,
-            start_ts,
-            0,
-            false,
-            0,
-            TimeStamp::default(),
-            cb
+        wait_op!(|cb| storage.sched_txn_command(
+            commands::Prewrite::with_defaults(mutations, primary, start_ts),
+            cb,
         ))
         .unwrap()
         .unwrap();
 
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
-        wait_op!(|cb| storage.commit(Context::default(), keys, start_ts, commit_ts.into(), cb))
-            .unwrap()
-            .unwrap();
+        wait_op!(|cb| storage.sched_txn_command(
+            commands::Commit::new(keys, start_ts, commit_ts.into(), Context::default()),
+            cb
+        ))
+        .unwrap()
+        .unwrap();
 
         // Assert these data is successfully written to the storage.
         check_data(&storage, &data);
@@ -2417,15 +2413,8 @@ mod tests {
 
             let (tx, rx) = channel();
             storage
-                .prewrite(
-                    Context::default(),
-                    vec![mutation],
-                    k,
-                    lock_ts.into(),
-                    0,
-                    false,
-                    0,
-                    TimeStamp::default(),
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(vec![mutation], k, lock_ts.into()),
                     Box::new(move |res| tx.send(res).unwrap()),
                 )
                 .unwrap();
