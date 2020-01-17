@@ -36,19 +36,19 @@ pub struct Config {
     pub capacity: ReadableSize,
 
     // raft_base_tick_interval is a base tick interval (ms).
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_base_tick_interval: ReadableDuration,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_heartbeat_ticks: usize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_election_timeout_ticks: usize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_min_election_timeout_ticks: usize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_max_election_timeout_ticks: usize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_max_size_per_msg: ReadableSize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
@@ -75,7 +75,7 @@ pub struct Config {
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
     // delay time before deleting a stale peer
-    #[config(skip)]
+    #[config(hidden)]
     pub clean_stale_peer_delay: ReadableDuration,
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
@@ -108,6 +108,7 @@ pub struct Config {
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
 
+    #[config(hidden)]
     pub leader_transfer_max_log_lag: u64,
 
     #[config(skip)]
@@ -116,22 +117,25 @@ pub struct Config {
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_interval: ReadableDuration,
 
+    #[config(hidden)]
     pub report_region_flow_interval: ReadableDuration,
 
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: ReadableDuration,
 
     // Right region derive origin region id when split.
+    #[config(hidden)]
     pub right_derive_when_split: bool,
 
     pub allow_remove_leader: bool,
 
     /// Max log gap allowed to propose merge.
+    #[config(hidden)]
     pub merge_max_log_gap: u64,
     /// Interval to re-propose merge.
     pub merge_check_tick_interval: ReadableDuration,
 
-    #[config(skip)]
+    #[config(hidden)]
     pub use_delete_range: bool,
 
     pub cleanup_import_sst_interval: ReadableDuration,
@@ -150,6 +154,7 @@ pub struct Config {
     pub store_pool_size: usize,
     #[config(skip)]
     pub future_poll_size: usize,
+    #[config(hidden)]
     pub hibernate_regions: bool,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
