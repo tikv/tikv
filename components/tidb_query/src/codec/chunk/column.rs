@@ -536,7 +536,7 @@ impl Column {
 
     /// Append a json datum in raw bytes to the column.
     #[inline]
-    pub fn append_json_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
+    pub fn append_json_datum(&mut self, raw_datum: &[u8]) -> Result<()> {
         self.write_json_to_chunk_by_datum(raw_datum)
     }
     /// Get the json datum of the row in the column.
