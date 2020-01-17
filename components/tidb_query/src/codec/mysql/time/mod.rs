@@ -7,6 +7,7 @@ pub mod weekmode;
 pub use self::extension::*;
 pub use self::tz::Tz;
 pub use self::weekmode::WeekMode;
+use tipb::FieldType;
 
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
@@ -22,6 +23,7 @@ use crate::codec::mysql::{check_fsp, Decimal, Duration};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::{EvalContext, Flag, SqlMode};
 
+use crate::codec::datum_codec::{decode_date_time_from_uint, DatumPayloadDecoder};
 use bitfield::bitfield;
 use boolinator::Boolinator;
 use chrono::prelude::*;
@@ -290,6 +292,7 @@ impl Time {
 
 mod parser {
     use super::*;
+
     fn bytes_to_u32(input: &[u8]) -> Option<u32> {
         input.iter().try_fold(0u32, |acc, d| {
             d.is_ascii_digit().as_option()?;
@@ -1681,6 +1684,26 @@ pub trait TimeEncoder: NumberEncoder {
     }
 }
 
+pub trait TimePayloadDatumnChunkEncoder: TimeEncoder {
+    fn write_time_to_chunk_by_datum_payload(
+        &mut self,
+        mut src_payload: &[u8],
+        var_flag: bool,
+        ctx: &mut EvalContext,
+        field_type: &FieldType,
+    ) -> Result<()> {
+        let v = if var_flag {
+            src_payload.read_datum_payload_var_u64()?
+        } else {
+            src_payload.read_datum_payload_u64()?
+        };
+        let v = decode_date_time_from_uint(v, ctx, field_type)?;
+        self.write_time(v)
+    }
+}
+
+impl<T: BufferWriter> TimePayloadDatumnChunkEncoder for T {}
+
 pub trait TimeDecoder: NumberDecoder {
     /// Decodes time encoded by `write_time` for Chunk format.
     fn read_time(&mut self, ctx: &mut EvalContext) -> Result<Time> {
@@ -2182,7 +2205,7 @@ mod tests {
             ..TimeEnv::default()
         });
 
-        assert!(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false,).is_err());
+        assert!(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false).is_err());
 
         // Enable NO_ZERO_DATE, STRICT_MODE and IGNORE_TRUNCATE.
         // If zero-date is encountered, an error is returned.
@@ -2195,7 +2218,7 @@ mod tests {
 
         assert_eq!(
             "0000-00-00 00:00:00",
-            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false,)?.to_string()
+            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false)?.to_string()
         );
 
         assert!(ctx.warnings.warning_cnt > 0);
@@ -2247,7 +2270,7 @@ mod tests {
 
         assert_eq!(
             "0000-00-00 00:00:00",
-            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false,)?.to_string()
+            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false)?.to_string()
         );
 
         assert!(ctx.warnings.warning_cnt > 0);
