@@ -2,5 +2,5 @@
 set -e
 
 if ! getent passwd tikv >/dev/null; then
-        adduser --quiet --system --no-create-home --home /etc/tikv --shell /usr/sbin/nologin tikv
+        adduser --quiet --system --no-create-home --home /var/lib/tikv --shell /usr/sbin/nologin tikv
 fi

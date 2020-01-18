@@ -32,7 +32,7 @@ A distributed transactional key-value database.
 
 %pre
 if ! getent passwd tikv >/dev/null; then
-        adduser --system --no-create-home --home /etc/tikv --shell /usr/sbin/nologin tikv
+        adduser --system --no-create-home --home /var/lib/tikv --shell /usr/sbin/nologin tikv
 fi
 exit 0
 
