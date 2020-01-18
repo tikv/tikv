@@ -84,6 +84,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-speed-limit"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8960ff0e84c4330f6d3d882fad4a3d292cdb1729b1acbc1c22dab0af0f77e6f1"
+dependencies = [
+ "futures-core",
+ "futures-io",
+ "futures-timer",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -164,6 +176,8 @@ dependencies = [
  "external_storage",
  "failure",
  "futures 0.1.29",
+ "futures-executor",
+ "futures-util",
  "grpcio",
  "hex 0.3.2",
  "keys",
@@ -540,6 +554,9 @@ name = "configuration"
 version = "0.1.0"
 dependencies = [
  "configuration_derive",
+ "serde",
+ "serde_derive",
+ "toml",
 ]
 
 [[package]]
@@ -881,6 +898,7 @@ dependencies = [
 name = "engine"
 version = "0.0.1"
 dependencies = [
+ "configuration",
  "engine_traits",
  "hex 0.3.2",
  "kvproto",
@@ -927,7 +945,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time",
- "toml",
 ]
 
 [[package]]
@@ -968,6 +985,9 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "futures-executor",
+ "futures-io",
+ "futures-util",
  "kvproto",
  "rand 0.7.2",
  "slog",
@@ -1191,6 +1211,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bae52d6b29cf440e298856fec3965ee6fa71b06aa7495178615953fd669e5f9"
 
 [[package]]
+name = "futures-timer"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1de7508b218029b0f01662ed8f61b1c964b3ae99d6f25462d0f55a595109df6"
+
+[[package]]
 name = "futures-util"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1208,6 +1234,7 @@ dependencies = [
  "proc-macro-hack",
  "proc-macro-nested",
  "slab",
+ "tokio-io",
 ]
 
 [[package]]
@@ -1659,7 +1686,6 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "panic_hook",
- "slog",
  "tikv_alloc",
 ]
 
@@ -1824,7 +1850,6 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.3.2",
- "kvproto",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2066,9 +2091,9 @@ dependencies = [
 
 [[package]]
 name = "nom"
-version = "5.0.1"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c618b63422da4401283884e6668d39f819a106ef51f5f59b81add00075da35ca"
+checksum = "c433f4d505fe6ce7ff78523d2fa13a0b9f2690e181fc26168bcbe5ccc5d14e07"
 dependencies = [
  "lexical-core",
  "memchr",
@@ -2334,7 +2359,6 @@ dependencies = [
  "futures 0.1.29",
  "grpcio",
  "hex 0.3.2",
- "keys",
  "kvproto",
  "lazy_static",
  "log",
@@ -3435,6 +3459,8 @@ dependencies = [
  "engine_traits",
  "external_storage",
  "futures 0.1.29",
+ "futures-executor",
+ "futures-util",
  "grpcio",
  "hex 0.3.2",
  "keys",
@@ -3851,7 +3877,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "match_template",
- "nom 5.0.1",
+ "nom 5.1.0",
  "num",
  "num-traits",
  "openssl",
@@ -3902,7 +3928,6 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
  "failure",
- "num-traits",
  "tikv_alloc",
  "tipb",
 ]
@@ -3923,7 +3948,6 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crc64fast",
- "criterion-papi",
  "crossbeam",
  "derive-new",
  "derive_more",
@@ -3936,7 +3960,9 @@ dependencies = [
  "futures 0.1.29",
  "futures 0.3.1",
  "futures-cpupool",
+ "futures-executor",
  "futures-locks",
+ "futures-util",
  "grpcio",
  "hex 0.3.2",
  "hyper",
@@ -3951,7 +3977,7 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nix 0.11.1",
- "nom 5.0.1",
+ "nom 5.1.0",
  "panic_hook",
  "pd_client",
  "pprof",
@@ -3968,7 +3994,6 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "signal",
  "slog",
  "slog-async",
  "slog-global",
@@ -3996,7 +4021,6 @@ dependencies = [
  "toml",
  "txn_types",
  "url 2.1.0",
- "utime",
  "uuid 0.7.4",
  "vlog",
  "yatp",
@@ -4021,6 +4045,7 @@ dependencies = [
 name = "tikv_util"
 version = "0.1.0"
 dependencies = [
+ "async-speed-limit",
  "backtrace",
  "byteorder",
  "chrono",
@@ -4030,6 +4055,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "fail",
+ "fs2",
  "futures 0.1.29",
  "futures 0.3.1",
  "futures-cpupool",
@@ -4043,7 +4069,6 @@ dependencies = [
  "panic_hook",
  "procinfo",
  "prometheus",
- "prometheus-static-metric",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
@@ -4378,7 +4403,6 @@ dependencies = [
  "byteorder",
  "codec",
  "derive-new",
- "derive_more",
  "farmhash",
  "hex 0.3.2",
  "kvproto",

@@ -142,6 +142,7 @@ impl PendingCmdQueue {
 
 #[derive(Default, Debug)]
 pub struct ChangePeer {
+    pub index: u64,
     pub conf_change: ConfChange,
     pub peer: PeerMeta,
     pub region: Region,
@@ -1378,6 +1379,11 @@ impl ApplyDelegate {
             |_| panic!("should not use return")
         );
         fail_point!(
+            "apply_on_conf_change_3_1",
+            self.id == 3 && self.region_id() == 1,
+            |_| panic!("should not use return")
+        );
+        fail_point!(
             "apply_on_conf_change_all_1",
             self.region_id() == 1,
             |_| panic!("should not use return")
@@ -1551,6 +1557,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
+                index: ctx.exec_ctx.as_ref().unwrap().index,
                 conf_change: Default::default(),
                 peer: peer.clone(),
                 region,
@@ -2749,7 +2756,6 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
-                CmpOrdering::Equal => {}
                 CmpOrdering::Greater => {
                     self.msg_buf.reserve(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
@@ -2758,6 +2764,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                     self.msg_buf.shrink_to(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
+                _ => {}
             }
             self.apply_ctx.enable_sync_log = incoming.sync_log;
         }
