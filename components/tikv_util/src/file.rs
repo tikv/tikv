@@ -3,6 +3,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
@@ -89,28 +90,32 @@ pub fn sha256(input: &[u8]) -> Result<Vec<u8>, ErrorStack> {
 /// Wrapper of a reader which computes its SHA-256 hash while reading.
 pub struct Sha256Reader<R> {
     reader: R,
-    hasher: Hasher,
+    hasher: Arc<Mutex<Hasher>>,
 }
 
 impl<R> Sha256Reader<R> {
     /// Creates a new `Sha256Reader`, wrapping the given reader.
-    pub fn new(reader: R) -> Result<Self, ErrorStack> {
-        Ok(Sha256Reader {
-            reader,
-            hasher: Hasher::new(MessageDigest::sha256())?,
-        })
+    pub fn new(reader: R) -> Result<(Self, Arc<Mutex<Hasher>>), ErrorStack> {
+        let hasher = Arc::new(Mutex::new(Hasher::new(MessageDigest::sha256())?));
+        Ok((
+            Sha256Reader {
+                reader,
+                hasher: hasher.clone(),
+            },
+            hasher,
+        ))
     }
 
-    /// Computes the final SHA-256 hash.
-    pub fn hash(mut self) -> Result<Vec<u8>, ErrorStack> {
-        Ok(self.hasher.finish()?.to_vec())
-    }
+    // Computes the final SHA-256 hash.
+    // pub fn hash(mut self) -> Result<Vec<u8>, ErrorStack> {
+    //     Ok(self.hasher.finish()?.to_vec())
+    // }
 }
 
 impl<R: Read> Read for Sha256Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let len = self.reader.read(buf)?;
-        self.hasher.update(&buf[..len])?;
+        (*self.hasher).lock().unwrap().update(&buf[..len])?;
         Ok(len)
     }
 }
