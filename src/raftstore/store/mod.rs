@@ -12,6 +12,7 @@ mod local_metrics;
 mod metrics;
 mod peer;
 mod peer_storage;
+mod read_queue;
 mod region_snapshot;
 mod snap;
 mod worker;
@@ -37,8 +38,8 @@ pub use self::peer_storage::{
 };
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::snap::{
-    check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager,
-    SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
+    check_abort, copy_snapshot, ApplyOptions, Error as SnapError, GenericSnapshot, SnapEntry,
+    SnapKey, SnapManager, SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::worker::PdTask;

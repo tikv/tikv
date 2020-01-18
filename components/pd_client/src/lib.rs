@@ -243,7 +243,10 @@ pub trait PdClient: Send + Sync {
     fn spawn(&self, _: PdFuture<()>) {
         unimplemented!()
     }
+}
 
+/// ConfigClient used for manage config
+pub trait ConfigClient: Send + Sync {
     fn register_config(
         &self,
         _id: String,
