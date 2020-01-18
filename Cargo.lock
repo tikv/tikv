@@ -555,6 +555,9 @@ name = "configuration"
 version = "0.1.0"
 dependencies = [
  "configuration_derive",
+ "serde",
+ "serde_derive",
+ "toml",
 ]
 
 [[package]]
