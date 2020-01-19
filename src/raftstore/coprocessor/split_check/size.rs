@@ -98,11 +98,11 @@ impl SplitChecker for Checker {
 }
 
 #[derive(Clone)]
-pub struct SizeCheckObserver<C: Clone> {
+pub struct SizeCheckObserver<C> {
     router: Arc<Mutex<C>>,
 }
 
-impl<C: CasualRouter + Clone> SizeCheckObserver<C> {
+impl<C: CasualRouter> SizeCheckObserver<C> {
     pub fn new(router: C) -> SizeCheckObserver<C> {
         SizeCheckObserver {
             router: Arc::new(Mutex::new(router)),
@@ -110,9 +110,9 @@ impl<C: CasualRouter + Clone> SizeCheckObserver<C> {
     }
 }
 
-impl<C: Send + Clone> Coprocessor for SizeCheckObserver<C> {}
+impl<C: Send> Coprocessor for SizeCheckObserver<C> {}
 
-impl<C: 'static + CasualRouter + Send + Clone> SplitCheckObserver for SizeCheckObserver<C> {
+impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,

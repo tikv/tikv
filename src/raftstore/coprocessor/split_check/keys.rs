@@ -82,11 +82,11 @@ impl SplitChecker for Checker {
 }
 
 #[derive(Clone)]
-pub struct KeysCheckObserver<C: Clone> {
+pub struct KeysCheckObserver<C> {
     router: Arc<Mutex<C>>,
 }
 
-impl<C: CasualRouter + Clone> KeysCheckObserver<C> {
+impl<C: CasualRouter> KeysCheckObserver<C> {
     pub fn new(router: C) -> KeysCheckObserver<C> {
         KeysCheckObserver {
             router: Arc::new(Mutex::new(router)),
@@ -94,9 +94,9 @@ impl<C: CasualRouter + Clone> KeysCheckObserver<C> {
     }
 }
 
-impl<C: Send + Clone> Coprocessor for KeysCheckObserver<C> {}
+impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
 
-impl<C: 'static + CasualRouter + Send + Clone> SplitCheckObserver for KeysCheckObserver<C> {
+impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
