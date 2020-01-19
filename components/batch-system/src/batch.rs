@@ -293,6 +293,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
         self.fetch_batch(&mut batch, self.max_batch_size);
         while !batch.is_empty() {
+            let mut hot_fsm_count = 0;
             self.handler.begin(batch.len());
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
@@ -308,10 +309,17 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.counters[i] += 1;
                     if p.is_stopped() {
                         reschedule_fsms.push((i, ReschedulePolicy::Remove));
-                    } else if batch.counters[i] >= 10 {
-                        reschedule_fsms.push((i, ReschedulePolicy::Schedule));
-                    } else if let Some(l) = len {
-                        reschedule_fsms.push((i, ReschedulePolicy::Release(l)));
+                    } else {
+                        if batch.counters[i] > 3 {
+                            hot_fsm_count += 1;
+                            if hot_fsm_count & 1 == 1 {
+                                reschedule_fsms.push((i, ReschedulePolicy::Schedule));
+                                continue;
+                            }
+                        }
+                        if let Some(l) = len {
+                            reschedule_fsms.push((i, ReschedulePolicy::Release(l)));
+                        }
                     }
                 }
             }
