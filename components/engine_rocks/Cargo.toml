@@ -27,7 +27,6 @@ sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
-toml = "0.4"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
