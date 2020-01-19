@@ -260,9 +260,13 @@ mod tests {
         let direct_sha256 = sha256(&large_file_bytes).unwrap();
 
         let large_file_reader = fs::File::open(&large_file).unwrap();
-        let mut sha256_reader = Sha256Reader::new(large_file_reader).unwrap();
-        sha256_reader.read_to_end(&mut Vec::new()).unwrap();
+        let (mut sha256_reader, sha256_hasher) = Sha256Reader::new(large_file_reader).unwrap();
+        let ret = sha256_reader.read_to_end(&mut Vec::new());
 
-        assert_eq!(sha256_reader.hash().unwrap(), direct_sha256);
+        assert_eq!(ret.unwrap(), DIGEST_BUFFER_SIZE * 4);
+        assert_eq!(
+            sha256_hasher.lock().unwrap().finish().unwrap().to_vec(),
+            direct_sha256
+        );
     }
 }
