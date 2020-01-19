@@ -1743,9 +1743,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.8.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b8467d9c1cebe26feb08c640139247fac215782d35371ade9a2136ed6085358"
+checksum = "f56a2d0bc861f9165be4eb3442afd3c236d8a98afd426f65d92324ae1091a484"
 dependencies = [
  "either",
 ]
@@ -1906,7 +1906,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=br_send#f5a3a4315d260a17ee0a625a64607295d6532d9f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3805bd47c265b32e5c2001509928d131f8ad22dc"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1924,7 +1924,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=br_send#f5a3a4315d260a17ee0a625a64607295d6532d9f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3805bd47c265b32e5c2001509928d131f8ad22dc"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3314,7 +3314,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=br_send#f5a3a4315d260a17ee0a625a64607295d6532d9f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3805bd47c265b32e5c2001509928d131f8ad22dc"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -5088,9 +5088,10 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.15+zstd.1.4.4"
-source = "git+https://github.com/gyscos/zstd-rs.git#9bdc44501ec3279e83d9bfe1ebc953bb7cf000b9"
+source = "git+https://github.com/gyscos/zstd-rs.git#3df21bbc06a5257967ca7f30ba33a6512e0cde4b"
 dependencies = [
  "cc",
  "glob",
+ "itertools",
  "libc",
 ]
