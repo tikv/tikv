@@ -5136,15 +5136,15 @@ mod tests {
                                 func_name, func_to_debug_str(&val), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
                             );
                             check_overflow(&ctx, true, log.as_str());
-                            check_result(Some(&Duration::zero()), &result, log.as_str());
+                            check_result(None, &result, log.as_str());
                         }
-                        WARN_DATA_TRUNCATED => {
+                        ERR_TRUNCATE_WRONG_VALUE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {}, expect_warn: {}",
                                 func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
                             );
-                            check_warning(&ctx, Some(WARN_DATA_TRUNCATED), log.as_str());
-                            check_result(Some(&Duration::zero()), &result, log.as_str());
+                            check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str());
+                            check_result(None, &result, log.as_str());
                         }
                         _ => {
                             let expect_err: crate::error::Error = e.into();
