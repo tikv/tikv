@@ -166,10 +166,6 @@ impl SplitCheckObserver for TableCheckObserver {
             policy,
         }));
     }
-
-    fn box_clone(&self) -> Box<dyn SplitCheckObserver> {
-        Box::new((*self).clone())
-    }
 }
 
 fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {

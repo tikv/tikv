@@ -3477,10 +3477,6 @@ mod tests {
         fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
-
-        fn box_clone(&self) -> Box<dyn QueryObserver> {
-            Box::new((*self).clone())
-        }
     }
 
     #[test]

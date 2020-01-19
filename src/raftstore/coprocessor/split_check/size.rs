@@ -180,10 +180,6 @@ impl<C: 'static + CasualRouter + Send + Clone> SplitCheckObserver for SizeCheckO
             );
         }
     }
-
-    fn box_clone(&self) -> Box<dyn SplitCheckObserver> {
-        Box::new((*self).clone())
-    }
 }
 
 /// Get the approximate size of the range.

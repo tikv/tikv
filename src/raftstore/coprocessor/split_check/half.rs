@@ -89,10 +89,6 @@ impl SplitCheckObserver for HalfCheckObserver {
             policy,
         )))
     }
-
-    fn box_clone(&self) -> Box<dyn SplitCheckObserver> {
-        Box::new((*self).clone())
-    }
 }
 
 fn half_split_bucket_size(region_max_size: u64) -> u64 {

@@ -180,10 +180,6 @@ impl QueryObserver for LockObserver {
             self.send(locks);
         }
     }
-
-    fn box_clone(&self) -> Box<dyn QueryObserver> {
-        Box::new((*self).clone())
-    }
 }
 
 impl ApplySnapshotObserver for LockObserver {
@@ -238,10 +234,6 @@ impl ApplySnapshotObserver for LockObserver {
             error!("cannot collect all applied lock: snapshot of lock cf applied from sst file");
             self.mark_dirty();
         }
-    }
-
-    fn box_clone(&self) -> Box<dyn ApplySnapshotObserver> {
-        Box::new((*self).clone())
     }
 }
 

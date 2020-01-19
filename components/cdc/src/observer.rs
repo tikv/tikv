@@ -72,10 +72,6 @@ impl RoleObserver for CdcObserver {
             }
         }
     }
-
-    fn box_clone(&self) -> Box<dyn RoleObserver> {
-        Box::new((*self).clone())
-    }
 }
 
 #[cfg(test)]

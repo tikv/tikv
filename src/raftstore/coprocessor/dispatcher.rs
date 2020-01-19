@@ -25,23 +25,59 @@ impl<T: Clone> Clone for Entry<T> {
     }
 }
 
+trait ClonableObserver: 'static + Send {
+    type Ob: ?Sized + Send;
+    fn ob_mut(&mut self) -> &mut Self::Ob;
+    fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send>;
+}
+
 macro_rules! impl_box_observer {
-    ($name:ident, $obs: ident) => {
-        pub type $name = Box<dyn $obs>;
+    ($name:ident, $ob: ident, $wrapper: ident) => {
+        pub type $name = Box<dyn ClonableObserver<Ob = dyn $ob> + Send>;
+
         impl Clone for $name {
             fn clone(&self) -> $name {
-                self.box_clone()
+                (*self).box_clone()
+            }
+        }
+
+        struct $wrapper<T: $ob + Clone> {
+            observer: T,
+        }
+
+        impl<T: 'static + $ob + Clone> ClonableObserver for $wrapper<T> {
+            type Ob = dyn $ob;
+            fn ob_mut(&mut self) -> &mut Self::Ob {
+                &mut self.observer as _
+            }
+
+            fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
+                Box::new($wrapper {
+                    observer: self.observer.clone(),
+                })
             }
         }
     };
 }
 
-impl_box_observer!(BoxAdminObserver, AdminObserver);
-impl_box_observer!(BoxQueryObserver, QueryObserver);
-impl_box_observer!(BoxApplySnapshotObserver, ApplySnapshotObserver);
-impl_box_observer!(BoxSplitCheckObserver, SplitCheckObserver);
-impl_box_observer!(BoxRoleObserver, RoleObserver);
-impl_box_observer!(BoxRegionChangeObserver, RegionChangeObserver);
+impl_box_observer!(BoxAdminObserver, AdminObserver, WrappedAdminObserver);
+impl_box_observer!(BoxQueryObserver, QueryObserver, WrappedQueryObserver);
+impl_box_observer!(
+    BoxApplySnapshotObserver,
+    ApplySnapshotObserver,
+    WrappedApplySnapshotObserver
+);
+impl_box_observer!(
+    BoxSplitCheckObserver,
+    SplitCheckObserver,
+    WrappedSplitCheckObserver
+);
+impl_box_observer!(BoxRoleObserver, RoleObserver, WrappedRoleObserver);
+impl_box_observer!(
+    BoxRegionChangeObserver,
+    RegionChangeObserver,
+    WrappedRegionChangeObserver
+);
 
 /// Registry contains all registered coprocessors.
 #[derive(Default, Clone)]
@@ -57,7 +93,7 @@ pub struct Registry {
 
 macro_rules! push {
     ($p:expr, $t:ident, $vec:expr) => {
-        $t.start();
+        $t.ob_mut().start();
         let e = Entry {
             priority: $p,
             observer: $t,
@@ -112,11 +148,11 @@ macro_rules! try_loop_ob {
 macro_rules! loop_ob {
     // Execute a hook, return early if error is found.
     (_exec _res, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
-        $o.$hook($ctx, $($args)*)?
+        $o.ob_mut().$hook($ctx, $($args)*)?
     };
     // Execute a hook.
     (_exec _tup, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
-        $o.$hook($ctx, $($args)*)
+        $o.ob_mut().$hook($ctx, $($args)*)
     };
     // When the try loop finishes successfully, the value to be returned.
     (_done _res) => {
@@ -151,11 +187,20 @@ pub struct CoprocessorHost {
 impl CoprocessorHost {
     pub fn new<C: CasualRouter + Clone + Send + 'static>(ch: C) -> CoprocessorHost {
         let mut registry = Registry::default();
-        registry.register_split_check_observer(200, Box::new(SizeCheckObserver::new(ch.clone())));
-        registry.register_split_check_observer(200, Box::new(KeysCheckObserver::new(ch)));
+        registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(ch.clone())),
+        );
+        registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(ch)),
+        );
         // TableCheckObserver has higher priority than SizeCheckObserver.
-        registry.register_split_check_observer(100, Box::new(HalfCheckObserver));
-        registry.register_split_check_observer(400, Box::new(TableCheckObserver::default()));
+        registry.register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        registry.register_split_check_observer(
+            400,
+            BoxSplitCheckObserver::new(TableCheckObserver::default()),
+        );
         CoprocessorHost { registry }
     }
 
@@ -341,10 +386,6 @@ mod tests {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
-
-        fn box_clone(&self) -> Box<dyn AdminObserver> {
-            Box::new((*self).clone())
-        }
     }
 
     impl QueryObserver for TestCoprocessor {
@@ -370,20 +411,12 @@ mod tests {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
-
-        fn box_clone(&self) -> Box<dyn QueryObserver> {
-            Box::new((*self).clone())
-        }
     }
 
     impl RoleObserver for TestCoprocessor {
         fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: StateRole) {
             self.called.fetch_add(7, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
-        }
-
-        fn box_clone(&self) -> Box<dyn RoleObserver> {
-            Box::new((*self).clone())
         }
     }
 
@@ -396,10 +429,6 @@ mod tests {
         ) {
             self.called.fetch_add(8, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
-        }
-
-        fn box_clone(&self) -> Box<dyn RegionChangeObserver> {
-            Box::new((*self).clone())
         }
     }
 
@@ -417,10 +446,6 @@ mod tests {
         fn pre_apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
             self.called.fetch_add(10, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
-        }
-
-        fn box_clone(&self) -> Box<dyn ApplySnapshotObserver> {
-            Box::new((*self).clone())
         }
     }
 

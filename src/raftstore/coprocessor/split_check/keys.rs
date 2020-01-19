@@ -159,10 +159,6 @@ impl<C: 'static + CasualRouter + Send + Clone> SplitCheckObserver for KeysCheckO
             );
         }
     }
-
-    fn box_clone(&self) -> Box<dyn SplitCheckObserver> {
-        Box::new((*self).clone())
-    }
 }
 
 /// Get the approximate number of keys in the range.

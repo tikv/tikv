@@ -159,10 +159,6 @@ impl AdminObserver for SplitObserver {
         }
         Ok(())
     }
-
-    fn box_clone(&self) -> Box<dyn AdminObserver> {
-        Box::new((*self).clone())
-    }
 }
 
 #[cfg(test)]
