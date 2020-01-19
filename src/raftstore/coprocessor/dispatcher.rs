@@ -5,7 +5,9 @@ use engine::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+
 use std::mem;
+use std::ops::{Deref, DerefMut};
 
 use crate::raftstore::store::CasualRouter;
 
@@ -25,35 +27,55 @@ impl<T: Clone> Clone for Entry<T> {
     }
 }
 
-trait ClonableObserver: 'static + Send {
+pub trait ClonableObserver: 'static + Send {
     type Ob: ?Sized + Send;
-    fn ob_mut(&mut self) -> &mut Self::Ob;
+    fn inner(&self) -> &Self::Ob;
+    fn inner_mut(&mut self) -> &mut Self::Ob;
     fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send>;
 }
 
 macro_rules! impl_box_observer {
     ($name:ident, $ob: ident, $wrapper: ident) => {
-        pub type $name = Box<dyn ClonableObserver<Ob = dyn $ob> + Send>;
-
+        pub struct $name(Box<dyn ClonableObserver<Ob = dyn $ob> + Send>);
+        impl $name {
+            pub fn new<T: 'static + $ob + Clone>(observer: T) -> $name {
+                $name(Box::new($wrapper { inner: observer }))
+            }
+        }
         impl Clone for $name {
             fn clone(&self) -> $name {
-                (*self).box_clone()
+                $name((**self).box_clone())
+            }
+        }
+        impl Deref for $name {
+            type Target = Box<dyn ClonableObserver<Ob = dyn $ob> + Send>;
+
+            fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob> + Send> {
+                &self.0
+            }
+        }
+        impl DerefMut for $name {
+            fn deref_mut(&mut self) -> &mut Box<dyn ClonableObserver<Ob = dyn $ob> + Send> {
+                &mut self.0
             }
         }
 
         struct $wrapper<T: $ob + Clone> {
-            observer: T,
+            inner: T,
         }
-
         impl<T: 'static + $ob + Clone> ClonableObserver for $wrapper<T> {
             type Ob = dyn $ob;
-            fn ob_mut(&mut self) -> &mut Self::Ob {
-                &mut self.observer as _
+            fn inner(&self) -> &Self::Ob {
+                &self.inner as _
+            }
+
+            fn inner_mut(&mut self) -> &mut Self::Ob {
+                &mut self.inner as _
             }
 
             fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
                 Box::new($wrapper {
-                    observer: self.observer.clone(),
+                    inner: self.inner.clone(),
                 })
             }
         }
@@ -93,7 +115,7 @@ pub struct Registry {
 
 macro_rules! push {
     ($p:expr, $t:ident, $vec:expr) => {
-        $t.ob_mut().start();
+        $t.inner().start();
         let e = Entry {
             priority: $p,
             observer: $t,
@@ -148,11 +170,11 @@ macro_rules! try_loop_ob {
 macro_rules! loop_ob {
     // Execute a hook, return early if error is found.
     (_exec _res, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
-        $o.ob_mut().$hook($ctx, $($args)*)?
+        $o.inner().$hook($ctx, $($args)*)?
     };
     // Execute a hook.
     (_exec _tup, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
-        $o.ob_mut().$hook($ctx, $($args)*)
+        $o.inner().$hook($ctx, $($args)*)
     };
     // When the try loop finishes successfully, the value to be returned.
     (_done _res) => {
@@ -332,13 +354,13 @@ impl CoprocessorHost {
 
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
-            entry.observer.stop();
+            entry.observer.inner().stop();
         }
         for entry in &self.registry.query_observers {
-            entry.observer.stop();
+            entry.observer.inner().stop();
         }
         for entry in &self.registry.split_check_observers {
-            entry.observer.stop();
+            entry.observer.inner().stop();
         }
     }
 }
@@ -470,15 +492,15 @@ mod tests {
         let mut host = CoprocessorHost::default();
         let ob = TestCoprocessor::default();
         host.registry
-            .register_admin_observer(1, Box::new(ob.clone()));
+            .register_admin_observer(1, BoxAdminObserver::new(ob.clone()));
         host.registry
-            .register_query_observer(1, Box::new(ob.clone()));
+            .register_query_observer(1, BoxQueryObserver::new(ob.clone()));
         host.registry
-            .register_apply_snapshot_observer(1, Box::new(ob.clone()));
+            .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(ob.clone()));
         host.registry
-            .register_role_observer(1, Box::new(ob.clone()));
+            .register_role_observer(1, BoxRoleObserver::new(ob.clone()));
         host.registry
-            .register_region_change_observer(1, Box::new(ob.clone()));
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(ob.clone()));
         let region = Region::default();
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
@@ -518,14 +540,14 @@ mod tests {
 
         let ob1 = TestCoprocessor::default();
         host.registry
-            .register_admin_observer(3, Box::new(ob1.clone()));
+            .register_admin_observer(3, BoxAdminObserver::new(ob1.clone()));
         host.registry
-            .register_query_observer(3, Box::new(ob1.clone()));
+            .register_query_observer(3, BoxQueryObserver::new(ob1.clone()));
         let ob2 = TestCoprocessor::default();
         host.registry
-            .register_admin_observer(2, Box::new(ob2.clone()));
+            .register_admin_observer(2, BoxAdminObserver::new(ob2.clone()));
         host.registry
-            .register_query_observer(2, Box::new(ob2.clone()));
+            .register_query_observer(2, BoxQueryObserver::new(ob2.clone()));
 
         let region = Region::default();
         let mut admin_req = RaftCmdRequest::default();

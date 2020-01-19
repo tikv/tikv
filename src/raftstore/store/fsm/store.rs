@@ -29,7 +29,7 @@ use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 use crate::config::{ConfigController, ConfigHandler};
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
-use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::config::Config;
 use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
@@ -1007,7 +1007,7 @@ impl RaftBatchSystem {
         // TODO load coprocessors from configuration
         coprocessor_host
             .registry
-            .register_admin_observer(100, Box::new(SplitObserver));
+            .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
         let workers = Workers {
             split_check_worker: Worker::new("split-check"),

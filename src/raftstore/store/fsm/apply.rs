@@ -3486,7 +3486,7 @@ mod tests {
         let obs = ApplyObserver::default();
         let mut host = CoprocessorHost::default();
         host.registry
-            .register_query_observer(1, Box::new(obs.clone()));
+            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();

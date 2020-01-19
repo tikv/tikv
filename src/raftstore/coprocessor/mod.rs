@@ -17,7 +17,10 @@ mod split_check;
 pub mod split_observer;
 
 pub use self::config::Config;
-pub use self::dispatcher::{CoprocessorHost, Registry};
+pub use self::dispatcher::{
+    BoxAdminObserver, BoxApplySnapshotObserver, BoxQueryObserver, BoxRegionChangeObserver,
+    BoxRoleObserver, BoxSplitCheckObserver, CoprocessorHost, Registry,
+};
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{
     Callback as RegionInfoCallback, RegionCollector, RegionInfo, RegionInfoAccessor,
