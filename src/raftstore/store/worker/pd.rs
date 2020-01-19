@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
+use futures::sync::oneshot;
 use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
@@ -22,7 +23,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
-use crate::config::ConfigHandler;
+use crate::config::{ConfigHandler, TiKvConfig};
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
 use crate::raftstore::store::util::is_epoch_stale;
@@ -93,6 +94,9 @@ pub enum Task {
         write_io_rates: RecordPairVec,
     },
     RefreshConfig,
+    GetConfig {
+        cfg_sender: oneshot::Sender<TiKvConfig>,
+    },
 }
 
 pub struct StoreStat {
@@ -206,6 +210,7 @@ impl Display for Task {
                 cpu_usages, read_io_rates, write_io_rates,
             ),
             Task::RefreshConfig => write!(f, "refresh config"),
+            Task::GetConfig {..} => write!(f, "get config"),
         }
     }
 }
@@ -779,13 +784,13 @@ impl<T: PdClient + ConfigClient> Runner<T> {
 
     fn handle_refresh_config(&mut self, handle: &Handle) {
         let config_handler = &mut self.config_handler;
-        info!(
+        debug!(
             "refresh config";
             "component id" => config_handler.get_id(),
             "version" => ?config_handler.get_version()
         );
         if let Err(e) = config_handler.refresh_config(self.pd_client.clone()) {
-            error!(
+            warn!(
                 "failed to refresh config";
                 "component id" => config_handler.get_id(),
                 "version" => ?config_handler.get_version(),
@@ -803,6 +808,13 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                 Ok(())
             });
         handle.spawn(f);
+    }
+
+    fn handle_get_config(&self, cfg_sender: oneshot::Sender<TiKvConfig>) {
+        let cfg = self.config_handler.get_config().clone();
+        let _ = cfg_sender
+            .send(cfg)
+            .map_err(|_| error!("failed to send config"));
     }
 }
 
@@ -920,6 +932,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
             Task::RefreshConfig => self.handle_refresh_config(handle),
+            Task::GetConfig { cfg_sender } => self.handle_get_config(cfg_sender),
         };
     }
 
