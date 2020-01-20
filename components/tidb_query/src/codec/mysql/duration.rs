@@ -158,9 +158,7 @@ mod parser {
         Ok((rest, frac * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
 
-    pub fn parse(input: &[u8], fsp: u8) -> Option<Duration> {
-        let input = std::str::from_utf8(input).ok()?.trim();
-
+    pub fn parse(input: &str, fsp: u8) -> Option<Duration> {
         if input.is_empty() {
             return Some(Duration::zero());
         }
@@ -360,9 +358,24 @@ impl Duration {
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
+        let input = std::str::from_utf8(input)?.trim();
         let fsp = check_fsp(fsp)?;
         parser::parse(input, fsp)
-            .ok_or_else(|| Error::truncated_wrong_val("TIME", format!("{:?}", input)))
+            .or_else(|| {
+                let integer_part = match input.find('.') {
+                    Some(index) => &input[..index],
+                    None => input,
+                };
+                if !integer_part.contains(':') {
+                    let mut ctx = EvalContext::default();
+                    let dt =
+                        DateTime::parse_datetime(&mut ctx, integer_part, fsp as i8, true).ok()?;
+                    dt.convert(&mut ctx).ok()
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.
@@ -668,7 +681,7 @@ mod tests {
             (b"23:60:59", 0, None),
             (b"54:59:59", 0, Some("54:59:59")),
             (b"2011-11-11 00:00:01", 0, None),
-            (b"2011-11-11", 0, None),
+            (b"2011-11-11", 0, Some("00:00:00")),
             (b"--23", 0, None),
             (b"232 10", 0, None),
             (b"-232 10", 0, None),
@@ -707,6 +720,7 @@ mod tests {
             (b"1.23 3", 0, None),
             (b"1:62:3", 0, None),
             (b"1:02:63", 0, None),
+            (b"20010101101010", 0, Some("10:10:10")),
             (b"-231342080", 0, None),
         ];
 
