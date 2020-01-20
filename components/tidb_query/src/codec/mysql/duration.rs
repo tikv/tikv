@@ -83,7 +83,7 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 
 mod parser {
     use super::*;
-    use nom::character::complete::{char, digit0, digit1, space0, space1};
+    use nom::character::complete::{anychar, char, digit0, digit1, space0, space1};
     use nom::combinator::opt;
     use nom::IResult;
 
@@ -140,6 +140,56 @@ mod parser {
         Ok((rest, hhmmss))
     }
 
+    fn hhmmss_datetime(input: &str, fsp: u8) -> IResult<&str, [u32; 4], ()> {
+        let (rest, digits) = digit1(input)?;
+        if digits.len() == 12 || digits.len() == 14 {
+            // FIXME: use a global context to parse the datetime
+            let datetime =
+                DateTime::parse_datetime(&mut EvalContext::default(), digits, fsp as i8, true)
+                    .map_err(|_| nom::Err::Error(()))?;
+            let (rest, fraction) = fraction(input, fsp)?;
+            return Ok((
+                rest,
+                [
+                    datetime.hour(),
+                    datetime.minute(),
+                    datetime.second(),
+                    fraction,
+                ],
+            ));
+        }
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+
+        if rest.is_empty() {
+            return Err(nom::Err::Error(()));
+        }
+
+        let datetime =
+            DateTime::parse_datetime(&mut EvalContext::default(), input, fsp as i8, true)
+                .map_err(|_| nom::Err::Error(()))?;
+        Ok((
+            rest,
+            [
+                datetime.hour(),
+                datetime.minute(),
+                datetime.second(),
+                datetime.micro(),
+            ],
+        ))
+    }
+
+    fn anysep(input: &str) -> IResult<&str, char, ()> {
+        let (rest, sep) = anychar(input)?;
+        if !sep.is_ascii_punctuation() {
+            Err(nom::Err::Error(()))
+        } else {
+            Ok((rest, sep))
+        }
+    }
+
     fn fraction(input: &str, fsp: u8) -> IResult<&str, u32, ()> {
         let fsp = usize::from(fsp);
         let (rest, dot) = opt(char('.'))(input)?;
@@ -167,21 +217,27 @@ mod parser {
 
         let (rest, neg) = negative(input).ok()?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
-        let (rest, hhmmss) = day_hhmmss(rest)
+        day_hhmmss(rest)
             .ok()
             .and_then(|(rest, (day, [hh, mm, ss]))| {
                 Some((rest, [day.checked_mul(24)? + hh, mm, ss]))
             })
             .or_else(|| hhmmss_delimited(rest, true).ok())
-            .or_else(|| hhmmss_compact(rest).ok())?;
-        let (rest, _) = space0::<_, ()>(rest).ok()?;
-        let (rest, frac) = fraction(rest, fsp).ok()?;
+            .or_else(|| hhmmss_compact(rest).ok())
+            .and_then(|(rest, hhmmss)| {
+                let (rest, _) = space0::<_, ()>(rest).ok()?;
+                let (rest, frac) = fraction(rest, fsp).ok()?;
 
-        if !rest.is_empty() {
-            return None;
-        }
+                if !rest.is_empty() {
+                    return None;
+                }
 
-        Duration::new_from_parts(neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8).ok()
+                Duration::new_from_parts(neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8).ok()
+            })
+            .or_else(|| {
+                let (_, [h, m, s, f]) = hhmmss_datetime(rest, fsp).ok()?;
+                Duration::new_from_parts(neg, h, m, s, f, fsp as i8).ok()
+            })
     }
 } /* parser */
 
@@ -667,7 +723,9 @@ mod tests {
             (b"-839:00:00", 0, None),
             (b"23:60:59", 0, None),
             (b"54:59:59", 0, Some("54:59:59")),
-            (b"2011-11-11 00:00:01", 0, None),
+            (b"2011-11-11 00:00:01", 0, Some("00:00:01")),
+            (b"20111111000001", 0, Some("00:00:01")),
+            (b"201112110102", 0, Some("11:01:02")),
             (b"2011-11-11", 0, None),
             (b"--23", 0, None),
             (b"232 10", 0, None),
