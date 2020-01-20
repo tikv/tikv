@@ -562,6 +562,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let start_key = if task.start_key.is_empty() {
             None
         } else {
+            // TODO: if is_raw_kv is written everywhere. It need to be simplified.
             if task.is_raw_kv {
                 Some(Key::from_encoded(task.start_key))
             } else {
