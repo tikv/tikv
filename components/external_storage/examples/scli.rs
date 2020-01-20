@@ -64,7 +64,7 @@ args:
         takes_value: true
     - prefix:
         help: remote path prefix
-        short: p
+        short: x
         long: prefix
         takes_value: true
 
@@ -87,35 +87,30 @@ fn create_s3_storage(matches: &ArgMatches) -> Result<Arc<dyn ExternalStorage>> {
             })?;
             let props = ini
                 .section(Some("default"))
-                .ok_or(Error::new(ErrorKind::Other, "fail to parse section"))?;
+                .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse section"))?;
             config.access_key = props
                 .get("aws_access_key_id")
-                .ok_or(Error::new(ErrorKind::Other, "fail to parse credential"))?
+                .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
                 .clone();
             config.secret_access_key = props
                 .get("aws_secret_access_key")
-                .ok_or(Error::new(ErrorKind::Other, "fail to parse credential"))?
+                .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
                 .clone();
         }
         _ => return Err(Error::new(ErrorKind::Other, "missing credential_file")),
     }
-    match matches.value_of("region") {
-        Some(region) => {
-            config.region = region.to_string();
-        }
-        _ => return Err(Error::new(ErrorKind::Other, "missing region")),
+    if let Some(region) = matches.value_of("region") {
+        config.region = region.to_string();
+    } else {
+        return Err(Error::new(ErrorKind::Other, "missing region"));
     }
-    match matches.value_of("bucket") {
-        Some(bucket) => {
-            config.bucket = bucket.to_string();
-        }
-        _ => return Err(Error::new(ErrorKind::Other, "missing bucket")),
+    if let Some(bucket) = matches.value_of("bucket") {
+        config.bucket = bucket.to_string();
+    } else {
+        return Err(Error::new(ErrorKind::Other, "missing bucket"));
     }
-    match matches.value_of("prefix") {
-        Some(prefix) => {
-            config.prefix = prefix.to_string();
-        }
-        _ => {}
+    if let Some(prefix) = matches.value_of("prefix") {
+        config.prefix = prefix.to_string();
     }
     create_storage(&make_s3_backend(config))
 }

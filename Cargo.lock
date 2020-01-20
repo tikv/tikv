@@ -1085,7 +1085,6 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
- "bytes 0.4.12",
  "clap",
  "futures 0.1.29",
  "futures 0.3.1",
