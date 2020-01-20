@@ -2571,7 +2571,7 @@ impl ApplyFsm {
             "region_id" => region_id,
             "peer_id" => self.delegate.id(),
         );
-        // The source peerfsm will be destroyed when the target peer executes `on_ready_commit_merge` 
+        // The source peerfsm will be destroyed when the target peer executes `on_ready_commit_merge`
         // and sends `merge result` to the source peerfsm.
         self.destroy(ctx);
         catch_up_logs
