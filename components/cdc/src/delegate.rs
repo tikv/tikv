@@ -23,7 +23,7 @@ static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 pub struct DownstreamID(usize);
 
 impl DownstreamID {
-    fn new() -> DownstreamID {
+    pub fn new() -> DownstreamID {
         DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
     }
 }
