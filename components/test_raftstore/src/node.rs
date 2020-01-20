@@ -29,7 +29,7 @@ use super::*;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager<RocksEngine>, TempDir)>,
+    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter>>,
 }
 

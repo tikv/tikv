@@ -904,7 +904,7 @@ impl<T> VersionTrack<T> {
         F: FnOnce(&mut T),
     {
         f(&mut self.value.write().unwrap());
-        self.version.fetch_add(1, Ordering::Relaxed);
+        self.version.fetch_add(1, Ordering::Release);
     }
 
     pub fn value(&self) -> RwLockReadGuard<'_, T> {
@@ -931,7 +931,7 @@ impl<T> Tracker<T> {
     // The update of `value` and `version` is not atomic
     // so there maybe false positive.
     pub fn any_new(&mut self) -> Option<RwLockReadGuard<'_, T>> {
-        let v = self.inner.version.load(Ordering::Relaxed);
+        let v = self.inner.version.load(Ordering::Acquire);
         if self.version < v {
             self.version = v;
             match self.inner.value.try_read() {
