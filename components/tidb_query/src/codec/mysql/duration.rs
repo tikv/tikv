@@ -416,8 +416,7 @@ impl Duration {
     pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
         let input = std::str::from_utf8(input)?.trim();
         let fsp = check_fsp(fsp)?;
-        parser::parse(input, fsp)
-            .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
+        parser::parse(input, fsp).ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.
@@ -759,7 +758,7 @@ mod tests {
             (b"- 1.1", 1, Some("-00:00:01.1")),
             (b"- 1 .1", 1, Some("-00:00:01.1")),
             (b"18446744073709551615:59:59", 0, None),
-            // FIXME: this case should parse as MAX_DURATION in some contexts, 
+            // FIXME: this case should parse as MAX_DURATION in some contexts,
             // which means this behavior depends on a global context variable
             (b"4294967295 0:59:59", 0, None),
             (b"1::2:3", 0, None),
