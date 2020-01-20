@@ -358,6 +358,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
             }
+            CasualMessage::SnapshotGenerated => {
+                // Resume snapshot handling again to avoid waiting another heartbeat.
+                self.fsm.peer.ping();
+                self.fsm.has_ready = true;
+            }
         }
     }
 
@@ -1316,9 +1321,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         if job.initialized {
-            self.ctx
-                .apply_router
-                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id));
+            // When initialized is true and async_remove is false, applyfsm doesn't need to
+            // send destroy msg to peerfsm because peerfsm has already destroyed.
+            // In this case, if applyfsm sends destroy msg, peerfsm may be destroyed twice
+            // because there are some msgs in channel so peerfsm still need to handle them (e.g. callback)
+            self.ctx.apply_router.schedule_task(
+                job.region_id,
+                ApplyTask::destroy(job.region_id, job.async_remove),
+            );
         }
         if job.async_remove {
             info!(
@@ -1334,6 +1344,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn destroy_peer(&mut self, merged_by_target: bool) {
+        fail_point!("destroy_peer");
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
@@ -1368,10 +1379,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(reader) = meta.readers.remove(&region_id) {
             reader.mark_invalid();
         }
-
-        self.ctx
-            .apply_router
-            .schedule_task(region_id, ApplyTask::destroy(region_id));
 
         // Trigger region change observer
         self.ctx.coprocessor_host.on_region_changed(
@@ -1438,6 +1445,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
+                    // Speed up snapshot instead of waiting another heartbeat.
+                    self.fsm.peer.ping();
+                    self.fsm.has_ready = true;
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
                 self.fsm.peer.recent_conf_change_time = now;
@@ -1479,7 +1489,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             if my_peer_id == peer.get_id() {
-                self.destroy_peer(false)
+                self.destroy_peer(false);
             } else {
                 panic!(
                     "{} trying to remove unknown peer {:?}",
@@ -2093,8 +2103,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "peer_id" => self.fsm.peer_id(),
             "merge_state" => ?self.fsm.peer.pending_merge_state,
         );
-        if let Some(job) = self.fsm.peer.maybe_destroy() {
-            self.handle_destroy_peer(job);
+        match self.fsm.peer.maybe_destroy() {
+            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+            Some(job) => {
+                self.handle_destroy_peer(job);
+            }
         }
     }
 
