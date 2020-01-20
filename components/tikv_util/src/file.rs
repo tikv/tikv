@@ -105,11 +105,6 @@ impl<R> Sha256Reader<R> {
             hasher,
         ))
     }
-
-    // Computes the final SHA-256 hash.
-    // pub fn hash(mut self) -> Result<Vec<u8>, ErrorStack> {
-    //     Ok(self.hasher.finish()?.to_vec())
-    // }
 }
 
 impl<R: Read> Read for Sha256Reader<R> {
