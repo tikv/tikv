@@ -102,10 +102,6 @@ pub struct StoreMeta {
     /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
     /// source_region_id -> target_region_id
     pub targets_map: HashMap<u64, u64>,
-    /// The target region should exec `on_ready_commit_merge` after the source region has destroyed its peerfsm.
-    /// A map used to record the destroyed source region id and its corresponding target region id.
-    /// target_region_id -> source_region_id
-    pub merge_destroy_map: HashMap<u64, u64>,
 }
 
 impl StoreMeta {
@@ -119,7 +115,6 @@ impl StoreMeta {
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
             targets_map: HashMap::default(),
-            merge_destroy_map: HashMap::default(),
         }
     }
 

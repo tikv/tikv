@@ -2512,7 +2512,7 @@ impl ApplyFsm {
     fn resume_pending_merge(&mut self, ctx: &mut ApplyContext) -> bool {
         match self.delegate.wait_merge_state {
             Some(ref state) => {
-                let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
+                let source_region_id = state.logs_up_to_date.load(Ordering::Acquire);
                 if source_region_id == 0 {
                     return false;
                 }
@@ -2565,17 +2565,18 @@ impl ApplyFsm {
             |_| {}
         );
 
-        // source peerfsm will be destroyed after target peer apply CommitMerge
-        self.destroy(ctx);
         let region_id = self.delegate.region_id();
-        catch_up_logs
-            .logs_up_to_date
-            .store(region_id, Ordering::SeqCst);
         info!(
             "source logs are all applied now";
             "region_id" => region_id,
             "peer_id" => self.delegate.id(),
         );
+        // The source peerfsm will be destroyed when the target peer executes `on_ready_commit_merge` 
+        // and sends `merge result` to the source peerfsm.
+        self.destroy(ctx);
+        catch_up_logs
+            .logs_up_to_date
+            .store(region_id, Ordering::Release);
 
         if let Some(mailbox) = ctx.router.mailbox(catch_up_logs.target_region_id) {
             let _ = mailbox.force_send(Msg::Noop);

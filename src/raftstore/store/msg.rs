@@ -22,7 +22,7 @@ use crate::storage::kv::CompactedEvent;
 use tikv_util::escape;
 
 use super::RegionSnapshot;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -177,7 +177,7 @@ pub enum SignificantMsg {
         target: metapb::Peer,
         // Some(_) means it came from target region.
         // None means it's a stale merge source.
-        ready_to_merge: Option<Arc<AtomicBool>>,
+        ready_to_merge: Option<Arc<AtomicU64>>,
     },
 }
 

@@ -6,7 +6,6 @@ use std::thread;
 use std::time::*;
 
 use fail;
-use futures::Future;
 
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};

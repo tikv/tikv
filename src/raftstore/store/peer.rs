@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -168,7 +168,7 @@ pub struct WaitSourceDestroyState {
     /// These will be handled once `ready_to_merge` is true.
     pub results: Vec<ApplyTaskRes>,
     /// It is used by target peer to check whether source peer has destroyed.
-    pub ready_to_merge: Arc<AtomicBool>,
+    pub ready_to_merge: Arc<AtomicU64>,
 }
 
 pub struct Peer {

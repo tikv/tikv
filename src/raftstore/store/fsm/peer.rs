@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
@@ -99,6 +99,8 @@ pub struct PeerFsm {
     has_ready: bool,
     mailbox: Option<BasicMailbox<PeerFsm>>,
     pub receiver: Receiver<PeerMsg>,
+    // ID of last region that reports ready.
+    ready_source_region_id: u64,
 }
 
 impl Drop for PeerFsm {
@@ -160,6 +162,7 @@ impl PeerFsm {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
+                ready_source_region_id: 0,
             }),
         ))
     }
@@ -197,6 +200,7 @@ impl PeerFsm {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
+                ready_source_region_id: 0,
             }),
         ))
     }
@@ -402,9 +406,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     pub fn resume_handling_pending_apply_result(&mut self) -> bool {
         match self.fsm.peer.pending_merge_apply_result {
             Some(ref state) => {
-                if !state.ready_to_merge.load(Ordering::SeqCst) {
+                let source_region_id = state.ready_to_merge.load(Ordering::Acquire);
+                if source_region_id == 0 {
                     return false;
                 }
+                self.fsm.ready_source_region_id = source_region_id;
             }
             None => panic!(
                 "{} doesn't have pending apply result, can't be resume.",
@@ -1945,20 +1951,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region: metapb::Region,
         source: metapb::Region,
-    ) -> Option<Arc<AtomicBool>> {
+    ) -> Option<Arc<AtomicU64>> {
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        if let Some(source_id) = meta.merge_destroy_map.get(&region.get_id()) {
-            if *source_id != source.get_id() {
+        if self.fsm.ready_source_region_id != source.get_id() {
+            if self.fsm.ready_source_region_id != 0 {
                 panic!(
-                    "{} has source region id {} but it is not the expected id {}",
+                    "{} unexpected ready source region {}, expecting {}",
                     self.fsm.peer.tag,
-                    source_id,
+                    self.fsm.ready_source_region_id,
                     source.get_id()
                 );
             }
-            meta.merge_destroy_map.remove(&region.get_id());
-        } else {
-            let ready_to_merge = Arc::new(AtomicBool::new(false));
+            let ready_to_merge = Arc::new(AtomicU64::new(0));
             if let Err(e) = self.ctx.router.force_send(
                 source.get_id(),
                 PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
@@ -1977,6 +1981,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             return Some(ready_to_merge);
         }
+
+        self.fsm.ready_source_region_id = 0;
 
         let prev = if region.get_end_key() == source.get_end_key() {
             meta.region_ranges.remove(&enc_start_key(&source))
@@ -2047,7 +2053,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_merge_result(&mut self, target: metapb::Peer, ready_to_merge: Option<Arc<AtomicBool>>) {
+    fn on_merge_result(&mut self, target: metapb::Peer, ready_to_merge: Option<Arc<AtomicU64>>) {
         let exists = self
             .fsm
             .peer
@@ -2079,22 +2085,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "peer_id" => self.fsm.peer_id(),
                     "target_region" => ?target,
                 );
-                {
-                    let mut meta = self.ctx.store_meta.lock().unwrap();
-                    if let Some(source_id) = meta
-                        .merge_destroy_map
-                        .insert(target.get_id(), self.fsm.region_id())
-                    {
-                        panic!(
-                            "{} target_id {} has unexpected source_id {} in merge_destroy_map",
-                            self.fsm.peer.tag,
-                            target.get_id(),
-                            source_id
-                        );
-                    }
-                }
                 self.destroy_peer(true);
-                rtm.store(true, Ordering::SeqCst);
+                rtm.store(self.fsm.region_id(), Ordering::Release);
                 // To trigger the target peerfsm
                 if let Err(e) = self.ctx.router.force_send(target_id, PeerMsg::Noop) {
                     warn!(
@@ -2175,7 +2167,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         exec_results: &mut VecDeque<ExecResult>,
         metrics: &ApplyMetrics,
-    ) -> Option<Arc<AtomicBool>> {
+    ) -> Option<Arc<AtomicU64>> {
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
