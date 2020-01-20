@@ -211,7 +211,7 @@ mod tests {
     fn test_resolve_store_peer_addr() {
         let mut store = new_store("127.0.0.1:12345", metapb::StoreState::Up);
         store.set_peer_address("127.0.0.1:22345".to_string());
-        let runner = new_runner(store);
+        let mut runner = new_runner(store);
         assert_eq!(
             runner.get_address(0).unwrap(),
             "127.0.0.1:22345".to_string()
