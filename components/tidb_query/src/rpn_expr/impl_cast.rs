@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 use std::convert::TryFrom;
+use std::convert::TryInto;
+use std::num::IntErrorKind;
 
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
@@ -10,16 +12,16 @@ use tipb::{Expr, FieldType};
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
-use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use crate::codec::mysql::{binary_literal, Time};
 use crate::codec::Error;
 use crate::expr::EvalContext;
+use crate::rpn_expr::types::RpnExpressionBuilder;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
-use std::convert::TryInto;
-use std::num::IntErrorKind;
 
 fn get_cast_fn_rpn_meta(
+    is_from_constant: bool,
     from_field_type: &FieldType,
     to_field_type: &FieldType,
 ) -> Result<RpnFnMeta> {
@@ -41,7 +43,13 @@ fn get_cast_fn_rpn_meta(
                 cast_real_as_uint_fn_meta()
             }
         }
-        (EvalType::Bytes, EvalType::Int) => cast_string_as_int_or_uint_fn_meta(),
+        (EvalType::Bytes, EvalType::Int) => {
+            if is_from_constant && from_field_type.is_binary_string_like() {
+                cast_binary_string_as_int_fn_meta()
+            } else {
+                cast_string_as_int_fn_meta()
+            }
+        }
         (EvalType::Decimal, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
                 cast_any_as_any_fn_meta::<Decimal, Int>()
@@ -78,7 +86,7 @@ fn get_cast_fn_rpn_meta(
         }
         (EvalType::Bytes, EvalType::Real) => {
             match (
-                from_field_type.is_binary_string_like(),
+                is_from_constant && from_field_type.is_binary_string_like(),
                 to_field_type.is_unsigned(),
             ) {
                 (true, true) => cast_binary_string_as_unsigned_real_fn_meta(),
@@ -195,10 +203,11 @@ fn get_cast_fn_rpn_meta(
 /// TODO: This function supports some internal casts performed by TiKV. However it would be better
 /// to be done in TiDB.
 pub fn get_cast_fn_rpn_node(
+    is_from_constant: bool,
     from_field_type: &FieldType,
     to_field_type: FieldType,
 ) -> Result<RpnExpressionNode> {
-    let func_meta = get_cast_fn_rpn_meta(from_field_type, &to_field_type)?;
+    let func_meta = get_cast_fn_rpn_meta(is_from_constant, from_field_type, &to_field_type)?;
     // This cast function is inserted by `Coprocessor` automatically,
     // the `inUnion` flag always false in this situation. Ideally,
     // the cast function should be inserted by TiDB and pushed down
@@ -221,7 +230,11 @@ pub fn map_cast_func(expr: &Expr) -> Result<RpnFnMeta> {
             children.len()
         ));
     }
-    get_cast_fn_rpn_meta(children[0].get_field_type(), expr.get_field_type())
+    get_cast_fn_rpn_meta(
+        RpnExpressionBuilder::is_expr_eval_to_scalar(&children[0])?,
+        children[0].get_field_type(),
+        expr.get_field_type(),
+    )
 }
 
 // cast any as int/uint, some cast functions reuse `cast_any_as_any`
@@ -288,7 +301,7 @@ fn cast_real_as_uint(
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
-fn cast_string_as_int_or_uint(
+fn cast_string_as_int(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
@@ -355,6 +368,17 @@ fn cast_string_as_int_or_uint(
                     },
                 }
             }
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+fn cast_binary_string_as_int(ctx: &mut EvalContext, val: &Option<Bytes>) -> Result<Option<Int>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let r = binary_literal::to_uint(ctx, val)? as i64;
+            Ok(Some(r))
         }
     }
 }
@@ -893,11 +917,11 @@ macro_rules! cast_as_duration {
                         Err(e) => match e.code() {
                             ERR_DATA_OUT_OF_RANGE => {
                                 ctx.handle_overflow_err(e)?;
-                                Ok(Some(Duration::zero()))
+                                Ok(None)
                             }
-                            WARN_DATA_TRUNCATED => {
+                            ERR_TRUNCATE_WRONG_VALUE => {
                                 ctx.handle_truncate_err(e)?;
-                                Ok(Some(Duration::zero()))
+                                Ok(None)
                             }
                             _ => Err(e.into()),
                         },
@@ -1373,25 +1397,6 @@ mod tests {
         }
     }
 
-    fn check_warnings(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
-        assert_eq!(
-            ctx.warnings.warning_cnt,
-            err_code.len(),
-            "{}, warnings: {:?}",
-            log,
-            ctx.warnings.warnings
-        );
-        for i in 0..err_code.len() {
-            let e1 = err_code[i];
-            let e2 = ctx.warnings.warnings[i].get_code();
-            assert_eq!(
-                e1, e2,
-                "log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
-                log, ctx.warnings.warnings, err_code
-            );
-        }
-    }
-
     fn check_result<R: Debug + PartialEq>(expect: Option<&R>, res: &Result<Option<R>>, log: &str) {
         assert!(res.is_ok(), "{}", log);
         let res = res.as_ref().unwrap();
@@ -1560,8 +1565,15 @@ mod tests {
     }
 
     #[test]
-    fn test_string_as_int_or_uint() {
-        test_none_with_ctx_and_extra_and_metadata(cast_string_as_int_or_uint);
+    fn test_cast_string_as_int() {
+        // None
+        {
+            let output: Option<Int> = RpnFnScalarEvaluator::new()
+                .push_param(ScalarValue::Bytes(None))
+                .evaluate(ScalarFuncSig::CastStringAsInt)
+                .unwrap();
+            assert_eq!(output, None);
+        }
 
         #[derive(Debug)]
         enum Cond {
@@ -1642,9 +1654,9 @@ mod tests {
             // FIXME: in mysql, this case will return 18446744073709551615
             //  and `show warnings` will show
             //  `| Warning | 1292 | Truncated incorrect INTEGER value: '18446744073709551616'`
-            //  fix this cast_string_as_int_or_uint after fix TiDB's
+            //  fix this cast_string_as_int after fix TiDB's
             // ("18446744073709551616", 18446744073709551615 as i64, Some(ERR_TRUNCATE_WRONG_VALUE) , Cond::Unsigned)
-            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
+            // FIXME: our cast_string_as_int's err handle is not exactly same as TiDB's
             // ("18446744073709551616", 18446744073709551615u64 as i64, Some(ERR_TRUNCATE_WRONG_VALUE), Cond::InSelectStmt),
 
             // has prefix `-` and in_union and unsigned
@@ -1658,7 +1670,7 @@ mod tests {
                 vec![],
                 Cond::None,
             ),
-            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
+            // FIXME: our cast_string_as_int's err handle is not exactly same as TiDB's
             (
                 "-9223372036854775809",
                 -9223372036854775808i64,
@@ -1680,30 +1692,82 @@ mod tests {
             ),
         ];
 
-        for (input, expect, err_code, cond) in cs {
-            let mut ctx = CtxConfig {
-                overflow_as_warning: true,
-                truncate_as_warning: true,
-                ..CtxConfig::default()
-            }
-            .into();
-            let metadata = make_metadata(cond.in_union());
-            let rft = FieldTypeConfig {
-                unsigned: cond.is_unsigned(),
-                ..FieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft);
-
-            let val = Some(Vec::from(input.as_bytes()));
-            let r = cast_string_as_int_or_uint(&mut ctx, &extra, &metadata, &val);
-
-            let log = format!(
-                "input: {}, expect: {}, expect_err_code: {:?}, cond: {:?}, output: {:?}",
-                input, expect, err_code, cond, r
+        for (input, expected, mut err_code, cond) in cs {
+            let (result, ctx) = RpnFnScalarEvaluator::new()
+                .context(CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                })
+                .metadata(Box::new(make_metadata(cond.in_union())))
+                .push_param(ScalarValue::Bytes(Some(input.as_bytes().to_owned())))
+                .evaluate_raw(
+                    FieldTypeConfig {
+                        tp: Some(FieldTypeTp::LongLong),
+                        unsigned: cond.is_unsigned(),
+                        ..FieldTypeConfig::default()
+                    },
+                    ScalarFuncSig::CastStringAsInt,
+                );
+            let output: Option<Int> = result.unwrap().into();
+            assert_eq!(
+                output.unwrap(),
+                expected,
+                "input:{:?}, expected:{:?}, cond:{:?}",
+                input,
+                expected,
+                cond,
             );
-            check_result(Some(&expect), &r, log.as_str());
-            check_warnings(&ctx, err_code, log.as_str());
+            let mut got_warnings = ctx
+                .warnings
+                .warnings
+                .iter()
+                .map(|w| w.get_code())
+                .collect::<Vec<i32>>();
+            got_warnings.sort();
+            err_code.sort();
+            assert_eq!(
+                ctx.warnings.warning_cnt,
+                err_code.len(),
+                "input:{:?}, expected:{:?}, warnings:{:?}",
+                input,
+                expected,
+                got_warnings,
+            );
+            assert_eq!(got_warnings, err_code);
+        }
+
+        // binary literal
+        let cases = vec![
+            (vec![0x01, 0x02, 0x03], Some(0x010203 as i64)),
+            (vec![0x01, 0x02, 0x03, 0x4], Some(0x01020304 as i64)),
+            (
+                vec![0x01, 0x02, 0x03, 0x4, 0x05, 0x06, 0x06, 0x06, 0x06],
+                None,
+            ),
+        ];
+        for (input, expected) in cases {
+            let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
+                .return_field_type(FieldTypeConfig {
+                    tp: Some(FieldTypeTp::LongLong),
+                    ..FieldTypeConfig::default()
+                })
+                .push_param_with_field_type(
+                    input.clone(),
+                    FieldTypeConfig {
+                        tp: Some(FieldTypeTp::VarString),
+                        collation: Some(Collation::Binary),
+                        ..FieldTypeConfig::default()
+                    },
+                )
+                .evaluate(ScalarFuncSig::CastStringAsInt);
+
+            if let Some(exp) = expected {
+                assert!(output.is_ok(), "input: {:?}", input);
+                assert_eq!(output.unwrap().unwrap(), exp, "input={:?}", input);
+            } else {
+                assert!(output.is_err());
+            }
         }
     }
 
@@ -5072,15 +5136,15 @@ mod tests {
                                 func_name, func_to_debug_str(&val), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
                             );
                             check_overflow(&ctx, true, log.as_str());
-                            check_result(Some(&Duration::zero()), &result, log.as_str());
+                            check_result(None, &result, log.as_str());
                         }
-                        WARN_DATA_TRUNCATED => {
+                        ERR_TRUNCATE_WRONG_VALUE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {}, expect_warn: {}",
                                 func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
                             );
-                            check_warning(&ctx, Some(WARN_DATA_TRUNCATED), log.as_str());
-                            check_result(Some(&Duration::zero()), &result, log.as_str());
+                            check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str());
+                            check_result(None, &result, log.as_str());
                         }
                         _ => {
                             let expect_err: crate::error::Error = e.into();
