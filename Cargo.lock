@@ -554,6 +554,9 @@ name = "configuration"
 version = "0.1.0"
 dependencies = [
  "configuration_derive",
+ "serde",
+ "serde_derive",
+ "toml",
 ]
 
 [[package]]
@@ -942,7 +945,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time",
- "toml",
 ]
 
 [[package]]
@@ -1684,7 +1686,6 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "panic_hook",
- "slog",
  "tikv_alloc",
 ]
 
@@ -1773,7 +1774,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#72e45c3f3283302c825d53c3cd7154f4cd9e8f5b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3805bd47c265b32e5c2001509928d131f8ad22dc"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1791,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#72e45c3f3283302c825d53c3cd7154f4cd9e8f5b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3805bd47c265b32e5c2001509928d131f8ad22dc"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1849,7 +1850,6 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.3.2",
- "kvproto",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2359,7 +2359,6 @@ dependencies = [
  "futures 0.1.29",
  "grpcio",
  "hex 0.3.2",
- "keys",
  "kvproto",
  "lazy_static",
  "log",
@@ -3137,7 +3136,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#72e45c3f3283302c825d53c3cd7154f4cd9e8f5b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3805bd47c265b32e5c2001509928d131f8ad22dc"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3929,7 +3928,6 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
  "failure",
- "num-traits",
  "tikv_alloc",
  "tipb",
 ]
@@ -3950,7 +3948,6 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crc64fast",
- "criterion-papi",
  "crossbeam",
  "derive-new",
  "derive_more",
@@ -3997,7 +3994,6 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "signal",
  "slog",
  "slog-async",
  "slog-global",
@@ -4025,7 +4021,6 @@ dependencies = [
  "toml",
  "txn_types",
  "url 2.1.0",
- "utime",
  "uuid 0.7.4",
  "vlog",
  "yatp",
@@ -4074,7 +4069,6 @@ dependencies = [
  "panic_hook",
  "procinfo",
  "prometheus",
- "prometheus-static-metric",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
@@ -4409,7 +4403,6 @@ dependencies = [
  "byteorder",
  "codec",
  "derive-new",
- "derive_more",
  "farmhash",
  "hex 0.3.2",
  "kvproto",

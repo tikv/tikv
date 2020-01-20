@@ -83,7 +83,11 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 
 mod parser {
     use super::*;
+<<<<<<< HEAD
     use nom::character::complete::{anychar, char, digit0, digit1, space0, space1};
+=======
+    use nom::character::complete::{char, digit0, digit1, space0, space1};
+>>>>>>> 2c97d8706c0def76409a184d50c8ba10a904a3cc
     use nom::combinator::opt;
     use nom::IResult;
 
@@ -132,6 +136,7 @@ mod parser {
         }
 
         Ok((rest, hhmmss))
+<<<<<<< HEAD
     }
 
     fn hhmmss_compact(input: &str) -> IResult<&str, [u32; 3], ()> {
@@ -188,6 +193,14 @@ mod parser {
         } else {
             Ok((rest, sep))
         }
+=======
+    }
+
+    fn hhmmss_compact(input: &str) -> IResult<&str, [u32; 3], ()> {
+        let (rest, num) = number(input)?;
+        let hhmmss = [num / 10000, (num / 100) % 100, num % 100];
+        Ok((rest, hhmmss))
+>>>>>>> 2c97d8706c0def76409a184d50c8ba10a904a3cc
     }
 
     fn fraction(input: &str, fsp: u8) -> IResult<&str, u32, ()> {
@@ -208,21 +221,30 @@ mod parser {
         Ok((rest, frac * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
 
+<<<<<<< HEAD
     pub fn parse(input: &[u8], fsp: u8) -> Option<Duration> {
         let input = std::str::from_utf8(input).ok()?.trim();
 
+=======
+    pub fn parse(input: &str, fsp: u8) -> Option<Duration> {
+>>>>>>> 2c97d8706c0def76409a184d50c8ba10a904a3cc
         if input.is_empty() {
             return Some(Duration::zero());
         }
 
         let (rest, neg) = negative(input).ok()?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
+<<<<<<< HEAD
         day_hhmmss(rest)
+=======
+        let (rest, hhmmss) = day_hhmmss(rest)
+>>>>>>> 2c97d8706c0def76409a184d50c8ba10a904a3cc
             .ok()
             .and_then(|(rest, (day, [hh, mm, ss]))| {
                 Some((rest, [day.checked_mul(24)? + hh, mm, ss]))
             })
             .or_else(|| hhmmss_delimited(rest, true).ok())
+<<<<<<< HEAD
             .or_else(|| hhmmss_compact(rest).ok())
             .and_then(|(rest, hhmmss)| {
                 let (rest, _) = space0::<_, ()>(rest).ok()?;
@@ -238,6 +260,17 @@ mod parser {
                 let (_, [h, m, s, f]) = hhmmss_datetime(rest, fsp).ok()?;
                 Duration::new_from_parts(neg, h, m, s, f, fsp as i8).ok()
             })
+=======
+            .or_else(|| hhmmss_compact(rest).ok())?;
+        let (rest, _) = space0::<_, ()>(rest).ok()?;
+        let (rest, frac) = fraction(rest, fsp).ok()?;
+
+        if !rest.is_empty() {
+            return None;
+        }
+
+        Duration::new_from_parts(neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8).ok()
+>>>>>>> 2c97d8706c0def76409a184d50c8ba10a904a3cc
     }
 } /* parser */
 
@@ -416,9 +449,28 @@ impl Duration {
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
+        let input = std::str::from_utf8(input)?.trim();
         let fsp = check_fsp(fsp)?;
         parser::parse(input, fsp)
+<<<<<<< HEAD
             .ok_or_else(|| Error::truncated_wrong_val("TIME", format!("{:?}", input)))
+=======
+            .or_else(|| {
+                let integer_part = match input.find('.') {
+                    Some(index) => &input[..index],
+                    None => input,
+                };
+                if !integer_part.contains(':') {
+                    let mut ctx = EvalContext::default();
+                    let dt =
+                        DateTime::parse_datetime(&mut ctx, integer_part, fsp as i8, true).ok()?;
+                    dt.convert(&mut ctx).ok()
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
+>>>>>>> 2c97d8706c0def76409a184d50c8ba10a904a3cc
     }
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.
@@ -723,10 +775,15 @@ mod tests {
             (b"-839:00:00", 0, None),
             (b"23:60:59", 0, None),
             (b"54:59:59", 0, Some("54:59:59")),
+<<<<<<< HEAD
             (b"2011-11-11 00:00:01", 0, Some("00:00:01")),
             (b"20111111000001", 0, Some("00:00:01")),
             (b"201112110102", 0, Some("11:01:02")),
             (b"2011-11-11", 0, None),
+=======
+            (b"2011-11-11 00:00:01", 0, None),
+            (b"2011-11-11", 0, Some("00:00:00")),
+>>>>>>> 2c97d8706c0def76409a184d50c8ba10a904a3cc
             (b"--23", 0, None),
             (b"232 10", 0, None),
             (b"-232 10", 0, None),
@@ -765,6 +822,10 @@ mod tests {
             (b"1.23 3", 0, None),
             (b"1:62:3", 0, None),
             (b"1:02:63", 0, None),
+<<<<<<< HEAD
+=======
+            (b"20010101101010", 0, Some("10:10:10")),
+>>>>>>> 2c97d8706c0def76409a184d50c8ba10a904a3cc
             (b"-231342080", 0, None),
         ];
 
