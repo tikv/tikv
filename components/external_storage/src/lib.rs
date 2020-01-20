@@ -21,7 +21,7 @@ use kvproto::backup::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
 use kvproto::backup::StorageBackend_oneof_backend as Backend;
 #[cfg_attr(feature = "protobuf-codec", allow(unused_imports))]
-use kvproto::backup::{Local, Noop, StorageBackend};
+use kvproto::backup::{Local, Noop, StorageBackend, S3};
 
 mod local;
 pub use local::LocalStorage;
@@ -104,6 +104,22 @@ pub fn make_noop_backend() -> StorageBackend {
     {
         let mut backend = StorageBackend::default();
         backend.set_noop(noop);
+        backend
+    }
+}
+
+// Creates a S3 `StorageBackend`
+pub fn make_s3_backend(config: S3) -> StorageBackend {
+    #[cfg(feature = "prost-codec")]
+    {
+        StorageBackend {
+            backend: Some(Backend::S3(config)),
+        }
+    }
+    #[cfg(feature = "protobuf-codec")]
+    {
+        let mut backend = StorageBackend::default();
+        backend.set_s3(config);
         backend
     }
 }

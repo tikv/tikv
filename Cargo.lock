@@ -530,6 +530,7 @@ dependencies = [
  "textwrap",
  "unicode-width",
  "vec_map",
+ "yaml-rust",
 ]
 
 [[package]]
@@ -1085,6 +1086,7 @@ name = "external_storage"
 version = "0.0.1"
 dependencies = [
  "bytes 0.4.12",
+ "clap",
  "futures 0.1.29",
  "futures 0.3.1",
  "futures-executor",
@@ -1096,6 +1098,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_mock",
  "rusoto_s3",
+ "rust-ini",
  "slog",
  "slog-global",
  "tempfile",
@@ -2165,6 +2168,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2eb04b9f127583ed176e163fb9ec6f3e793b87e21deedd5734a69386a18a0151"
 
 [[package]]
+name = "multimap"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a97fbd5d00e0e37bfb10f433af8f5aaf631e739368dc9fc28286ca81ca4948dc"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "murmur3"
 version = "0.4.0"
 source = "git+https://github.com/pingcap/murmur3.git#4af9e1a8f2d4206d90d81f11e513fb03c87208bf"
@@ -2785,7 +2797,7 @@ dependencies = [
  "heck",
  "itertools",
  "log",
- "multimap",
+ "multimap 0.4.0",
  "petgraph",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prost-types",
@@ -3425,6 +3437,15 @@ dependencies = [
  "base64 0.10.1",
  "blake2b_simd",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "rust-ini"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c96a7d6722944454c68ff2ba2a252a4e9b0635c03dd510fdf482a2c8981cbf2"
+dependencies = [
+ "multimap 0.8.0",
 ]
 
 [[package]]
@@ -5057,6 +5078,12 @@ name = "xml-rs"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
+
+[[package]]
+name = "yaml-rust"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e66366e18dc58b46801afbf2ca7661a9f59cc8c5962c29892b6039b4f86fa992"
 
 [[package]]
 name = "yatp"
