@@ -141,22 +141,7 @@ fn test_node_merge_restart() {
     cluster.start().unwrap();
 
     // Wait till merge is finished.
-    let timer = Instant::now();
-    loop {
-        if pd_client
-            .get_region_by_id(left.get_id())
-            .wait()
-            .unwrap()
-            .is_none()
-        {
-            break;
-        }
-
-        if timer.elapsed() > Duration::from_secs(5) {
-            panic!("region still not merged after 5 secs");
-        }
-        sleep_ms(10);
-    }
+    pd_client.check_merged_timeout(left.get_id(), 5);
 
     cluster.must_put(b"k4", b"v4");
 
@@ -653,19 +638,21 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
-    // rely on this config to trigger a compact log
+    // Rely on this config to trigger a compact log
     cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize(1);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
     cluster.run();
-    // prevent gc_log_tick to propose a compact log
+    // Prevent gc_log_tick to propose a compact log
     let raft_gc_log_tick_fp = "on_raft_gc_log_tick";
     fail::cfg(raft_gc_log_tick_fp, "return()").unwrap();
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
-
     cluster.must_split(&region, b"k2");
 
     let left = pd_client.get_region(b"k1").unwrap();
@@ -673,46 +660,40 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     let left_peer_1 = find_peer(&left, 1).cloned().unwrap();
     cluster.must_transfer_leader(left.get_id(), left_peer_1);
 
-    // make log gap between store 1 and store 3, for min_index in preMerge
+    // Make log gap between store 1 and store 3, for min_index in preMerge
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     for i in 0..6 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
-    // prevent on_apply_res to update merge_state in Peer
-    // if not, almost everything cannot propose including compact log
+    // Prevent on_apply_res to update merge_state in Peer
+    // If not, almost everything cannot propose including compact log
     let on_apply_res_fp = "on_apply_res";
     fail::cfg(on_apply_res_fp, "return()").unwrap();
 
-    let merge = new_prepare_merge(right.clone());
-    let req = new_admin_request(left.get_id(), left.get_region_epoch(), merge);
-    let resp = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-    if resp.get_header().has_error() {
-        panic!("response {:?} has error", resp);
-    }
+    cluster.try_merge(left.get_id(), right.get_id());
+
     cluster.clear_send_filters();
-    // prevent apply fsm to apply compact log
+    // Prevent apply fsm to apply compact log
     let handle_apply_fp = "on_handle_apply";
     fail::cfg(handle_apply_fp, "return()").unwrap();
 
     let state1 = cluster.truncated_state(left.get_id(), 1);
     fail::remove(raft_gc_log_tick_fp);
 
-    // wait for compact log to be proposed and committed maybe
+    // Wait for compact log to be proposed and committed maybe
     sleep_ms(30);
 
     cluster.shutdown();
 
     fail::remove(handle_apply_fp);
     fail::remove(on_apply_res_fp);
-    // prevent sched_merge_tick to propose CommitMerge
+    // Prevent sched_merge_tick to propose CommitMerge
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
     cluster.start().unwrap();
 
-    // wait for compact log to apply
+    // Wait for compact log to apply
     for _ in 0..50 {
         let state2 = cluster.truncated_state(left.get_id(), 1);
         if state1.get_index() != state2.get_index() {
@@ -720,10 +701,157 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
         }
         sleep_ms(10);
     }
-    // can schedule merge now
+    // Now schedule merge
     fail::remove(schedule_merge_fp);
 
-    // propose to left region and wait for merge to succeed conveniently
+    pd_client.check_merged_timeout(left.get_id(), 2);
+
     cluster.must_put(b"k123", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k123", b"v2");
+}
+
+// Test if the data is complete when the source region executes the previous
+// failed PrepareMerge log after the target region executes the CommitMerge
+// log and sends CatchUpLogs to source region.
+#[test]
+fn test_node_failed_merge_before_succeed_merge() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.merge_max_log_gap = 30;
+    cluster.cfg.raft_store.store_max_batch_size = 1;
+    cluster.cfg.raft_store.store_pool_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    for i in 0..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k5");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let mut right = pd_client.get_region(b"k5").unwrap();
+    let left_peer_1 = find_peer(&left, 1).cloned().unwrap();
+    cluster.must_transfer_leader(left.get_id(), left_peer_1.clone());
+
+    let left_peer_3 = find_peer(&left, 3).cloned().unwrap();
+    assert_eq!(left_peer_3.get_id(), 1003);
+
+    // Prevent sched_merge_tick to propose CommitMerge
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    // To minimize peers log gap for merging
+    cluster.must_put(b"k11", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k11", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v2");
+    // Make peer 1003 can't receive PrepareMerge and RollbackMerge log
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    cluster.try_merge(left.get_id(), right.get_id());
+
+    // Change right region's epoch to make this merge failed
+    cluster.must_split(&right, b"k8");
+    fail::remove(schedule_merge_fp);
+    // Wait for left region to rollback merge
+    sleep_ms(200);
+    // Prevent the `PrepareMerge` and `RollbackMerge` log sending to applyfsm after
+    // cleaning send filter. Since this method is just to check `RollbackMerge`,
+    // the `PrepareMerge` may escape, but it makes the best effort.
+    let before_send_rollback_merge_1003_fp = "before_send_rollback_merge_1003";
+    fail::cfg(before_send_rollback_merge_1003_fp, "pause").unwrap();
+    cluster.clear_send_filters();
+
+    right = pd_client.get_region(b"k5").unwrap();
+    let right_peer_1 = find_peer(&right, 1).cloned().unwrap();
+    cluster.must_transfer_leader(right.get_id(), right_peer_1);
+    // Add some data for checking data integrity check at a later time
+    for i in 0..5 {
+        cluster.must_put(format!("k2{}", i).as_bytes(), b"v3");
+    }
+    // Do a really succeed merge
+    pd_client.must_merge(left.get_id(), right.get_id());
+    // Wait right region to send CatchUpLogs to left region.
+    sleep_ms(100);
+    // After executing CatchUpLogs in source peerfsm, the committed log will send
+    // to applyfsm in the end of this batch. So even the first `on_ready_prepare_merge`
+    // is executed after CatchUplogs, the latter committed logs is still sent to applyfsm
+    // if CatchUpLogs and `on_ready_prepare_merge` is in different batch.
+    //
+    // In this case, the data is complete because the wrong up-to-date msg from the
+    // first `on_ready_prepare_merge` is sent after all committed log.
+    // Sleep a while to wait applyfsm to send `on_ready_prepare_merge` to peerfsm.
+    let after_send_to_apply_1003_fp = "after_send_to_apply_1003";
+    fail::cfg(after_send_to_apply_1003_fp, "sleep(300)").unwrap();
+
+    fail::remove(before_send_rollback_merge_1003_fp);
+    // Wait `after_send_to_apply_1003` timeout
+    sleep_ms(300);
+    fail::remove(after_send_to_apply_1003_fp);
+    // Check the data integrity
+    for i in 0..5 {
+        must_get_equal(&cluster.get_engine(3), format!("k2{}", i).as_bytes(), b"v3");
+    }
+}
+
+// Test if the source region is destroyed correctly in merging when meeting transfer leader.
+// In previous merge flow, the target region deletes some data from source region in StoreMeta
+// before the source region is truly destroyed. It may meet panic when the source peerfsm handle
+// some msgs at this time.(such as this case)
+#[test]
+fn test_node_merge_transfer_leader() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.store_max_batch_size = 1;
+    cluster.cfg.raft_store.store_pool_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    let left_peer_1 = find_peer(&left, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(left.get_id(), left_peer_1.clone());
+    sleep_ms(100);
+
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    cluster.try_merge(left.get_id(), right.get_id());
+
+    let left_peer_3 = find_peer(&left, 3).unwrap().to_owned();
+    assert_eq!(left_peer_3.get_id(), 1003);
+    // Prevent peer 1003 to handle ready when it's leader
+    let before_handle_raft_ready_1003 = "before_handle_raft_ready_1003";
+    fail::cfg(before_handle_raft_ready_1003, "pause").unwrap();
+
+    let epoch = cluster.get_region_epoch(left.get_id());
+    let mut transfer_leader_req =
+        new_admin_request(left.get_id(), &epoch, new_transfer_leader_cmd(left_peer_3));
+    transfer_leader_req.mut_header().set_peer(left_peer_1);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, transfer_leader_req, Callback::None)
+        .unwrap();
+    fail::remove(schedule_merge_fp);
+
+    pd_client.check_merged_timeout(left.get_id(), 2);
+
+    fail::remove(before_handle_raft_ready_1003);
+    sleep_ms(100);
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }

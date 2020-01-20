@@ -30,7 +30,7 @@ use crate::raftstore::store::util::is_epoch_stale;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
-use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
+use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
 use crate::storage::FlowStatistics;
 use pd_client::metrics::*;
 use pd_client::{ConfigClient, Error, PdClient, RegionStat};
@@ -1029,9 +1029,9 @@ fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::P
     let target_id = target.get_id();
     if let Err(e) = router.send(
         source_region_id,
-        PeerMsg::CasualMessage(CasualMessage::MergeResult {
+        PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
             target,
-            stale: true,
+            ready_to_merge: None,
         }),
     ) {
         error!(

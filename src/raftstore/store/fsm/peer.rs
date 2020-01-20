@@ -19,8 +19,8 @@ use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, CommitMergeRequest, RaftCmdRequest, RaftCmdResponse,
-    StatusCmdType, StatusResponse,
+    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType,
+    StatusResponse,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
@@ -44,7 +44,7 @@ use crate::raftstore::store::fsm::{
 };
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
-use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
+use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitSourceDestroyState};
 use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::KeysInfoFormatter;
@@ -347,9 +347,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             } => {
                 self.on_schedule_half_split_region(&region_epoch, policy);
             }
-            CasualMessage::MergeResult { target, stale } => {
-                self.on_merge_result(target, stale);
-            }
             CasualMessage::GcSnap { snaps } => {
                 self.on_gc_snap(snaps);
             }
@@ -394,52 +391,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn start(&mut self) {
-        if self.fsm.peer.pending_merge_state.is_some() {
-            self.notify_prepare_merge();
-        }
         self.register_raft_base_tick();
         self.register_raft_gc_log_tick();
         self.register_pd_heartbeat_tick();
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
-    }
-
-    fn notify_prepare_merge(&self) {
-        let region_id = self.region_id();
-        let version = self.region().get_region_epoch().get_version();
-        // If there is no merge lock for that key, insert one to let target peer know `PrepareMerge`
-        // is already executed.
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        let (exist_version, ready_to_merge) =
-            match meta.merge_locks.insert(region_id, (version, None)) {
-                None => return,
-                Some((v, r)) => (v, r),
-            };
-        match exist_version.cmp(&version) {
-            cmp::Ordering::Equal => {
-                let ready_to_merge = ready_to_merge.unwrap();
-                // Set `ready_to_merge` to true to indicate `PrepareMerge` is finished.
-                ready_to_merge.store(true, Ordering::SeqCst);
-                let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
-                let target_region_id = state.get_target().get_id();
-                // Send an empty message to target peer to make sure it will check `ready_to_merge`
-                self.ctx
-                    .router
-                    .force_send(target_region_id, PeerMsg::Noop)
-                    .unwrap();
-            }
-            cmp::Ordering::Greater => {
-                meta.merge_locks
-                    .insert(region_id, (exist_version, ready_to_merge));
-            }
-            cmp::Ordering::Less => {
-                panic!(
-                    "{} expects version {} but got {}",
-                    self.fsm.peer.tag, version, exist_version
-                );
-            }
-        }
     }
 
     pub fn resume_handling_pending_apply_result(&mut self) -> bool {
@@ -587,6 +544,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         self.register_raft_base_tick();
                     }
                 }
+            }
+            SignificantMsg::MergeResult {
+                target,
+                ready_to_merge,
+            } => {
+                self.on_merge_result(target, ready_to_merge);
+            }
+            SignificantMsg::CatchUpLogs(catch_up_logs) => {
+                self.on_catch_up_logs_for_merge(catch_up_logs);
             }
         }
     }
@@ -837,7 +803,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if let Some(ready_to_merge) = self.on_ready_result(&mut res.exec_res, &res.metrics)
                 {
                     // There is a `CommitMerge` needed to wait
-                    self.fsm.peer.pending_merge_apply_result = Some(WaitApplyResultState {
+                    self.fsm.peer.pending_merge_apply_result = Some(WaitSourceDestroyState {
                         results: vec![ApplyTaskRes::Apply(res)],
                         ready_to_merge,
                     });
@@ -1325,9 +1291,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .router
                 .force_send(
                     region_id,
-                    PeerMsg::CasualMessage(CasualMessage::MergeResult {
+                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target: self.fsm.peer.peer.clone(),
-                        stale: true,
+                        ready_to_merge: None,
                     }),
                 )
                 .unwrap();
@@ -1350,6 +1316,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
+        self.fsm.peer.pending_remove = true;
         if job.initialized {
             // When initialized is true and async_remove is false, applyfsm doesn't need to
             // send destroy msg to peerfsm because peerfsm has already destroyed.
@@ -1403,7 +1370,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
             }
         }
-        meta.merge_locks.remove(&region_id);
 
         // Destroy read delegates.
         if let Some(reader) = meta.readers.remove(&region_id) {
@@ -1437,7 +1403,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.stop();
 
         if is_initialized
-            && !merged_by_target
             && meta
                 .region_ranges
                 .remove(&enc_end_key(self.fsm.peer.region()))
@@ -1445,7 +1410,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             panic!("{} meta corruption detected", self.fsm.peer.tag,);
         }
-        if meta.regions.remove(&region_id).is_none() && !merged_by_target {
+        if meta.regions.remove(&region_id).is_none() {
             panic!("{} meta corruption detected", self.fsm.peer.tag,)
         }
     }
@@ -1891,89 +1856,63 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(
-                &self.ctx.coprocessor_host,
-                region.clone(),
-                &mut self.fsm.peer,
-            );
+            meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
         }
-        let target = state.get_target().get_id();
-        let commit = state.get_commit();
-        self.fsm.peer.pending_merge_state = Some(state);
-        self.notify_prepare_merge();
 
-        if let Some(logs_up_to_date) = self.fsm.peer.catch_up_logs.take() {
-            // Send CatchUpLogs back to destroy source apply delegate,
-            // then it will send `LogsUpToDate` to target apply delegate.
-            let mut req = CommitMergeRequest::new();
-            req.set_commit(commit);
-            self.ctx.apply_router.schedule_task(
-                region.get_id(),
-                ApplyTask::CatchUpLogs(CatchUpLogs {
-                    target_region_id: target,
-                    merge: req,
-                    logs_up_to_date,
-                }),
-            );
-            return;
+        self.fsm.peer.pending_merge_state = Some(state);
+        let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
+
+        if let Some(ref catch_up_logs) = self.fsm.peer.catch_up_logs {
+            if state.get_commit() == catch_up_logs.merge.get_commit() {
+                assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
+                // Indicate that `on_catch_up_logs_for_merge` has already executed.
+                // Mark pending_remove because its applyfsm will be destroyed.
+                self.fsm.peer.pending_remove = true;
+                // Send CatchUpLogs back to destroy source applyfsm,
+                // then it will send `Noop` to trigger target applyfsm.
+                self.ctx.apply_router.schedule_task(
+                    self.fsm.region_id(),
+                    ApplyTask::LogsUpToDate(self.fsm.peer.catch_up_logs.take().unwrap()),
+                );
+                return;
+            }
         }
 
         self.on_check_merge();
     }
 
-    // The `PrepareMerge` and `CommitMerge` is executed sequentially, but we cannot
-    // ensure the order to handle the apply results between different peers. So check
-    // the merge locks to ensure `on_ready_prepare_merge` is called.
-    fn check_merge_locks(
-        &self,
-        source: &metapb::Region,
-        meta: &mut StoreMeta,
-    ) -> Option<Arc<AtomicBool>> {
-        let source_region_id = source.get_id();
-        let source_version = source.get_region_epoch().get_version();
-
-        if let Some((exist_version, ready_to_merge)) = meta.merge_locks.remove(&source_region_id) {
-            match exist_version.cmp(&source_version) {
-                cmp::Ordering::Equal => {
-                    assert!(ready_to_merge.is_none());
-                    // So `on_ready_prepare_merge` is executed.
-                    return None;
-                }
-                cmp::Ordering::Less => {
-                    assert!(
-                        ready_to_merge.is_none(),
-                        "{} source region {} meets a commit merge before {} < {}",
-                        self.fsm.peer.tag,
-                        source_region_id,
-                        exist_version,
-                        source_version
-                    );
-                }
-                cmp::Ordering::Greater => {
-                    panic!(
-                        "{} source region {} can't finished current merge: {} > {}",
-                        self.fsm.peer.tag, source_region_id, exist_version, source_region_id
-                    );
-                }
-            }
-        }
-
-        // The corresponding `on_ready_prepare_merge` is not executed yet.
-        // Insert the lock, and `on_ready_prepare_merge` will check and use `ready_to_merge`
-        // to notify.
-        let ready_to_merge = Arc::new(AtomicBool::new(false));
-        meta.merge_locks.insert(
-            source_region_id,
-            (source_version, Some(ready_to_merge.clone())),
-        );
-        Some(ready_to_merge)
-    }
-
-    fn on_ready_catch_up_logs(&mut self, catch_up_logs: CatchUpLogs) {
+    fn on_catch_up_logs_for_merge(&mut self, mut catch_up_logs: CatchUpLogs) {
         let region_id = self.fsm.region_id();
         assert_eq!(region_id, catch_up_logs.merge.get_source().get_id());
 
-        // directly append these logs to raft log and then commit
+        if let Some(ref cul) = self.fsm.peer.catch_up_logs {
+            panic!(
+                "{} get catch_up_logs from {} but has already got from {}",
+                self.fsm.peer.tag, catch_up_logs.target_region_id, cul.target_region_id
+            )
+        }
+
+        if let Some(ref pending_merge_state) = self.fsm.peer.pending_merge_state {
+            if pending_merge_state.get_commit() == catch_up_logs.merge.get_commit() {
+                assert_eq!(
+                    pending_merge_state.get_target().get_id(),
+                    catch_up_logs.target_region_id
+                );
+                // Indicate that `on_ready_prepare_merge` has already executed.
+                // Mark pending_remove because its applyfsm will be destroyed.
+                self.fsm.peer.pending_remove = true;
+                // Just for saving memory.
+                catch_up_logs.merge.clear_entries();
+                // Send CatchUpLogs back to destroy source applyfsm,
+                // then it will send `Noop` to trigger target applyfsm.
+                self.ctx
+                    .apply_router
+                    .schedule_task(region_id, ApplyTask::LogsUpToDate(catch_up_logs));
+                return;
+            }
+        }
+
+        // Directly append these logs to raft log and then commit them.
         match self
             .fsm
             .peer
@@ -1988,7 +1927,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
                 // Now it has some committed entries, so mark it to take `Ready` in next round.
                 self.fsm.has_ready = true;
-                self.fsm.peer.catch_up_logs = Some(catch_up_logs.logs_up_to_date);
             }
             None => {
                 info!(
@@ -1996,13 +1934,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "region_id" => region_id,
                     "peer_id" => self.fsm.peer.peer_id(),
                 );
-                // Send CatchUpLogs back to destroy source apply delegate,
-                // then it will send `LogsUpToDate` to target apply delegate.
-                self.ctx
-                    .apply_router
-                    .schedule_task(region_id, ApplyTask::CatchUpLogs(catch_up_logs));
             }
         }
+        // Just for saving memory.
+        catch_up_logs.merge.clear_entries();
+        self.fsm.peer.catch_up_logs = Some(catch_up_logs);
     }
 
     fn on_ready_commit_merge(
@@ -2010,16 +1946,38 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         region: metapb::Region,
         source: metapb::Region,
     ) -> Option<Arc<AtomicBool>> {
-        self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
-
-        let ready_to_merge = self.check_merge_locks(&source, &mut meta);
-        if ready_to_merge.is_some() {
-            return ready_to_merge;
+        if let Some(source_id) = meta.merge_destroy_map.get(&region.get_id()) {
+            if *source_id != source.get_id() {
+                panic!(
+                    "{} has source region id {} but it is not the expected id {}",
+                    self.fsm.peer.tag,
+                    source_id,
+                    source.get_id()
+                );
+            }
+            meta.merge_destroy_map.remove(&region.get_id());
+        } else {
+            let ready_to_merge = Arc::new(AtomicBool::new(false));
+            if let Err(e) = self.ctx.router.force_send(
+                source.get_id(),
+                PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                    target: self.fsm.peer.peer.clone(),
+                    ready_to_merge: Some(ready_to_merge.clone()),
+                }),
+            ) {
+                // TODO: need to remove "are we shutting down", it should panic
+                // if we are not in shut-down state
+                warn!(
+                    "failed to send merge result, are we shutting down?";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "err" => %e,
+                );
+            }
+            return Some(ready_to_merge);
         }
 
-        let prev = meta.region_ranges.remove(&enc_end_key(&source));
-        assert_eq!(prev, Some(source.get_id()));
         let prev = if region.get_end_key() == source.get_end_key() {
             meta.region_ranges.remove(&enc_start_key(&source))
         } else {
@@ -2033,10 +1991,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         meta.region_ranges
             .insert(enc_end_key(&region), region.get_id());
-        assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
-        let reader = meta.readers.remove(&source.get_id()).unwrap();
-        reader.mark_invalid();
+        drop(meta);
+
+        self.register_split_region_check_tick();
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
@@ -2050,20 +2008,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "target_region" => ?self.fsm.peer.region(),
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
-        }
-        if let Err(e) = self.ctx.router.send(
-            source.get_id(),
-            PeerMsg::CasualMessage(CasualMessage::MergeResult {
-                target: self.fsm.peer.peer.clone(),
-                stale: false,
-            }),
-        ) {
-            info!(
-                "failed to send merge result, are we shutting down?";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
         }
         None
     }
@@ -2088,33 +2032,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
         }
         self.fsm.peer.pending_merge_state = None;
-        {
+        if let Some(r) = region {
             let mut meta = self.ctx.store_meta.lock().unwrap();
-            if let Some(r) = region {
-                meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);
-            }
-            let region = self.fsm.peer.region();
-            let region_id = region.get_id();
-            let source_version = region.get_region_epoch().get_version();
-            if let Some((exist_version, ready_to_merge)) = meta.merge_locks.remove(&region_id) {
-                if exist_version > source_version {
-                    assert!(
-                        ready_to_merge.is_some(),
-                        "{} unexpected empty merge state at {}",
-                        self.fsm.peer.tag,
-                        exist_version
-                    );
-                    meta.merge_locks
-                        .insert(region_id, (exist_version, ready_to_merge));
-                } else {
-                    assert!(
-                        ready_to_merge.is_none(),
-                        "{} rollback a commit merge state at {}",
-                        self.fsm.peer.tag,
-                        exist_version
-                    );
-                }
-            }
+            meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);
         }
         if self.fsm.peer.is_leader() {
             info!(
@@ -2127,7 +2047,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_merge_result(&mut self, target: metapb::Peer, stale: bool) {
+    fn on_merge_result(&mut self, target: metapb::Peer, ready_to_merge: Option<Arc<AtomicBool>>) {
         let exists = self
             .fsm
             .peer
@@ -2137,19 +2057,57 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !exists {
             panic!(
                 "{} unexpected merge result: {:?} {:?} {}",
-                self.fsm.peer.tag, self.fsm.peer.pending_merge_state, target, stale
+                self.fsm.peer.tag,
+                self.fsm.peer.pending_merge_state,
+                target,
+                ready_to_merge.is_some()
             );
         }
-        if !stale {
-            info!(
-                "merge finished";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "target_region" => ?self.fsm.peer.pending_merge_state.as_ref().unwrap().target,
-            );
-            self.destroy_peer(true);
-        } else {
-            self.on_stale_merge();
+        match ready_to_merge {
+            Some(rtm) => {
+                let target = self
+                    .fsm
+                    .peer
+                    .pending_merge_state
+                    .as_ref()
+                    .unwrap()
+                    .get_target();
+                let target_id = target.get_id();
+                info!(
+                    "merge finished";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "target_region" => ?target,
+                );
+                {
+                    let mut meta = self.ctx.store_meta.lock().unwrap();
+                    if let Some(source_id) = meta
+                        .merge_destroy_map
+                        .insert(target.get_id(), self.fsm.region_id())
+                    {
+                        panic!(
+                            "{} target_id {} has unexpected source_id {} in merge_destroy_map",
+                            self.fsm.peer.tag,
+                            target.get_id(),
+                            source_id
+                        );
+                    }
+                }
+                self.destroy_peer(true);
+                rtm.store(true, Ordering::SeqCst);
+                // To trigger the target peerfsm
+                if let Err(e) = self.ctx.router.force_send(target_id, PeerMsg::Noop) {
+                    warn!(
+                        "failed to send noop back to target peer, are we shutting down?";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                    );
+                }
+            }
+            None => {
+                self.on_stale_merge();
+            }
         }
     }
 
@@ -2230,9 +2188,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state);
-                }
-                ExecResult::CatchUpLogs(catch_up_logs) => {
-                    self.on_ready_catch_up_logs(catch_up_logs);
                 }
                 ExecResult::CommitMerge { region, source } => {
                     if let Some(ready_to_merge) =

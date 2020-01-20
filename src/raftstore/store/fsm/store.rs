@@ -19,7 +19,7 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
@@ -102,11 +102,10 @@ pub struct StoreMeta {
     /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
     /// source_region_id -> target_region_id
     pub targets_map: HashMap<u64, u64>,
-    /// In raftstore, the execute order of `PrepareMerge` and `CommitMerge` is not certain because of the messages
-    /// belongs two regions. To make them in order, `PrepareMerge` will set this structure and `CommitMerge` will retry
-    /// later if there is no related lock.
-    /// source_region_id -> (version, BiLock).
-    pub merge_locks: HashMap<u64, (u64, Option<Arc<AtomicBool>>)>,
+    /// The target region should exec `on_ready_commit_merge` after the source region has destroyed its peerfsm.
+    /// A map used to record the destroyed source region id and its corresponding target region id.
+    /// target_region_id -> source_region_id
+    pub merge_destroy_map: HashMap<u64, u64>,
 }
 
 impl StoreMeta {
@@ -120,7 +119,7 @@ impl StoreMeta {
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
             targets_map: HashMap::default(),
-            merge_locks: HashMap::default(),
+            merge_destroy_map: HashMap::default(),
         }
     }
 
@@ -1456,9 +1455,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 .router
                 .force_send(
                     id,
-                    PeerMsg::CasualMessage(CasualMessage::MergeResult {
+                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target: target.clone(),
-                        stale: true,
+                        ready_to_merge: None,
                     }),
                 )
                 .unwrap();

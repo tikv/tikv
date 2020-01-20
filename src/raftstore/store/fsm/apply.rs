@@ -37,7 +37,7 @@ use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::metrics::*;
-use crate::raftstore::store::msg::{Callback, PeerMsg};
+use crate::raftstore::store::msg::{Callback, PeerMsg, SignificantMsg};
 use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
@@ -180,7 +180,6 @@ pub enum ExecResult {
         region: Region,
         state: MergeState,
     },
-    CatchUpLogs(CatchUpLogs),
     CommitMerge {
         region: Region,
         source: Region,
@@ -974,8 +973,7 @@ impl ApplyDelegate {
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
-                | ExecResult::IngestSst { .. }
-                | ExecResult::CatchUpLogs { .. } => {}
+                | ExecResult::IngestSst { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1768,14 +1766,16 @@ impl ApplyDelegate {
     // The target peer should send missing log entries to the source peer.
     //
     // So, the merge process order would be:
-    // 1. `exec_commit_merge` in target apply worker
-    // 2. `catch_up_logs_for_merge` in source apply worker (check whether need to catch up logs)
-    // 3. `on_ready_catch_up_logs` in source raftstore
-    // 4. ... (raft append and apply logs)
-    // 5. `on_ready_prepare_merge` in source raftstore (means source region has finished applying all logs)
-    // 6. `catch_up_logs_for_merge` in source apply worker (destroy itself and send LogsUpToDate)
-    // 7. resume `exec_commit_merge` in target apply worker
-    // 8. `on_ready_commit_merge` in target raftstore
+    // 1.   `exec_commit_merge` in target applyfsm
+    // 2.   `on_catch_up_logs_for_merge` in source peerfsm
+    // 3.   if the source peer has already executed the corresponding `on_ready_prepare_merge`, set pending_remove and jump to step 6
+    // 4.   ... (raft append and apply logs)
+    // 5.   `on_ready_prepare_merge` in source peerfsm and set pending_remove (means source region has finished applying all logs)
+    // 6.   `logs_up_to_date_for_merge` in source applyfsm (destroy its applyfsm and send Noop to trigger the target applyfsm)
+    // 7.   resume `exec_commit_merge` in target applyfsm
+    // 8.   `on_ready_commit_merge` in target peerfsm
+    // 9.   `on_merge_result` in source peerfsm (destroy its peerfsm and send Noop to trigger the target peerfsm)
+    // 10.  resume `on_ready_commit_merge` in target peerfsm
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext,
@@ -1817,14 +1817,15 @@ impl ApplyDelegate {
                 "source_region_id" => source_region_id
             );
 
-            // Sends message to the source apply worker and pause `exec_commit_merge` process
+            // Sends message to the source peerfsm and pause `exec_commit_merge` process
             let logs_up_to_date = Arc::new(AtomicU64::new(0));
-            let msg = Msg::CatchUpLogs(CatchUpLogs {
+            let msg = SignificantMsg::CatchUpLogs(CatchUpLogs {
                 target_region_id: self.region_id(),
                 merge: merge.to_owned(),
                 logs_up_to_date: logs_up_to_date.clone(),
             });
-            ctx.router.schedule_task(source_region_id, msg);
+            ctx.notifier
+                .notify(source_region_id, PeerMsg::SignificantMsg(msg));
             return Ok((
                 AdminResponse::default(),
                 ApplyResult::WaitMergeSource(logs_up_to_date),
@@ -2289,8 +2290,8 @@ pub enum Msg {
     },
     Registration(Registration),
     Proposal(RegionProposal),
-    CatchUpLogs(CatchUpLogs),
-    LogsUpToDate(u64),
+    LogsUpToDate(CatchUpLogs),
+    Noop,
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     #[cfg(test)]
@@ -2325,8 +2326,8 @@ impl Debug for Msg {
             Msg::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
-            Msg::CatchUpLogs(cul) => write!(f, "{:?}", cul.merge),
-            Msg::LogsUpToDate(region_id) => write!(f, "[region {}] logs are updated", region_id),
+            Msg::LogsUpToDate(_) => write!(f, "logs are updated"),
+            Msg::Noop => write!(f, "noop"),
             Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
             Msg::Snapshot(GenSnapTask { region_id, .. }) => {
                 write!(f, "[region {}] requests a snapshot", region_id)
@@ -2554,36 +2555,8 @@ impl ApplyFsm {
         true
     }
 
-    fn catch_up_logs_for_merge(&mut self, ctx: &mut ApplyContext, catch_up_logs: CatchUpLogs) {
-        if ctx.timer.is_none() {
-            ctx.timer = Some(SlowTimer::new());
-        }
-
-        // if it is already up to date, no need to catch up anymore
-        let apply_index = self.delegate.apply_state.get_applied_index();
-        debug!(
-            "check catch up logs for merge";
-            "apply_index" => apply_index,
-            "commit" => catch_up_logs.merge.get_commit(),
-            "region_id" => self.delegate.region_id(),
-            "peer_id" => self.delegate.id(),
-        );
-        if apply_index < catch_up_logs.merge.get_commit() {
-            fail_point!("on_handle_catch_up_logs_for_merge");
-            let mut res = VecDeque::new();
-            // send logs to raftstore to append
-            res.push_back(ExecResult::CatchUpLogs(catch_up_logs));
-
-            // TODO: can we use `ctx.finish_for()` directly? is it safe here?
-            ctx.apply_res.push(ApplyRes {
-                region_id: self.delegate.region_id(),
-                apply_state: self.delegate.apply_state.clone(),
-                exec_res: res,
-                metrics: self.delegate.metrics.clone(),
-                applied_index_term: self.delegate.applied_index_term,
-            });
-            return;
-        }
+    fn logs_up_to_date_for_merge(&mut self, ctx: &mut ApplyContext, catch_up_logs: CatchUpLogs) {
+        fail_point!("on_handle_catch_up_logs_for_merge");
 
         fail_point!("after_handle_catch_up_logs_for_merge");
         fail_point!(
@@ -2592,8 +2565,9 @@ impl ApplyFsm {
             |_| {}
         );
 
-        let region_id = self.delegate.region_id();
+        // source peerfsm will be destroyed after target peer apply CommitMerge
         self.destroy(ctx);
+        let region_id = self.delegate.region_id();
         catch_up_logs
             .logs_up_to_date
             .store(region_id, Ordering::SeqCst);
@@ -2604,7 +2578,7 @@ impl ApplyFsm {
         );
 
         if let Some(mailbox) = ctx.router.mailbox(catch_up_logs.target_region_id) {
-            let _ = mailbox.force_send(Msg::LogsUpToDate(region_id));
+            let _ = mailbox.force_send(Msg::Noop);
         } else {
             error!(
                 "failed to get mailbox, are we shutting down?";
@@ -2686,8 +2660,8 @@ impl ApplyFsm {
                 Some(Msg::Proposal(prop)) => self.handle_proposal(prop),
                 Some(Msg::Registration(reg)) => self.handle_registration(reg),
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
-                Some(Msg::CatchUpLogs(cul)) => self.catch_up_logs_for_merge(apply_ctx, cul),
-                Some(Msg::LogsUpToDate(_)) => {}
+                Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
+                Some(Msg::Noop) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
                 Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
@@ -2908,7 +2882,7 @@ impl ApplyRouter {
                     }
                     return;
                 }
-                Msg::Apply { .. } | Msg::Destroy(_) | Msg::LogsUpToDate(_) => {
+                Msg::Apply { .. } | Msg::Destroy(_) | Msg::Noop => {
                     info!(
                         "target region is not found, drop messages";
                         "region_id" => region_id
@@ -2922,7 +2896,7 @@ impl ApplyRouter {
                     );
                     return;
                 }
-                Msg::CatchUpLogs(cul) => {
+                Msg::LogsUpToDate(cul) => {
                     warn!(
                         "region is removed before merged, are we shutting down?";
                         "region_id" => region_id,

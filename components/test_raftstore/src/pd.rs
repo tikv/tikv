@@ -868,23 +868,25 @@ impl TestPdClient {
     pub fn must_merge(&self, from: u64, target: u64) {
         self.merge_region(from, target);
 
-        for _ in 1..500 {
+        self.check_merged_timeout(from, 5);
+    }
+
+    pub fn check_merged(&self, from: u64) -> bool {
+        self.get_region_by_id(from).wait().unwrap().is_none()
+    }
+
+    pub fn check_merged_timeout(&self, from: u64, secs: u64) {
+        for _ in 0..secs * 100 {
             sleep_ms(10);
 
             if self.get_region_by_id(from).wait().unwrap().is_none() {
                 return;
             }
         }
-
         let region = self.get_region_by_id(from).wait().unwrap();
-        if region.is_none() {
-            return;
+        if let Some(r) = region {
+            panic!("region {:?} is still not merged.", r);
         }
-        panic!("region {:?} is still not merged.", region.unwrap());
-    }
-
-    pub fn check_merged(&self, from: u64) -> bool {
-        self.get_region_by_id(from).wait().unwrap().is_none()
     }
 
     pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
