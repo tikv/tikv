@@ -218,6 +218,8 @@ pub enum CasualMessage {
     ClearRegionSize,
     /// Indicate a target region is overlapped.
     RegionOverlapped,
+    /// Notifies that a new snapshot has been generated.
+    SnapshotGenerated,
 
     /// A test only message, it is useful when we want to access
     /// peer's internal state.
@@ -263,6 +265,7 @@ impl fmt::Debug for CasualMessage {
                 "clear region size"
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
+            CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::Test(_) => write!(fmt, "Test"),
         }
     }
@@ -361,6 +364,10 @@ pub enum StoreMsg {
     Start {
         store: metapb::Store,
     },
+
+    /// Messge only used for test
+    #[cfg(test)]
+    Validate(Box<dyn FnOnce(&crate::raftstore::store::Config) + Send>),
 }
 
 impl fmt::Debug for StoreMsg {
@@ -383,6 +390,8 @@ impl fmt::Debug for StoreMsg {
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            #[cfg(test)]
+            StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
     }
 }

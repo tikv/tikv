@@ -13,6 +13,7 @@ use grpcio::{
 use kvproto::tikvpb::*;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
+use yatp::task::future::TaskCell;
 
 use crate::coprocessor::Endpoint;
 use crate::raftstore::router::RaftStoreRouter;
@@ -60,6 +61,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // Currently load statistics is done in the thread.
     stats_pool: Option<ThreadPool>,
     grpc_thread_load: Arc<ThreadLoad>,
+    yatp_read_pool: Option<yatp::ThreadPool<TaskCell>>,
     readpool_normal_concurrency: usize,
     readpool_normal_thread_load: Arc<ThreadLoad>,
     timer: Handle,
@@ -76,6 +78,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         resolver: S,
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
+        yatp_read_pool: Option<yatp::ThreadPool<TaskCell>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = ThreadPoolBuilder::new()
@@ -122,6 +125,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .set_resource_quota(mem_quota)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
+            .keepalive_time(cfg.grpc_keepalive_time.into())
+            .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
             .build_args();
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
@@ -151,6 +156,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker,
             stats_pool: Some(stats_pool),
             grpc_thread_load,
+            yatp_read_pool,
             readpool_normal_concurrency,
             readpool_normal_thread_load,
             timer: GLOBAL_TIMER_HANDLE.clone(),
@@ -243,6 +249,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         if let Some(pool) = self.stats_pool.take() {
             let _ = pool.shutdown_now().wait();
         }
+        let _ = self.yatp_read_pool.take();
         Ok(())
     }
 
@@ -352,7 +359,8 @@ mod tests {
         cfg.addr = "127.0.0.1:0".to_owned();
 
         let storage = TestStorageBuilder::new().build().unwrap();
-        let mut gc_worker = GcWorker::new(storage.get_engine(), None, None, Default::default());
+        let mut gc_worker =
+            GcWorker::new(storage.get_engine(), None, None, None, Default::default());
         gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();
@@ -370,7 +378,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         );
-        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);
+        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool.into());
 
         let addr = Arc::new(Mutex::new(None));
         let resolver = MockResolver {
@@ -387,6 +395,7 @@ mod tests {
             resolver.clone(),
             SnapManager::new("", None),
             gc_worker,
+            None,
         )
         .unwrap();
 
@@ -428,7 +437,7 @@ mod tests {
         msg.mut_to_peer().set_store_id(2);
         msg.set_region_id(2);
         resolver.quick_fail.store(true, Ordering::SeqCst);
-        trans.send(msg.clone()).unwrap();
+        trans.send(msg).unwrap();
         trans.flush();
         resp = receiver
             .significant_msg_receiver

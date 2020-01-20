@@ -8,6 +8,8 @@ use std::time::Instant;
 
 use futures::sync::mpsc as future_mpsc;
 use futures::{Future, Stream};
+use futures_executor::block_on;
+use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
@@ -175,13 +177,14 @@ impl TestSuite {
         &self,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
+        begin_ts: TimeStamp,
         backup_ts: TimeStamp,
         path: &Path,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
         let mut req = BackupRequest::default();
         req.set_start_key(start_key);
         req.set_end_key(end_key);
-        req.start_version = backup_ts.into_inner();
+        req.start_version = begin_ts.into_inner();
         req.end_version = backup_ts.into_inner();
         req.set_storage_backend(make_local_backend(path));
         let (tx, rx) = future_mpsc::unbounded();
@@ -261,8 +264,9 @@ fn test_backup_and_import() {
     let backup_ts = suite.alloc_ts();
     let storage_path = tmp.path().join(format!("{}", backup_ts));
     let rx = suite.backup(
-        vec![], // start
-        vec![], // end
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
         backup_ts,
         &storage_path,
     );
@@ -279,8 +283,9 @@ fn test_backup_and_import() {
     // Backup file should have same contents.
     // backup ts + 1 avoid file already exist.
     let rx = suite.backup(
-        vec![], // start
-        vec![], // end
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts.next())),
     );
@@ -299,7 +304,7 @@ fn test_backup_and_import() {
     for f in files1.clone().into_iter() {
         let mut reader = storage.read(&f.name).unwrap();
         let mut content = vec![];
-        reader.read_to_end(&mut content).unwrap();
+        block_on(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
         m.crc32 = calc_crc32_bytes(&content);
         m.length = content.len() as _;
@@ -336,8 +341,9 @@ fn test_backup_and_import() {
     // Backup file should have same contents.
     // backup ts + 2 avoid file already exist.
     let rx = suite.backup(
-        vec![], // start
-        vec![], // end
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
@@ -377,8 +383,9 @@ fn test_backup_meta() {
     let tmp = Builder::new().tempdir().unwrap();
     let storage_path = tmp.path().join(format!("{}", backup_ts));
     let rx = suite.backup(
-        vec![], // start
-        vec![], // end
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
         backup_ts,
         &storage_path,
     );

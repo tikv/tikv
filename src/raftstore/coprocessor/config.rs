@@ -1,9 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Result;
-use tikv_util::config::ReadableSize;
+use crate::config::ConfigManager;
+use crate::raftstore::store::SplitCheckTask;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+use configuration::{ConfigChange, Configuration};
+use tikv_util::config::ReadableSize;
+use tikv_util::worker::Scheduler;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -39,7 +44,7 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(SPLIT_SIZE_MB);
         Config {
-            split_region_on_table: true,
+            split_region_on_table: false,
             batch_split_limit: BATCH_SPLIT_LIMIT,
             region_split_size: split_size,
             region_max_size: split_size / 2 * 3,
@@ -65,6 +70,18 @@ impl Config {
                 self.region_split_keys
             ));
         }
+        Ok(())
+    }
+}
+
+pub type SplitCheckConfigManager = Scheduler<SplitCheckTask>;
+
+impl ConfigManager for SplitCheckConfigManager {
+    fn dispatch(
+        &mut self,
+        change: ConfigChange,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        self.schedule(SplitCheckTask::ChangeConfig(change))?;
         Ok(())
     }
 }

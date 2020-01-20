@@ -7,12 +7,16 @@ use std::net::{SocketAddrV4, SocketAddrV6};
 use std::ops::{Div, Mul};
 use std::path::Path;
 use std::str::{self, FromStr};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
+use super::time::SlowTimer;
+use crate::slow_log;
 use configuration::ConfigValue;
 
 quick_error! {
@@ -287,6 +291,10 @@ impl ReadableDuration {
 
     pub fn as_millis(&self) -> u64 {
         crate::time::duration_to_ms(self.0)
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.0.as_nanos() == 0
     }
 }
 
@@ -876,6 +884,71 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+#[derive(Default)]
+pub struct VersionTrack<T> {
+    value: RwLock<T>,
+    version: AtomicU64,
+}
+
+impl<T> VersionTrack<T> {
+    pub fn new(value: T) -> Self {
+        VersionTrack {
+            value: RwLock::new(value),
+            version: AtomicU64::new(1),
+        }
+    }
+
+    /// Update the value
+    pub fn update<F>(&self, f: F)
+    where
+        F: FnOnce(&mut T),
+    {
+        f(&mut self.value.write().unwrap());
+        self.version.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn value(&self) -> RwLockReadGuard<'_, T> {
+        self.value.read().unwrap()
+    }
+
+    pub fn tracker(self: Arc<Self>, tag: String) -> Tracker<T> {
+        Tracker {
+            tag,
+            version: self.version.load(Ordering::Relaxed),
+            inner: self,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Tracker<T> {
+    tag: String,
+    inner: Arc<VersionTrack<T>>,
+    version: u64,
+}
+
+impl<T> Tracker<T> {
+    // The update of `value` and `version` is not atomic
+    // so there maybe false positive.
+    pub fn any_new(&mut self) -> Option<RwLockReadGuard<'_, T>> {
+        let v = self.inner.version.load(Ordering::Acquire);
+        if self.version < v {
+            self.version = v;
+            match self.inner.value.try_read() {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    let t = SlowTimer::new();
+                    let value = self.inner.value.read().unwrap();
+                    slow_log!(t, "{} tracker get updated value", self.tag);
+                    Some(value)
+                }
+            }
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -1185,5 +1258,40 @@ mod tests {
         assert!(ret.is_err());
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
         assert!(ret.is_ok());
+    }
+
+    #[test]
+    fn test_multi_tracker() {
+        use super::*;
+        use std::sync::Arc;
+
+        #[derive(Debug, Default, PartialEq)]
+        struct Value {
+            v1: u64,
+            v2: bool,
+        }
+
+        let count = 10;
+        let vc = Arc::new(VersionTrack::new(Value::default()));
+        let mut trackers = Vec::with_capacity(count);
+        for _ in 0..count {
+            trackers.push(vc.clone().tracker("test-tracker".to_owned()));
+        }
+
+        assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
+
+        vc.update(|v| {
+            v.v1 = 1000;
+            v.v2 = true;
+        });
+        for tr in trackers.iter_mut() {
+            let incoming = tr.any_new();
+            assert!(incoming.is_some());
+            let incoming = incoming.unwrap();
+            assert_eq!(incoming.v1, 1000);
+            assert_eq!(incoming.v2, true);
+        }
+
+        assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
     }
 }

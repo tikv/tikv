@@ -4,6 +4,7 @@ use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::codec::mysql::{RoundMode, DEFAULT_FSP};
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::expr_util::rand::MySQLRng;
@@ -31,9 +32,16 @@ pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+#[allow(clippy::float_cmp)]
 pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
     Ok(match (arg0, arg1) {
-        (Some(base), Some(n)) => f64_to_real(n.log(**base)),
+        (Some(base), Some(n)) => {
+            if **base <= 0f64 || **base == 1f64 || **n <= 0f64 {
+                None
+            } else {
+                f64_to_real(n.log(**base))
+            }
+        }
         _ => None,
     })
 }
@@ -425,12 +433,44 @@ pub fn conv(
     }
 }
 
+#[inline]
+#[rpn_fn]
+pub fn round_real(arg: &Option<Real>) -> Result<Option<Real>> {
+    match arg {
+        Some(arg) => Ok(Real::new(arg.round()).ok()),
+        None => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_int(arg: &Option<Int>) -> Result<Option<Int>> {
+    Ok(*arg)
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_dec(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
+    match arg {
+        Some(arg) => {
+            let res: codec::Result<Decimal> = arg
+                .to_owned()
+                .round(DEFAULT_FSP, RoundMode::HalfEven)
+                .into();
+            Ok(Some(res?))
+        }
+        None => Ok(None),
+    }
+}
+
 thread_local! {
    static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+    use std::{f64, i64};
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -491,6 +531,9 @@ mod tests {
             (Some(2.0_f64), Some(1.0_f64), Some(Real::from(0.0_f64))),
             (Some(0.5_f64), Some(0.25_f64), Some(Real::from(2.0_f64))),
             (Some(-0.23323_f64), Some(2.0_f64), None),
+            (Some(0_f64), Some(123_f64), None),
+            (Some(1_f64), Some(123_f64), None),
+            (Some(1123_f64), Some(0_f64), None),
             (None, None, None),
             (Some(2.0_f64), None, None),
             (None, Some(2.0_f64), None),
@@ -1322,6 +1365,65 @@ mod tests {
                 .evaluate::<Bytes>(ScalarFuncSig::Conv)
                 .unwrap();
             assert_eq!(got, e);
+        }
+    }
+
+    #[test]
+    fn test_round_real() {
+        let test_cases = vec![
+            (Some(Real::from(-3.12_f64)), Some(Real::from(-3f64))),
+            (Some(Real::from(f64::MAX)), Some(Real::from(f64::MAX))),
+            (Some(Real::from(f64::MIN)), Some(Real::from(f64::MIN))),
+            (None, None),
+        ];
+
+        for (arg, exp) in test_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Real>(ScalarFuncSig::RoundReal)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_round_int() {
+        let test_cases = vec![
+            (Some(Int::from(1)), Some(Int::from(1))),
+            (Some(Int::from(i64::MAX)), Some(Int::from(i64::MAX))),
+            (Some(Int::from(i64::MIN)), Some(Int::from(i64::MIN))),
+            (None, None),
+        ];
+
+        for (arg, exp) in test_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Int>(ScalarFuncSig::RoundInt)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_round_dec() {
+        let test_cases = vec![
+            (
+                Some(Decimal::from_str("123.1").unwrap()),
+                Some(Decimal::from_str("123.0").unwrap()),
+            ),
+            (
+                Some(Decimal::from_str("-1111.1").unwrap()),
+                Some(Decimal::from_str("-1111.0").unwrap()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Decimal>(ScalarFuncSig::RoundDec)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 }

@@ -383,8 +383,7 @@ impl ToInt for Bytes {
 impl ToInt for Decimal {
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        // TODO: avoid this clone
-        let dec = round_decimal_with_ctx(ctx, self.clone())?;
+        let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_i64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
@@ -393,8 +392,7 @@ impl ToInt for Decimal {
 
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        // TODO: avoid this clone
-        let dec = round_decimal_with_ctx(ctx, self.clone())?;
+        let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_u64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
@@ -579,7 +577,7 @@ pub fn produce_dec_with_specified_tp(
             ))?;
             dec = max_or_min_dec(dec.is_negative(), flen as u8, decimal as u8)
         } else if frac != decimal {
-            let old = dec.clone();
+            let old = dec;
             let rounded = dec
                 .round(decimal as i8, RoundMode::HalfEven)
                 .into_result_with_overflow_err(
@@ -770,8 +768,30 @@ impl ConvertTo<f64> for Bytes {
 }
 
 pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
-    let vs = get_valid_float_prefix(ctx, s)?;
-    float_str_to_int_string(ctx, vs)
+    if !ctx.cfg.flag.contains(Flag::IN_SELECT_STMT) {
+        let vs = get_valid_float_prefix(ctx, s)?;
+        float_str_to_int_string(ctx, vs)
+    } else {
+        let mut valid_len = 0;
+        for (i, c) in s.chars().enumerate() {
+            if (c == '+' || c == '-') && i == 0 {
+                continue;
+            }
+            if c >= '0' && c <= '9' {
+                valid_len = i + 1;
+                continue;
+            }
+            break;
+        }
+        let mut valid = &s[..valid_len];
+        if valid == "" {
+            valid = "0";
+        }
+        if valid_len == 0 || valid_len < s.len() {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("INTEGER", s))?;
+        }
+        Ok(Cow::Borrowed(valid))
+    }
 }
 
 pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a str> {
@@ -1241,7 +1261,7 @@ mod tests {
             // OVERFLOW_AS_WARNING
             let mut ctx =
                 EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-            let val = raw.clone().to_int(&mut ctx, tp);
+            let val = raw.to_int(&mut ctx, tp);
             assert_eq!(val.unwrap(), dst);
             assert_eq!(ctx.warnings.warning_cnt, 1);
         }
@@ -1941,6 +1961,26 @@ mod tests {
             assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
+            Flag::IN_SELECT_STMT | Flag::IGNORE_TRUNCATE | Flag::OVERFLOW_AS_WARNING,
+        )));
+        let cases = vec![
+            ("+0.0", "+0"),
+            ("100", "100"),
+            ("+100", "+100"),
+            ("-100", "-100"),
+            ("9e20", "9"),
+            ("+9e20", "+9"),
+            ("-9e20", "-9"),
+            ("-900e20", "-900"),
+        ];
+
+        for (i, e) in cases {
+            let o = super::get_valid_int_prefix(&mut ctx, i);
+            assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
+        }
+        assert_eq!(ctx.take_warnings().warnings.len(), 0);
     }
 
     #[test]
@@ -2089,7 +2129,7 @@ mod tests {
         for (dec, flen, decimal, want) in cases {
             ft.set_flen(flen);
             ft.set_decimal(decimal);
-            let nd = produce_dec_with_specified_tp(&mut ctx, dec.clone(), &ft);
+            let nd = produce_dec_with_specified_tp(&mut ctx, dec, &ft);
             assert!(nd.is_ok());
             let nd = nd.unwrap();
             assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
@@ -2476,20 +2516,27 @@ mod tests {
                 }
 
                 // call produce_dec_with_specified_tp
-                let r = produce_dec_with_specified_tp(&mut ctx, input.clone(), &rft);
+                let r = produce_dec_with_specified_tp(&mut ctx, input, &rft);
 
                 // make log
                 let rs = r.as_ref().map(|x| x.to_string());
                 let expect_str = expect.as_ref().map(|x| x.to_string());
-                let log =
-                    format!(
-                            "input: {}, origin_flen: {}, origin_decimal: {}, \
+                let log = format!(
+                    "input: {}, origin_flen: {}, origin_decimal: {}, \
                      res_flen: {}, res_decimal: {}, is_unsigned: {}, \
                      in_dml: {}, in_dml_flag(if in_dml is false, it will take no effect): {:?}, \
                      expect: {:?}, expect: {:?}",
-                            input, origin_flen, origin_decimal, res_flen, res_decimal,
-                            is_unsigned, in_dml, in_dml_flag, expect_str, rs
-                        );
+                    input,
+                    origin_flen,
+                    origin_decimal,
+                    res_flen,
+                    res_decimal,
+                    is_unsigned,
+                    in_dml,
+                    in_dml_flag,
+                    expect_str,
+                    rs
+                );
 
                 // check result
                 match &expect {

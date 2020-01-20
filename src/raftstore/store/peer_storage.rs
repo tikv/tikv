@@ -15,7 +15,7 @@ use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
 use engine_rocks::RocksSnapshot;
-use engine_traits::Peekable as PeekableTrait;
+use engine_traits::{KvEngine, Peekable as PeekableTrait};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1344,12 +1344,15 @@ pub fn clear_meta(
     Ok(())
 }
 
-pub fn do_snapshot(
+pub fn do_snapshot<E>(
     mgr: SnapManager,
-    raft_snap: RocksSnapshot,
-    kv_snap: RocksSnapshot,
+    raft_snap: E::Snapshot,
+    kv_snap: E::Snapshot,
     region_id: u64,
-) -> raft::Result<Snapshot> {
+) -> raft::Result<Snapshot>
+where
+    E: KvEngine,
+{
     debug!(
         "begin to generate a snapshot";
         "region_id" => region_id,
@@ -1417,7 +1420,7 @@ pub fn do_snapshot(
     let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = mgr.get_snapshot_for_building(&key)?;
+    let mut s = mgr.get_snapshot_for_building::<E>(&key)?;
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::default();
     snap_data.set_region(state.get_region().clone());
@@ -1643,6 +1646,7 @@ pub fn maybe_upgrade_from_2_to_3(
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::coprocessor::CoprocessorHost;
     use crate::raftstore::store::fsm::apply::compact_raft_log;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
@@ -1968,7 +1972,16 @@ mod tests {
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
-        let runner = RegionRunner::new(s.engines.clone(), mgr, 0, true, Duration::from_secs(0));
+        let (router, _) = mpsc::sync_channel(100);
+        let runner = RegionRunner::new(
+            s.engines.clone(),
+            mgr,
+            0,
+            true,
+            Duration::from_secs(0),
+            Arc::new(CoprocessorHost::default()),
+            router,
+        );
         worker.start(runner).unwrap();
         let snap = s.snapshot(0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -2044,7 +2057,7 @@ mod tests {
         s.apply_state = ctx.apply_state;
 
         let (tx, rx) = channel();
-        tx.send(snap.clone()).unwrap();
+        tx.send(snap).unwrap();
         s.set_snap_state(SnapState::Generating(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
@@ -2285,12 +2298,15 @@ mod tests {
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
+        let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
             s1.engines.clone(),
-            mgr.clone(),
+            mgr,
             0,
             true,
             Duration::from_secs(0),
+            Arc::new(CoprocessorHost::default()),
+            router,
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot(0).is_err());
