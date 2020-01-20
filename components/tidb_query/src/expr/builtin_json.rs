@@ -339,7 +339,7 @@ mod tests {
                 Some(s) => Datum::Json(s.parse().unwrap()),
             });
             let op = if let Some(b) = param {
-                scalar_func_expr(ScalarFuncSig::JsonKeysSig, &[json, datum_expr(b)])
+                scalar_func_expr(ScalarFuncSig::JsonKeys2ArgsSig, &[json, datum_expr(b)])
             } else {
                 scalar_func_expr(ScalarFuncSig::JsonKeysSig, &[json])
             };

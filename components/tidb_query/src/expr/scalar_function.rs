@@ -297,9 +297,10 @@ impl ScalarFunc {
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
             | ScalarFuncSig::JsonDepthSig
-            | ScalarFuncSig::RandomBytes => (1, 1),
+            | ScalarFuncSig::RandomBytes
+            | ScalarFuncSig::JsonKeysSig => (1, 1),
 
-            ScalarFuncSig::JsonKeysSig | ScalarFuncSig::JsonLengthSig => (1, 2),
+            ScalarFuncSig::JsonKeys2ArgsSig | ScalarFuncSig::JsonLengthSig => (1, 2),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -533,7 +534,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonStorageSizeSig
             | ScalarFuncSig::JsonValidJsonSig
             | ScalarFuncSig::JsonContainsSig
-            | ScalarFuncSig::JsonKeys2ArgsSig
             | ScalarFuncSig::JsonValidStringSig
             | ScalarFuncSig::JsonValidOthersSig => return Err(Error::UnknownSignature(sig)),
 
@@ -1104,7 +1104,9 @@ dispatch_call! {
         IfJson => if_json,
         IfNullJson => if_null_json,
 
+
         JsonKeysSig => json_keys,
+        JsonKeys2ArgsSig => json_keys,
         JsonExtractSig => json_extract,
         JsonSetSig => json_set,
         JsonInsertSig => json_insert,
