@@ -473,11 +473,11 @@ mod tests {
             Datum::I64(32),
             Datum::F64(32.5),
         ];
-
+        let capacity = 4096;
         let raw_vec_data = datum_data
             .iter()
             .map(|datum| {
-                let mut col = LazyBatchColumn::raw_with_capacity(1);
+                let mut col = LazyBatchColumn::raw_with_capacity(capacity);
                 let mut ctx = EvalContext::default();
                 let mut datum_raw = Vec::new();
                 datum_raw
@@ -490,10 +490,12 @@ mod tests {
 
         let mut chunk = Chunk::new(&fields, 10);
         b.iter(|| {
-            for (col_id, val) in raw_vec_data.iter().enumerate() {
-                chunk
-                    .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
-                    .unwrap();
+            for _count in 0..capacity {
+                for (col_id, val) in raw_vec_data.iter().enumerate() {
+                    chunk
+                        .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                        .unwrap();
+                }
             }
         });
     }
@@ -509,10 +511,11 @@ mod tests {
             Datum::Dec(dec),
         ];
 
+        let capacity = 4096;
         let raw_vec_data = datum_data
             .iter()
             .map(|datum| {
-                let mut col = LazyBatchColumn::raw_with_capacity(1);
+                let mut col = LazyBatchColumn::raw_with_capacity(capacity);
                 let mut ctx = EvalContext::default();
                 let mut datum_raw = Vec::new();
                 datum_raw
@@ -525,10 +528,12 @@ mod tests {
 
         let mut chunk = Chunk::new(&fields, 10);
         b.iter(|| {
-            for (col_id, val) in raw_vec_data.iter().enumerate() {
-                chunk
-                    .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
-                    .unwrap();
+            for _count in 0..capacity {
+                for (col_id, val) in raw_vec_data.iter().enumerate() {
+                    chunk
+                        .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                        .unwrap();
+                }
             }
         });
     }
@@ -543,10 +548,11 @@ mod tests {
             Datum::Bytes(b"xxx".to_vec()),
         ];
 
+        let capacity = 4096;
         let raw_vec_data = datum_data
             .iter()
             .map(|datum| {
-                let mut col = LazyBatchColumn::raw_with_capacity(1);
+                let mut col = LazyBatchColumn::raw_with_capacity(capacity);
                 let mut ctx = EvalContext::default();
                 let mut datum_raw = Vec::new();
                 datum_raw
@@ -559,10 +565,12 @@ mod tests {
 
         let mut chunk = Chunk::new(&fields, 10);
         b.iter(|| {
-            for (col_id, val) in raw_vec_data.iter().enumerate() {
-                chunk
-                    .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
-                    .unwrap();
+            for _count in 0..capacity {
+                for (col_id, val) in raw_vec_data.iter().enumerate() {
+                    chunk
+                        .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                        .unwrap();
+                }
             }
         });
     }
@@ -579,10 +587,11 @@ mod tests {
             Datum::Json(json),
         ];
 
+        let capacity = 4096;
         let raw_vec_data = datum_data
             .iter()
             .map(|datum| {
-                let mut col = LazyBatchColumn::raw_with_capacity(1);
+                let mut col = LazyBatchColumn::raw_with_capacity(capacity);
                 let mut ctx = EvalContext::default();
                 let mut datum_raw = Vec::new();
                 datum_raw
@@ -595,10 +604,12 @@ mod tests {
 
         let mut chunk = Chunk::new(&fields, 10);
         b.iter(|| {
-            for (col_id, val) in raw_vec_data.iter().enumerate() {
-                chunk
-                    .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
-                    .unwrap();
+            for _count in 0..capacity {
+                for (col_id, val) in raw_vec_data.iter().enumerate() {
+                    chunk
+                        .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                        .unwrap();
+                }
             }
         });
     }
