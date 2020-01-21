@@ -362,6 +362,7 @@ mod tests {
     use crate::codec::chunk::tests::*;
     use crate::codec::datum::{Datum, DatumEncoder};
     use crate::codec::mysql::*;
+    use test::Bencher;
 
     #[test]
     fn test_append_datum() {
@@ -460,6 +461,148 @@ mod tests {
             assert_eq!(row.idx(), 0);
         }
     }
+
+    #[bench]
+    fn bench_append_lazy_col_basic_type(b: &mut Bencher) {
+        let mut ctx = EvalContext::default();
+        let fields = vec![
+            field_type(FieldTypeTp::LongLong),
+            field_type(FieldTypeTp::Float),
+        ];
+        let datum_data = vec![
+            Datum::I64(32),
+            Datum::F64(32.5),
+        ];
+
+        let raw_vec_data = datum_data
+            .iter()
+            .map(|datum| {
+                let mut col = LazyBatchColumn::raw_with_capacity(1);
+                let mut ctx = EvalContext::default();
+                let mut datum_raw = Vec::new();
+                datum_raw
+                    .write_datum(&mut ctx, &[datum.clone()], false)
+                    .unwrap();
+                col.mut_raw().push(&datum_raw);
+                col
+            })
+            .collect::<Vec<_>>();
+
+        let mut chunk = Chunk::new(&fields, 10);
+        b.iter(|| {
+            for (col_id, val) in raw_vec_data.iter().enumerate() {
+                chunk
+                    .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                    .unwrap();
+            }
+        });
+    }
+
+    #[bench]
+    fn bench_append_lazy_col_decimal(b: &mut Bencher) {
+        let mut ctx = EvalContext::default();
+        let fields = vec![
+            field_type(FieldTypeTp::NewDecimal),
+        ];
+        let dec: Decimal = "1234.00".parse().unwrap();
+        let datum_data = vec![
+            Datum::Dec(dec),
+        ];
+
+        let raw_vec_data = datum_data
+            .iter()
+            .map(|datum| {
+                let mut col = LazyBatchColumn::raw_with_capacity(1);
+                let mut ctx = EvalContext::default();
+                let mut datum_raw = Vec::new();
+                datum_raw
+                    .write_datum(&mut ctx, &[datum.clone()], false)
+                    .unwrap();
+                col.mut_raw().push(&datum_raw);
+                col
+            })
+            .collect::<Vec<_>>();
+
+        let mut chunk = Chunk::new(&fields, 10);
+        b.iter(|| {
+            for (col_id, val) in raw_vec_data.iter().enumerate() {
+                chunk
+                    .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                    .unwrap();
+            }
+        });
+    }
+
+    #[bench]
+    fn bench_append_lazy_col_bytes(b: &mut Bencher) {
+        let mut ctx = EvalContext::default();
+        let fields = vec![
+            field_type(FieldTypeTp::String),
+        ];
+        let datum_data = vec![
+            Datum::Bytes(b"xxx".to_vec()),
+        ];
+
+        let raw_vec_data = datum_data
+            .iter()
+            .map(|datum| {
+                let mut col = LazyBatchColumn::raw_with_capacity(1);
+                let mut ctx = EvalContext::default();
+                let mut datum_raw = Vec::new();
+                datum_raw
+                    .write_datum(&mut ctx, &[datum.clone()], false)
+                    .unwrap();
+                col.mut_raw().push(&datum_raw);
+                col
+            })
+            .collect::<Vec<_>>();
+
+        let mut chunk = Chunk::new(&fields, 10);
+        b.iter(|| {
+            for (col_id, val) in raw_vec_data.iter().enumerate() {
+                chunk
+                    .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                    .unwrap();
+            }
+        });
+    }
+
+
+    #[bench]
+    fn bench_append_lazy_col_json(b: &mut Bencher) {
+        let mut ctx = EvalContext::default();
+        let fields = vec![
+            field_type(FieldTypeTp::JSON),
+        ];
+        let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
+        let datum_data = vec![
+            Datum::Json(json),
+        ];
+
+        let raw_vec_data = datum_data
+            .iter()
+            .map(|datum| {
+                let mut col = LazyBatchColumn::raw_with_capacity(1);
+                let mut ctx = EvalContext::default();
+                let mut datum_raw = Vec::new();
+                datum_raw
+                    .write_datum(&mut ctx, &[datum.clone()], false)
+                    .unwrap();
+                col.mut_raw().push(&datum_raw);
+                col
+            })
+            .collect::<Vec<_>>();
+
+        let mut chunk = Chunk::new(&fields, 10);
+        b.iter(|| {
+            for (col_id, val) in raw_vec_data.iter().enumerate() {
+                chunk
+                    .append_logical_rows(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                    .unwrap();
+            }
+        });
+    }
+
 
     #[test]
     fn test_codec() {
