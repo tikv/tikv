@@ -71,7 +71,11 @@ impl Writer {
 
         let (reader, hasher) = Sha256Reader::new(sst_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
-        storage.write(&file_name, Box::new(limiter.limit(AllowStdIo::new(reader))))?;
+        storage.write(
+            &file_name,
+            Box::new(limiter.limit(AllowStdIo::new(reader))),
+            sst_info.file_size(),
+        )?;
         let sha256 = hasher
             .lock()
             .unwrap()

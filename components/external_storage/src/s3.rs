@@ -91,7 +91,12 @@ impl S3Storage {
 }
 
 impl ExternalStorage for S3Storage {
-    fn write(&self, name: &str, reader: Box<dyn AsyncRead + Unpin + Send>) -> Result<()> {
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Unpin + Send>,
+        content_length: u64,
+    ) -> Result<()> {
         let key = self.maybe_prefix_key(name);
         debug!("save file to s3 storage"; "key" => %key);
         let get_var = |s: &String| {
@@ -107,6 +112,7 @@ impl ExternalStorage for S3Storage {
             body: Some(ByteStream::new(
                 FramedRead::new(reader.compat(), BytesCodec::new()).map(|bytes| bytes.freeze()),
             )),
+            content_length: Some(content_length as i64),
             acl: get_var(&self.config.acl),
             server_side_encryption: get_var(&self.config.sse),
             storage_class: get_var(&self.config.storage_class),
@@ -193,8 +199,12 @@ mod tests {
             },
         );
         let s = S3Storage::with_request_dispatcher(&config, dispatcher).unwrap();
-        s.write("mykey", Box::new(magic_contents.as_bytes()))
-            .unwrap();
+        s.write(
+            "mykey",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        )
+        .unwrap();
         let mut reader = s.read("mykey").unwrap();
         let mut buf = Vec::new();
         let ret = futures::executor::block_on(reader.read_to_end(&mut buf));

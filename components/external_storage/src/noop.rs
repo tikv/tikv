@@ -15,7 +15,12 @@ use super::ExternalStorage;
 pub struct NoopStorage {}
 
 impl ExternalStorage for NoopStorage {
-    fn write(&self, _name: &str, reader: Box<dyn AsyncRead + Send + Unpin>) -> io::Result<()> {
+    fn write(
+        &self,
+        _name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        _content_length: u64,
+    ) -> io::Result<()> {
         // we must still process the entire reader to run the SHA-256 hasher.
         block_on(copy(reader, &mut AllowStdIo::new(io::sink()))).map(drop)
     }
@@ -36,7 +41,12 @@ mod tests {
 
         // Test save_file
         let magic_contents: &[u8] = b"5678";
-        noop.write("a.log", Box::new(magic_contents)).unwrap();
+        noop.write(
+            "a.log",
+            Box::new(magic_contents),
+            magic_contents.len() as u64,
+        )
+        .unwrap();
         let mut reader = noop.read("a.log").unwrap();
         let mut buf = vec![];
         block_on(reader.read_to_end(&mut buf)).unwrap();

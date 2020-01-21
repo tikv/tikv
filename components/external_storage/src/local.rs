@@ -59,6 +59,7 @@ impl ExternalStorage for LocalStorage {
         &self,
         name: &str,
         reader: Box<dyn AsyncRead + Send + Unpin + 'static>,
+        _content_length: u64,
     ) -> io::Result<()> {
         // Storage does not support dir,
         // "a/a.sst", "/" and "" will return an error.
@@ -124,14 +125,19 @@ mod tests {
 
         // Test save_file
         let magic_contents: &[u8] = b"5678";
-        ls.write("a.log", Box::new(magic_contents)).unwrap();
+        let content_length = magic_contents.len() as u64;
+        ls.write("a.log", Box::new(magic_contents), content_length)
+            .unwrap();
         assert_eq!(fs::read(path.join("a.log")).unwrap(), magic_contents);
 
         // Names contain parent is not allowed.
-        ls.write("a/a.log", Box::new(magic_contents)).unwrap_err();
+        ls.write("a/a.log", Box::new(magic_contents), content_length)
+            .unwrap_err();
         // Empty name is not allowed.
-        ls.write("", Box::new(magic_contents)).unwrap_err();
+        ls.write("", Box::new(magic_contents), content_length)
+            .unwrap_err();
         // root is not allowed.
-        ls.write("/", Box::new(magic_contents)).unwrap_err();
+        ls.write("/", Box::new(magic_contents), content_length)
+            .unwrap_err();
     }
 }

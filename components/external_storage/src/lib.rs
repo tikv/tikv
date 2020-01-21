@@ -128,14 +128,24 @@ pub fn make_s3_backend(config: S3) -> StorageBackend {
 // TODO: these should all be returning a future (i.e. async fn).
 pub trait ExternalStorage: Sync + Send + 'static {
     /// Write all contents of the read to the given path.
-    fn write(&self, name: &str, reader: Box<dyn AsyncRead + Send + Unpin>) -> io::Result<()>;
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()>;
     /// Read all contents of the given path.
     fn read(&self, name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>>;
 }
 
 impl ExternalStorage for Arc<dyn ExternalStorage> {
-    fn write(&self, name: &str, reader: Box<dyn AsyncRead + Send + Unpin>) -> io::Result<()> {
-        (**self).write(name, reader)
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()> {
+        (**self).write(name, reader, content_length)
     }
     fn read(&self, name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>> {
         (**self).read(name)

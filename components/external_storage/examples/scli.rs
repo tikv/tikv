@@ -135,7 +135,8 @@ fn process() -> Result<()> {
     match matches.subcommand_name() {
         Some("save") => {
             let file = File::open(file_path)?;
-            storage.write(name, Box::new(AllowStdIo::new(file)))?;
+            let file_size = file.metadata()?.len();
+            storage.write(name, Box::new(AllowStdIo::new(file)), file_size)?;
         }
         Some("load") => {
             let mut file = AllowStdIo::new(File::create(file_path)?);
