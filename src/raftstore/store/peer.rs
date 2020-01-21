@@ -558,6 +558,7 @@ impl Peer {
             state != GroupState::Chaos
                 && self.raft_group.raft.leader_id != raft::INVALID_ID
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
+                && !self.has_unresolved_reads()
         }
     }
 
@@ -1871,6 +1872,10 @@ impl Peer {
         Ok(())
     }
 
+    pub fn has_unresolved_reads(&self) -> bool {
+        self.pending_reads.has_unresolved()
+    }
+
     /// `ReadIndex` requests could be lost in network, so on followers commands could queue in
     /// `pending_reads` forever. Sending a new `ReadIndex` periodically can resolve this.
     pub fn retry_pending_reads(&mut self, cfg: &Config) {
@@ -1889,6 +1894,7 @@ impl Peer {
             "request_id" => ?read.id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
+            "uuid" => ?read.id,
         );
     }
 
@@ -1984,6 +1990,7 @@ impl Peer {
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "is_leader" => self.is_leader(),
+            "uuid" => ?id,
         );
 
         // TimeoutNow has been sent out, so we need to propose explicitly to

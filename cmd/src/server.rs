@@ -40,7 +40,7 @@ use tikv::{
         store::{
             fsm,
             fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-            new_compaction_listener, LocalReader, SnapManagerBuilder,
+            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder,
         },
     },
     read_pool::{ReadPool, ReadPoolRunner},
@@ -60,7 +60,7 @@ use tikv_util::{
     check_environment_variables,
     security::SecurityManager,
     time::Monitor,
-    worker::{FutureWorker, Worker},
+    worker::{FutureScheduler, FutureWorker, Worker},
 };
 use yatp::{
     pool::CloneRunnerBuilder,
@@ -118,6 +118,7 @@ struct Engines {
 }
 
 struct Servers {
+    pd_sender: FutureScheduler<PdTask>,
     lock_mgr: Option<LockManager>,
     server: Server<ServerRaftStoreRouter, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
@@ -451,7 +452,7 @@ impl TiKVServer {
         } else {
             let cop_read_pools = coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.coprocessor,
-                pd_sender,
+                pd_sender.clone(),
                 engines.engine.clone(),
             );
             ReadPool::from(cop_read_pools)
@@ -506,6 +507,7 @@ impl TiKVServer {
         }
 
         self.servers = Some(Servers {
+            pd_sender,
             lock_mgr,
             server,
             node,
@@ -631,22 +633,23 @@ impl TiKVServer {
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
-        let server = &mut self.servers.as_mut().unwrap().server;
+        let server = self.servers.as_mut().unwrap();
         server
+            .server
             .build_and_bind()
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
+            .server
             .start(server_config, self.security_mgr.clone())
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
 
         // Create a status server.
         let status_enabled =
             self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
-        // FIXME: How to keep config updated?
         if status_enabled {
             let mut status_server = Box::new(StatusServer::new(
                 self.config.server.status_thread_pool_size,
-                self.config.clone(),
+                server.pd_sender.clone(),
             ));
             // Start the status server.
             if let Err(e) = status_server.start(self.config.server.status_addr.clone()) {

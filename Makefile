@@ -77,9 +77,7 @@ endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
-DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
-GOROOT ?= $(DEPS_PATH)/go
 CARGO_TARGET_DIR ?= $(CURDIR)/target
 
 # Build-time environment, captured for reporting by the application binary
@@ -237,6 +235,7 @@ test:
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
+	bash scripts/check-udeps.sh
 	# TODO: remove the section after https://github.com/rust-lang/cargo/issues/5364 is resolved.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
