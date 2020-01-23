@@ -99,6 +99,10 @@ impl ReadIndexQueue {
         true
     }
 
+    pub fn has_unresolved(&self) -> bool {
+        self.ready_cnt != self.reads.len()
+    }
+
     /// Clear all commands in the queue. if `notify_removed` contains an `region_id`,
     /// notify the request's callback that the region is removed.
     pub fn clear_all(&mut self, notify_removed: Option<u64>) {

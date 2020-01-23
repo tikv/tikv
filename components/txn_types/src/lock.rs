@@ -2,6 +2,7 @@
 
 use crate::timestamp::{TimeStamp, TsSet};
 use crate::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::{Error, ErrorInner, Result};
 use crate::{Error, Result};
 use codec::number::MAX_VARINT64_LENGTH;
 use codec::prelude::{CompactByteDecoder, CompactByteEncoder, NumberDecoder, NumberEncoder};
@@ -102,12 +103,12 @@ impl Lock {
 
     pub fn parse(mut b: &[u8]) -> Result<Lock> {
         if b.is_empty() {
-            return Err(Error::BadFormatLock);
+            return Err(Error::from(ErrorInner::BadFormatLock));
         }
-        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
+        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
         let primary = b.read_compact_bytes()?;
         if b.is_empty() {
-            return Err(Error::BadFormatLock);
+            return Err(ErrorInner::BadFormatLock);
         }
         let ts = b.read_var_u64()?.into();
         let ttl = if b.is_empty() { 0 } else { b.read_var_u64()? };
@@ -201,7 +202,9 @@ impl Lock {
         }
 
         // There is a pending lock. Client should wait or clean it.
-        Err(Error::KeyIsLocked(self.into_lock_info(raw_key)))
+        Err(Error::from(ErrorInner::KeyIsLocked(
+            self.into_lock_info(raw_key),
+        )))
     }
 }
 
