@@ -12,7 +12,7 @@ use tipb::{Expr, FieldType};
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
-use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use crate::codec::mysql::{binary_literal, Time};
 use crate::codec::Error;
 use crate::expr::EvalContext;
@@ -917,11 +917,11 @@ macro_rules! cast_as_duration {
                         Err(e) => match e.code() {
                             ERR_DATA_OUT_OF_RANGE => {
                                 ctx.handle_overflow_err(e)?;
-                                Ok(Some(Duration::zero()))
+                                Ok(None)
                             }
-                            WARN_DATA_TRUNCATED => {
+                            ERR_TRUNCATE_WRONG_VALUE => {
                                 ctx.handle_truncate_err(e)?;
-                                Ok(Some(Duration::zero()))
+                                Ok(None)
                             }
                             _ => Err(e.into()),
                         },
@@ -5136,15 +5136,15 @@ mod tests {
                                 func_name, func_to_debug_str(&val), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
                             );
                             check_overflow(&ctx, true, log.as_str());
-                            check_result(Some(&Duration::zero()), &result, log.as_str());
+                            check_result(None, &result, log.as_str());
                         }
-                        WARN_DATA_TRUNCATED => {
+                        ERR_TRUNCATE_WRONG_VALUE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {}, expect_warn: {}",
                                 func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
                             );
-                            check_warning(&ctx, Some(WARN_DATA_TRUNCATED), log.as_str());
-                            check_result(Some(&Duration::zero()), &result, log.as_str());
+                            check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str());
+                            check_result(None, &result, log.as_str());
                         }
                         _ => {
                             let expect_err: crate::error::Error = e.into();
