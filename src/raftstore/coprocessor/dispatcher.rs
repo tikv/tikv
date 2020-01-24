@@ -54,11 +54,6 @@ macro_rules! impl_box_observer {
                 &self.0
             }
         }
-        impl DerefMut for $name {
-            fn deref_mut(&mut self) -> &mut Box<dyn ClonableObserver<Ob = dyn $ob> + Send> {
-                &mut self.0
-            }
-        }
 
         struct $wrapper<T: $ob + Clone> {
             inner: T,
