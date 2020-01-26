@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use engine::rocks::{SeekKey, DB};
 use engine::CF_WRITE;
@@ -76,7 +77,7 @@ impl SplitCheckObserver for TableCheckObserver {
         &self,
         ctx: &mut ObserverContext<'_>,
         host: &mut Host,
-        engine: &DB,
+        engine: &Arc<DB>,
         policy: CheckPolicy,
     ) {
         if !host.cfg.split_region_on_table {

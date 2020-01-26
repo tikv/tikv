@@ -6,6 +6,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use raft::StateRole;
+use std::sync::Arc;
 
 pub mod config;
 pub mod dispatcher;
@@ -117,7 +118,7 @@ pub trait SplitChecker {
     fn split_keys(&mut self) -> Vec<Vec<u8>>;
 
     /// Get approximate split keys without scan.
-    fn approximate_split_keys(&mut self, _: &Region, _: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, _: &Region, _: &Arc<DB>) -> Result<Vec<Vec<u8>>> {
         Ok(vec![])
     }
 
@@ -131,7 +132,7 @@ pub trait SplitCheckObserver: Coprocessor {
         &self,
         _: &mut ObserverContext<'_>,
         _: &mut SplitCheckerHost<'_>,
-        _: &DB,
+        _: &Arc<DB>,
         policy: CheckPolicy,
     );
 }

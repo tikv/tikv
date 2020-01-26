@@ -5,6 +5,7 @@ use engine::util;
 use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use std::sync::Arc;
 
 use tikv_util::config::ReadableSize;
 
@@ -56,7 +57,7 @@ impl SplitChecker for Checker {
         }
     }
 
-    fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, region: &Region, engine: &Arc<DB>) -> Result<Vec<Vec<u8>>> {
         let ks = box_try!(get_region_approximate_middle(engine, region)
             .map(|keys| keys.map_or(vec![], |key| vec![key])));
 
@@ -77,7 +78,7 @@ impl SplitCheckObserver for HalfCheckObserver {
         &self,
         _: &mut ObserverContext<'_>,
         host: &mut Host,
-        _: &DB,
+        _: &Arc<DB>,
         policy: CheckPolicy,
     ) {
         if host.auto_split() {
@@ -102,7 +103,7 @@ fn half_split_bucket_size(region_max_size: u64) -> u64 {
 }
 
 /// Get region approximate middle key based on default and write cf size.
-pub fn get_region_approximate_middle(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
+pub fn get_region_approximate_middle(db: &Arc<DB>, region: &Region) -> Result<Option<Vec<u8>>> {
     let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
@@ -124,7 +125,7 @@ pub fn get_region_approximate_middle(db: &DB, region: &Region) -> Result<Option<
 /// The returned key maybe is timestamped if transaction KV is used,
 /// and must start with "z".
 fn get_region_approximate_middle_cf(
-    db: &DB,
+    db: &Arc<DB>,
     cfname: &str,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {

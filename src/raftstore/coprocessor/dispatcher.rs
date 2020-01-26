@@ -236,7 +236,7 @@ impl CoprocessorHost {
         &self,
         cfg: &'a Config,
         region: &Region,
-        engine: &DB,
+        engine: &Arc<DB>,
         auto_split: bool,
         policy: CheckPolicy,
     ) -> SplitCheckerHost<'a> {

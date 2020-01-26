@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use engine::rocks;
 use engine::rocks::DB;
@@ -86,7 +86,7 @@ impl SplitChecker for Checker {
         self.policy
     }
 
-    fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, region: &Region, engine: &Arc<DB>) -> Result<Vec<Vec<u8>>> {
         Ok(box_try!(get_approximate_split_keys(
             engine,
             region,
@@ -116,7 +116,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
         &self,
         ctx: &mut ObserverContext<'_>,
         host: &mut Host,
-        engine: &DB,
+        engine: &Arc<DB>,
         mut policy: CheckPolicy,
     ) {
         let region = ctx.region();
@@ -182,7 +182,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
 }
 
 /// Get the approximate size of the range.
-pub fn get_region_approximate_size(db: &DB, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_size(db: &Arc<DB>, region: &Region) -> Result<u64> {
     let mut size = 0;
     for cfname in LARGE_CFS {
         size += get_region_approximate_size_cf(db, cfname, &region)?
@@ -190,7 +190,7 @@ pub fn get_region_approximate_size(db: &DB, region: &Region) -> Result<u64> {
     Ok(size)
 }
 
-pub fn get_region_approximate_size_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_size_cf(db: &Arc<DB>, cfname: &str, region: &Region) -> Result<u64> {
     let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
@@ -209,7 +209,7 @@ pub fn get_region_approximate_size_cf(db: &DB, cfname: &str, region: &Region) ->
 
 /// Get region approximate split keys based on default and write cf.
 fn get_approximate_split_keys(
-    db: &DB,
+    db: &Arc<DB>,
     region: &Region,
     split_size: u64,
     max_size: u64,
@@ -240,7 +240,7 @@ fn get_approximate_split_keys(
 }
 
 fn get_approximate_split_keys_cf(
-    db: &DB,
+    db: &Arc<DB>,
     cfname: &str,
     region: &Region,
     split_size: u64,

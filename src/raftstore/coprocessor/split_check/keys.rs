@@ -7,7 +7,7 @@ use engine::util;
 use engine::CF_WRITE;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::super::error::Result;
 use super::super::metrics::*;
@@ -100,7 +100,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
         &self,
         ctx: &mut ObserverContext<'_>,
         host: &mut Host,
-        engine: &DB,
+        engine: &Arc<DB>,
         policy: CheckPolicy,
     ) {
         let region = ctx.region();
@@ -161,7 +161,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
 }
 
 /// Get the approximate number of keys in the range.
-pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys(db: &Arc<DB>, region: &Region) -> Result<u64> {
     // try to get from RangeProperties first.
     match get_region_approximate_keys_cf(db, CF_WRITE, region) {
         Ok(v) => {
@@ -180,7 +180,7 @@ pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
     Ok(keys)
 }
 
-pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys_cf(db: &Arc<DB>, cfname: &str, region: &Region) -> Result<u64> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
