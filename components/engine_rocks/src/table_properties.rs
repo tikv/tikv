@@ -96,6 +96,10 @@ impl Deref for RocksTablePropertiesKey {
 pub struct RocksTableProperties(raw::TableProperties);
 
 impl TableProperties<UCPA, UCPIA> for RocksTableProperties {
+    fn num_entries(&self) -> u64 {
+        self.0.num_entries()
+    }
+
     fn user_collected_properties(&self) -> RocksUserCollectedProperties {
         RocksUserCollectedProperties(self.0.user_collected_properties())
     }

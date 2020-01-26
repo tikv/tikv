@@ -62,6 +62,8 @@ pub trait TableProperties<UCP, UCPI>
 where UCP: UserCollectedProperties<UCPI>,
       UCPI: UserCollectedPropertiesIter
 {
+    fn num_entries(&self) -> u64;
+
     fn user_collected_properties(&self) -> UCP;
 }
 
