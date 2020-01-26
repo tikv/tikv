@@ -2,8 +2,8 @@
 
 use super::DATA_KEY_PREFIX_LEN;
 pub use crate::rocks::{DBIterator, ReadOptions, TableFilter, DB};
-use rocksdb::TableProperties;
 use crate::Result;
+use rocksdb::TableProperties;
 use tikv_util::codec::number;
 use tikv_util::keybuilder::KeyBuilder;
 

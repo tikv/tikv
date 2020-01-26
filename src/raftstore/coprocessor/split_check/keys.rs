@@ -5,7 +5,7 @@ use engine::rocks::DB;
 use engine::rocks::{self, Range};
 use engine::CF_WRITE;
 use engine_rocks::Compat;
-use engine_traits::{TablePropertiesExt, TablePropertiesCollection, TableProperties};
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::{Arc, Mutex};
@@ -188,9 +188,7 @@ pub fn get_region_approximate_keys_cf(db: &Arc<DB>, cfname: &str, region: &Regio
     let range = Range::new(&start_key, &end_key);
     let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
 
-    let collection = box_try!(db.c().get_range_properties_cf(
-        cfname, &start_key, &end_key
-    ));
+    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
     for (_, v) in collection.iter() {
         let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
         keys += props.get_approximate_keys_in_range(&start_key, &end_key);

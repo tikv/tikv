@@ -3,7 +3,7 @@
 use engine::rocks::DB;
 use engine::{CF_DEFAULT, CF_WRITE};
 use engine_rocks::Compat;
-use engine_traits::{TablePropertiesExt, TablePropertiesCollection, TableProperties};
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use std::sync::Arc;
@@ -58,7 +58,11 @@ impl SplitChecker for Checker {
         }
     }
 
-    fn approximate_split_keys(&mut self, region: &Region, engine: &Arc<DB>) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(
+        &mut self,
+        region: &Region,
+        engine: &Arc<DB>,
+    ) -> Result<Vec<Vec<u8>>> {
         let ks = box_try!(get_region_approximate_middle(engine, region)
             .map(|keys| keys.map_or(vec![], |key| vec![key])));
 
@@ -132,9 +136,7 @@ fn get_region_approximate_middle_cf(
 ) -> Result<Option<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let collection = box_try!(db.c().get_range_properties_cf(
-        cfname, &start_key, &end_key
-    ));
+    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
 
     let mut keys = Vec::new();
     for (_, v) in collection.iter() {

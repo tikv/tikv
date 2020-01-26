@@ -12,9 +12,9 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine_rocks::RocksTablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
+use engine_rocks::RocksTablePropertiesCollection;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};

@@ -5,11 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks;
 use engine::rocks::DB;
-use engine::LARGE_CFS;
 use engine::Range;
+use engine::LARGE_CFS;
 use engine::{CF_DEFAULT, CF_WRITE};
 use engine_rocks::Compat;
-use engine_traits::{TablePropertiesExt, TablePropertiesCollection, TableProperties};
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -88,7 +88,11 @@ impl SplitChecker for Checker {
         self.policy
     }
 
-    fn approximate_split_keys(&mut self, region: &Region, engine: &Arc<DB>) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(
+        &mut self,
+        region: &Region,
+        engine: &Arc<DB>,
+    ) -> Result<Vec<Vec<u8>>> {
         Ok(box_try!(get_approximate_split_keys(
             engine,
             region,
@@ -199,9 +203,7 @@ pub fn get_region_approximate_size_cf(db: &Arc<DB>, cfname: &str, region: &Regio
     let range = Range::new(&start_key, &end_key);
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
 
-    let collection = box_try!(db.c().get_range_properties_cf(
-        cfname, &start_key, &end_key
-    ));
+    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
     for (_, v) in collection.iter() {
         let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
         size += props.get_approximate_size_in_range(&start_key, &end_key);
@@ -251,9 +253,7 @@ fn get_approximate_split_keys_cf(
 ) -> Result<Vec<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let collection = box_try!(db.c().get_range_properties_cf(
-        cfname, &start_key, &end_key
-    ));
+    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
 
     let mut keys = vec![];
     let mut total_size = 0;

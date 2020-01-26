@@ -17,7 +17,7 @@ use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::Compat;
-use engine_traits::{TablePropertiesExt, TablePropertiesCollection, TableProperties};
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
@@ -855,9 +855,7 @@ impl Debugger {
         let mut mvcc_properties = MvccProperties::new();
         let start = keys::enc_start_key(&region);
         let end = keys::enc_end_key(&region);
-        let collection = box_try!(db.c().get_range_properties_cf(
-            CF_WRITE, &start, &end
-        ));
+        let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
         for (_, v) in collection.iter() {
             num_entries += v.num_entries();
             let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
@@ -898,7 +896,8 @@ impl Debugger {
                     Path::new(&*k)
                         .file_name()
                         .map(|f| f.to_str().unwrap())
-                        .unwrap_or(&*k).to_string()
+                        .unwrap_or(&*k)
+                        .to_string()
                 })
                 .collect::<Vec<_>>()
                 .join(", "),

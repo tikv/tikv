@@ -1,17 +1,29 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Deref;
 use crate::errors::Result;
 use crate::range::Range;
 use crate::CFHandleExt;
+use std::ops::Deref;
 
-pub trait TablePropertiesExt: CFHandleExt
-{
-    
-    type TablePropertiesCollection: TablePropertiesCollection<Self::TablePropertiesCollectionIter, Self::TablePropertiesKey, Self::TableProperties, Self::UserCollectedProperties, Self::UserCollectedPropertiesIter>;
-    type TablePropertiesCollectionIter: TablePropertiesCollectionIter<Self::TablePropertiesKey, Self::TableProperties, Self::UserCollectedProperties, Self::UserCollectedPropertiesIter>;
+pub trait TablePropertiesExt: CFHandleExt {
+    type TablePropertiesCollection: TablePropertiesCollection<
+        Self::TablePropertiesCollectionIter,
+        Self::TablePropertiesKey,
+        Self::TableProperties,
+        Self::UserCollectedProperties,
+        Self::UserCollectedPropertiesIter,
+    >;
+    type TablePropertiesCollectionIter: TablePropertiesCollectionIter<
+        Self::TablePropertiesKey,
+        Self::TableProperties,
+        Self::UserCollectedProperties,
+        Self::UserCollectedPropertiesIter,
+    >;
     type TablePropertiesKey: TablePropertiesKey;
-    type TableProperties: TableProperties<Self::UserCollectedProperties, Self::UserCollectedPropertiesIter>;
+    type TableProperties: TableProperties<
+        Self::UserCollectedProperties,
+        Self::UserCollectedPropertiesIter,
+    >;
     type UserCollectedProperties: UserCollectedProperties<Self::UserCollectedPropertiesIter>;
     type UserCollectedPropertiesIter: UserCollectedPropertiesIter;
 
@@ -33,12 +45,13 @@ pub trait TablePropertiesExt: CFHandleExt
     }
 }
 
-pub trait TablePropertiesCollection<I, PKey, P, UCP, UCPI,>
-where I: TablePropertiesCollectionIter<PKey, P, UCP, UCPI>,
-      PKey: TablePropertiesKey,
-      P: TableProperties<UCP, UCPI>,
-      UCP: UserCollectedProperties<UCPI>,
-      UCPI: UserCollectedPropertiesIter,
+pub trait TablePropertiesCollection<I, PKey, P, UCP, UCPI>
+where
+    I: TablePropertiesCollectionIter<PKey, P, UCP, UCPI>,
+    PKey: TablePropertiesKey,
+    P: TableProperties<UCP, UCPI>,
+    UCP: UserCollectedProperties<UCPI>,
+    UCPI: UserCollectedPropertiesIter,
 {
     fn iter(&self) -> I;
 
@@ -50,21 +63,25 @@ where I: TablePropertiesCollectionIter<PKey, P, UCP, UCPI>,
 }
 
 pub trait TablePropertiesCollectionIter<PKey, P, UCP, UCPI>
-where Self: Iterator<Item = (PKey, P)>,
-      PKey: TablePropertiesKey,
-      P: TableProperties<UCP, UCPI>,
-      UCP: UserCollectedProperties<UCPI>,
-      UCPI: UserCollectedPropertiesIter,
+where
+    Self: Iterator<Item = (PKey, P)>,
+    PKey: TablePropertiesKey,
+    P: TableProperties<UCP, UCPI>,
+    UCP: UserCollectedProperties<UCPI>,
+    UCPI: UserCollectedPropertiesIter,
 {
 }
 
 pub trait TablePropertiesKey
-where Self: Deref<Target = str>
-{}
+where
+    Self: Deref<Target = str>,
+{
+}
 
 pub trait TableProperties<UCP, UCPI>
-where UCP: UserCollectedProperties<UCPI>,
-      UCPI: UserCollectedPropertiesIter
+where
+    UCP: UserCollectedProperties<UCPI>,
+    UCPI: UserCollectedPropertiesIter,
 {
     fn num_entries(&self) -> u64;
 
@@ -72,7 +89,8 @@ where UCP: UserCollectedProperties<UCPI>,
 }
 
 pub trait UserCollectedProperties<UCPI>
-where UCPI: UserCollectedPropertiesIter
+where
+    UCPI: UserCollectedPropertiesIter,
 {
     fn iter(&self) -> UCPI;
 
@@ -85,5 +103,4 @@ where UCPI: UserCollectedPropertiesIter
     }
 }
 
-pub trait UserCollectedPropertiesIter
-{}
+pub trait UserCollectedPropertiesIter {}

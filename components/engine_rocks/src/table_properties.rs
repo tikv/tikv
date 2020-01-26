@@ -2,20 +2,17 @@
 
 #![allow(unused)]
 
-use std::ops::Deref;
 use crate::engine::RocksEngine;
 use crate::util;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
-use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
 use engine_traits::{
-    TablePropertiesCollectionIter,
-    TableProperties,
-    TablePropertiesKey,
-    UserCollectedProperties,
+    TableProperties, TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
     UserCollectedPropertiesIter,
 };
+use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
 use rocksdb::table_properties_rc as raw;
+use std::ops::Deref;
 
 impl TablePropertiesExt for RocksEngine {
     type TablePropertiesCollection = RocksTablePropertiesCollection;
@@ -54,8 +51,7 @@ type PA = RocksTableProperties;
 type UCPA = RocksUserCollectedProperties;
 type UCPIA = RocksUserCollectedPropertiesIter;
 
-impl TablePropertiesCollection<IA, PKeyA, PA, UCPA, UCPIA> for RocksTablePropertiesCollection
-{
+impl TablePropertiesCollection<IA, PKeyA, PA, UCPA, UCPIA> for RocksTablePropertiesCollection {
     fn iter(&self) -> RocksTablePropertiesCollectionIter {
         RocksTablePropertiesCollectionIter(self.0.iter())
     }
@@ -67,23 +63,21 @@ impl TablePropertiesCollection<IA, PKeyA, PA, UCPA, UCPIA> for RocksTablePropert
 
 pub struct RocksTablePropertiesCollectionIter(raw::TablePropertiesCollectionIter);
 
-impl TablePropertiesCollectionIter<PKeyA, PA, UCPA, UCPIA> for RocksTablePropertiesCollectionIter
-{}
+impl TablePropertiesCollectionIter<PKeyA, PA, UCPA, UCPIA> for RocksTablePropertiesCollectionIter {}
 
 impl Iterator for RocksTablePropertiesCollectionIter {
     type Item = (RocksTablePropertiesKey, RocksTableProperties);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(key, props)| (
-            RocksTablePropertiesKey(key),
-            RocksTableProperties(props),
-        ))
+        self.0
+            .next()
+            .map(|(key, props)| (RocksTablePropertiesKey(key), RocksTableProperties(props)))
     }
 }
 
 pub struct RocksTablePropertiesKey(raw::TablePropertiesKey);
 
-impl TablePropertiesKey for RocksTablePropertiesKey { }
+impl TablePropertiesKey for RocksTablePropertiesKey {}
 
 impl Deref for RocksTablePropertiesKey {
     type Target = str;
@@ -123,5 +117,4 @@ impl UserCollectedProperties<UCPIA> for RocksUserCollectedProperties {
 
 pub struct RocksUserCollectedPropertiesIter(raw::UserCollectedPropertiesIter);
 
-impl UserCollectedPropertiesIter for RocksUserCollectedPropertiesIter { }
-
+impl UserCollectedPropertiesIter for RocksUserCollectedPropertiesIter {}

@@ -11,8 +11,7 @@ pub struct KvEngines<K, R> {
     pub shared_block_cache: bool,
 }
 
-impl<K: KvEngine, R: KvEngine> KvEngines<K, R>
-{
+impl<K: KvEngine, R: KvEngine> KvEngines<K, R> {
     pub fn new(kv_engine: K, raft_engine: R, shared_block_cache: bool) -> Self {
         KvEngines {
             kv: kv_engine,
