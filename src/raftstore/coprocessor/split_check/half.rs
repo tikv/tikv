@@ -1,8 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DB;
-use engine::util;
 use engine::{CF_DEFAULT, CF_WRITE};
+use engine_rocks::Compat;
+use engine_traits::{TablePropertiesExt, TablePropertiesCollection, TableProperties};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use std::sync::Arc;
@@ -131,13 +132,13 @@ fn get_region_approximate_middle_cf(
 ) -> Result<Option<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let collection = box_try!(util::get_range_properties_cf(
-        db, cfname, &start_key, &end_key
+    let collection = box_try!(db.c().get_range_properties_cf(
+        cfname, &start_key, &end_key
     ));
 
     let mut keys = Vec::new();
-    for (_, v) in &*collection {
-        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+    for (_, v) in collection.iter() {
+        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
         keys.extend(
             props
                 .take_excluded_range(start_key.as_slice(), end_key.as_slice())
