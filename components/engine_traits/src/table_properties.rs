@@ -58,6 +58,10 @@ where Self: Iterator<Item = (PKey, P)>,
 {
 }
 
+pub trait TablePropertiesKey
+where Self: Deref<Target = str>
+{}
+
 pub trait TableProperties<UCP, UCPI>
 where UCP: UserCollectedProperties<UCPI>,
       UCPI: UserCollectedPropertiesIter
@@ -66,17 +70,6 @@ where UCP: UserCollectedProperties<UCPI>,
 
     fn user_collected_properties(&self) -> UCP;
 }
-
-pub trait TablePropertiesKey
-where Self: Deref<Target = str>
-{}
-
-pub trait TablePropertiesRef<P, UCP, UCPI>
-where Self: Deref<Target = P>,
-      P: TableProperties<UCP, UCPI>,
-      UCP: UserCollectedProperties<UCPI>,
-      UCPI: UserCollectedPropertiesIter,
-{}
 
 pub trait UserCollectedProperties<UCPI>
 where UCPI: UserCollectedPropertiesIter
