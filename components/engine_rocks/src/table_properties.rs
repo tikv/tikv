@@ -115,6 +115,10 @@ impl UserCollectedProperties<UCPIA> for RocksUserCollectedProperties {
     fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]> {
         self.0.get(index)
     }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 pub struct RocksUserCollectedPropertiesIter(raw::UserCollectedPropertiesIter);

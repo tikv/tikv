@@ -77,6 +77,12 @@ where UCPI: UserCollectedPropertiesIter
     fn iter(&self) -> UCPI;
 
     fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]>;
+
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 pub trait UserCollectedPropertiesIter
