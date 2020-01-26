@@ -283,7 +283,6 @@ impl CoprocessorHost {
 mod tests {
     use crate::raftstore::coprocessor::*;
     use std::sync::atomic::*;
-    use std::sync::*;
 
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{

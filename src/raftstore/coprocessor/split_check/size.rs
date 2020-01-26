@@ -555,7 +555,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let region = make_region(1, vec![], vec![]);
         assert_eq!(
@@ -595,7 +595,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         let mut big_value = Vec::with_capacity(256);
@@ -711,7 +711,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         let cf_size = 2 + 1024 + 2 + 2048 + 2 + 4096;
@@ -751,7 +751,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut cf_size = 0;
         for i in 0..100 {
@@ -792,7 +792,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut cf_size = 0;
         let cf = db.cf_handle("default").unwrap();

@@ -375,7 +375,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
@@ -421,7 +421,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let write_cf = db.cf_handle(CF_WRITE).unwrap();
         let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
