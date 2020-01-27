@@ -18,9 +18,7 @@ pub trait TablePropertiesExt: CFHandleExt {
         Self::UserCollectedProperties,
     >;
     type TablePropertiesKey: TablePropertiesKey;
-    type TableProperties: TableProperties<
-        Self::UserCollectedProperties,
-    >;
+    type TableProperties: TableProperties<Self::UserCollectedProperties>;
     type UserCollectedProperties: UserCollectedProperties;
 
     fn get_properties_of_tables_in_range(
@@ -81,8 +79,7 @@ where
     fn user_collected_properties(&self) -> UCP;
 }
 
-pub trait UserCollectedProperties
-{
+pub trait UserCollectedProperties {
     fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]>;
 
     fn len(&self) -> usize;
