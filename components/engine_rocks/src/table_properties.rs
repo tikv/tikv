@@ -8,7 +8,6 @@ use engine_traits::Range;
 use engine_traits::{Error, Result};
 use engine_traits::{
     TableProperties, TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
-    UserCollectedPropertiesIter,
 };
 use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
 use rocksdb::table_properties_rc as raw;
@@ -20,7 +19,6 @@ impl TablePropertiesExt for RocksEngine {
     type TablePropertiesKey = RocksTablePropertiesKey;
     type TableProperties = RocksTableProperties;
     type UserCollectedProperties = RocksUserCollectedProperties;
-    type UserCollectedPropertiesIter = RocksUserCollectedPropertiesIter;
 
     fn get_properties_of_tables_in_range(
         &self,
@@ -49,9 +47,8 @@ type IA = RocksTablePropertiesCollectionIter;
 type PKeyA = RocksTablePropertiesKey;
 type PA = RocksTableProperties;
 type UCPA = RocksUserCollectedProperties;
-type UCPIA = RocksUserCollectedPropertiesIter;
 
-impl TablePropertiesCollection<IA, PKeyA, PA, UCPA, UCPIA> for RocksTablePropertiesCollection {
+impl TablePropertiesCollection<IA, PKeyA, PA, UCPA> for RocksTablePropertiesCollection {
     fn iter(&self) -> RocksTablePropertiesCollectionIter {
         RocksTablePropertiesCollectionIter(self.0.iter())
     }
@@ -63,7 +60,7 @@ impl TablePropertiesCollection<IA, PKeyA, PA, UCPA, UCPIA> for RocksTablePropert
 
 pub struct RocksTablePropertiesCollectionIter(raw::TablePropertiesCollectionIter);
 
-impl TablePropertiesCollectionIter<PKeyA, PA, UCPA, UCPIA> for RocksTablePropertiesCollectionIter {}
+impl TablePropertiesCollectionIter<PKeyA, PA, UCPA> for RocksTablePropertiesCollectionIter {}
 
 impl Iterator for RocksTablePropertiesCollectionIter {
     type Item = (RocksTablePropertiesKey, RocksTableProperties);
@@ -89,7 +86,7 @@ impl Deref for RocksTablePropertiesKey {
 
 pub struct RocksTableProperties(raw::TableProperties);
 
-impl TableProperties<UCPA, UCPIA> for RocksTableProperties {
+impl TableProperties<UCPA> for RocksTableProperties {
     fn num_entries(&self) -> u64 {
         self.0.num_entries()
     }
@@ -101,11 +98,7 @@ impl TableProperties<UCPA, UCPIA> for RocksTableProperties {
 
 pub struct RocksUserCollectedProperties(raw::UserCollectedProperties);
 
-impl UserCollectedProperties<UCPIA> for RocksUserCollectedProperties {
-    fn iter(&self) -> RocksUserCollectedPropertiesIter {
-        RocksUserCollectedPropertiesIter(self.0.iter())
-    }
-
+impl UserCollectedProperties for RocksUserCollectedProperties {
     fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]> {
         self.0.get(index)
     }
@@ -114,7 +107,3 @@ impl UserCollectedProperties<UCPIA> for RocksUserCollectedProperties {
         self.0.len()
     }
 }
-
-pub struct RocksUserCollectedPropertiesIter(raw::UserCollectedPropertiesIter);
-
-impl UserCollectedPropertiesIter for RocksUserCollectedPropertiesIter {}

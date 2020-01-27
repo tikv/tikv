@@ -11,21 +11,17 @@ pub trait TablePropertiesExt: CFHandleExt {
         Self::TablePropertiesKey,
         Self::TableProperties,
         Self::UserCollectedProperties,
-        Self::UserCollectedPropertiesIter,
     >;
     type TablePropertiesCollectionIter: TablePropertiesCollectionIter<
         Self::TablePropertiesKey,
         Self::TableProperties,
         Self::UserCollectedProperties,
-        Self::UserCollectedPropertiesIter,
     >;
     type TablePropertiesKey: TablePropertiesKey;
     type TableProperties: TableProperties<
         Self::UserCollectedProperties,
-        Self::UserCollectedPropertiesIter,
     >;
-    type UserCollectedProperties: UserCollectedProperties<Self::UserCollectedPropertiesIter>;
-    type UserCollectedPropertiesIter: UserCollectedPropertiesIter;
+    type UserCollectedProperties: UserCollectedProperties;
 
     fn get_properties_of_tables_in_range(
         &self,
@@ -45,13 +41,12 @@ pub trait TablePropertiesExt: CFHandleExt {
     }
 }
 
-pub trait TablePropertiesCollection<I, PKey, P, UCP, UCPI>
+pub trait TablePropertiesCollection<I, PKey, P, UCP>
 where
-    I: TablePropertiesCollectionIter<PKey, P, UCP, UCPI>,
+    I: TablePropertiesCollectionIter<PKey, P, UCP>,
     PKey: TablePropertiesKey,
-    P: TableProperties<UCP, UCPI>,
-    UCP: UserCollectedProperties<UCPI>,
-    UCPI: UserCollectedPropertiesIter,
+    P: TableProperties<UCP>,
+    UCP: UserCollectedProperties,
 {
     fn iter(&self) -> I;
 
@@ -62,13 +57,12 @@ where
     }
 }
 
-pub trait TablePropertiesCollectionIter<PKey, P, UCP, UCPI>
+pub trait TablePropertiesCollectionIter<PKey, P, UCP>
 where
     Self: Iterator<Item = (PKey, P)>,
     PKey: TablePropertiesKey,
-    P: TableProperties<UCP, UCPI>,
-    UCP: UserCollectedProperties<UCPI>,
-    UCPI: UserCollectedPropertiesIter,
+    P: TableProperties<UCP>,
+    UCP: UserCollectedProperties,
 {
 }
 
@@ -78,22 +72,17 @@ where
 {
 }
 
-pub trait TableProperties<UCP, UCPI>
+pub trait TableProperties<UCP>
 where
-    UCP: UserCollectedProperties<UCPI>,
-    UCPI: UserCollectedPropertiesIter,
+    UCP: UserCollectedProperties,
 {
     fn num_entries(&self) -> u64;
 
     fn user_collected_properties(&self) -> UCP;
 }
 
-pub trait UserCollectedProperties<UCPI>
-where
-    UCPI: UserCollectedPropertiesIter,
+pub trait UserCollectedProperties
 {
-    fn iter(&self) -> UCPI;
-
     fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]>;
 
     fn len(&self) -> usize;
@@ -102,5 +91,3 @@ where
         self.len() == 0
     }
 }
-
-pub trait UserCollectedPropertiesIter {}
