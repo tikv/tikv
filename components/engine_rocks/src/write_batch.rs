@@ -12,19 +12,16 @@ pub struct WriteBatch {
     wb: RawWriteBatch,
 }
 
-// TODO: Remove this cast method after the engine traits is completed
-impl AsRef<RawWriteBatch> for WriteBatch {
-    fn as_ref(&self) -> &RawWriteBatch {
-        &self.wb
-    }
-}
-
 impl WriteBatch {
     pub fn new(db: Arc<DB>) -> WriteBatch {
         WriteBatch {
             db,
             wb: RawWriteBatch::default(),
         }
+    }
+
+    pub fn as_inner(&self) -> &RawWriteBatch {
+        &self.wb
     }
 
     pub fn with_capacity(db: Arc<DB>, cap: usize) -> WriteBatch {

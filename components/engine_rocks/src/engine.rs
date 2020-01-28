@@ -59,7 +59,7 @@ impl KvEngine for RocksEngine {
         }
         let opt: RocksWriteOptions = opts.into();
         self.0
-            .write_opt(wb.as_ref(), &opt.into_raw())
+            .write_opt(wb.as_inner(), &opt.into_raw())
             .map_err(Error::Engine)
     }
 
