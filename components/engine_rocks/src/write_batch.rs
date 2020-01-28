@@ -7,14 +7,14 @@ use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::util::get_cf_handle;
 
-pub struct WriteBatch {
+pub struct RocksWriteBatch {
     db: Arc<DB>,
     wb: RawWriteBatch,
 }
 
-impl WriteBatch {
-    pub fn new(db: Arc<DB>) -> WriteBatch {
-        WriteBatch {
+impl RocksWriteBatch {
+    pub fn new(db: Arc<DB>) -> RocksWriteBatch {
+        RocksWriteBatch {
             db,
             wb: RawWriteBatch::default(),
         }
@@ -24,17 +24,17 @@ impl WriteBatch {
         &self.wb
     }
 
-    pub fn with_capacity(db: Arc<DB>, cap: usize) -> WriteBatch {
+    pub fn with_capacity(db: Arc<DB>, cap: usize) -> RocksWriteBatch {
         let wb = if cap == 0 {
             RawWriteBatch::default()
         } else {
             RawWriteBatch::with_capacity(cap)
         };
-        WriteBatch { db, wb }
+        RocksWriteBatch { db, wb }
     }
 
-    pub fn from_raw(db: Arc<DB>, wb: RawWriteBatch) -> WriteBatch {
-        WriteBatch { db, wb }
+    pub fn from_raw(db: Arc<DB>, wb: RawWriteBatch) -> RocksWriteBatch {
+        RocksWriteBatch { db, wb }
     }
 
     pub fn get_db(&self) -> &DB {
@@ -42,7 +42,7 @@ impl WriteBatch {
     }
 }
 
-impl engine_traits::WriteBatch for WriteBatch {
+impl engine_traits::WriteBatch for RocksWriteBatch {
     fn data_size(&self) -> usize {
         self.wb.data_size()
     }
@@ -72,7 +72,7 @@ impl engine_traits::WriteBatch for WriteBatch {
     }
 }
 
-impl Mutable for WriteBatch {
+impl Mutable for RocksWriteBatch {
     fn put_opt(&self, _: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
         self.wb.put(key, value).map_err(Error::Engine)
     }

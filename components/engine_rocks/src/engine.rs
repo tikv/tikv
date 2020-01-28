@@ -13,6 +13,7 @@ use rocksdb::{DBIterator, Writable, DB};
 use crate::db_vector::RocksDBVector;
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::get_cf_handle;
+use crate::write_batch::RocksWriteBatch;
 use crate::{RocksEngineIterator, RocksSnapshot};
 
 #[derive(Clone, Debug)]
@@ -51,7 +52,7 @@ impl RocksEngine {
 
 impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
-    type WriteBatch = crate::WriteBatch;
+    type WriteBatch = RocksWriteBatch;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()> {
         if wb.get_db().path() != self.0.path() {
