@@ -496,7 +496,7 @@
 ## The data block size. RocksDB compresses data based on the unit of block.
 ## Similar to page in other databases, block is the smallest unit cached in block-cache. Note that
 ## the block size specified here corresponds to uncompressed data.
-# block-size = "64KB"
+# block-size = "4KB"
 
 ## If you're doing point lookups you definitely want to turn bloom filters on. We use bloom filters
 ## to avoid unnecessary disk reads. Default bits_per_key is 10, which yields ~1% false positive

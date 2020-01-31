@@ -397,7 +397,7 @@ cf_config!(DefaultCfConfig);
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
         DefaultCfConfig {
-            block_size: ReadableSize::kb(64),
+            block_size: ReadableSize::kb(4),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_DEFAULT) as u64),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
