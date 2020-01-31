@@ -18,7 +18,7 @@ use kvproto::pdpb;
 use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
+use pd_client::{ConfigClient, Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
@@ -1065,6 +1065,7 @@ impl PdClient for TestPdClient {
 
     fn handle_region_heartbeat_response<F>(&self, store_id: u64, f: F) -> PdFuture<()>
     where
+        Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
         use futures::stream;
@@ -1206,7 +1207,9 @@ impl PdClient for TestPdClient {
         resp.set_region_id(region_id);
         Ok(resp)
     }
+}
 
+impl ConfigClient for TestPdClient {
     fn register_config(
         &self,
         _id: String,
