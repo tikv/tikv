@@ -7,7 +7,6 @@ use tipb::FieldType;
 use super::column::{ChunkColumnEncoder, Column};
 use super::Result;
 use crate::codec::Datum;
-use crate::expr::EvalContext;
 
 /// `Chunk` stores multiple rows of data.
 /// Values are appended in compact format and can be directly accessed without decoding.
@@ -131,13 +130,8 @@ impl<'a> Row<'a> {
 
     /// Get the datum of the column with the specified type in the row.
     #[inline]
-    pub fn get_datum(
-        &self,
-        col_idx: usize,
-        fp: &FieldType,
-        ctx: &mut EvalContext,
-    ) -> Result<Datum> {
-        self.c.columns[col_idx].get_datum(ctx, self.idx, fp)
+    pub fn get_datum(&self, col_idx: usize, fp: &FieldType) -> Result<Datum> {
+        self.c.columns[col_idx].get_datum(self.idx, fp)
     }
 }
 
@@ -176,6 +170,7 @@ mod tests {
     use crate::codec::batch::LazyBatchColumn;
     use crate::codec::datum::{Datum, DatumEncoder};
     use crate::codec::mysql::*;
+    use crate::expr::EvalContext;
 
     #[test]
     fn test_append_datum() {
@@ -209,7 +204,7 @@ mod tests {
         }
         for row in chunk.iter() {
             for col_id in 0..row.len() {
-                let got = row.get_datum(col_id, &fields[col_id], &mut ctx).unwrap();
+                let got = row.get_datum(col_id, &fields[col_id]).unwrap();
                 assert_eq!(got, data[col_id]);
             }
 
@@ -267,7 +262,7 @@ mod tests {
         let chunk = Chunk::from_columns(columns);
         for row in chunk.iter() {
             for col_id in 0..row.len() {
-                let got = row.get_datum(col_id, &fields[col_id], &mut ctx).unwrap();
+                let got = row.get_datum(col_id, &fields[col_id]).unwrap();
                 assert_eq!(got, datum_data[col_id]);
             }
 
@@ -342,7 +337,6 @@ mod tests {
             FieldTypeTp::JSON.into(),
         ];
         let mut chunk = Chunk::new(&fields, rows);
-        let mut ctx = EvalContext::default();
 
         for row_id in 0..rows {
             let s = format!("{}.123435", row_id);
@@ -363,15 +357,11 @@ mod tests {
         assert_eq!(got.num_rows(), rows);
         for row_id in 0..rows {
             for (col_id, tp) in fields.iter().enumerate() {
-                let dt = got
-                    .get_row(row_id)
-                    .unwrap()
-                    .get_datum(col_id, tp, &mut ctx)
-                    .unwrap();
+                let dt = got.get_row(row_id).unwrap().get_datum(col_id, tp).unwrap();
                 let exp = chunk
                     .get_row(row_id)
                     .unwrap()
-                    .get_datum(col_id, tp, &mut ctx)
+                    .get_datum(col_id, tp)
                     .unwrap();
                 assert_eq!(dt, exp);
             }

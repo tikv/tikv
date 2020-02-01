@@ -9,7 +9,6 @@ use tipb::FieldType;
 
 use super::{check_fsp, Decimal, DEFAULT_FSP};
 use crate::codec::convert::ConvertTo;
-use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP};
 use crate::codec::{Error, Result, TEN_POW};
@@ -558,7 +557,7 @@ pub trait DurationDatumPayloadChunkEncoder: NumberEncoder {
         &mut self,
         mut src_payload: &[u8],
     ) -> Result<()> {
-        let nanos = src_payload.read_datum_payload_i64()?;
+        let nanos = src_payload.read_i64()?;
         self.write_i64_le(nanos)?;
         Ok(())
     }
@@ -568,7 +567,7 @@ pub trait DurationDatumPayloadChunkEncoder: NumberEncoder {
         &mut self,
         mut src_payload: &[u8],
     ) -> Result<()> {
-        let nanos = src_payload.read_datum_payload_i64()?;
+        let nanos = src_payload.read_var_i64()?;
         self.write_i64_le(nanos)?;
         Ok(())
     }

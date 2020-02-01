@@ -240,12 +240,7 @@ impl Column {
     }
 
     /// Get the datum of one row with the specified type.
-    pub fn get_datum(
-        &self,
-        ctx: &mut EvalContext,
-        idx: usize,
-        field_type: &dyn FieldTypeAccessor,
-    ) -> Result<Datum> {
+    pub fn get_datum(&self, idx: usize, field_type: &dyn FieldTypeAccessor) -> Result<Datum> {
         if self.is_null(idx) {
             return Ok(Datum::Null);
         }
@@ -265,7 +260,7 @@ impl Column {
             FieldTypeTp::Double => Datum::F64(self.get_f64(idx)?),
             FieldTypeTp::Float => Datum::F64(f64::from(self.get_f32(idx)?)),
             FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
-                Datum::Time(self.get_time(ctx, idx)?)
+                Datum::Time(self.get_time(idx)?)
             }
             FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
@@ -683,11 +678,11 @@ impl Column {
 
     /// Get the time datum of the row in the column.
     #[inline]
-    pub fn get_time(&self, ctx: &mut EvalContext, idx: usize) -> Result<Time> {
+    pub fn get_time(&self, idx: usize) -> Result<Time> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_time_from_chunk(ctx)
+        data.read_time_from_chunk()
     }
 
     /// Append a duration datum to the column.
@@ -913,15 +908,14 @@ mod tests {
             Datum::I64(12),
             Datum::I64(1024),
         ];
-        let mut ctx = EvalContext::default();
         for field in &fields {
-            let mut column = Column::new(field.tp(), data.len());
+            let mut column = Column::new(field.as_accessor().tp(), data.len());
             for v in &data {
                 column.append_datum(v).unwrap();
             }
 
             for (id, expect) in data.iter().enumerate() {
-                let get = column.get_datum(&mut ctx, id, field).unwrap();
+                let get = column.get_datum(id, field).unwrap();
                 assert_eq!(&get, expect);
             }
         }
@@ -950,14 +944,13 @@ mod tests {
     }
 
     fn test_colum_datum(fields: Vec<FieldType>, data: Vec<Datum>) {
-        let mut ctx = EvalContext::default();
         for field in &fields {
-            let mut column = Column::new(field.tp(), data.len());
+            let mut column = Column::new(field.as_accessor().tp(), data.len());
             for v in &data {
                 column.append_datum(v).unwrap();
             }
             for (id, expect) in data.iter().enumerate() {
-                let get = column.get_datum(&mut ctx, id, field).unwrap();
+                let get = column.get_datum(id, field).unwrap();
                 assert_eq!(&get, expect);
             }
         }

@@ -16,7 +16,6 @@ use tikv_util::escape;
 
 use crate::codec::convert::{self, ConvertTo};
 use crate::codec::data_type::*;
-use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -2095,7 +2094,7 @@ impl<T: BufferWriter> DecimalEncoder for T {}
 pub trait DecimalDatumPayloadChunkEncoder: NumberEncoder + DecimalEncoder {
     #[inline]
     fn write_decimal_to_chunk_by_datum_payload(&mut self, mut src_payload: &[u8]) -> Result<()> {
-        let decimal = src_payload.read_datum_payload_decimal()?;
+        let decimal = src_payload.read_decimal()?;
         self.write_decimal_to_chunk(&decimal)
     }
 }

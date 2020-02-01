@@ -22,7 +22,6 @@ use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tipb::FieldType;
 
 use crate::codec::convert::ConvertTo;
-use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::mysql::{check_fsp, Decimal, Duration};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::{EvalContext, Flag, SqlMode};
@@ -1672,7 +1671,7 @@ pub trait TimeDatumPayloadChunkEncoder: TimeEncoder {
         ctx: &mut EvalContext,
         field_type: &FieldType,
     ) -> Result<()> {
-        let time = src_payload.read_datum_payload_date_time_int(ctx, field_type)?;
+        let time = src_payload.read_time_int(ctx, field_type)?;
         self.write_time(time)
     }
 
@@ -1683,7 +1682,7 @@ pub trait TimeDatumPayloadChunkEncoder: TimeEncoder {
         ctx: &mut EvalContext,
         field_type: &FieldType,
     ) -> Result<()> {
-        let time = src_payload.read_datum_payload_date_time_varint(ctx, field_type)?;
+        let time = src_payload.read_time_varint(ctx, field_type)?;
         self.write_time(time)
     }
 }
@@ -1701,14 +1700,14 @@ pub trait TimeDecoder: NumberDecoder {
 
     #[inline]
     fn read_time_varint(&mut self, ctx: &mut EvalContext, field_type: &FieldType) -> Result<Time> {
-        let v = self.read_u64()?;
+        let v = self.read_var_u64()?;
         let fsp = field_type.as_accessor().decimal() as i8;
         let time_type = field_type.as_accessor().tp().try_into()?;
         Time::from_packed_u64(ctx, v, time_type, fsp)
     }
 
     #[inline]
-    fn read_time_from_chunk(&mut self, ctx: &mut EvalContext) -> Result<Time> {
+    fn read_time_from_chunk(&mut self) -> Result<Time> {
         let t = self.read_u64_le()?;
         Ok(Time(t))
     }
