@@ -7,7 +7,6 @@ pub mod weekmode;
 pub use self::extension::*;
 pub use self::tz::Tz;
 pub use self::weekmode::WeekMode;
-use tipb::FieldType;
 
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
@@ -15,18 +14,19 @@ use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 use std::mem;
 
-use codec::prelude::*;
-use tidb_query_datatype::FieldTypeTp;
-
-use crate::codec::convert::ConvertTo;
-use crate::codec::mysql::{check_fsp, Decimal, Duration};
-use crate::codec::{Error, Result, TEN_POW};
-use crate::expr::{EvalContext, Flag, SqlMode};
-
-use crate::codec::datum_codec::{decode_date_time_from_uint, DatumPayloadDecoder};
 use bitfield::bitfield;
 use boolinator::Boolinator;
 use chrono::prelude::*;
+
+use codec::prelude::*;
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+use tipb::FieldType;
+
+use crate::codec::convert::ConvertTo;
+use crate::codec::datum_codec::DatumPayloadDecoder;
+use crate::codec::mysql::{check_fsp, Decimal, Duration};
+use crate::codec::{Error, Result, TEN_POW};
+use crate::expr::{EvalContext, Flag, SqlMode};
 
 const MIN_TIMESTAMP: i64 = 0;
 const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
@@ -1684,29 +1684,47 @@ pub trait TimeEncoder: NumberEncoder {
     }
 }
 
-pub trait TimePayloadDatumnChunkEncoder: TimeEncoder {
-    fn write_time_to_chunk_by_datum_payload(
+pub trait TimeDatumPayloadChunkEncoder: TimeEncoder {
+    fn write_time_to_chunk_by_datum_payload_int(
         &mut self,
         mut src_payload: &[u8],
-        var_flag: bool,
         ctx: &mut EvalContext,
         field_type: &FieldType,
     ) -> Result<()> {
-        let v = if var_flag {
-            src_payload.read_datum_payload_var_u64()?
-        } else {
-            src_payload.read_datum_payload_u64()?
-        };
-        let v = decode_date_time_from_uint(v, ctx, field_type)?;
-        self.write_time(v)
+        let time = src_payload.read_datum_payload_date_time_int(ctx, field_type)?;
+        self.write_time(time)
+    }
+
+    fn write_time_to_chunk_by_datum_payload_varint(
+        &mut self,
+        mut src_payload: &[u8],
+        ctx: &mut EvalContext,
+        field_type: &FieldType,
+    ) -> Result<()> {
+        let time = src_payload.read_datum_payload_date_time_varint(ctx, field_type)?;
+        self.write_time(time)
     }
 }
 
-impl<T: BufferWriter> TimePayloadDatumnChunkEncoder for T {}
+impl<T: BufferWriter> TimeDatumPayloadChunkEncoder for T {}
 
 pub trait TimeDecoder: NumberDecoder {
+    fn read_time_int(&mut self, ctx: &mut EvalContext, field_type: &FieldType) -> Result<Time> {
+        let v = self.read_u64()?;
+        let fsp = field_type.as_accessor().decimal() as i8;
+        let time_type = field_type.as_accessor().tp().try_into()?;
+        Time::from_packed_u64(ctx, v, time_type, fsp)
+    }
+
+    fn read_time_varint(&mut self, ctx: &mut EvalContext, field_type: &FieldType) -> Result<Time> {
+        let v = self.read_u64()?;
+        let fsp = field_type.as_accessor().decimal() as i8;
+        let time_type = field_type.as_accessor().tp().try_into()?;
+        Time::from_packed_u64(ctx, v, time_type, fsp)
+    }
+
     /// Decodes time encoded by `write_time` for Chunk format.
-    fn read_time(&mut self, ctx: &mut EvalContext) -> Result<Time> {
+    fn read_time_from_chunk(&mut self, ctx: &mut EvalContext) -> Result<Time> {
         let hour = self.read_u32_le()?;
         let micro = self.read_u32_le()?;
         let year = i32::from(self.read_u16_le()?);

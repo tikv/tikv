@@ -213,14 +213,14 @@ pub trait JsonEncoder: NumberEncoder {
     }
 }
 
-pub trait JsonDatumPayloadChunkEncoder: JsonEncoder {
+impl<T: BufferWriter> JsonEncoder for T {}
+
+pub trait JsonDatumPayloadChunkEncoder: BufferWriter {
     fn write_json_to_chunk_by_datum_payload(&mut self, src_payload: &[u8]) -> Result<()> {
         self.write_bytes(src_payload)?;
         Ok(())
     }
 }
-
-impl<T: BufferWriter> JsonEncoder for T {}
 
 impl<T: BufferWriter> JsonDatumPayloadChunkEncoder for T {}
 

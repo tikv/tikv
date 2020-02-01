@@ -45,7 +45,7 @@ fn bench_encode_chunk(b: &mut Bencher) {
 
     b.iter(|| {
         let mut buf = vec![];
-        buf.encode_chunk(&chunk).unwrap();
+        buf.write_chunk(&chunk).unwrap();
     });
 }
 
