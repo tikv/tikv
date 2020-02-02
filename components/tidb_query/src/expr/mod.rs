@@ -538,7 +538,7 @@ mod tests {
             (
                 ScalarFuncSig::CastIntAsJson,
                 vec![Datum::I64(12)],
-                Datum::Json(Json::from_i64(12)),
+                Datum::Json(Json::from_i64(12).unwrap()),
             ),
         ];
         for (sig, cols, exp) in cases {

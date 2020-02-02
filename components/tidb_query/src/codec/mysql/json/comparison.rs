@@ -179,7 +179,7 @@ mod tests {
             assert!(left < right);
             assert_eq!(left, left);
         }
-        assert_eq!(Json::none(), Json::none());
+        assert_eq!(Json::none().unwrap(), Json::none().unwrap());
     }
 
     #[test]
@@ -202,6 +202,6 @@ mod tests {
             assert!(left < right);
         }
 
-        assert_eq!(Json::from_i64(2), Json::from_bool(false));
+        assert_eq!(Json::from_i64(2).unwrap(), Json::from_bool(false).unwrap());
     }
 }

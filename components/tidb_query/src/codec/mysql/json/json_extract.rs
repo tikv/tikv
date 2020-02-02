@@ -25,7 +25,7 @@ impl Json {
         }
         Ok(Some(Json::from_array(
             elem_list.drain(..).map(|j| j.to_owned()).collect(),
-        )))
+        )?))
     }
 }
 

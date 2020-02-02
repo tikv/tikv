@@ -93,11 +93,11 @@ impl<'a> BinaryModifier<'a> {
                         }
                         // We can ignore the idx in the PathLeg here since we have checked the path-value existence
                         elems.push(new.as_ref());
-                        self.new_value = Some(Json::from_ref_array(elems));
+                        self.new_value = Some(Json::from_ref_array(elems)?);
                     }
                     _ => {
                         let new_value = vec![parent_node.clone(), new.as_ref()];
-                        self.new_value = Some(Json::from_ref_array(new_value));
+                        self.new_value = Some(Json::from_ref_array(new_value)?);
                     }
                 }
             }
@@ -130,7 +130,7 @@ impl<'a> BinaryModifier<'a> {
                         values.push(new.as_ref());
                     }
                 }
-                self.new_value = Some(Json::from_kv_pairs(keys, values));
+                self.new_value = Some(Json::from_kv_pairs(keys, values)?);
             }
             _ => {}
         }
@@ -170,7 +170,7 @@ impl<'a> BinaryModifier<'a> {
                             elems.push(parent_node.array_get_elem(i)?);
                         }
                     }
-                    self.new_value = Some(Json::from_ref_array(elems));
+                    self.new_value = Some(Json::from_ref_array(elems)?);
                 }
             }
             PathLeg::Key(remove_key) => {
@@ -187,7 +187,7 @@ impl<'a> BinaryModifier<'a> {
                             values.push(parent_node.object_get_val(i)?);
                         }
                     }
-                    self.new_value = Some(Json::from_kv_pairs(keys, values));
+                    self.new_value = Some(Json::from_kv_pairs(keys, values)?);
                 }
             }
             _ => {}

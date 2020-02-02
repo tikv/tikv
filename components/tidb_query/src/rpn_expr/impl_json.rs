@@ -49,7 +49,9 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     assert!(args.len() >= 2);
     // base Json argument
     let base: &Option<Json> = args[0].as_ref();
-    let mut base = base.as_ref().map_or(Json::none(), |json| json.to_owned());
+    let mut base = base
+        .as_ref()
+        .map_or(Json::none(), |json| Ok(json.to_owned()))?;
 
     let buf_size = args.len() / 2;
 
@@ -62,7 +64,9 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
 
         path_expr_list.push(try_opt!(parse_json_path(path)));
 
-        let value = value.as_ref().map_or(Json::none(), |json| json.to_owned());
+        let value = value
+            .as_ref()
+            .map_or(Json::none(), |json| Ok(json.to_owned()))?;
         values.push(value);
     }
     base.modify(&path_expr_list, values, mt)?;
@@ -90,14 +94,14 @@ fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
 #[rpn_fn(varg)]
 #[inline]
 fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
-    Ok(Some(Json::from_array(
-        args.iter()
-            .map(|json| match json {
-                None => Json::none(),
-                Some(json) => json.to_owned(),
-            })
-            .collect(),
-    )))
+    let mut jsons = vec![];
+    for arg in args {
+        match arg {
+            None => jsons.push(Json::none()?),
+            Some(j) => jsons.push(j.to_owned()),
+        }
+    }
+    Ok(Some(Json::from_array(jsons)?))
 }
 
 fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
@@ -132,13 +136,13 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
 
         let value: &Option<Json> = chunk[1].as_ref();
         let value = match value {
-            None => Json::none(),
+            None => Json::none()?,
             Some(v) => v.to_owned(),
         };
 
         pairs.insert(key, value);
     }
-    Ok(Some(Json::from_object(pairs)))
+    Ok(Some(Json::from_object(pairs)?))
 }
 
 // According to mysql 5.7,
@@ -150,14 +154,14 @@ pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
     if args[0].is_none() {
         return Ok(None);
     }
-    Ok(Some(Json::merge(
-        args.iter()
-            .map(|json| match json {
-                None => Json::none(),
-                Some(json) => json.to_owned(),
-            })
-            .collect(),
-    )?))
+    let mut jsons = vec![];
+    for arg in args {
+        match arg {
+            None => jsons.push(Json::none()?),
+            Some(j) => jsons.push(j.to_owned()),
+        }
+    }
+    Ok(Some(Json::merge(jsons)?))
 }
 
 #[rpn_fn]
@@ -358,27 +362,27 @@ mod tests {
             (
                 ScalarFuncSig::JsonSetSig,
                 vec![
-                    Some(Json::from_i64(9)).into(),
+                    Some(Json::from_i64(9).unwrap()).into(),
                     Some(b"$[1]".to_vec()).into(),
-                    Some(Json::from_u64(3)).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
                 ],
                 Some(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonInsertSig,
                 vec![
-                    Some(Json::from_i64(9)).into(),
+                    Some(Json::from_i64(9).unwrap()).into(),
                     Some(b"$[1]".to_vec()).into(),
-                    Some(Json::from_u64(3)).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
                 ],
                 Some(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonReplaceSig,
                 vec![
-                    Some(Json::from_i64(9)).into(),
+                    Some(Json::from_i64(9).unwrap()).into(),
                     Some(b"$[1]".to_vec()).into(),
-                    Some(Json::from_u64(3)).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
                 ],
                 Some(r#"9"#.parse().unwrap()),
             ),
@@ -543,7 +547,7 @@ mod tests {
                 if parse {
                     input.parse().unwrap()
                 } else {
-                    Json::from_string(input.to_string())
+                    Json::from_string(input.to_string()).unwrap()
                 }
             });
             let expect_output = expect_output.map(Bytes::from);

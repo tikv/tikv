@@ -53,7 +53,7 @@ fn merge_binary_array(elems: Vec<Json>) -> Result<Json> {
             }
         }
     }
-    Ok(Json::from_array(buf))
+    Json::from_array(buf)
 }
 
 fn merge_binary_object(objects: &mut Vec<Json>) -> Result<Json> {
@@ -72,7 +72,7 @@ fn merge_binary_object(objects: &mut Vec<Json>) -> Result<Json> {
             }
         }
     }
-    Ok(Json::from_object(kv_map))
+    Json::from_object(kv_map)
 }
 
 #[cfg(test)]

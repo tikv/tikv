@@ -85,21 +85,21 @@ impl<'de> Visitor<'de> for JsonVisitor {
     where
         E: de::Error,
     {
-        Ok(Json::none())
+        Ok(Json::none().map_err(de::Error::custom)?)
     }
 
     fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(Json::from_bool(v))
+        Ok(Json::from_bool(v).map_err(de::Error::custom)?)
     }
 
     fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(Json::from_i64(v))
+        Ok(Json::from_i64(v).map_err(de::Error::custom)?)
     }
 
     fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
@@ -107,9 +107,9 @@ impl<'de> Visitor<'de> for JsonVisitor {
         E: de::Error,
     {
         if v > (std::i64::MAX as u64) {
-            Ok(Json::from_f64(v as f64))
+            Ok(Json::from_f64(v as f64).map_err(de::Error::custom)?)
         } else {
-            Ok(Json::from_i64(v as i64))
+            Ok(Json::from_i64(v as i64).map_err(de::Error::custom)?)
         }
     }
 
@@ -117,14 +117,14 @@ impl<'de> Visitor<'de> for JsonVisitor {
     where
         E: de::Error,
     {
-        Ok(Json::from_f64(v))
+        Ok(Json::from_f64(v).map_err(de::Error::custom)?)
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(Json::from_string(String::from(v)))
+        Ok(Json::from_string(String::from(v)).map_err(de::Error::custom)?)
     }
 
     fn visit_seq<M>(self, mut seq: M) -> Result<Self::Value, M::Error>
@@ -136,7 +136,7 @@ impl<'de> Visitor<'de> for JsonVisitor {
         while let Some(v) = seq.next_element()? {
             value.push(v);
         }
-        Ok(Json::from_array(value))
+        Ok(Json::from_array(value).map_err(de::Error::custom)?)
     }
 
     fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
@@ -147,7 +147,7 @@ impl<'de> Visitor<'de> for JsonVisitor {
         while let Some((key, value)) = access.next_entry()? {
             map.insert(key, value);
         }
-        Ok(Json::from_object(map))
+        Ok(Json::from_object(map).map_err(de::Error::custom)?)
     }
 }
 
@@ -205,7 +205,7 @@ mod tests {
         for (json_str, json) in cases {
             let resp = Json::from_str(json_str);
             assert!(resp.is_ok());
-            assert_eq!(resp.unwrap(), json);
+            assert_eq!(resp.unwrap(), json.unwrap());
         }
 
         let illegal_cases = vec!["[pxx,apaa]", "hpeheh", ""];

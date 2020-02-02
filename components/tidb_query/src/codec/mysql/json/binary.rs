@@ -399,12 +399,12 @@ mod tests {
         let jstr2 = r#"[{"a": 1, "b": true}, 3, 3.5, "hello, world", null, true]"#;
         let j2: Json = jstr2.parse().unwrap();
 
-        let json_nil = Json::none();
-        let json_bool = Json::from_bool(true);
-        let json_int = Json::from_i64(30);
-        let json_uint = Json::from_u64(30);
-        let json_double = Json::from_f64(3.24);
-        let json_str = Json::from_string(String::from("hello, 世界"));
+        let json_nil = Json::none().unwrap();
+        let json_bool = Json::from_bool(true).unwrap();
+        let json_int = Json::from_i64(30).unwrap();
+        let json_uint = Json::from_u64(30).unwrap();
+        let json_double = Json::from_f64(3.24).unwrap();
+        let json_str = Json::from_string(String::from("hello, 世界")).unwrap();
         let test_cases = vec![
             json_nil,
             json_bool,

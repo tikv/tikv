@@ -7,7 +7,7 @@ use super::{Json, JsonType};
 impl Json {
     fn len(&self) -> Option<i64> {
         match self.as_ref().get_type() {
-            JsonType::Array | JsonType::Object => Some(i64::from(self.as_ref().get_elem_count())),
+            JsonType::Array | JsonType::Object => Some(self.as_ref().get_elem_count() as i64),
             _ => Some(1),
         }
     }

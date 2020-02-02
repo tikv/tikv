@@ -1095,7 +1095,7 @@ fn cast_duration_as_time(
 fn cast_bool_as_json(val: &Option<Int>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
-        Some(val) => Ok(Some(Json::from_bool(*val != 0))),
+        Some(val) => Ok(Some(Json::from_bool(*val != 0)?)),
     }
 }
 
@@ -1104,7 +1104,7 @@ fn cast_bool_as_json(val: &Option<Int>) -> Result<Option<Json>> {
 fn cast_uint_as_json(val: &Option<Int>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
-        Some(val) => Ok(Some(Json::from_u64(*val as u64))),
+        Some(val) => Ok(Some(Json::from_u64(*val as u64)?)),
     }
 }
 
@@ -1127,7 +1127,7 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: &Option<Bytes>) -> Resul
             } else {
                 // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8 string
                 let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
-                Ok(Some(Json::from_string(val)))
+                Ok(Some(Json::from_string(val)?))
             }
         }
     }
@@ -2196,32 +2196,44 @@ mod tests {
         // no overflow
         let cs = vec![
             // (origin, expect, overflow)
-            (Json::from_object(BTreeMap::default()), 0, false),
-            (Json::from_array(vec![]), 0, false),
-            (Json::from_i64(10), 10i64, false),
-            (Json::from_i64(i64::MAX), i64::MAX, false),
-            (Json::from_i64(i64::MIN), i64::MIN, false),
-            (Json::from_u64(0), 0, false),
-            (Json::from_u64(u64::MAX), u64::MAX as i64, false),
-            (Json::from_f64(i64::MIN as u64 as f64), i64::MAX, false),
-            (Json::from_f64(i64::MAX as u64 as f64), i64::MAX, false),
-            (Json::from_f64(i64::MIN as u64 as f64), i64::MAX, false),
-            (Json::from_f64(i64::MIN as f64), i64::MIN, false),
-            (Json::from_f64(10.5), 11, false),
-            (Json::from_f64(10.4), 10, false),
-            (Json::from_f64(-10.4), -10, false),
-            (Json::from_f64(-10.5), -11, false),
-            (Json::from_string(String::from("10.0")), 10, false),
-            (Json::from_bool(true), 1, false),
-            (Json::from_bool(false), 0, false),
-            (Json::none(), 0, false),
+            (Json::from_object(BTreeMap::default()).unwrap(), 0, false),
+            (Json::from_array(vec![]).unwrap(), 0, false),
+            (Json::from_i64(10).unwrap(), 10i64, false),
+            (Json::from_i64(i64::MAX).unwrap(), i64::MAX, false),
+            (Json::from_i64(i64::MIN).unwrap(), i64::MIN, false),
+            (Json::from_u64(0).unwrap(), 0, false),
+            (Json::from_u64(u64::MAX).unwrap(), u64::MAX as i64, false),
             (
-                Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64),
+                Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+                i64::MAX,
+                false,
+            ),
+            (
+                Json::from_f64(i64::MAX as u64 as f64).unwrap(),
+                i64::MAX,
+                false,
+            ),
+            (
+                Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+                i64::MAX,
+                false,
+            ),
+            (Json::from_f64(i64::MIN as f64).unwrap(), i64::MIN, false),
+            (Json::from_f64(10.5).unwrap(), 11, false),
+            (Json::from_f64(10.4).unwrap(), 10, false),
+            (Json::from_f64(-10.4).unwrap(), -10, false),
+            (Json::from_f64(-10.5).unwrap(), -11, false),
+            (Json::from_string(String::from("10.0")).unwrap(), 10, false),
+            (Json::from_bool(true).unwrap(), 1, false),
+            (Json::from_bool(false).unwrap(), 0, false),
+            (Json::none().unwrap(), 0, false),
+            (
+                Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
                 i64::MAX,
                 true,
             ),
             (
-                Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)),
+                Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
                 i64::MIN,
                 true,
             ),
@@ -2247,20 +2259,20 @@ mod tests {
         // no clip to zero
         let cs: Vec<(Json, u64, Option<i32>)> = vec![
             // (origin, expect, error_code)
-            (Json::from_f64(-1.0), -1.0f64 as i64 as u64, None),
-            (Json::from_string(String::from("10")), 10, None),
+            (Json::from_f64(-1.0).unwrap(), -1.0f64 as i64 as u64, None),
+            (Json::from_string(String::from("10")).unwrap(), 10, None),
             (
-                Json::from_string(String::from("+10abc")),
+                Json::from_string(String::from("+10abc")).unwrap(),
                 10,
                 Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
             (
-                Json::from_string(String::from("9999999999999999999999999")),
+                Json::from_string(String::from("9999999999999999999999999")).unwrap(),
                 u64::MAX,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
             (
-                Json::from_f64(2f64 * (u64::MAX as f64)),
+                Json::from_f64(2f64 * (u64::MAX as f64)).unwrap(),
                 u64::MAX,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
@@ -2283,25 +2295,25 @@ mod tests {
         // should clip to zero
         let cs: Vec<(Json, u64, Option<i32>)> = vec![
             // (origin, expect, err_code)
-            (Json::from_f64(-1.0), 0, None),
+            (Json::from_f64(-1.0).unwrap(), 0, None),
             (
-                Json::from_string(String::from("-10")),
+                Json::from_string(String::from("-10")).unwrap(),
                 0,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
-            (Json::from_string(String::from("10")), 10, None),
+            (Json::from_string(String::from("10")).unwrap(), 10, None),
             (
-                Json::from_string(String::from("+10abc")),
+                Json::from_string(String::from("+10abc")).unwrap(),
                 10,
                 Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
             (
-                Json::from_string(String::from("9999999999999999999999999")),
+                Json::from_string(String::from("9999999999999999999999999")).unwrap(),
                 u64::MAX,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
             (
-                Json::from_f64(2f64 * (u64::MAX as f64)),
+                Json::from_f64(2f64 * (u64::MAX as f64)).unwrap(),
                 u64::MAX,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
@@ -3037,22 +3049,26 @@ mod tests {
     fn test_json_as_real() {
         let cs: Vec<(Json, f64, Option<i32>)> = vec![
             // (input, expect, err_code)
-            (Json::from_object(BTreeMap::default()), 0f64, None),
-            (Json::from_array(vec![]), 0f64, None),
-            (Json::from_i64(10), 10f64, None),
-            (Json::from_i64(i64::MAX), i64::MAX as f64, None),
-            (Json::from_i64(i64::MIN), i64::MIN as f64, None),
-            (Json::from_u64(0), 0f64, None),
-            (Json::from_u64(u64::MAX), u64::MAX as f64, None),
-            (Json::from_f64(f64::MAX), f64::MAX, None),
-            (Json::from_f64(f64::MIN), f64::MIN, None),
-            (Json::from_string(String::from("10.0")), 10.0, None),
-            (Json::from_string(String::from("-10.0")), -10.0, None),
-            (Json::from_bool(true), 1f64, None),
-            (Json::from_bool(false), 0f64, None),
-            (Json::none(), 0f64, None),
+            (Json::from_object(BTreeMap::default()).unwrap(), 0f64, None),
+            (Json::from_array(vec![]).unwrap(), 0f64, None),
+            (Json::from_i64(10).unwrap(), 10f64, None),
+            (Json::from_i64(i64::MAX).unwrap(), i64::MAX as f64, None),
+            (Json::from_i64(i64::MIN).unwrap(), i64::MIN as f64, None),
+            (Json::from_u64(0).unwrap(), 0f64, None),
+            (Json::from_u64(u64::MAX).unwrap(), u64::MAX as f64, None),
+            (Json::from_f64(f64::MAX).unwrap(), f64::MAX, None),
+            (Json::from_f64(f64::MIN).unwrap(), f64::MIN, None),
+            (Json::from_string(String::from("10.0")).unwrap(), 10.0, None),
             (
-                Json::from_string((0..500).map(|_| '9').collect::<String>()),
+                Json::from_string(String::from("-10.0")).unwrap(),
+                -10.0,
+                None,
+            ),
+            (Json::from_bool(true).unwrap(), 1f64, None),
+            (Json::from_bool(false).unwrap(), 0f64, None),
+            (Json::none().unwrap(), 0f64, None),
+            (
+                Json::from_string((0..500).map(|_| '9').collect::<String>()).unwrap(),
                 f64::MAX,
                 Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
@@ -3061,7 +3077,8 @@ mod tests {
                     (0..500)
                         .map(|x| if x == 0 { '-' } else { '9' })
                         .collect::<String>(),
-                ),
+                )
+                .unwrap(),
                 f64::MIN,
                 Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
@@ -3633,46 +3650,49 @@ mod tests {
         //  i64::MAX as f64 => "9.223372036854776e18",  "9223372036854776000",
         //  u64::MAX as f64 => "1.8446744073709552e19", "18446744073709552000",
         let cs = vec![
-            (Json::from_object(BTreeMap::default()), "{}".to_string()),
-            (Json::from_array(vec![]), "[]".to_string()),
-            (Json::from_i64(10), "10".to_string()),
-            (Json::from_i64(i64::MAX), i64::MAX.to_string()),
-            (Json::from_i64(i64::MIN), i64::MIN.to_string()),
-            (Json::from_u64(0), "0".to_string()),
-            (Json::from_u64(u64::MAX), u64::MAX.to_string()),
-            (Json::from_f64(f64::MIN), format!("{:e}", f64::MIN)),
-            (Json::from_f64(f64::MAX), format!("{:e}", f64::MAX)),
             (
-                Json::from_f64(f64::from(f32::MIN)),
+                Json::from_object(BTreeMap::default()).unwrap(),
+                "{}".to_string(),
+            ),
+            (Json::from_array(vec![]).unwrap(), "[]".to_string()),
+            (Json::from_i64(10).unwrap(), "10".to_string()),
+            (Json::from_i64(i64::MAX).unwrap(), i64::MAX.to_string()),
+            (Json::from_i64(i64::MIN).unwrap(), i64::MIN.to_string()),
+            (Json::from_u64(0).unwrap(), "0".to_string()),
+            (Json::from_u64(u64::MAX).unwrap(), u64::MAX.to_string()),
+            (Json::from_f64(f64::MIN).unwrap(), format!("{:e}", f64::MIN)),
+            (Json::from_f64(f64::MAX).unwrap(), format!("{:e}", f64::MAX)),
+            (
+                Json::from_f64(f64::from(f32::MIN)).unwrap(),
                 format!("{:e}", f64::from(f32::MIN)),
             ),
             (
-                Json::from_f64(f64::from(f32::MAX)),
+                Json::from_f64(f64::from(f32::MAX)).unwrap(),
                 format!("{:e}", f64::from(f32::MAX)),
             ),
             (
-                Json::from_f64(i64::MIN as f64),
+                Json::from_f64(i64::MIN as f64).unwrap(),
                 format!("{:e}", i64::MIN as f64),
             ),
             (
-                Json::from_f64(i64::MAX as f64),
+                Json::from_f64(i64::MAX as f64).unwrap(),
                 format!("{:e}", i64::MAX as f64),
             ),
             (
-                Json::from_f64(u64::MAX as f64),
+                Json::from_f64(u64::MAX as f64).unwrap(),
                 format!("{:e}", u64::MAX as f64),
             ),
-            (Json::from_f64(10.5), "10.5".to_string()),
-            (Json::from_f64(10.4), "10.4".to_string()),
-            (Json::from_f64(-10.4), "-10.4".to_string()),
-            (Json::from_f64(-10.5), "-10.5".to_string()),
+            (Json::from_f64(10.5).unwrap(), "10.5".to_string()),
+            (Json::from_f64(10.4).unwrap(), "10.4".to_string()),
+            (Json::from_f64(-10.4).unwrap(), "-10.4".to_string()),
+            (Json::from_f64(-10.5).unwrap(), "-10.5".to_string()),
             (
-                Json::from_string(String::from("10.0")),
+                Json::from_string(String::from("10.0")).unwrap(),
                 r#""10.0""#.to_string(),
             ),
-            (Json::from_bool(true), "true".to_string()),
-            (Json::from_bool(false), "false".to_string()),
-            (Json::none(), "null".to_string()),
+            (Json::from_bool(true).unwrap(), "true".to_string()),
+            (Json::from_bool(false).unwrap(), "false".to_string()),
+            (Json::none().unwrap(), "null".to_string()),
         ];
 
         for (input, expect) in cs {
@@ -4885,75 +4905,80 @@ mod tests {
         let cs: Vec<(Json, bool, bool, Decimal)> = vec![
             // (cast_func_input, in_union, is_res_unsigned, base_result)
             (
-                Json::from_object(BTreeMap::default()),
+                Json::from_object(BTreeMap::default()).unwrap(),
                 false,
                 false,
                 Decimal::zero(),
             ),
-            (Json::from_array(vec![]), false, false, Decimal::zero()),
             (
-                Json::from_i64(10),
+                Json::from_array(vec![]).unwrap(),
+                false,
+                false,
+                Decimal::zero(),
+            ),
+            (
+                Json::from_i64(10).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(10f64).unwrap(),
             ),
             (
-                Json::from_i64(i64::MAX),
+                Json::from_i64(i64::MAX).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MAX as f64).unwrap(),
             ),
             (
-                Json::from_i64(i64::MIN),
+                Json::from_i64(i64::MIN).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MIN as f64).unwrap(),
             ),
-            (Json::from_u64(0), false, false, Decimal::zero()),
+            (Json::from_u64(0).unwrap(), false, false, Decimal::zero()),
             (
-                Json::from_u64(i64::MAX as u64),
+                Json::from_u64(i64::MAX as u64).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MAX as f64).unwrap(),
             ),
             (
-                Json::from_u64(u64::MAX),
+                Json::from_u64(u64::MAX).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(u64::MAX as f64).unwrap(),
             ),
             (
-                Json::from_f64(i64::MAX as f64),
+                Json::from_f64(i64::MAX as f64).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MAX as f64).unwrap(),
             ),
             (
-                Json::from_f64(i64::MIN as f64),
+                Json::from_f64(i64::MIN as f64).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MIN as f64).unwrap(),
             ),
             (
-                Json::from_f64(u64::MAX as f64),
+                Json::from_f64(u64::MAX as f64).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(u64::MAX as f64).unwrap(),
             ),
             (
-                Json::from_string("10.0".to_string()),
+                Json::from_string("10.0".to_string()).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"10.0").unwrap().unwrap(),
             ),
             (
-                Json::from_string("-10.0".to_string()),
+                Json::from_string("-10.0".to_string()).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"-10.0").unwrap().unwrap(),
             ),
             (
-                Json::from_string("9999999999999999999".to_string()),
+                Json::from_string("9999999999999999999".to_string()).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"9999999999999999999")
@@ -4961,7 +4986,7 @@ mod tests {
                     .unwrap(),
             ),
             (
-                Json::from_string("-9999999999999999999".to_string()),
+                Json::from_string("-9999999999999999999".to_string()).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"-9999999999999999999")
@@ -4969,13 +4994,18 @@ mod tests {
                     .unwrap(),
             ),
             (
-                Json::from_bool(true),
+                Json::from_bool(true).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(1f64).unwrap(),
             ),
-            (Json::from_bool(false), false, false, Decimal::zero()),
-            (Json::none(), false, false, Decimal::zero()),
+            (
+                Json::from_bool(false).unwrap(),
+                false,
+                false,
+                Decimal::zero(),
+            ),
+            (Json::none().unwrap(), false, false, Decimal::zero()),
         ];
 
         test_as_decimal_helper(
@@ -5407,43 +5437,47 @@ mod tests {
         // the case that Json::unquote failed had be tested by test_json_unquote
 
         let cs = vec![
-            Json::from_object(BTreeMap::default()),
-            Json::from_array(vec![]),
-            Json::from_i64(10),
-            Json::from_i64(i64::MAX),
-            Json::from_i64(i64::MIN),
-            Json::from_u64(0),
-            Json::from_u64(u64::MAX),
-            Json::from_f64(10.5),
-            Json::from_f64(10.4),
-            Json::from_f64(-10.4),
-            Json::from_f64(-10.5),
-            Json::from_f64(i64::MIN as u64 as f64),
-            Json::from_f64(i64::MAX as u64 as f64),
-            Json::from_f64(i64::MIN as u64 as f64),
-            Json::from_f64(i64::MIN as f64),
-            Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64),
-            Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)),
-            Json::from_f64(f64::from(f32::MIN)),
-            Json::from_f64(f64::from(f32::MAX)),
-            Json::from_f64(f64::MAX),
-            Json::from_f64(f64::MAX),
-            Json::from_string(String::from("10.0")),
+            Json::from_object(BTreeMap::default()).unwrap(),
+            Json::from_array(vec![]).unwrap(),
+            Json::from_i64(10).unwrap(),
+            Json::from_i64(i64::MAX).unwrap(),
+            Json::from_i64(i64::MIN).unwrap(),
+            Json::from_u64(0).unwrap(),
+            Json::from_u64(u64::MAX).unwrap(),
+            Json::from_f64(10.5).unwrap(),
+            Json::from_f64(10.4).unwrap(),
+            Json::from_f64(-10.4).unwrap(),
+            Json::from_f64(-10.5).unwrap(),
+            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+            Json::from_f64(i64::MAX as u64 as f64).unwrap(),
+            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+            Json::from_f64(i64::MIN as f64).unwrap(),
+            Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
+            Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
+            Json::from_f64(f64::from(f32::MIN)).unwrap(),
+            Json::from_f64(f64::from(f32::MAX)).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+            Json::from_string(String::from("10.0")).unwrap(),
             Json::from_string(String::from(
                 "999999999999999999999999999999999999999999999999",
-            )),
+            ))
+            .unwrap(),
             Json::from_string(String::from(
                 "-999999999999999999999999999999999999999999999999",
-            )),
+            ))
+            .unwrap(),
             Json::from_string(String::from(
                 "99999999999999999999999999999999999999999999999aabcde9",
-            )),
+            ))
+            .unwrap(),
             Json::from_string(String::from(
                 "-99999999999999999999999999999999999999999999999aabcde9",
-            )),
-            Json::from_bool(true),
-            Json::from_bool(false),
-            Json::none(),
+            ))
+            .unwrap(),
+            Json::from_bool(true).unwrap(),
+            Json::from_bool(false).unwrap(),
+            Json::none().unwrap(),
         ];
         test_as_duration_helper(
             cs,
@@ -5459,9 +5493,9 @@ mod tests {
         test_none_with_ctx(cast_any_as_any::<Int, Json>);
 
         let cs = vec![
-            (i64::MIN, Json::from_i64(i64::MIN)),
-            (0, Json::from_i64(0)),
-            (i64::MAX, Json::from_i64(i64::MAX)),
+            (i64::MIN, Json::from_i64(i64::MIN).unwrap()),
+            (0, Json::from_i64(0).unwrap()),
+            (i64::MAX, Json::from_i64(i64::MAX).unwrap()),
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
@@ -5476,9 +5510,9 @@ mod tests {
         test_none_with_nothing(cast_uint_as_json);
 
         let cs = vec![
-            (u64::MAX, Json::from_u64(u64::MAX)),
-            (0, Json::from_u64(0)),
-            (i64::MAX as u64, Json::from_u64(i64::MAX as u64)),
+            (u64::MAX, Json::from_u64(u64::MAX).unwrap()),
+            (0, Json::from_u64(0).unwrap()),
+            (i64::MAX as u64, Json::from_u64(i64::MAX as u64).unwrap()),
         ];
         for (input, expect) in cs {
             let r = cast_uint_as_json(&Some(input as i64));
@@ -5492,9 +5526,9 @@ mod tests {
         test_none_with_nothing(cast_bool_as_json);
 
         let cs = vec![
-            (0, Json::from_bool(false)),
-            (i64::MIN, Json::from_bool(true)),
-            (i64::MAX, Json::from_bool(true)),
+            (0, Json::from_bool(false).unwrap()),
+            (i64::MIN, Json::from_bool(true).unwrap()),
+            (i64::MAX, Json::from_bool(true).unwrap()),
         ];
         for (input, expect) in cs {
             let result = cast_bool_as_json(&Some(input));
@@ -5508,10 +5542,16 @@ mod tests {
         test_none_with_ctx(cast_any_as_any::<Real, Json>);
 
         let cs = vec![
-            (f64::from(f32::MAX), Json::from_f64(f64::from(f32::MAX))),
-            (f64::from(f32::MIN), Json::from_f64(f64::from(f32::MIN))),
-            (f64::MAX, Json::from_f64(f64::MAX)),
-            (f64::MIN, Json::from_f64(f64::MIN)),
+            (
+                f64::from(f32::MAX),
+                Json::from_f64(f64::from(f32::MAX)).unwrap(),
+            ),
+            (
+                f64::from(f32::MIN),
+                Json::from_f64(f64::from(f32::MIN)).unwrap(),
+            ),
+            (f64::MAX, Json::from_f64(f64::MAX).unwrap()),
+            (f64::MIN, Json::from_f64(f64::MIN).unwrap()),
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
@@ -5526,47 +5566,67 @@ mod tests {
         test_none_with_extra(cast_string_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
-        jo1.insert(String::from("a"), Json::from_string(String::from("b")));
+        jo1.insert(
+            String::from("a"),
+            Json::from_string(String::from("b")).unwrap(),
+        );
         // HasParseToJSONFlag
         let cs = vec![
-            ("{\"a\": \"b\"}".to_string(), Json::from_object(jo1), true),
-            ("{}".to_string(), Json::from_object(BTreeMap::new()), true),
+            (
+                "{\"a\": \"b\"}".to_string(),
+                Json::from_object(jo1).unwrap(),
+                true,
+            ),
+            (
+                "{}".to_string(),
+                Json::from_object(BTreeMap::new()).unwrap(),
+                true,
+            ),
             (
                 "[1, 2, 3]".to_string(),
                 Json::from_array(vec![
-                    Json::from_i64(1),
-                    Json::from_i64(2),
-                    Json::from_i64(3),
-                ]),
+                    Json::from_i64(1).unwrap(),
+                    Json::from_i64(2).unwrap(),
+                    Json::from_i64(3).unwrap(),
+                ])
+                .unwrap(),
                 true,
             ),
-            ("[]".to_string(), Json::from_array(Vec::new()), true),
+            (
+                "[]".to_string(),
+                Json::from_array(Vec::new()).unwrap(),
+                true,
+            ),
             (
                 "9223372036854775807".to_string(),
-                Json::from_i64(9223372036854775807),
+                Json::from_i64(9223372036854775807).unwrap(),
                 true,
             ),
             (
                 "-9223372036854775808".to_string(),
-                Json::from_i64(-9223372036854775808),
+                Json::from_i64(-9223372036854775808).unwrap(),
                 true,
             ),
             (
                 "18446744073709551615".to_string(),
-                Json::from_f64(18446744073709552000.0),
+                Json::from_f64(18446744073709552000.0).unwrap(),
                 true,
             ),
             // FIXME: f64::MAX.to_string() to json should success
             // (f64::MAX.to_string(), Json::from_f64(f64::MAX), true),
-            ("0.0".to_string(), Json::from_f64(0.0), true),
+            ("0.0".to_string(), Json::from_f64(0.0).unwrap(), true),
             (
                 "\"abcde\"".to_string(),
-                Json::from_string("abcde".to_string()),
+                Json::from_string("abcde".to_string()).unwrap(),
                 true,
             ),
-            ("\"\"".to_string(), Json::from_string("".to_string()), true),
-            ("true".to_string(), Json::from_bool(true), true),
-            ("false".to_string(), Json::from_bool(false), true),
+            (
+                "\"\"".to_string(),
+                Json::from_string("".to_string()).unwrap(),
+                true,
+            ),
+            ("true".to_string(), Json::from_bool(true).unwrap(), true),
+            ("false".to_string(), Json::from_bool(false).unwrap(), true),
         ];
         for (input, expect, parse_to_json) in cs {
             let mut rft = FieldType::default();
@@ -5591,23 +5651,23 @@ mod tests {
         let cs = vec![
             (
                 Decimal::from_f64(i64::MIN as f64).unwrap(),
-                Json::from_f64(i64::MIN as f64),
+                Json::from_f64(i64::MIN as f64).unwrap(),
             ),
             (
                 Decimal::from_f64(i64::MAX as f64).unwrap(),
-                Json::from_f64(i64::MAX as f64),
+                Json::from_f64(i64::MAX as f64).unwrap(),
             ),
             (
                 Decimal::from_bytes(b"184467440737095516160")
                     .unwrap()
                     .unwrap(),
-                Json::from_f64(184467440737095516160.0),
+                Json::from_f64(184467440737095516160.0).unwrap(),
             ),
             (
                 Decimal::from_bytes(b"-184467440737095516160")
                     .unwrap()
                     .unwrap(),
-                Json::from_f64(-184467440737095516160.0),
+                Json::from_f64(-184467440737095516160.0).unwrap(),
             ),
         ];
 
@@ -5630,32 +5690,32 @@ mod tests {
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:14.000000".to_string()),
+                Json::from_string("2000-01-01 12:13:14.000000".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:15.000000".to_string()),
+                Json::from_string("2000-01-01 12:13:15.000000".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:14.000000".to_string()),
+                Json::from_string("2000-01-01 12:13:14.000000".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:14.666600".to_string()),
+                Json::from_string("2000-01-01 12:13:14.666600".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2019-09-01", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2019-09-01 00:00:00.000000".to_string()),
+                Json::from_string("2019-09-01 00:00:00.000000".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2019-09-01", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2019-09-01 00:00:00.000000".to_string()),
+                Json::from_string("2019-09-01 00:00:00.000000".to_string()).unwrap(),
             ),
         ];
         for (input, time_type, expect) in cs {
@@ -5683,11 +5743,11 @@ mod tests {
         let cs = vec![
             (
                 Duration::zero(),
-                Json::from_string("00:00:00.000000".to_string()),
+                Json::from_string("00:00:00.000000".to_string()).unwrap(),
             ),
             (
                 Duration::parse(&mut EvalContext::default(), b"10:10:10", 0).unwrap(),
-                Json::from_string("10:10:10.000000".to_string()),
+                Json::from_string("10:10:10.000000".to_string()).unwrap(),
             ),
         ];
 
@@ -5704,24 +5764,25 @@ mod tests {
         test_none_with_nothing(cast_json_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
-        jo1.insert("a".to_string(), Json::from_string("b".to_string()));
+        jo1.insert("a".to_string(), Json::from_string("b".to_string()).unwrap());
         let cs = vec![
-            Json::from_object(jo1),
+            Json::from_object(jo1).unwrap(),
             Json::from_array(vec![
-                Json::from_i64(1),
-                Json::from_i64(3),
-                Json::from_i64(4),
-            ]),
-            Json::from_i64(i64::MIN),
-            Json::from_i64(i64::MAX),
-            Json::from_u64(0u64),
-            Json::from_u64(u64::MAX),
-            Json::from_f64(f64::MIN),
-            Json::from_f64(f64::MAX),
-            Json::from_string("abcde".to_string()),
-            Json::from_bool(true),
-            Json::from_bool(false),
-            Json::none(),
+                Json::from_i64(1).unwrap(),
+                Json::from_i64(3).unwrap(),
+                Json::from_i64(4).unwrap(),
+            ])
+            .unwrap(),
+            Json::from_i64(i64::MIN).unwrap(),
+            Json::from_i64(i64::MAX).unwrap(),
+            Json::from_u64(0u64).unwrap(),
+            Json::from_u64(u64::MAX).unwrap(),
+            Json::from_f64(f64::MIN).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+            Json::from_string("abcde".to_string()).unwrap(),
+            Json::from_bool(true).unwrap(),
+            Json::from_bool(false).unwrap(),
+            Json::none().unwrap(),
         ];
 
         for input in cs {

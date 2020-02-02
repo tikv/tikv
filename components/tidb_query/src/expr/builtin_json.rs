@@ -53,7 +53,7 @@ impl ScalarFunc {
             .iter()
             .map(|e| parser.get_json(ctx, e))
             .collect());
-        Ok(Some(Cow::Owned(Json::from_array(elems))))
+        Ok(Some(Cow::Owned(Json::from_array(elems)?)))
     }
 
     pub fn json_object<'a, 'b: 'a>(
@@ -68,7 +68,7 @@ impl ScalarFunc {
             let val = try_opt!(parser.get_json(ctx, &chunk[1]));
             pairs.insert(key, val);
         }
-        Ok(Some(Cow::Owned(Json::from_object(pairs))))
+        Ok(Some(Cow::Owned(Json::from_object(pairs)?)))
     }
 
     pub fn json_extract<'a, 'b: 'a>(
@@ -204,7 +204,7 @@ impl<'a> JsonFuncArgsParser<'a> {
     fn get_json(&self, ctx: &mut EvalContext, e: &Expression) -> Result<Option<Json>> {
         let j = e
             .eval_json(ctx, self.row)?
-            .map_or(Json::none(), Cow::into_owned);
+            .map_or(Json::none(), |x| Ok(Cow::into_owned(x)))?;
         Ok(Some(j))
     }
 
@@ -461,7 +461,7 @@ mod tests {
                     if parse {
                         Datum::Json(s.parse().unwrap())
                     } else {
-                        Datum::Json(Json::from_string(s.to_owned()))
+                        Datum::Json(Json::from_string(s.to_owned()).unwrap())
                     }
                 }
             };
@@ -491,9 +491,9 @@ mod tests {
                     Datum::Bytes(b"1".to_vec()),
                     Datum::Null,
                     Datum::Bytes(b"2".to_vec()),
-                    Datum::Json(Json::from_string("sdf".to_owned())),
+                    Datum::Json(Json::from_string("sdf".to_owned()).unwrap()),
                     Datum::Bytes(b"k1".to_vec()),
-                    Datum::Json(Json::from_string("v1".to_owned())),
+                    Datum::Json(Json::from_string("v1".to_owned()).unwrap()),
                 ],
                 Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap()),
             ),
@@ -521,9 +521,9 @@ mod tests {
                     Datum::Json("1".parse().unwrap()),
                     Datum::Null,
                     Datum::Json("2".parse().unwrap()),
-                    Datum::Json(Json::from_string("sdf".to_owned())),
-                    Datum::Json(Json::from_string("k1".to_owned())),
-                    Datum::Json(Json::from_string("v1".to_owned())),
+                    Datum::Json(Json::from_string("sdf".to_owned()).unwrap()),
+                    Datum::Json(Json::from_string("k1".to_owned()).unwrap()),
+                    Datum::Json(Json::from_string("v1".to_owned()).unwrap()),
                 ],
                 Datum::Json(r#"[1, null, 2, "sdf", "k1", "v1"]"#.parse().unwrap()),
             ),
@@ -549,27 +549,27 @@ mod tests {
             (
                 ScalarFuncSig::JsonSetSig,
                 vec![
-                    Datum::Json(Json::from_i64(9)),
+                    Datum::Json(Json::from_i64(9).unwrap()),
                     Datum::Bytes(b"$[1]".to_vec()),
-                    Datum::Json(Json::from_u64(3)),
+                    Datum::Json(Json::from_u64(3).unwrap()),
                 ],
                 Datum::Json(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonInsertSig,
                 vec![
-                    Datum::Json(Json::from_i64(9)),
+                    Datum::Json(Json::from_i64(9).unwrap()),
                     Datum::Bytes(b"$[1]".to_vec()),
-                    Datum::Json(Json::from_u64(3)),
+                    Datum::Json(Json::from_u64(3).unwrap()),
                 ],
                 Datum::Json(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonReplaceSig,
                 vec![
-                    Datum::Json(Json::from_i64(9)),
+                    Datum::Json(Json::from_i64(9).unwrap()),
                     Datum::Bytes(b"$[1]".to_vec()),
-                    Datum::Json(Json::from_u64(3)),
+                    Datum::Json(Json::from_u64(3).unwrap()),
                 ],
                 Datum::Json(r#"9"#.parse().unwrap()),
             ),

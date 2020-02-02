@@ -123,7 +123,7 @@ mod tests {
             ("\\u59", false, None),
         ];
         for (i, (input, no_error, expected)) in test_cases.drain(..).enumerate() {
-            let j = Json::from_string(String::from(input));
+            let j = Json::from_string(String::from(input)).unwrap();
             let r = j.as_ref().unquote();
             if no_error {
                 assert!(r.is_ok(), "#{} expect unquote ok but got err {:?}", i, r);
@@ -141,12 +141,12 @@ mod tests {
 
         // test unquote other json types
         let mut test_cases = vec![
-            Json::from_object(BTreeMap::new()),
-            Json::from_array(vec![]),
-            Json::from_i64(2017),
-            Json::from_f64(19.28),
-            Json::from_bool(true),
-            Json::none(),
+            Json::from_object(BTreeMap::new()).unwrap(),
+            Json::from_array(vec![]).unwrap(),
+            Json::from_i64(2017).unwrap(),
+            Json::from_f64(19.28).unwrap(),
+            Json::from_bool(true).unwrap(),
+            Json::none().unwrap(),
         ];
         for (i, j) in test_cases.drain(..).enumerate() {
             let expected = j.to_string();

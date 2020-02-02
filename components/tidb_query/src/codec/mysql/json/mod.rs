@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 mod binary;
+// FIXME(shirly): remove following later
 #[allow(dead_code)]
 mod comparison;
 mod constants;
@@ -108,9 +109,9 @@ impl<'a> JsonRef<'a> {
     }
 
     // Gets the count of Object or Array
-    pub(crate) fn get_elem_count(&self) -> u32 {
+    pub(crate) fn get_elem_count(&self) -> usize {
         assert!((self.type_code == JsonType::Object) | (self.type_code == JsonType::Array));
-        NumberCodec::decode_u32_le(self.value())
+        NumberCodec::decode_u32_le(self.value()) as usize
     }
 
     // Returns `None` if the JSON value is `null`. Otherwise, returns
@@ -161,87 +162,85 @@ impl Json {
     }
 
     /// Creates a `string` JSON from a `String`
-    pub fn from_string(s: String) -> Self {
-        let mut j = Self::new(JsonType::String, vec![]);
-        j.value.write_json_str(s.as_str()).unwrap();
-        j
+    pub fn from_string(s: String) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_str(s.as_str())?;
+        Ok(Self::new(JsonType::String, value))
     }
 
     /// Creates a `string` JSON from a `&str`
-    pub fn from_str_val(s: &str) -> Self {
-        let mut j = Self::new(JsonType::String, vec![]);
-        j.value.write_json_str(s).unwrap();
-        j
+    pub fn from_str_val(s: &str) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_str(s)?;
+        Ok(Self::new(JsonType::String, value))
     }
 
     /// Creates a `literal` JSON from a `bool`
-    pub fn from_bool(b: bool) -> Self {
-        let mut j = Self::new(JsonType::Literal, vec![]);
-        if b {
-            j.value.write_json_literal(JSON_LITERAL_TRUE).unwrap();
+    pub fn from_bool(b: bool) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_literal(if b {
+            JSON_LITERAL_TRUE
         } else {
-            j.value.write_json_literal(JSON_LITERAL_FALSE).unwrap();
-        }
-        j
+            JSON_LITERAL_FALSE
+        })?;
+        Ok(Self::new(JsonType::Literal, value))
     }
 
     /// Creates a `number` JSON from a `u64`
-    pub fn from_u64(v: u64) -> Self {
-        let mut j = Self::new(JsonType::U64, vec![]);
-        j.value.write_json_u64(v).unwrap();
-        j
+    pub fn from_u64(v: u64) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_u64(v)?;
+        Ok(Self::new(JsonType::U64, value))
     }
 
     /// Creates a `number` JSON from a `f64`
-    pub fn from_f64(v: f64) -> Self {
-        let mut j = Self::new(JsonType::Double, vec![]);
-        j.value.write_json_f64(v).unwrap();
-        j
+    pub fn from_f64(v: f64) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_f64(v)?;
+        Ok(Self::new(JsonType::Double, value))
     }
 
     /// Creates a `number` JSON from an `i64`
-    pub fn from_i64(v: i64) -> Self {
-        let mut j = Self::new(JsonType::I64, vec![]);
-        j.value.write_json_i64(v).unwrap();
-        j
+    pub fn from_i64(v: i64) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_i64(v)?;
+        Ok(Self::new(JsonType::I64, value))
     }
 
     /// Creates a `array` JSON from a collection of `JsonRef`
-    pub fn from_ref_array(array: Vec<JsonRef<'_>>) -> Self {
-        let mut j = Self::new(JsonType::Array, vec![]);
-        j.value.write_json_ref_array(&array).unwrap();
-        j
+    pub fn from_ref_array(array: Vec<JsonRef<'_>>) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_ref_array(&array)?;
+        Ok(Self::new(JsonType::Array, value))
     }
 
     /// Creates a `array` JSON from a collection of `Json`
-    pub fn from_array(array: Vec<Json>) -> Self {
-        let mut j = Self::new(JsonType::Array, vec![]);
-        j.value.write_json_array(&array).unwrap();
-        j
+    pub fn from_array(array: Vec<Json>) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_array(&array)?;
+        Ok(Self::new(JsonType::Array, value))
     }
 
     /// Creates a `object` JSON from key-value pairs
-    pub fn from_kv_pairs<'a>(keys: Vec<&[u8]>, values: Vec<JsonRef<'a>>) -> Self {
-        let mut j = Self::new(JsonType::Object, vec![]);
-        j.value
-            .write_json_obj_from_keys_values(keys, values)
-            .unwrap();
-        j
+    pub fn from_kv_pairs<'a>(keys: Vec<&[u8]>, values: Vec<JsonRef<'a>>) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_obj_from_keys_values(keys, values)?;
+        Ok(Self::new(JsonType::Object, value))
     }
 
     /// Creates a `object` JSON from key-value pairs in BTreeMap
-    pub fn from_object(map: BTreeMap<String, Json>) -> Self {
-        let mut j = Self::new(JsonType::Object, vec![]);
+    pub fn from_object(map: BTreeMap<String, Json>) -> Result<Self> {
+        let mut value = vec![];
         // TODO(fullstop000): use write_json_obj_from_keys_values instead
-        j.value.write_json_obj(&map).unwrap();
-        j
+        value.write_json_obj(&map)?;
+        Ok(Self::new(JsonType::Object, value))
     }
 
     /// Creates a `null` JSON
-    pub fn none() -> Self {
-        let mut j = Self::new(JsonType::Literal, vec![]);
-        j.value.write_json_literal(JSON_LITERAL_NIL).unwrap();
-        j
+    pub fn none() -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_literal(JSON_LITERAL_NIL)?;
+        Ok(Self::new(JsonType::Literal, value))
     }
 
     /// Returns a `JsonRef` points to the starting of encoded bytes
@@ -260,7 +259,7 @@ pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     for elem in elems {
         a.push(elem.into_json()?);
     }
-    Ok(Json::from_array(a))
+    Json::from_array(a)
 }
 
 /// Create JSON object by given key-value pairs
@@ -290,7 +289,7 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
             map.insert(key.take().unwrap(), val);
         }
     }
-    Ok(Json::from_object(map))
+    Json::from_object(map)
 }
 
 impl ConvertTo<f64> for Json {
@@ -302,16 +301,11 @@ impl ConvertTo<f64> for Json {
             JsonType::U64 => self.as_ref().get_u64() as f64,
             JsonType::I64 => self.as_ref().get_i64() as f64,
             JsonType::Double => self.as_ref().get_double(),
-            JsonType::Literal => match self.as_ref().get_literal() {
-                Some(b) => {
-                    if b {
-                        1f64
-                    } else {
-                        0f64
-                    }
-                }
-                None => 0f64,
-            },
+            JsonType::Literal => {
+                self.as_ref()
+                    .get_literal()
+                    .map_or(0f64, |x| if x { 1f64 } else { 0f64 })
+            }
             JsonType::String => self.as_ref().get_str_bytes()?.convert(ctx)?,
         };
         Ok(d)
@@ -374,7 +368,7 @@ impl ConvertTo<Json> for Time {
         } else {
             *self
         };
-        Ok(Json::from_string(s.to_string()))
+        Json::from_string(s.to_string())
     }
 }
 
@@ -382,7 +376,7 @@ impl ConvertTo<Json> for Duration {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
         let d = self.maximize_fsp();
-        Ok(Json::from_string(d.to_string()))
+        Json::from_string(d.to_string())
     }
 }
 
