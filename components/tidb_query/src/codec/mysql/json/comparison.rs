@@ -92,7 +92,13 @@ impl<'a> PartialOrd for JsonRef<'a> {
                     // larger and smaller are not defined.
                     self.value().partial_cmp(right.value())
                 }
-                JsonType::String => self.get_str_bytes().partial_cmp(right.get_str_bytes()),
+                JsonType::String => {
+                    if let (Ok(left), Ok(right)) = (self.get_str_bytes(), right.get_str_bytes()) {
+                        left.partial_cmp(right)
+                    } else {
+                        return None;
+                    }
+                }
                 JsonType::Array => {
                     let left_count = self.get_elem_count();
                     let right_count = right.get_elem_count();

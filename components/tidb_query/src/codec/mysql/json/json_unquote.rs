@@ -20,8 +20,7 @@ impl<'a> JsonRef<'a> {
     pub fn unquote(&self) -> Result<String> {
         match self.get_type() {
             JsonType::String => {
-                let bytes = self.get_str_bytes();
-                let s = str::from_utf8(bytes)?;
+                let s = self.get_str()?;
                 unquote_string(s)
             }
             _ => Ok(self.to_string()),

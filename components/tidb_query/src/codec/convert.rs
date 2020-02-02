@@ -449,20 +449,11 @@ impl ToInt for Json {
         // MySQL: 4
         let val = match self.as_ref().get_type() {
             JsonType::Object | JsonType::Array => Ok(0),
-            JsonType::Literal => Ok(match self.as_ref().get_literal() {
-                Some(b) => {
-                    if b {
-                        1
-                    } else {
-                        0
-                    }
-                }
-                None => 0,
-            }),
+            JsonType::Literal => Ok(self.as_ref().get_literal().map_or(0, |x| x as i64)),
             JsonType::I64 => Ok(self.as_ref().get_i64()),
             JsonType::U64 => Ok(self.as_ref().get_u64() as i64),
             JsonType::Double => self.as_ref().get_double().to_int(ctx, tp),
-            JsonType::String => self.as_ref().get_str_bytes().to_int(ctx, tp),
+            JsonType::String => self.as_ref().get_str_bytes()?.to_int(ctx, tp),
         }?;
         val.to_int(ctx, tp)
     }
@@ -472,20 +463,11 @@ impl ToInt for Json {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = match self.as_ref().get_type() {
             JsonType::Object | JsonType::Array => Ok(0),
-            JsonType::Literal => Ok(match self.as_ref().get_literal() {
-                Some(b) => {
-                    if b {
-                        1
-                    } else {
-                        0
-                    }
-                }
-                None => 0,
-            }),
+            JsonType::Literal => Ok(self.as_ref().get_literal().map_or(0, |x| x as u64)),
             JsonType::I64 => Ok(self.as_ref().get_i64() as u64),
             JsonType::U64 => Ok(self.as_ref().get_u64()),
             JsonType::Double => self.as_ref().get_double().to_uint(ctx, tp),
-            JsonType::String => self.as_ref().get_str_bytes().to_uint(ctx, tp),
+            JsonType::String => self.as_ref().get_str_bytes()?.to_uint(ctx, tp),
         }?;
         val.to_uint(ctx, tp)
     }

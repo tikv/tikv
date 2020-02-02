@@ -28,7 +28,7 @@ impl<'a> Serialize for JsonRef<'a> {
                 Some(b) => serializer.serialize_bool(b),
                 None => serializer.serialize_none(),
             },
-            JsonType::String => match str::from_utf8(self.get_str_bytes()) {
+            JsonType::String => match self.get_str() {
                 Ok(s) => serializer.serialize_str(s),
                 Err(_) => Err(SerError::custom("json contains invalid UTF-8 characters")),
             },

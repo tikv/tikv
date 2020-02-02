@@ -124,17 +124,17 @@ impl<'a> JsonRef<'a> {
         }
     }
 
-    /// Returns the string value in bytes
-    pub(crate) fn get_str_bytes(&self) -> &[u8] {
+    // Returns the string value in bytes
+    pub(crate) fn get_str_bytes(&self) -> Result<&'a [u8]> {
         assert_eq!(self.type_code, JsonType::String);
         let val = self.value();
-        let (str_len, len_len) = NumberCodec::try_decode_var_u64(val).unwrap();
-        &val[len_len..len_len + str_len as usize]
+        let (str_len, len_len) = NumberCodec::try_decode_var_u64(val)?;
+        Ok(&val[len_len..len_len + str_len as usize])
     }
 
     // Returns the value as a &str
-    pub(crate) fn get_str(&self) -> &str {
-        str::from_utf8(self.get_str_bytes()).unwrap()
+    pub(crate) fn get_str(&self) -> Result<&'a str> {
+        Ok(str::from_utf8(self.get_str_bytes()?)?)
     }
 }
 
@@ -312,7 +312,7 @@ impl ConvertTo<f64> for Json {
                 }
                 None => 0f64,
             },
-            JsonType::String => self.as_ref().get_str_bytes().convert(ctx)?,
+            JsonType::String => self.as_ref().get_str_bytes()?.convert(ctx)?,
         };
         Ok(d)
     }
