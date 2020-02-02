@@ -1471,6 +1471,26 @@ pub fn write_initial_apply_state<T: Mutable>(
     Ok(())
 }
 
+// When we bootstrap the region or handling split new region, we must
+// call this to initialize region apply state first.
+// TODO: remove the _2 and delete the other version of this function
+pub fn write_initial_apply_state_2<T: MutableTrait>(
+    kv_wb: &T,
+    region_id: u64,
+) -> Result<()> {
+    let mut apply_state = RaftApplyState::default();
+    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_term(RAFT_INIT_LOG_TERM);
+
+    kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
+    Ok(())
+}
+
 pub fn write_peer_state<T: Mutable>(
     kv_engine: &DB,
     kv_wb: &T,
@@ -1496,7 +1516,7 @@ pub fn write_peer_state<T: Mutable>(
     Ok(())
 }
 
-// TODO: remove _2 when write_peer_state is deleted
+// TODO: remove the _2 and delete the other version of this function
 pub fn write_peer_state_2<T: MutableTrait>(
     kv_wb: &T,
     region: &metapb::Region,
