@@ -249,7 +249,6 @@ fn fuzz_duration(
 ) -> Result<(), Error> {
     use tidb_query::codec::convert::ConvertTo;
     use tidb_query::codec::mysql::decimal::Decimal;
-    use tidb_query::codec::mysql::DurationEncoder;
 
     let _ = t.fsp();
     let u = t;
@@ -263,8 +262,6 @@ fn fuzz_duration(
 
     let u = t;
     u.round_frac(cursor.read_as_i8()?)?;
-    let mut v = Vec::new();
-    let _ = v.write_duration(t);
 
     let mut ctx = EvalContext::default();
     let _: Decimal = t.convert(&mut ctx)?;

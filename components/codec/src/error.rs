@@ -15,7 +15,7 @@ pub enum ErrorInner {
 
 impl ErrorInner {
     #[inline]
-    pub fn eof() -> ErrorInner {
+    pub(crate) fn eof() -> ErrorInner {
         io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF").into()
     }
 
