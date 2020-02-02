@@ -14,7 +14,7 @@ use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
 use engine_rocks::RocksSnapshot;
-use engine_traits::{KvEngine, Peekable as PeekableTrait};
+use engine_traits::{KvEngine, Peekable as PeekableTrait, Mutable as MutableTrait};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1493,6 +1493,30 @@ pub fn write_peer_state<T: Mutable>(
         "state" => ?region_state,
     );
     kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+    Ok(())
+}
+
+// TODO: remove _2 when write_peer_state is deleted
+pub fn write_peer_state_2<T: MutableTrait>(
+    kv_wb: &T,
+    region: &metapb::Region,
+    state: PeerState,
+    merge_state: Option<MergeState>,
+) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::default();
+    region_state.set_state(state);
+    region_state.set_region(region.clone());
+    if let Some(state) = merge_state {
+        region_state.set_merge_state(state);
+    }
+
+    debug!(
+        "writing merge state";
+        "region_id" => region_id,
+        "state" => ?region_state,
+    );
+    kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
     Ok(())
 }
 
