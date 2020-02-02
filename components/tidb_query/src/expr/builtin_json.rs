@@ -80,7 +80,7 @@ impl ScalarFunc {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
         let parser = JsonFuncArgsParser::new(row);
         let path_exprs: Vec<_> = try_opt!(parser.get_path_exprs(ctx, &self.children[1..]));
-        Ok(j.extract(&path_exprs)?.map(Cow::Owned))
+        Ok(j.as_ref().as_ref().extract(&path_exprs)?.map(Cow::Owned))
     }
 
     pub fn json_length<'a, 'b: 'a>(

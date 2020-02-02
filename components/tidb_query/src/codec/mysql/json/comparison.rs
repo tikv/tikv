@@ -4,20 +4,8 @@ use std::cmp::Ordering;
 use std::f64;
 
 use super::super::Result;
+use super::constants::*;
 use super::{Json, JsonRef, JsonType, ERR_CONVERT_FAILED};
-
-const PRECEDENCE_BLOB: i32 = -1;
-const PRECEDENCE_BIT: i32 = -2;
-const PRECEDENCE_OPAQUE: i32 = -3;
-const PRECEDENCE_DATETIME: i32 = -4;
-const PRECEDENCE_TIME: i32 = -5;
-const PRECEDENCE_DATE: i32 = -6;
-const PRECEDENCE_BOOLEAN: i32 = -7;
-const PRECEDENCE_ARRAY: i32 = -8;
-const PRECEDENCE_OBJECT: i32 = -9;
-const PRECEDENCE_STRING: i32 = -10;
-const PRECEDENCE_NUMBER: i32 = -11;
-const PRECEDENCE_NULL: i32 = -12;
 
 impl<'a> JsonRef<'a> {
     fn get_precedence(&self) -> i32 {
@@ -104,10 +92,9 @@ impl<'a> PartialOrd for JsonRef<'a> {
                     let right_count = right.get_elem_count();
                     let mut i = 0;
                     while i < left_count && i < right_count {
-                        if let (Ok(left_ele), Ok(right_ele)) = (
-                            self.array_get_elem(i as usize),
-                            right.array_get_elem(i as usize),
-                        ) {
+                        if let (Ok(left_ele), Ok(right_ele)) =
+                            (self.array_get_elem(i), right.array_get_elem(i))
+                        {
                             match left_ele.partial_cmp(&right_ele) {
                                 order @ None
                                 | order @ Some(Ordering::Greater)

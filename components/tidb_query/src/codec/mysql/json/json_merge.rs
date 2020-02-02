@@ -13,6 +13,8 @@ impl Json {
     /// 2. adjacent object are merged to a single object;
     /// 3. a scalar value is autowrapped as an array before merge;
     /// 4. an adjacent array and object are merged by autowrapping the object as an array.
+    ///
+    /// See `MergeBinary()` in TiDB `json/binary_function.go`
     #[allow(clippy::comparison_chain)]
     pub fn merge(mut bjs: Vec<Json>) -> Result<Json> {
         let mut result = vec![];
@@ -40,13 +42,14 @@ impl Json {
     }
 }
 
+// See `mergeBinaryArray()` in TiDB `json/binary_function.go`
 fn merge_binary_array(elems: Vec<Json>) -> Result<Json> {
     let mut buf = vec![];
     for j in elems {
         if j.as_ref().get_type() != JsonType::Array {
             buf.push(j)
         } else {
-            let child_count = j.as_ref().get_elem_count() as usize;
+            let child_count = j.as_ref().get_elem_count();
             for i in 0..child_count {
                 // TODO: Can we remove `to_owned`
                 buf.push(j.as_ref().array_get_elem(i)?.to_owned());
@@ -56,10 +59,11 @@ fn merge_binary_array(elems: Vec<Json>) -> Result<Json> {
     Json::from_array(buf)
 }
 
+// See `mergeBinaryObject()` in TiDB `json/binary_function.go`
 fn merge_binary_object(objects: &mut Vec<Json>) -> Result<Json> {
     let mut kv_map = BTreeMap::new();
     for j in objects.drain(..) {
-        let elem_count = j.as_ref().get_elem_count() as usize;
+        let elem_count = j.as_ref().get_elem_count();
         for i in 0..elem_count {
             let key = j.as_ref().object_get_key(i);
             let val = j.as_ref().object_get_val(i)?;

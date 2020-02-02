@@ -11,6 +11,8 @@ use std::ptr;
 /// A helper struct that derives a new JSON by combining and manipulating
 /// the encoded bytes directly. Only used by `json_replace`, `json_set`,
 /// `json_insert` and `json_remove`
+///
+/// See `binaryModifier` in TiDB `json/binary_function.go`
 pub struct BinaryModifier<'a> {
     // The target Json to be modified
     old: JsonRef<'a>,
@@ -86,7 +88,7 @@ impl<'a> BinaryModifier<'a> {
                 self.to_be_modified_ptr = parent_node.as_ptr();
                 match parent_node.get_type() {
                     JsonType::Array => {
-                        let elem_count = parent_node.get_elem_count() as usize;
+                        let elem_count = parent_node.get_elem_count();
                         let mut elems = vec![];
                         for i in 0..elem_count {
                             elems.push(parent_node.array_get_elem(i)?);
@@ -107,30 +109,31 @@ impl<'a> BinaryModifier<'a> {
                     return Ok(());
                 }
                 self.to_be_modified_ptr = parent_node.as_ptr();
-                let elem_count = parent_node.get_elem_count() as usize;
-                let mut keys = Vec::with_capacity(elem_count + 1);
-                let mut values = Vec::with_capacity(elem_count + 1);
+                let elem_count = parent_node.get_elem_count();
+                let mut entries = Vec::with_capacity(elem_count + 1);
                 match parent_node.object_search_key(insert_key.as_bytes()) {
                     Some(insert_idx) => {
                         for i in 0..elem_count {
                             if insert_idx == i {
-                                keys.push(insert_key.as_bytes());
-                                values.push(new.as_ref());
+                                entries.push((insert_key.as_bytes(), new.as_ref()));
                             }
-                            keys.push(parent_node.object_get_key(i));
-                            values.push(parent_node.object_get_val(i)?);
+                            entries.push((
+                                parent_node.object_get_key(i),
+                                parent_node.object_get_val(i)?,
+                            ));
                         }
                     }
                     None => {
                         for i in 0..elem_count {
-                            keys.push(parent_node.object_get_key(i));
-                            values.push(parent_node.object_get_val(i)?);
+                            entries.push((
+                                parent_node.object_get_key(i),
+                                parent_node.object_get_val(i)?,
+                            ));
                         }
-                        keys.push(insert_key.as_bytes());
-                        values.push(new.as_ref());
+                        entries.push((insert_key.as_bytes(), new.as_ref()))
                     }
                 }
-                self.new_value = Some(Json::from_kv_pairs(keys, values)?);
+                self.new_value = Some(Json::from_kv_pairs(entries)?);
             }
             _ => {}
         }
@@ -162,7 +165,7 @@ impl<'a> BinaryModifier<'a> {
             PathLeg::Index(remove_idx) => {
                 if parent_node.get_type() == JsonType::Array {
                     self.to_be_modified_ptr = parent_node.as_ptr();
-                    let elems_count = parent_node.get_elem_count() as usize;
+                    let elems_count = parent_node.get_elem_count();
                     let mut elems = Vec::with_capacity(elems_count - 1);
                     let remove_idx = *remove_idx as usize;
                     for i in 0..elems_count {
@@ -177,17 +180,15 @@ impl<'a> BinaryModifier<'a> {
                 // Ignore constant
                 if parent_node.get_type() == JsonType::Object {
                     self.to_be_modified_ptr = parent_node.as_ptr();
-                    let elem_count = parent_node.get_elem_count() as usize;
-                    let mut keys = Vec::with_capacity(elem_count - 1);
-                    let mut values = Vec::with_capacity(elem_count - 1);
+                    let elem_count = parent_node.get_elem_count();
+                    let mut entries = Vec::with_capacity(elem_count - 1);
                     for i in 0..elem_count {
                         let key = parent_node.object_get_key(i);
                         if key != remove_key.as_bytes() {
-                            keys.push(key);
-                            values.push(parent_node.object_get_val(i)?);
+                            entries.push((key, parent_node.object_get_val(i)?));
                         }
                     }
-                    self.new_value = Some(Json::from_kv_pairs(keys, values)?);
+                    self.new_value = Some(Json::from_kv_pairs(entries)?);
                 }
             }
             _ => {}
@@ -230,7 +231,7 @@ impl<'a> BinaryModifier<'a> {
             }
             JsonType::Object | JsonType::Array => {
                 let doc_off = buf.len();
-                let elem_count = self.old.get_elem_count() as usize;
+                let elem_count = self.old.get_elem_count();
                 let current = self.old.clone();
                 let val_entry_start = match current.get_type() {
                     JsonType::Array => {

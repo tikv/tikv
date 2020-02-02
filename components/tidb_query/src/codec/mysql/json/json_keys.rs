@@ -6,7 +6,7 @@ use super::super::Result;
 use super::path_expr::PathExpression;
 use super::{Json, JsonRef, JsonType};
 
-impl Json {
+impl<'a> JsonRef<'a> {
     /// Evaluates a (possibly empty) list of values and returns a JSON array containing those values specified by `path_expr_list`
     pub fn keys(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {
         if !path_expr_list.is_empty() {
@@ -26,27 +26,27 @@ impl Json {
                 ));
             }
             match self.extract(path_expr_list)? {
-                Some(j) => json_keys(j.as_ref()),
+                Some(j) => json_keys(&j.as_ref()),
                 None => Ok(None),
             }
         } else {
-            json_keys(self.as_ref())
+            json_keys(&self)
         }
     }
 }
 
-fn json_keys(j: JsonRef<'_>) -> Result<Option<Json>> {
-    match j.get_type() {
-        JsonType::Object => {
-            let elem_count = j.get_elem_count() as usize;
-            let mut ret = Vec::with_capacity(elem_count);
-            for i in 0..elem_count {
-                ret.push(Json::from_str_val(str::from_utf8(j.object_get_key(i))?)?);
-            }
-            Ok(Some(Json::from_array(ret)?))
+// See `GetKeys()` in TiDB `json/binary.go`
+fn json_keys(j: &JsonRef<'_>) -> Result<Option<Json>> {
+    Ok(if j.get_type() == JsonType::Object {
+        let elem_count = j.get_elem_count();
+        let mut ret = Vec::with_capacity(elem_count);
+        for i in 0..elem_count {
+            ret.push(Json::from_str_val(str::from_utf8(j.object_get_key(i))?)?);
         }
-        _ => Ok(None),
-    }
+        Some(Json::from_array(ret)?)
+    } else {
+        None
+    })
 }
 
 #[cfg(test)]
@@ -105,7 +105,7 @@ mod tests {
                 Some(p) => vec![parse_json_path_expr(p).unwrap()],
                 None => vec![],
             };
-            let got = j.keys(&exprs[..]);
+            let got = j.as_ref().keys(&exprs[..]);
             if success {
                 assert!(got.is_ok(), "#{} expect modify ok but got {:?}", i, got);
                 let result = got.unwrap();

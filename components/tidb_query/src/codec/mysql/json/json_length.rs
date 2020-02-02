@@ -21,7 +21,7 @@ impl Json {
         if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
             return Ok(None);
         }
-        Ok(self.extract(path_expr_list)?.and_then(|j| j.len()))
+        Ok(self.as_ref().extract(path_expr_list)?.and_then(|j| j.len()))
     }
 }
 

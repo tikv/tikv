@@ -13,10 +13,11 @@ impl<'a> JsonRef<'a> {
     }
 }
 
+// See `GetElemDepth()` in TiDB `json/binary_function.go`
 fn depth_json(j: &JsonRef<'_>) -> Result<i64> {
     Ok(match j.get_type() {
         JsonType::Object => {
-            let length = j.get_elem_count() as usize;
+            let length = j.get_elem_count();
             let mut max_depth = 0;
             for i in 0..length {
                 let val = j.object_get_val(i)?;
@@ -28,7 +29,7 @@ fn depth_json(j: &JsonRef<'_>) -> Result<i64> {
             max_depth
         }
         JsonType::Array => {
-            let length = j.get_elem_count() as usize;
+            let length = j.get_elem_count();
             let mut max_depth = 0;
             for i in 0..length {
                 let val = j.array_get_elem(i)?;

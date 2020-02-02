@@ -1,9 +1,67 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
+//! The binary JSON format from MySQL 5.7 is as follows:
+//! ```
+//!   JSON doc ::= type value
+//!   type ::=
+//!       0x01 |       // large JSON object
+//!       0x03 |       // large JSON array
+//!       0x04 |       // literal (true/false/null)
+//!       0x05 |       // int16
+//!       0x06 |       // uint16
+//!       0x07 |       // int32
+//!       0x08 |       // uint32
+//!       0x09 |       // int64
+//!       0x0a |       // uint64
+//!       0x0b |       // double
+//!       0x0c |       // utf8mb4 string
+//!   value ::=
+//!       object  |
+//!       array   |
+//!       literal |
+//!       number  |
+//!       string  |
+//!   object ::= element-count size key-entry* value-entry* key* value*
+//!   array ::= element-count size value-entry* value*
+//!
+//!   // the number of members in object or number of elements in array
+//!   element-count ::= uint32
+//!
+//!   //number of bytes in the binary representation of the object or array
+//!   size ::= uint32
+//!   key-entry ::= key-offset key-length
+//!   key-offset ::= uint32
+//!   key-length ::= uint16    // key length must be less than 64KB
+//!   value-entry ::= type offset-or-inlined-value
+//!
+//!   // This field holds either the offset to where the value is stored,
+//!   // or the value itself if it is small enough to be inlined (that is,
+//!   // if it is a JSON literal or a small enough [u]int).
+//!   offset-or-inlined-value ::= uint32
+//!   key ::= utf8mb4-data
+//!   literal ::=
+//!       0x00 |   // JSON null literal
+//!       0x01 |   // JSON true literal
+//!       0x02 |   // JSON false literal
+//!   number ::=  ....    // little-endian format for [u]int(16|32|64), whereas
+//!                       // double is stored in a platform-independent, eight-byte
+//!                       // format using float8store()
+//!   string ::= data-length utf8mb4-data
+//!   data-length ::= uint8*    // If the high bit of a byte is 1, the length
+//!                             // field is continued in the next byte,
+//!                             // otherwise it is the last byte of the length
+//!                             // field. So we need 1 byte to represent
+//!                             // lengths up to 127, 2 bytes to represent
+//!                             // lengths up to 16383, and so on...
+//! ```
+//!
+
 mod binary;
+mod comparison;
 // FIXME(shirly): remove following later
 #[allow(dead_code)]
-mod comparison;
 mod constants;
+mod jcodec;
 mod modifier;
 mod path_expr;
 mod serde;
@@ -18,7 +76,7 @@ mod json_remove;
 mod json_type;
 mod json_unquote;
 
-pub use self::binary::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder};
+pub use self::jcodec::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder};
 pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 
@@ -91,24 +149,32 @@ impl<'a> JsonRef<'a> {
     }
 
     // Returns the JSON value as u64
+    //
+    // See `GetUint64()` in TiDB `json/binary.go`
     pub(crate) fn get_u64(&self) -> u64 {
         assert_eq!(self.type_code, JsonType::U64);
         NumberCodec::decode_u64_le(self.value())
     }
 
     // Returns the JSON value as i64
+    //
+    // See `GetInt64()` in TiDB `json/binary.go`
     pub(crate) fn get_i64(&self) -> i64 {
         assert_eq!(self.type_code, JsonType::I64);
         NumberCodec::decode_i64_le(self.value())
     }
 
     // Returns the JSON value as f64
+    //
+    // See `GetFloat64()` in TiDB `json/binary.go`
     pub(crate) fn get_double(&self) -> f64 {
         assert_eq!(self.type_code, JsonType::Double);
         NumberCodec::decode_f64_le(self.value())
     }
 
     // Gets the count of Object or Array
+    //
+    // See `GetElemCount()` in TiDB `json/binary.go`
     pub(crate) fn get_elem_count(&self) -> usize {
         assert!((self.type_code == JsonType::Object) | (self.type_code == JsonType::Array));
         NumberCodec::decode_u32_le(self.value()) as usize
@@ -222,9 +288,9 @@ impl Json {
     }
 
     /// Creates a `object` JSON from key-value pairs
-    pub fn from_kv_pairs<'a>(keys: Vec<&[u8]>, values: Vec<JsonRef<'a>>) -> Result<Self> {
+    pub fn from_kv_pairs<'a>(entries: Vec<(&[u8], JsonRef<'a>)>) -> Result<Self> {
         let mut value = vec![];
-        value.write_json_obj_from_keys_values(keys, values)?;
+        value.write_json_obj_from_keys_values(entries)?;
         Ok(Self::new(JsonType::Object, value))
     }
 

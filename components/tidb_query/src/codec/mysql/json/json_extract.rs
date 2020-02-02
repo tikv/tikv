@@ -6,14 +6,16 @@ use super::path_expr::{
 };
 use super::{Json, JsonRef, JsonType};
 
-impl Json {
+impl<'a> JsonRef<'a> {
     /// `extract` receives several path expressions as arguments, matches them in j, and returns
     /// the target JSON matched any path expressions, which may be autowrapped as an array.
     /// If there is no any expression matched, it returns None.
+    ///
+    /// See `Extract()` in TiDB `json.binary_function.go`
     pub fn extract(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {
         let mut elem_list = Vec::with_capacity(path_expr_list.len());
         for path_expr in path_expr_list {
-            elem_list.append(&mut extract_json(self.as_ref(), &path_expr.legs)?)
+            elem_list.append(&mut extract_json(self.clone(), &path_expr.legs)?)
         }
         if elem_list.is_empty() {
             return Ok(None);
@@ -39,7 +41,7 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
     match *current_leg {
         PathLeg::Index(i) => match j.get_type() {
             JsonType::Array => {
-                let elem_count = j.get_elem_count() as usize;
+                let elem_count = j.get_elem_count();
                 if i == PATH_EXPR_ARRAY_INDEX_ASTERISK {
                     for k in 0..elem_count {
                         ret.append(&mut extract_json(j.array_get_elem(k)?, sub_path_legs)?)
@@ -60,7 +62,7 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
         PathLeg::Key(ref key) => {
             if j.get_type() == JsonType::Object {
                 if key == PATH_EXPR_ASTERISK {
-                    let elem_count = j.get_elem_count() as usize;
+                    let elem_count = j.get_elem_count();
                     for i in 0..elem_count {
                         ret.append(&mut extract_json(j.object_get_val(i)?, sub_path_legs)?)
                     }
@@ -74,13 +76,13 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
             ret.append(&mut extract_json(j.clone(), sub_path_legs)?);
             match j.get_type() {
                 JsonType::Array => {
-                    let elem_count = j.get_elem_count() as usize;
+                    let elem_count = j.get_elem_count();
                     for k in 0..elem_count {
                         ret.append(&mut extract_json(j.array_get_elem(k)?, sub_path_legs)?)
                     }
                 }
                 JsonType::Object => {
-                    let elem_count = j.get_elem_count() as usize;
+                    let elem_count = j.get_elem_count();
                     for i in 0..elem_count {
                         ret.append(&mut extract_json(j.object_get_val(i)?, sub_path_legs)?)
                     }
@@ -274,7 +276,7 @@ mod tests {
                 }
                 None => None,
             };
-            let got = j.extract(&exprs[..]).unwrap();
+            let got = j.as_ref().extract(&exprs[..]).unwrap();
             assert_eq!(
                 got, expected,
                 "#{} expect {:?}, but got {:?}",

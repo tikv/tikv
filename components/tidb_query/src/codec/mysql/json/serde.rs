@@ -36,7 +36,7 @@ impl<'a> Serialize for JsonRef<'a> {
             JsonType::I64 => serializer.serialize_i64(self.get_i64()),
             JsonType::U64 => serializer.serialize_u64(self.get_u64()),
             JsonType::Object => {
-                let elem_count = self.get_elem_count() as usize;
+                let elem_count = self.get_elem_count();
                 let mut map = serializer.serialize_map(Some(elem_count))?;
                 for i in 0..elem_count {
                     let key = self.object_get_key(i);
@@ -46,7 +46,7 @@ impl<'a> Serialize for JsonRef<'a> {
                 map.end()
             }
             JsonType::Array => {
-                let elem_count = self.get_elem_count() as usize;
+                let elem_count = self.get_elem_count();
                 let mut tup = serializer.serialize_tuple(elem_count)?;
                 for i in 0..elem_count {
                     let item = self.array_get_elem(i).map_err(SerError::custom)?;

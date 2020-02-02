@@ -200,7 +200,7 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 
     let path_expr_list = try_opt!(parse_json_path_list(&args[1..]));
 
-    Ok(j.extract(&path_expr_list)?)
+    Ok(j.as_ref().extract(&path_expr_list)?)
 }
 
 // Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
