@@ -15,12 +15,12 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
-use engine::rocks::Writable;
-use engine::rocks::{WriteBatch, WriteOptions};
+use engine::rocks::WriteOptions;
 use engine::Engines;
-use engine::{util as engine_util, Mutable, Peekable};
+use engine::{util as engine_util, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch, Compat};
+use engine_traits::{WriteBatch, Mutable as MutableTrait, KvEngine};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
@@ -38,7 +38,7 @@ use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
-use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
+use crate::store::peer_storage::{self, write_initial_apply_state_2, write_peer_state_2};
 use crate::store::util::KeysInfoFormatter;
 use crate::store::util::{check_region_epoch, compare_region_epoch};
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
@@ -290,7 +290,7 @@ struct ApplyContext {
     apply_res: Vec<ApplyRes>,
     exec_ctx: Option<ExecContext>,
 
-    kv_wb: Option<WriteBatch>,
+    kv_wb: Option<RocksWriteBatch>,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
@@ -346,7 +346,8 @@ impl ApplyContext {
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate) {
         if self.kv_wb.is_none() {
-            self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            let kb_wb = self.engines.kv.c().write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+            self.kv_wb = Some(kb_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
@@ -371,7 +372,7 @@ impl ApplyContext {
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
         if self.last_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
+            delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
         // last_applied_index doesn't need to be updated, set persistent to true will
         // force it call `prepare_for` automatically.
@@ -397,7 +398,7 @@ impl ApplyContext {
             write_opts.set_sync(need_sync);
             self.engines
                 .kv
-                .write_opt(self.kv_wb(), &write_opts)
+                .write_opt(self.kv_wb().as_inner(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
@@ -405,7 +406,8 @@ impl ApplyContext {
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                let kv_wb = self.engines.kv.c().write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+                self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
                 self.kv_wb().clear();
@@ -422,7 +424,7 @@ impl ApplyContext {
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult>) {
         if !delegate.pending_remove {
-            delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
+            delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
         self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
@@ -443,12 +445,12 @@ impl ApplyContext {
     }
 
     #[inline]
-    pub fn kv_wb(&self) -> &WriteBatch {
+    pub fn kv_wb(&self) -> &RocksWriteBatch {
         self.kv_wb.as_ref().unwrap()
     }
 
     #[inline]
-    pub fn kv_kv_wb_mut(&mut self) -> &mut WriteBatch {
+    pub fn kv_kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
         self.kv_wb.as_mut().unwrap()
     }
 
@@ -782,16 +784,12 @@ impl ApplyDelegate {
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, engines: &Engines, wb: &WriteBatch) {
-        rocks::util::get_cf_handle(&engines.kv, CF_RAFT)
-            .map_err(From::from)
-            .and_then(|handle| {
-                wb.put_msg_cf(
-                    handle,
-                    &keys::apply_state_key(self.region.get_id()),
-                    &self.apply_state,
-                )
-            })
+    fn write_apply_state(&self, wb: &RocksWriteBatch) {
+        wb.put_msg_cf(
+            CF_RAFT,
+            &keys::apply_state_key(self.region.get_id()),
+            &self.apply_state,
+        )
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save apply state to write batch, error: {:?}",
@@ -1221,8 +1219,7 @@ impl ApplyDelegate {
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            rocks::util::get_cf_handle(&ctx.engines.kv, cf)
-                .and_then(|handle| ctx.kv_wb().put_cf(handle, &key, value).map_err(Into::into))
+            ctx.kv_wb().put_cf(cf, &key, value)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to write ({}, {}) to cf {}: {:?}",
@@ -1259,8 +1256,7 @@ impl ApplyDelegate {
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            rocks::util::get_cf_handle(&ctx.engines.kv, cf)
-                .and_then(|handle| ctx.kv_wb().delete_cf(handle, &key).map_err(Into::into))
+            ctx.kv_wb().delete_cf(cf, &key)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to delete {}: {}",
@@ -1593,7 +1589,7 @@ impl ApplyDelegate {
             PeerState::Normal
         };
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        if let Err(e) = write_peer_state(&ctx.engines.kv, kv_wb_mut, &region, state, None) {
+        if let Err(e) = write_peer_state_2(kv_wb_mut, &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -1701,7 +1697,6 @@ impl ApplyDelegate {
             derived.set_end_key(keys.front().unwrap().to_vec());
             regions.push(derived.clone());
         }
-        let kv = &ctx.engines.kv;
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
@@ -1718,8 +1713,8 @@ impl ApplyDelegate {
             {
                 peer.set_id(*peer_id);
             }
-            write_peer_state(kv, kv_wb_mut, &new_region, PeerState::Normal, None)
-                .and_then(|_| write_initial_apply_state(kv, kv_wb_mut, new_region.get_id()))
+            write_peer_state_2(kv_wb_mut, &new_region, PeerState::Normal, None)
+                .and_then(|_| write_initial_apply_state_2(kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} fails to save split region {:?}: {:?}",
@@ -1732,7 +1727,7 @@ impl ApplyDelegate {
             derived.set_start_key(keys.pop_front().unwrap());
             regions.push(derived.clone());
         }
-        write_peer_state(kv, kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
+        write_peer_state_2(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
         let mut resp = AdminResponse::default();
@@ -1784,8 +1779,7 @@ impl ApplyDelegate {
         merging_state.set_min_index(index);
         merging_state.set_target(prepare_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
-        write_peer_state(
-            &ctx.engines.kv,
+        write_peer_state_2(
             ctx.kv_wb.as_mut().unwrap(),
             &region,
             PeerState::Merging,
@@ -1926,15 +1920,13 @@ impl ApplyDelegate {
         } else {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
-        let kv = &ctx.engines.kv;
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        write_peer_state(kv, kv_wb_mut, &region, PeerState::Normal, None)
+        write_peer_state_2(kv_wb_mut, &region, PeerState::Normal, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
                 let mut merging_state = MergeState::default();
                 merging_state.set_target(self.region.clone());
-                write_peer_state(
-                    kv,
+                write_peer_state_2(
                     kv_wb_mut,
                     source_region,
                     PeerState::Tombstone,
@@ -1987,9 +1979,8 @@ impl ApplyDelegate {
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
-        let kv = &ctx.engines.kv;
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        write_peer_state(kv, kv_wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
+        write_peer_state_2(kv_wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
                 "{} failed to rollback merge {:?}: {:?}",
                 self.tag, rollback, e
@@ -2661,10 +2652,10 @@ impl ApplyFsm {
                 apply_ctx.timer = Some(SlowTimer::new());
             }
             if apply_ctx.kv_wb.is_none() {
-                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                apply_ctx.kv_wb = Some(apply_ctx.engines.kv.c().write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
             }
             self.delegate
-                .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+                .write_apply_state(apply_ctx.kv_wb());
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,
