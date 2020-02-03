@@ -707,6 +707,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_overflow_as_warning() {
+        let cases: Vec<(&'static [u8], i8, &'static str)> = vec![
+            (b"-1062600704", 0, "-838:59:59"),
+            (b"1062600704", 0, "838:59:59"),
+        ];
+
+        for (input, fsp, expect) in cases {
+            let got = Duration::parse(
+                &mut EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING))),
+                input,
+                fsp,
+            );
+            assert_eq!(expect, &format!("{}", got.unwrap()));
+        }
+    }
+
+    #[test]
     fn test_parse() {
         let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
             (b"10:11:12", 0, Some("10:11:12")),
