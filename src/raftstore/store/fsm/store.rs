@@ -29,7 +29,7 @@ use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 use crate::config::{ConfigController, ConfigHandler};
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
-use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::config::Config;
 use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
@@ -216,7 +216,7 @@ pub struct PollContext<T, C: 'static> {
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
     pub applying_snap_count: Arc<AtomicUsize>,
-    pub coprocessor_host: Arc<CoprocessorHost>,
+    pub coprocessor_host: CoprocessorHost,
     pub timer: SteadyTimer,
     pub trans: T,
     pub pd_client: Arc<C>,
@@ -724,7 +724,7 @@ pub struct RaftPollerBuilder<T, C> {
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
     snap_mgr: SnapManager,
-    pub coprocessor_host: Arc<CoprocessorHost>,
+    pub coprocessor_host: CoprocessorHost,
     trans: T,
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
@@ -963,7 +963,7 @@ struct Workers {
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     region_worker: Worker<RegionTask>,
-    coprocessor_host: Arc<CoprocessorHost>,
+    coprocessor_host: CoprocessorHost,
     future_poller: ThreadPool,
 }
 
@@ -1001,7 +1001,7 @@ impl RaftBatchSystem {
         // TODO load coprocessors from configuration
         coprocessor_host
             .registry
-            .register_admin_observer(100, Box::new(SplitObserver));
+            .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
         let workers = Workers {
             split_check_worker: Worker::new("split-check"),
@@ -1010,7 +1010,7 @@ impl RaftBatchSystem {
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
-            coprocessor_host: Arc::new(coprocessor_host),
+            coprocessor_host,
             future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
                 .pool_size(cfg.future_poll_size)
@@ -1117,7 +1117,7 @@ impl RaftBatchSystem {
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             self.router.clone(),
-            Arc::clone(&workers.coprocessor_host),
+            workers.coprocessor_host.clone(),
             cfg_controller.get_current().coprocessor.clone(),
         );
         box_try!(workers.split_check_worker.start(split_check_runner));
@@ -1128,7 +1128,7 @@ impl RaftBatchSystem {
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
             cfg.clean_stale_peer_delay.0,
-            Arc::clone(&workers.coprocessor_host),
+            workers.coprocessor_host.clone(),
             self.router(),
         );
         let timer = region_runner.new_timer();
@@ -2203,7 +2203,7 @@ mod tests {
         let (raft_router, apply_router, mut system, mut apply_system) =
             create_batch_system(&cfg.raft_store);
         let (_, engines) = create_tmp_engine("store-config");
-        let host = Arc::new(CoprocessorHost::default());
+        let host = CoprocessorHost::default();
         let importer = {
             let dir = Builder::new().prefix("store-config").tempdir().unwrap();
             Arc::new(SSTImporter::new(dir.path()).unwrap())

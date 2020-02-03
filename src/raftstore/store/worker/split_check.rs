@@ -164,17 +164,12 @@ impl Display for Task {
 pub struct Runner<S> {
     engine: Arc<DB>,
     router: S,
-    coprocessor: Arc<CoprocessorHost>,
+    coprocessor: CoprocessorHost,
     cfg: Config,
 }
 
 impl<S: CasualRouter> Runner<S> {
-    pub fn new(
-        engine: Arc<DB>,
-        router: S,
-        coprocessor: Arc<CoprocessorHost>,
-        cfg: Config,
-    ) -> Runner<S> {
+    pub fn new(engine: Arc<DB>, router: S, coprocessor: CoprocessorHost, cfg: Config) -> Runner<S> {
         Runner {
             engine,
             router,
@@ -367,7 +362,7 @@ mod tests {
         let runner = Runner::new(
             engine,
             router.clone(),
-            Arc::new(CoprocessorHost::new(router)),
+            CoprocessorHost::new(router),
             cfg.coprocessor.clone(),
         );
         let mut worker: Worker<Task> = Worker::new("split-check-config");

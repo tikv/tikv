@@ -279,7 +279,7 @@ impl Notifier {
 struct ApplyContext {
     tag: String,
     timer: Option<SlowTimer>,
-    host: Arc<CoprocessorHost>,
+    host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
@@ -307,7 +307,7 @@ struct ApplyContext {
 impl ApplyContext {
     pub fn new(
         tag: String,
-        host: Arc<CoprocessorHost>,
+        host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
@@ -2797,7 +2797,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
 pub struct Builder {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
-    coprocessor_host: Arc<CoprocessorHost>,
+    coprocessor_host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     engines: Engines,
@@ -3119,7 +3119,6 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
         let (_tmp, engines) = create_tmp_engine("apply-basic");
-        let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
@@ -3127,7 +3126,7 @@ mod tests {
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
-            coprocessor_host: host,
+            coprocessor_host: CoprocessorHost::default(),
             importer,
             region_scheduler,
             sender,
@@ -3459,10 +3458,10 @@ mod tests {
     fn test_handle_raft_committed_entries() {
         let (_path, engines) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
-        let mut host = CoprocessorHost::default();
         let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::default();
         host.registry
-            .register_query_observer(1, Box::new(obs.clone()));
+            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -3474,7 +3473,7 @@ mod tests {
             cfg,
             sender,
             region_scheduler,
-            coprocessor_host: Arc::new(host),
+            coprocessor_host: host,
             importer: importer.clone(),
             engines: engines.clone(),
             router: router.clone(),
@@ -3806,7 +3805,6 @@ mod tests {
         reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
-        let host = Arc::new(CoprocessorHost::default());
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
@@ -3816,7 +3814,7 @@ mod tests {
             sender,
             importer,
             region_scheduler,
-            coprocessor_host: host,
+            coprocessor_host: CoprocessorHost::default(),
             engines: engines.clone(),
             router: router.clone(),
         };
