@@ -245,12 +245,15 @@ impl From<codec::Error> for ErrorInner {
 impl From<txn_types::Error> for ErrorInner {
     fn from(err: txn_types::Error) -> Self {
         match err {
-            txn_types::Error::Io(e) => ErrorInner::Io(e),
-            txn_types::Error::Codec(e) => ErrorInner::Codec(e),
-            txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => {
+            txn_types::Error(box txn_types::ErrorInner::Io(e)) => ErrorInner::Io(e),
+            txn_types::Error(box txn_types::ErrorInner::Codec(e)) => ErrorInner::Codec(e),
+            txn_types::Error(box txn_types::ErrorInner::BadFormatLock)
+            | txn_types::Error(box txn_types::ErrorInner::BadFormatWrite) => {
                 ErrorInner::BadFormat(err)
             }
-            txn_types::Error::KeyIsLocked(lock_info) => ErrorInner::KeyIsLocked(lock_info),
+            txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock_info)) => {
+                ErrorInner::KeyIsLocked(lock_info)
+            }
         }
     }
 }
