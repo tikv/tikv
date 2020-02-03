@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod btree_engine;
-mod compact_listener;
 mod cursor;
 mod perf_context;
 mod rocksdb_engine;
@@ -23,7 +22,6 @@ use crate::into_other::IntoOther;
 use crate::raftstore::coprocessor::{RegionInfo, RegionInfoCallback, SeekRegionCallback};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
-pub use self::compact_listener::{CompactedEvent, CompactionListener};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
