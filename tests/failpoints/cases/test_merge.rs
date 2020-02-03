@@ -757,7 +757,7 @@ fn test_node_failed_merge_before_succeed_merge() {
     fail::remove(schedule_merge_fp);
     // Wait for left region to rollback merge
     sleep_ms(200);
-    // Prevent the `PrepareMerge` and `RollbackMerge` log sending to applyfsm after
+    // Prevent the `PrepareMerge` and `RollbackMerge` log sending to apply fsm after
     // cleaning send filter. Since this method is just to check `RollbackMerge`,
     // the `PrepareMerge` may escape, but it makes the best effort.
     let before_send_rollback_merge_1003_fp = "before_send_rollback_merge_1003";
@@ -775,14 +775,14 @@ fn test_node_failed_merge_before_succeed_merge() {
     pd_client.must_merge(left.get_id(), right.get_id());
     // Wait right region to send CatchUpLogs to left region.
     sleep_ms(100);
-    // After executing CatchUpLogs in source peerfsm, the committed log will send
-    // to applyfsm in the end of this batch. So even the first `on_ready_prepare_merge`
-    // is executed after CatchUplogs, the latter committed logs is still sent to applyfsm
+    // After executing CatchUpLogs in source peer fsm, the committed log will send
+    // to apply fsm in the end of this batch. So even the first `on_ready_prepare_merge`
+    // is executed after CatchUplogs, the latter committed logs is still sent to apply fsm
     // if CatchUpLogs and `on_ready_prepare_merge` is in different batch.
     //
     // In this case, the data is complete because the wrong up-to-date msg from the
     // first `on_ready_prepare_merge` is sent after all committed log.
-    // Sleep a while to wait applyfsm to send `on_ready_prepare_merge` to peerfsm.
+    // Sleep a while to wait apply fsm to send `on_ready_prepare_merge` to peer fsm.
     let after_send_to_apply_1003_fp = "after_send_to_apply_1003";
     fail::cfg(after_send_to_apply_1003_fp, "sleep(300)").unwrap();
 
@@ -798,7 +798,7 @@ fn test_node_failed_merge_before_succeed_merge() {
 
 // Test if the source region is destroyed correctly in merging when meeting transfer leader.
 // In previous merge flow, the target region deletes some data from source region in StoreMeta
-// before the source region is truly destroyed. It may meet panic when the source peerfsm handle
+// before the source region is truly destroyed. It may meet panic when the source peer fsm handle
 // some msgs at this time.(such as this case)
 #[test]
 fn test_node_merge_transfer_leader() {

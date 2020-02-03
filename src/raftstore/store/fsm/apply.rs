@@ -1766,16 +1766,16 @@ impl ApplyDelegate {
     // The target peer should send missing log entries to the source peer.
     //
     // So, the merge process order would be:
-    // 1.   `exec_commit_merge` in target applyfsm
-    // 2.   `on_catch_up_logs_for_merge` in source peerfsm
+    // 1.   `exec_commit_merge` in target apply fsm
+    // 2.   `on_catch_up_logs_for_merge` in source peer fsm
     // 3.   if the source peer has already executed the corresponding `on_ready_prepare_merge`, set pending_remove and jump to step 6
     // 4.   ... (raft append and apply logs)
-    // 5.   `on_ready_prepare_merge` in source peerfsm and set pending_remove (means source region has finished applying all logs)
-    // 6.   `logs_up_to_date_for_merge` in source applyfsm (destroy its applyfsm and send Noop to trigger the target applyfsm)
-    // 7.   resume `exec_commit_merge` in target applyfsm
-    // 8.   `on_ready_commit_merge` in target peerfsm
-    // 9.   `on_merge_result` in source peerfsm (destroy its peerfsm and send Noop to trigger the target peerfsm)
-    // 10.  resume `on_ready_commit_merge` in target peerfsm
+    // 5.   `on_ready_prepare_merge` in source peer fsm and set pending_remove (means source region has finished applying all logs)
+    // 6.   `logs_up_to_date_for_merge` in source apply fsm (destroy its apply fsm and send Noop to trigger the target apply fsm)
+    // 7.   resume `exec_commit_merge` in target apply fsm
+    // 8.   `on_ready_commit_merge` in target peer fsm
+    // 9.   `on_merge_result` in source peer fsm (destroy its peer fsm and send Noop to trigger the target peer fsm)
+    // 10.  resume `on_ready_commit_merge` in target peer fsm
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext,
@@ -1817,7 +1817,7 @@ impl ApplyDelegate {
                 "source_region_id" => source_region_id
             );
 
-            // Sends message to the source peerfsm and pause `exec_commit_merge` process
+            // Sends message to the source peer fsm and pause `exec_commit_merge` process
             let logs_up_to_date = Arc::new(AtomicU64::new(0));
             let msg = SignificantMsg::CatchUpLogs(CatchUpLogs {
                 target_region_id: self.region_id(),
@@ -2512,7 +2512,7 @@ impl ApplyFsm {
     fn resume_pending_merge(&mut self, ctx: &mut ApplyContext) -> bool {
         match self.delegate.wait_merge_state {
             Some(ref state) => {
-                let source_region_id = state.logs_up_to_date.load(Ordering::Acquire);
+                let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
                 if source_region_id == 0 {
                     return false;
                 }
@@ -2571,12 +2571,12 @@ impl ApplyFsm {
             "region_id" => region_id,
             "peer_id" => self.delegate.id(),
         );
-        // The source peerfsm will be destroyed when the target peer executes `on_ready_commit_merge`
-        // and sends `merge result` to the source peerfsm.
+        // The source peer fsm will be destroyed when the target peer executes `on_ready_commit_merge`
+        // and sends `merge result` to the source peer fsm.
         self.destroy(ctx);
         catch_up_logs
             .logs_up_to_date
-            .store(region_id, Ordering::Release);
+            .store(region_id, Ordering::SeqCst);
 
         if let Some(mailbox) = ctx.router.mailbox(catch_up_logs.target_region_id) {
             let _ = mailbox.force_send(Msg::Noop);

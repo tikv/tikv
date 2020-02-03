@@ -406,7 +406,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     pub fn resume_handling_pending_apply_result(&mut self) -> bool {
         match self.fsm.peer.pending_merge_apply_result {
             Some(ref state) => {
-                let source_region_id = state.ready_to_merge.load(Ordering::Acquire);
+                let source_region_id = state.ready_to_merge.load(Ordering::SeqCst);
                 if source_region_id == 0 {
                     return false;
                 }
@@ -1324,10 +1324,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         self.fsm.peer.pending_remove = true;
         if job.initialized {
-            // When initialized is true and async_remove is false, applyfsm doesn't need to
-            // send destroy msg to peerfsm because peerfsm has already destroyed.
-            // In this case, if applyfsm sends destroy msg, peerfsm may be destroyed twice
-            // because there are some msgs in channel so peerfsm still need to handle them (e.g. callback)
+            // When initialized is true and async_remove is false, apply fsm doesn't need to
+            // send destroy msg to peer fsm because peer fsm has already destroyed.
+            // In this case, if apply fsm sends destroy msg, peer fsm may be destroyed twice
+            // because there are some msgs in channel so peer fsm still need to handle them (e.g. callback)
             self.ctx.apply_router.schedule_task(
                 job.region_id,
                 ApplyTask::destroy(job.region_id, job.async_remove),
@@ -1872,10 +1872,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if state.get_commit() == catch_up_logs.merge.get_commit() {
                 assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
                 // Indicate that `on_catch_up_logs_for_merge` has already executed.
-                // Mark pending_remove because its applyfsm will be destroyed.
+                // Mark pending_remove because its apply fsm will be destroyed.
                 self.fsm.peer.pending_remove = true;
-                // Send CatchUpLogs back to destroy source applyfsm,
-                // then it will send `Noop` to trigger target applyfsm.
+                // Send CatchUpLogs back to destroy source apply fsm,
+                // then it will send `Noop` to trigger target apply fsm.
                 self.ctx.apply_router.schedule_task(
                     self.fsm.region_id(),
                     ApplyTask::LogsUpToDate(self.fsm.peer.catch_up_logs.take().unwrap()),
@@ -1905,12 +1905,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     catch_up_logs.target_region_id
                 );
                 // Indicate that `on_ready_prepare_merge` has already executed.
-                // Mark pending_remove because its applyfsm will be destroyed.
+                // Mark pending_remove because its apply fsm will be destroyed.
                 self.fsm.peer.pending_remove = true;
                 // Just for saving memory.
                 catch_up_logs.merge.clear_entries();
-                // Send CatchUpLogs back to destroy source applyfsm,
-                // then it will send `Noop` to trigger target applyfsm.
+                // Send CatchUpLogs back to destroy source apply fsm,
+                // then it will send `Noop` to trigger target apply fsm.
                 self.ctx
                     .apply_router
                     .schedule_task(region_id, ApplyTask::LogsUpToDate(catch_up_logs));
@@ -2086,8 +2086,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "target_region" => ?target,
                 );
                 self.destroy_peer(true);
-                rtm.store(self.fsm.region_id(), Ordering::Release);
-                // To trigger the target peerfsm
+                rtm.store(self.fsm.region_id(), Ordering::SeqCst);
+                // To trigger the target peer fsm
                 if let Err(e) = self.ctx.router.force_send(target_id, PeerMsg::Noop) {
                     warn!(
                         "failed to send noop back to target peer, are we shutting down?";

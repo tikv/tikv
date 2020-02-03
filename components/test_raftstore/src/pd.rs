@@ -876,16 +876,17 @@ impl TestPdClient {
     }
 
     pub fn check_merged_timeout(&self, from: u64, secs: u64) {
-        for _ in 0..secs * 100 {
-            sleep_ms(10);
-
-            if self.get_region_by_id(from).wait().unwrap().is_none() {
+        let timer = Instant::now();
+        loop {
+            let region = self.get_region_by_id(from).wait().unwrap();
+            if let Some(r) = region {
+                if timer.elapsed() > Duration::from_secs(secs) {
+                    panic!("region {:?} is still not merged.", r);
+                }
+            } else {
                 return;
             }
-        }
-        let region = self.get_region_by_id(from).wait().unwrap();
-        if let Some(r) = region {
-            panic!("region {:?} is still not merged.", r);
+            sleep_ms(10);
         }
     }
 

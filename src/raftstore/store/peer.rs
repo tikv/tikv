@@ -417,12 +417,12 @@ impl Peer {
             );
             return None;
         }
-        // If initialized is false, it implicitly means applyfsm does not exist now.
+        // If initialized is false, it implicitly means apply fsm does not exist now.
         let initialized = self.get_store().is_initialized();
-        // If async_remove is true, it means peerfsm needs to be removed after its
-        // corresponding applyfsm was removed.
-        // If it is false, it means either applyfsm does not exist or there is no task
-        // in applyfsm so it's ok to remove peerfsm immediately.
+        // If async_remove is true, it means peer fsm needs to be removed after its
+        // corresponding apply fsm was removed.
+        // If it is false, it means either apply fsm does not exist or there is no task
+        // in apply fsm so it's ok to remove peer fsm immediately.
         let async_remove = if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
