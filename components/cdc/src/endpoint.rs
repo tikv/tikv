@@ -14,8 +14,8 @@ use tikv::raftstore::store::fsm::{ApplyRouter, ApplyTask};
 use tikv::raftstore::store::msg::{Callback, ReadResponse};
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
-use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
+use tikv::storage::txn::{EntryBatch, TxnEntry};
 use tikv_util::collections::HashMap;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
@@ -46,7 +46,7 @@ pub enum Task {
     IncrementalScan {
         region_id: u64,
         downstream_id: DownstreamID,
-        entries: Vec<Option<TxnEntry>>,
+        entries: EntryBatch,
     },
     #[cfg(not(validate))]
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
@@ -147,7 +147,7 @@ impl Endpoint {
         &mut self,
         _region_id: u64,
         _downstream_id: DownstreamID,
-        _entries: Vec<Option<TxnEntry>>,
+        _entries: EntryBatch,
     ) {
         unimplemented!();
     }
@@ -240,7 +240,7 @@ impl Initializer {
                             }
                         };
                     // If the last element is None, it means scanning is finished.
-                    if let Some(None) = entries.last() {
+                    if entries.is_empty() {
                         done = true;
                     }
                     debug!("cdc scan entries"; "len" => entries.len());
@@ -268,24 +268,14 @@ impl Initializer {
         scanner: &mut DeltaScanner<S>,
         batch_size: usize,
         resolver: Option<&mut Resolver>,
-    ) -> Result<Vec<Option<TxnEntry>>> {
-        let mut entries = Vec::with_capacity(batch_size);
-        while entries.len() < entries.capacity() {
-            match scanner.next_entry()? {
-                Some(entry) => {
-                    entries.push(Some(entry));
-                }
-                None => {
-                    entries.push(None);
-                    break;
-                }
-            }
-        }
+    ) -> Result<EntryBatch> {
+        let mut entry_batch = EntryBatch::with_capacity(batch_size);
+        scanner.scan_entries(&mut entry_batch)?;
 
         if let Some(resolver) = resolver {
             // Track the locks.
-            for entry in &entries {
-                if let Some(TxnEntry::Prewrite { lock, .. }) = entry {
+            for entry in entry_batch.iter() {
+                if let TxnEntry::Prewrite { lock, .. } = entry {
                     let (encoded_key, value) = lock;
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
@@ -294,7 +284,7 @@ impl Initializer {
             }
         }
 
-        Ok(entries)
+        Ok(entry_batch)
     }
 
     fn finish_building_resolver(mut resolver: Resolver, region: Region, sched: Scheduler<Task>) {
