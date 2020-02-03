@@ -717,9 +717,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg, fsp, h, m, s, ms) in cases {
-            let d = Datum::Dur(
-                Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap(),
-            );
+            let d = Datum::Dur(Duration::parse(&mut ctx, arg.as_bytes(), fsp).unwrap());
             test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Hour, d.clone(), Datum::I64(h));
             test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Minute, d.clone(), Datum::I64(m));
             test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Second, d.clone(), Datum::I64(s));
@@ -731,8 +729,7 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Second, Datum::Null);
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, Datum::Null);
         // test zero case
-        let d =
-            Datum::Dur(Duration::parse(&mut EvalContext::default(), b"0 00:00:00.0", 0).unwrap());
+        let d = Datum::Dur(Duration::parse(&mut ctx, b"0 00:00:00.0", 0).unwrap());
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Hour, d.clone(), Datum::I64(0));
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Minute, d.clone(), Datum::I64(0));
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Second, d.clone(), Datum::I64(0));
@@ -1402,9 +1399,7 @@ mod tests {
         let cases = vec![
             (
                 Datum::Null,
-                Datum::Dur(
-                    Duration::parse(&mut EvalContext::default(), b"11:30:45.123456", 6).unwrap(),
-                ),
+                Datum::Dur(Duration::parse(&mut ctx, b"11:30:45.123456", 6).unwrap()),
                 Datum::Null,
             ),
             (Datum::Null, Datum::Null, Datum::Null),
@@ -1421,7 +1416,7 @@ mod tests {
                 Datum::Time(
                     Time::parse_datetime(&mut ctx, "2019-01-01 01:00:00", 6, true).unwrap(),
                 ),
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"-01:01:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"-01:01:00", 6).unwrap()),
                 Datum::Time(
                     Time::parse_datetime(&mut ctx, "2018-12-31 23:59:00", 6, true).unwrap(),
                 ),
@@ -1590,9 +1585,7 @@ mod tests {
         let cases = vec![
             (
                 Datum::Null,
-                Datum::Dur(
-                    Duration::parse(&mut EvalContext::default(), b"11:30:45.123456", 6).unwrap(),
-                ),
+                Datum::Dur(Duration::parse(&mut ctx, b"11:30:45.123456", 6).unwrap()),
                 Datum::Null,
             ),
             (Datum::Null, Datum::Null, Datum::Null),
@@ -1602,13 +1595,13 @@ mod tests {
                 zero_duration.clone(),
             ),
             (
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
                 zero_duration.clone(),
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
             ),
             (
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap()),
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"-01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"-01:00:00", 6).unwrap()),
                 zero_duration,
             ),
         ];
@@ -1676,15 +1669,15 @@ mod tests {
             (
                 zero_duration.clone(),
                 Datum::Bytes(b"01:00:00".to_vec()),
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
             ),
             (
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
                 zero_duration_string,
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
             ),
             (
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
                 Datum::Bytes(b"-01:00:00".to_vec()),
                 zero_duration,
             ),

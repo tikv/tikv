@@ -508,11 +508,7 @@ impl ScalarFunc {
     ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
-        let dur = Duration::parse(
-            &mut EvalContext::default(),
-            s.as_bytes(),
-            self.field_type.decimal() as i8,
-        )?;
+        let dur = Duration::parse(ctx, s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(dur))
     }
 
@@ -523,11 +519,7 @@ impl ScalarFunc {
     ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
-        let dur = Duration::parse(
-            &mut EvalContext::default(),
-            s.as_bytes(),
-            self.field_type.decimal() as i8,
-        )?;
+        let dur = Duration::parse(ctx, s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(dur))
     }
 
@@ -537,11 +529,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let dur = Duration::parse(
-            &mut EvalContext::default(),
-            val.as_ref(),
-            self.field_type.decimal() as i8,
-        )?;
+        let dur = Duration::parse(ctx, val.as_ref(), self.field_type.decimal() as i8)?;
         Ok(Some(dur))
     }
 
@@ -574,11 +562,7 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.unquote()?;
         // TODO: tidb would handle truncate here
-        let d = Duration::parse(
-            &mut EvalContext::default(),
-            s.as_bytes(),
-            self.field_type.decimal() as i8,
-        )?;
+        let d = Duration::parse(ctx, s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(d))
     }
 
