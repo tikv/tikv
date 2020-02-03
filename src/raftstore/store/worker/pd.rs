@@ -644,7 +644,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                             return Ok(());
                         }
                         info!(
-                            "peer is still valid a member of region";
+                            "peer is still a valid member of region";
                             "region_id" => local_region.get_id(),
                             "peer_id" => peer.get_id(),
                             "pd_region" => ?pd_region
