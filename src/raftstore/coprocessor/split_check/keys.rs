@@ -7,7 +7,7 @@ use engine::util;
 use engine::CF_WRITE;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::super::error::Result;
 use super::super::metrics::*;
@@ -81,19 +81,20 @@ impl SplitChecker for Checker {
     }
 }
 
+#[derive(Clone)]
 pub struct KeysCheckObserver<C> {
-    router: Mutex<C>,
+    router: Arc<Mutex<C>>,
 }
 
 impl<C: CasualRouter> KeysCheckObserver<C> {
     pub fn new(router: C) -> KeysCheckObserver<C> {
         KeysCheckObserver {
-            router: Mutex::new(router),
+            router: Arc::new(Mutex::new(router)),
         }
     }
 }
 
-impl<C> Coprocessor for KeysCheckObserver<C> {}
+impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
 
 impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
@@ -287,7 +288,7 @@ mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(tx)),
+            CoprocessorHost::new(tx),
             cfg,
         );
 
