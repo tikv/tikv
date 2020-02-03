@@ -7,7 +7,7 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
 use std::mem;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use crate::raftstore::store::CasualRouter;
 
