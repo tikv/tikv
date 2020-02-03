@@ -210,6 +210,10 @@ impl CFStatistics {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
 
+    pub fn total_seeks(&self) -> usize {
+        self.seek + self.seek_for_prev
+    }
+
     pub fn details(&self) -> Vec<(&str, usize)> {
         vec![
             (STAT_TOTAL, self.total_op_count()),
@@ -256,6 +260,10 @@ impl Statistics {
 
     pub fn total_processed(&self) -> usize {
         self.lock.processed + self.write.processed + self.data.processed
+    }
+
+    pub fn total_seeks(&self) -> usize {
+        self.lock.total_seeks() + self.write.total_seeks() + self.data.total_seeks()
     }
 
     pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {

@@ -158,6 +158,7 @@ impl Tracker {
                 "scan_is_desc" => self.req_ctx.is_desc_scan,
                 "scan_iter_ops" => self.total_exec_metrics.cf_stats.total_op_count(),
                 "scan_iter_processed" => self.total_exec_metrics.cf_stats.total_processed(),
+                "scan_iter_seeks" => self.total_exec_metrics.cf_stats.total_seeks(),
                 "scan_ranges" => self.req_ctx.ranges_len,
                 "scan_first_range" => ?self.req_ctx.first_range,
                 self.total_perf_statistics,
@@ -219,6 +220,12 @@ impl Tracker {
                 .local_copr_rocksdb_perf_counter
                 .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
                 .inc_by(self.total_perf_statistics.block_read_byte as i64);
+
+            // seeks
+            cop_metrics
+                .local_copr_req_seeks
+                .with_label_values(&[self.req_ctx.tag])
+                .observe(total_exec_metrics.cf_stats.total_seeks() as f64);
         });
 
         tls_collect_executor_metrics(

@@ -27,6 +27,7 @@ pub struct CopLocalMetrics {
     local_copr_executor_count: LocalIntCounterVec,
     local_copr_get_or_scan_count: LocalIntCounterVec,
     local_cop_flow_stats: HashMap<u64, crate::storage::FlowStatistics>,
+    pub local_copr_req_seeks: LocalHistogramVec,
 }
 
 thread_local! {
@@ -54,6 +55,8 @@ thread_local! {
                 COPR_GET_OR_SCAN_COUNT.local(),
             local_cop_flow_stats:
                 HashMap::default(),
+            local_copr_req_seeks:
+                COP_REQ_SEEKS.local(),
         }
     );
 }
@@ -99,6 +102,7 @@ fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
         cop_metrics.local_copr_scan_details.flush();
         cop_metrics.local_copr_get_or_scan_count.flush();
         cop_metrics.local_copr_executor_count.flush();
+        cop_metrics.local_copr_req_seeks.flush();
 
         // Report PD metrics
         if cop_metrics.local_cop_flow_stats.is_empty() {

@@ -81,4 +81,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+
+    pub static ref COP_REQ_SEEKS: HistogramVec = register_histogram_vec!(
+        "tikv_coprocessor_request_seeks",
+        "Bucketed histogram of coprocessor per request seeks",
+        &["req"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }
