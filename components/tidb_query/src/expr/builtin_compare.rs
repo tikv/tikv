@@ -502,7 +502,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let dec = "1.1".parse::<Decimal>().unwrap();
         let s = "你好".as_bytes().to_owned();
-        let dur = Duration::parse(b"01:00:00", 0).unwrap();
+        let dur = Duration::parse(&mut EvalContext::default(), b"01:00:00", 0).unwrap();
         let json = Json::I64(12);
         let t = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:39", 0, true).unwrap();
         let cases = vec![
@@ -577,8 +577,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         let dec1 = "1.1".parse::<Decimal>().unwrap();
         let dec2 = "1.11".parse::<Decimal>().unwrap();
-        let dur1 = Duration::parse(b"01:00:00", 0).unwrap();
-        let dur2 = Duration::parse(b"02:00:00", 0).unwrap();
+        let dur1 = Duration::parse(&mut EvalContext::default(), b"01:00:00", 0).unwrap();
+        let dur2 = Duration::parse(&mut EvalContext::default(), b"02:00:00", 0).unwrap();
         let json1 = Json::I64(11);
         let json2 = Json::I64(12);
         let s1 = "你好".as_bytes().to_owned();

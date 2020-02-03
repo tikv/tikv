@@ -521,7 +521,7 @@ mod tests {
             (
                 ScalarFuncSig::CastStringAsDuration,
                 vec![Datum::Bytes(b"12:02:03".to_vec())],
-                Datum::Dur(Duration::parse(b"12:02:03", 0).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"12:02:03", 0).unwrap()),
             ),
             (
                 ScalarFuncSig::CastStringAsTime,
