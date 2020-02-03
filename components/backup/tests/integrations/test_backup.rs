@@ -512,7 +512,6 @@ fn test_backup_rawkv() {
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
     let files1 = resps1[0].files.clone();
-    // Short value is piggybacked in write cf, so we get 1 sst at least.
     assert!(!resps1[0].get_files().is_empty());
 
     // Delete all data, there should be no backup files.
