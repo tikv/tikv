@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use super::metrics::*;
 use super::{
-    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
-    RoleObserver,
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, RoleObserver,
 };
 use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
 use keys::{data_end_key, data_key};
@@ -149,9 +149,9 @@ fn register_region_event_listener(
     let listener = RegionEventListener { scheduler };
 
     host.registry
-        .register_role_observer(1, Box::new(listener.clone()));
+        .register_role_observer(1, BoxRoleObserver::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, Box::new(listener));
+        .register_region_change_observer(1, BoxRegionChangeObserver::new(listener));
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the

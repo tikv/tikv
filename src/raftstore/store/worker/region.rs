@@ -213,7 +213,7 @@ struct SnapContext<R> {
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
-    coprocessor_host: Arc<CoprocessorHost>,
+    coprocessor_host: CoprocessorHost,
     router: R,
 }
 
@@ -336,7 +336,7 @@ impl<R: CasualRouter> SnapContext<R> {
             region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
-            coprocessor_host: Arc::clone(&self.coprocessor_host),
+            coprocessor_host: self.coprocessor_host.clone(),
         };
         s.apply(options)?;
 
@@ -537,7 +537,7 @@ impl<R: CasualRouter> Runner<R> {
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
-        coprocessor_host: Arc<CoprocessorHost>,
+        coprocessor_host: CoprocessorHost,
         router: R,
     ) -> Runner<R> {
         Runner {
@@ -832,7 +832,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
-            Arc::new(CoprocessorHost::default()),
+            CoprocessorHost::default(),
             router,
         );
         let mut timer = Timer::new(1);
