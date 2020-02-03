@@ -226,12 +226,21 @@ impl BackupRange {
             }
         }
         let mut batch = vec![];
+        let mut last_key = vec![];
         loop {
             while cursor.valid()? && batch.len() < BACKUP_BATCH_LIMIT {
                 batch.push(Ok((
                     cursor.key(cfstatistics).to_owned(),
                     cursor.value(cfstatistics).to_owned(),
                 )));
+                if last_key.as_slice() >= cursor.key(cfstatistics) {
+                    error!(
+                        "keys scanned from cursor out of order";
+                        "last_key" => hex::encode_upper(&last_key),
+                        "current_key" => hex::encode_upper(cursor.key(cfstatistics))
+                    );
+                }
+                last_key = cursor.key(cfstatistics).to_owned();
                 cursor.next(cfstatistics);
             }
             if batch.is_empty() {

@@ -224,6 +224,7 @@ impl BackupRawKVWriter {
     where
         I: Iterator<Item = Result<KvPair>>,
     {
+        let mut last_key = vec![];
         for kv_pair in kv_pairs {
             let (k, v) = match kv_pair {
                 Ok(s) => s,
@@ -234,7 +235,11 @@ impl BackupRawKVWriter {
             };
 
             assert!(!k.is_empty());
-            self.writer.write(&k, &v)?;
+            self.writer.write(&k, &v).map_err(|e| {
+                error!("write sst failed."; "key" => hex::encode_upper(&k), "last_key" => hex::encode_upper(&last_key));
+                e
+            })?;
+            last_key = k.clone();
             self.writer.update_raw_with(&k, &v, need_checksum)?;
         }
         Ok(())

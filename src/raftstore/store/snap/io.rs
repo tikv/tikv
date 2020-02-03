@@ -72,12 +72,26 @@ where
 {
     let mut sst_writer = create_sst_file_writer::<E>(snap, cf, path)?;
     let mut stats = BuildStatistics::default();
+    let mut last_key: Vec<u8> = vec![];
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         io_limiter.blocking_consume(entry_len);
         stats.key_count += 1;
         stats.total_size += entry_len;
+        if last_key.as_slice() >= key {
+            error!(
+                "keys scanned from snap out of order";
+                "last_key" => hex::encode_upper(&last_key),
+                "current_key" => hex::encode_upper(key)
+            );
+        }
+        last_key = key.to_vec();
         if let Err(e) = sst_writer.put(key, value) {
+            error!(
+                "sst writer put error";
+                "last_key" => hex::encode_upper(&last_key),
+                "current_key" => hex::encode_upper(key)
+            );
             let io_error = io::Error::new(io::ErrorKind::Other, e);
             return Err(io_error.into());
         }
