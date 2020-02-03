@@ -17,8 +17,9 @@ use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
+use tikv::raftstore::coprocessor::RegionInfoProvider;
 use tikv::raftstore::store::util::find_peer;
-use tikv::storage::kv::{Engine, RegionInfoProvider};
+use tikv::storage::kv::Engine;
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::Statistics;
 use tikv_util::time::Limiter;
@@ -592,9 +593,9 @@ pub mod tests {
     use std::thread;
     use tempfile::TempDir;
     use tikv::raftstore::coprocessor::RegionCollector;
+    use tikv::raftstore::coprocessor::Result as CopResult;
     use tikv::raftstore::coprocessor::SeekRegionCallback;
     use tikv::raftstore::store::util::new_peer;
-    use tikv::storage::kv::Result as EngineResult;
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::time::Instant;
@@ -634,7 +635,7 @@ pub mod tests {
         }
     }
     impl RegionInfoProvider for MockRegionInfoProvider {
-        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
+        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> CopResult<()> {
             let from = from.to_vec();
             let regions = self.regions.lock().unwrap();
             if let Some(c) = self.cancel.as_ref() {
