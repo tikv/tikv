@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Reverse;
+use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::fs::{File, OpenOptions};
@@ -22,6 +23,8 @@ use engine::rocks::{
 };
 use engine::Iterable;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use futures_executor::block_on;
+use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
@@ -34,11 +37,10 @@ use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::util::check_key_in_region;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
-use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
-use tikv_util::time::duration_to_sec;
+use tikv_util::time::{duration_to_sec, Limiter};
 use tikv_util::HandyRwLock;
 
 use crate::raftstore::store::metrics::{
@@ -311,7 +313,7 @@ pub struct Snap {
     cf_index: usize,
     meta_file: MetaFile,
     size_track: Arc<AtomicU64>,
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Limiter,
     hold_tmp_files: bool,
 }
 
@@ -323,7 +325,7 @@ impl Snap {
         is_sending: bool,
         to_build: bool,
         deleter: Box<dyn SnapshotDeleter>,
-        limiter: Option<Arc<IOLimiter>>,
+        limiter: Limiter,
     ) -> RaftStoreResult<Snap> {
         let dir_path = dir.into();
         if !dir_path.exists() {
@@ -404,7 +406,7 @@ impl Snap {
         snap: &DbSnapshot,
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
-        limiter: Option<Arc<IOLimiter>>,
+        limiter: Limiter,
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, true, true, deleter, limiter)?;
         s.init_for_building(snap)?;
@@ -417,7 +419,15 @@ impl Snap {
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
-        let mut s = Snap::new(dir, key, size_track, true, false, deleter, None)?;
+        let mut s = Snap::new(
+            dir,
+            key,
+            size_track,
+            true,
+            false,
+            deleter,
+            Limiter::new(INFINITY),
+        )?;
 
         if !s.exists() {
             // Skip the initialization below if it doesn't exists.
@@ -439,7 +449,7 @@ impl Snap {
         snapshot_meta: SnapshotMeta,
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
-        limiter: Option<Arc<IOLimiter>>,
+        limiter: Limiter,
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, false, false, deleter, limiter)?;
         s.set_snapshot_meta(snapshot_meta)?;
@@ -474,7 +484,15 @@ impl Snap {
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
-        let s = Snap::new(dir, key, size_track, false, false, deleter, None)?;
+        let s = Snap::new(
+            dir,
+            key,
+            size_track,
+            false,
+            false,
+            deleter,
+            Limiter::new(INFINITY),
+        )?;
         Ok(s)
     }
 
@@ -715,20 +733,9 @@ impl Snap {
             } else {
                 let mut key_count = 0;
                 let mut size = 0;
-                let base = self
-                    .limiter
-                    .as_ref()
-                    .map_or(0 as i64, |l| l.get_max_bytes_per_time());
-                let mut bytes: i64 = 0;
                 kv_snap.scan_cf(cf, &begin_key, &end_key, false, |key, value| {
                     let l = key.len() + value.len();
-                    if let Some(ref limiter) = self.limiter {
-                        if bytes >= base {
-                            bytes = 0;
-                            limiter.request(base);
-                        }
-                        bytes += l as i64;
-                    }
+                    self.limiter.blocking_consume(l);
                     size += l;
                     key_count += 1;
                     box_try!(self.add_kv(key, value));
@@ -1054,17 +1061,18 @@ impl Write for Snap {
                 continue;
             }
 
-            let mut file = LimitWriter::new(self.limiter.clone(), cf_file.file.as_mut().unwrap());
+            let file = AllowStdIo::new(cf_file.file.as_mut().unwrap());
+            let mut file = self.limiter.clone().limit(file);
             let digest = cf_file.write_digest.as_mut().unwrap();
 
             if next_buf.len() > left {
-                file.write_all(&next_buf[0..left])?;
+                block_on(file.write_all(&next_buf[0..left]))?;
                 digest.update(&next_buf[0..left]);
                 cf_file.written_size += left as u64;
                 self.cf_index += 1;
                 next_buf = &next_buf[left..];
             } else {
-                file.write_all(next_buf)?;
+                block_on(file.write_all(next_buf))?;
                 digest.update(next_buf);
                 cf_file.written_size += next_buf.len() as u64;
                 return Ok(buf.len());
@@ -1140,7 +1148,7 @@ pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
     router: Option<RaftRouter>,
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Limiter,
     max_total_size: u64,
 }
 
@@ -1470,11 +1478,11 @@ impl SnapManagerBuilder {
         self
     }
     pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter>) -> SnapManager {
-        let limiter = if self.max_write_bytes_per_sec > 0 {
-            Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
+        let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
+            self.max_write_bytes_per_sec as f64
         } else {
-            None
-        };
+            INFINITY
+        });
         let max_total_size = if self.max_total_size > 0 {
             self.max_total_size
         } else {
@@ -1496,6 +1504,7 @@ impl SnapManagerBuilder {
 #[cfg(test)]
 pub mod tests {
     use std::cmp;
+    use std::f64::INFINITY;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::Path;
@@ -1514,6 +1523,7 @@ pub mod tests {
     use protobuf::Message;
     use std::path::PathBuf;
     use tempdir::TempDir;
+    use tikv_util::time::Limiter;
 
     use super::{
         ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
@@ -1752,7 +1762,7 @@ pub mod tests {
             &snapshot,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         // Ensure that this snapshot file doesn't exist before being built.
@@ -1801,7 +1811,7 @@ pub mod tests {
             snap_data.take_meta(),
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s3.exists());
@@ -1879,7 +1889,7 @@ pub mod tests {
             &snapshot,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s1.exists());
@@ -1903,7 +1913,7 @@ pub mod tests {
             &snapshot,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(s2.exists());
@@ -2036,7 +2046,7 @@ pub mod tests {
             snapshot_meta,
             Arc::clone(&size_track),
             deleter,
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
 
@@ -2064,7 +2074,7 @@ pub mod tests {
             &snapshot,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s1.exists());
@@ -2095,7 +2105,7 @@ pub mod tests {
             &snapshot,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s2.exists());
@@ -2149,7 +2159,7 @@ pub mod tests {
             snap_meta,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .is_err());
         assert!(Snap::new_for_applying(
@@ -2179,7 +2189,7 @@ pub mod tests {
             &snapshot,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s1.exists());
@@ -2210,7 +2220,7 @@ pub mod tests {
             &snapshot,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s2.exists());
@@ -2248,8 +2258,8 @@ pub mod tests {
             &key,
             snap_data.take_meta(),
             Arc::clone(&size_track),
-            deleter.clone(),
-            None,
+            deleter,
+            Limiter::new(INFINITY),
         )
         .is_err());
     }
@@ -2292,7 +2302,7 @@ pub mod tests {
             &snapshot,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         let mut region = gen_test_region(1, 1, 1);
@@ -2316,7 +2326,7 @@ pub mod tests {
             snap_data.get_meta().clone(),
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
@@ -2332,7 +2342,7 @@ pub mod tests {
             &snapshot,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         let s4 = Snap::new_for_receiving(
@@ -2340,8 +2350,8 @@ pub mod tests {
             &key2,
             snap_data.take_meta(),
             Arc::clone(&size_track),
-            deleter.clone(),
-            None,
+            deleter,
+            Limiter::new(INFINITY),
         )
         .unwrap();
 
