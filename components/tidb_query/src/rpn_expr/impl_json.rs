@@ -839,9 +839,12 @@ mod tests {
             ),
         ];
         for (vargs, expected, is_success) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_params(vargs.clone())
-                .evaluate(ScalarFuncSig::JsonKeysSig);
+            let mut output = RpnFnScalarEvaluator::new().push_params(vargs.clone());
+            let mut output = if vargs.len() == 1 {
+                output.evaluate(ScalarFuncSig::JsonKeysSig)
+            } else {
+                output.evaluate(ScalarFuncSig::JsonKeys2ArgsSig)
+            };
             if is_success {
                 assert_eq!(output.unwrap(), expected, "{:?}", vargs);
             } else {
