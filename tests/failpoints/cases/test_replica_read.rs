@@ -274,7 +274,7 @@ fn test_read_after_cleanup_range_for_snap() {
     let _guard = crate::setup();
     let mut cluster = new_server_cluster(1, 3);
     configure_for_snapshot(&mut cluster);
-    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    configure_for_lease_read(&mut cluster, Some(100), Some(10_000));
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
