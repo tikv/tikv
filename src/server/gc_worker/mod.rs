@@ -1,7 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod applied_lock_collector;
+
 use std::cmp::Ordering;
-use std::convert::TryFrom;
+use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
@@ -9,13 +11,13 @@ use std::sync::{atomic, Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
-use configuration::Configuration;
+use applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
+use configuration::{ConfigChange, Configuration};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::{RocksEngine, RocksIOLimiter};
-use engine_traits::IOLimiter;
+use engine_rocks::RocksEngine;
 use futures::sink::Sink;
 use futures::sync::mpsc as future_mpsc;
 use futures::{future, Async, Future, Poll, Stream};
@@ -25,22 +27,21 @@ use log_wrappers::DisplayValue;
 use raft::StateRole;
 use tokio_core::reactor::Handle;
 
-use crate::raftstore::coprocessor::RegionInfoAccessor;
+use crate::config::ConfigManager;
+use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::raftstore::store::RegionSnapshot;
 use crate::server::metrics::*;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
-    Snapshot, Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Snapshot, Statistics,
 };
 use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
 use crate::storage::{Callback, Error, ErrorInner, Result};
 use pd_client::PdClient;
-use tikv_util::config::ReadableSize;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::config::{ReadableSize, Tracker, VersionTrack};
+use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
@@ -103,6 +104,23 @@ impl GcConfig {
 
 pub type GcWorkerConfigManager = Arc<VersionTrack<GcConfig>>;
 
+impl ConfigManager for GcWorkerConfigManager {
+    fn dispatch(
+        &mut self,
+        change: ConfigChange,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        {
+            let change = change.clone();
+            self.update(move |cfg: &mut GcConfig| cfg.update(change));
+        }
+        info!(
+            "GC worker config changed";
+            "change" => ?change,
+        );
+        Ok(())
+    }
+}
+
 /// Provides safe point.
 /// TODO: Give it a better name?
 pub trait GcSafePointProvider: Send + 'static {
@@ -137,7 +155,7 @@ enum GcTask {
         sender: future_mpsc::Sender<Result<Vec<LockInfo>>>,
     },
     #[cfg(test)]
-    Validate(Box<dyn FnOnce(&GcConfig, &Option<RocksIOLimiter>) + Send>),
+    Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),
 }
 
 impl GcTask {
@@ -278,7 +296,7 @@ struct GcRunner<E: Engine> {
     region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
-    limiter: Option<RocksIOLimiter>,
+    limiter: Limiter,
 
     cfg: GcConfig,
     cfg_tracker: Tracker<GcConfig>,
@@ -295,13 +313,11 @@ impl<E: Engine> GcRunner<E> {
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
     ) -> Self {
-        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
-                .expect("max_write_bytes_per_sec > i64::MAX");
-            Some(IOLimiter::new(bps))
+        let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
+            cfg.max_write_bytes_per_sec.0 as f64
         } else {
-            None
-        };
+            INFINITY
+        });
         Self {
             engine,
             local_storage,
@@ -491,12 +507,8 @@ impl<E: Engine> GcRunner<E> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
-            // refresh gc worker config here, just in cases gc woker config
-            // (i.e `max_write_bytes_per_sec`) updated during `Gc` task
             self.refresh_cfg();
-            if let Some(ref limiter) = self.limiter {
-                limiter.request(write_size as i64);
-            }
+            self.limiter.blocking_consume(write_size);
             self.engine.write(ctx, modifies)?;
         }
         Ok(next_scan_key)
@@ -682,24 +694,9 @@ impl<E: Engine> GcRunner<E> {
     fn refresh_cfg(&mut self) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             let limit = incoming.max_write_bytes_per_sec.0;
-            if self.cfg.max_write_bytes_per_sec.0 != limit {
-                if limit == 0 {
-                    self.limiter.take();
-                } else {
-                    let bps = i64::try_from(limit).unwrap_or_else(|_| {
-                        warn!("tried to set max_write_bytes_per_sec > i64::MAX");
-                        std::i64::MAX
-                    });
-                    self.limiter
-                        .get_or_insert_with(|| IOLimiter::new(bps))
-                        .set_bytes_per_second(bps);
-                }
-            }
+            self.limiter
+                .set_speed_limit(if limit > 0 { limit as f64 } else { INFINITY });
             self.cfg = incoming.clone();
-            info!(
-                "GC worker config changed";
-                "new config" => ?self.cfg,
-            );
         }
     }
 }
@@ -765,7 +762,6 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
             } => self.handle_physical_scan_lock(handle, &ctx, max_ts, sender),
             #[cfg(test)]
             GcTask::Validate(f) => {
-                self.refresh_cfg();
                 f(&self.cfg, &self.limiter);
             }
         };
@@ -1403,6 +1399,8 @@ pub struct GcWorker<E: Engine> {
     worker: Arc<Mutex<FutureWorker<GcTask>>>,
     worker_scheduler: FutureScheduler<GcTask>,
 
+    applied_lock_collector: Option<Arc<AppliedLockCollector>>,
+
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
 }
 
@@ -1421,6 +1419,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
+            applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
         }
     }
@@ -1462,6 +1461,7 @@ impl<E: Engine> GcWorker<E> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
             worker_scheduler,
+            applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
         }
     }
@@ -1491,6 +1491,16 @@ impl<E: Engine> GcWorker<E> {
             .unwrap()
             .start(runner)
             .map_err(|e| box_err!("failed to start gc_worker, err: {:?}", e))
+    }
+
+    pub fn start_observe_lock_apply(
+        &mut self,
+        coprocessor_host: &mut CoprocessorHost,
+    ) -> Result<()> {
+        assert!(self.applied_lock_collector.is_none());
+        let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
+        self.applied_lock_collector = Some(collector);
+        Ok(())
     }
 
     pub fn stop(&self) -> Result<()> {
@@ -1597,19 +1607,53 @@ impl<E: Engine> GcWorker<E> {
             .into_stream()
             .flatten()
     }
+
+    pub fn start_collecting(
+        &self,
+        max_ts: TimeStamp,
+        callback: LockCollectorCallback<()>,
+    ) -> Result<()> {
+        self.applied_lock_collector
+            .as_ref()
+            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
+            .and_then(move |c| c.start_collecting(max_ts, callback))
+    }
+
+    pub fn get_collected_locks(
+        &self,
+        max_ts: TimeStamp,
+        callback: LockCollectorCallback<(Vec<LockInfo>, bool)>,
+    ) -> Result<()> {
+        self.applied_lock_collector
+            .as_ref()
+            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
+            .and_then(move |c| c.get_collected_locks(max_ts, callback))
+    }
+
+    pub fn stop_collecting(
+        &self,
+        max_ts: TimeStamp,
+        callback: LockCollectorCallback<()>,
+    ) -> Result<()> {
+        self.applied_lock_collector
+            .as_ref()
+            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
+            .and_then(move |c| c.stop_collecting(max_ts, callback))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{ConfigController, TiKvConfig};
+    use crate::raftstore::coprocessor::Result as CopResult;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::{
         self, Callback as EngineCallback, Modify, Result as EngineResult, TestEngineBuilder,
     };
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{Storage, TestStorageBuilder};
+    use crate::storage::{txn::commands, Storage, TestStorageBuilder};
     use futures::Future;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
@@ -1652,7 +1696,7 @@ mod tests {
     }
 
     impl RegionInfoProvider for MockRegionInfoProvider {
-        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
+        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> CopResult<()> {
             let from = from.to_vec();
             callback(&mut self.regions.range(from..).map(|(_, v)| v));
             Ok(())
@@ -2064,25 +2108,21 @@ mod tests {
         let start_ts = start_ts.into();
 
         // Write these data to the storage.
-        wait_op!(|cb| storage.prewrite(
-            Context::default(),
-            mutations,
-            primary,
-            start_ts,
-            0,
-            false,
-            0,
-            TimeStamp::default(),
-            cb
+        wait_op!(|cb| storage.sched_txn_command(
+            commands::Prewrite::with_defaults(mutations, primary, start_ts),
+            cb,
         ))
         .unwrap()
         .unwrap();
 
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
-        wait_op!(|cb| storage.commit(Context::default(), keys, start_ts, commit_ts.into(), cb))
-            .unwrap()
-            .unwrap();
+        wait_op!(|cb| storage.sched_txn_command(
+            commands::Commit::new(keys, start_ts, commit_ts.into(), Context::default()),
+            cb
+        ))
+        .unwrap()
+        .unwrap();
 
         // Assert these data is successfully written to the storage.
         check_data(&storage, &data);
@@ -2202,7 +2242,9 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
     }
 
-    fn setup_cfg_controller(cfg: TiKvConfig) -> (GcWorker<crate::storage::kv::RocksEngine>, ConfigController) {
+    fn setup_cfg_controller(
+        cfg: TiKvConfig,
+    ) -> (GcWorker<crate::storage::kv::RocksEngine>, ConfigController) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone());
         gc_worker.start().unwrap();
@@ -2215,12 +2257,12 @@ mod tests {
 
     fn validate<F>(scheduler: &FutureScheduler<GcTask>, f: F)
     where
-        F: FnOnce(&GcConfig, &Option<RocksIOLimiter>) + Send + 'static,
+        F: FnOnce(&GcConfig, &Limiter) + Send + 'static,
     {
         let (tx, rx) = channel();
         scheduler
             .schedule(GcTask::Validate(Box::new(
-                move |cfg: &GcConfig, limiter: &Option<RocksIOLimiter>| {
+                move |cfg: &GcConfig, limiter: &Limiter| {
                     f(cfg, limiter);
                     tx.send(()).unwrap();
                 },
@@ -2261,14 +2303,15 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_change_io_limit_by_config_manager() {
         let mut cfg = TiKvConfig::default();
         cfg.validate().unwrap();
         let (gc_worker, mut cfg_controller) = setup_cfg_controller(cfg.clone());
         let scheduler = gc_worker.worker_scheduler.clone();
 
-        validate(&scheduler, move |_, limiter: &Option<_>| {
-            assert!(limiter.is_none());
+        validate(&scheduler, move |_, limiter: &Limiter| {
+            assert_eq!(limiter.speed_limit(), INFINITY);
         });
 
         // Enable io iolimit
@@ -2276,8 +2319,8 @@ mod tests {
         incoming.gc.max_write_bytes_per_sec = ReadableSize(1024);
         let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
         assert!(rollback.right().unwrap());
-        validate(&scheduler, move |_, limiter: &Option<RocksIOLimiter>| {
-            assert_eq!(limiter.as_ref().unwrap().get_bytes_per_second(), 1024);
+        validate(&scheduler, move |_, limiter: &Limiter| {
+            assert_eq!(limiter.speed_limit(), 1024.0);
         });
 
         // Change io iolimit
@@ -2285,8 +2328,8 @@ mod tests {
         incoming.gc.max_write_bytes_per_sec = ReadableSize(2048);
         let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
         assert!(rollback.right().unwrap());
-        validate(&scheduler, move |_, limiter: &Option<RocksIOLimiter>| {
-            assert_eq!(limiter.as_ref().unwrap().get_bytes_per_second(), 2048);
+        validate(&scheduler, move |_, limiter: &Limiter| {
+            assert_eq!(limiter.speed_limit(), 2048.0);
         });
 
         // Disable io iolimit
@@ -2294,12 +2337,13 @@ mod tests {
         incoming.gc.max_write_bytes_per_sec = ReadableSize(0);
         let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
         assert!(rollback.right().unwrap());
-        validate(&scheduler, move |_, limiter: &Option<_>| {
-            assert!(limiter.is_none());
+        validate(&scheduler, move |_, limiter: &Limiter| {
+            assert_eq!(limiter.speed_limit(), INFINITY);
         });
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_change_io_limit_by_debugger() {
         // Debugger use GcWorkerConfigManager to change io limit
         let mut cfg = TiKvConfig::default();
@@ -2308,28 +2352,28 @@ mod tests {
         let scheduler = gc_worker.worker_scheduler.clone();
         let config_manager = gc_worker.get_config_manager();
 
-        validate(&scheduler, move |_, limiter: &Option<_>| {
-            assert!(limiter.is_none());
+        validate(&scheduler, move |_, limiter: &Limiter| {
+            assert_eq!(limiter.speed_limit(), INFINITY);
         });
 
         // Enable io iolimit
         config_manager
             .update(|cfg: &mut GcConfig| cfg.max_write_bytes_per_sec = ReadableSize(1024));
-        validate(&scheduler, move |_, limiter: &Option<RocksIOLimiter>| {
-            assert_eq!(limiter.as_ref().unwrap().get_bytes_per_second(), 1024);
+        validate(&scheduler, move |_, limiter: &Limiter| {
+            assert_eq!(limiter.speed_limit(), 1024.0);
         });
 
         // Change io iolimit
         config_manager
             .update(|cfg: &mut GcConfig| cfg.max_write_bytes_per_sec = ReadableSize(2048));
-        validate(&scheduler, move |_, limiter: &Option<RocksIOLimiter>| {
-            assert_eq!(limiter.as_ref().unwrap().get_bytes_per_second(), 2048);
+        validate(&scheduler, move |_, limiter: &Limiter| {
+            assert_eq!(limiter.speed_limit(), 2048.0);
         });
 
         // Disable io iolimit
         config_manager.update(|cfg: &mut GcConfig| cfg.max_write_bytes_per_sec = ReadableSize(0));
-        validate(&scheduler, move |_, limiter: &Option<_>| {
-            assert!(limiter.is_none());
+        validate(&scheduler, move |_, limiter: &Limiter| {
+            assert_eq!(limiter.speed_limit(), INFINITY);
         });
     }
 
@@ -2369,15 +2413,8 @@ mod tests {
 
             let (tx, rx) = channel();
             storage
-                .prewrite(
-                    Context::default(),
-                    vec![mutation],
-                    k,
-                    lock_ts.into(),
-                    0,
-                    false,
-                    0,
-                    TimeStamp::default(),
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(vec![mutation], k, lock_ts.into()),
                     Box::new(move |res| tx.send(res).unwrap()),
                 )
                 .unwrap();

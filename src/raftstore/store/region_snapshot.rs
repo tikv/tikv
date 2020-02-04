@@ -384,6 +384,7 @@ fn handle_check_key_in_region_error(e: crate::raftstore::Error) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::f64::INFINITY;
     use std::path::Path;
     use std::sync::Arc;
     use std::thread;
@@ -412,6 +413,7 @@ mod tests {
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
     use keys::data_key;
     use tikv_util::config::{ReadableDuration, ReadableSize};
+    use tikv_util::time::Limiter;
     use tikv_util::worker;
     use txn_types::Key;
 
@@ -1047,13 +1049,14 @@ mod tests {
         // Generate a snapshot
         let default_sst_file_path = path.path().join("default.sst");
         let write_sst_file_path = path.path().join("write.sst");
+        let limiter = Limiter::new(INFINITY);
         build_sst_cf_file::<RocksEngine>(
             &default_sst_file_path.to_str().unwrap(),
             &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_DEFAULT,
             b"",
             b"{",
-            None,
+            &limiter,
         )
         .unwrap();
         build_sst_cf_file::<RocksEngine>(
@@ -1062,7 +1065,7 @@ mod tests {
             CF_WRITE,
             b"",
             b"{",
-            None,
+            &limiter,
         )
         .unwrap();
 

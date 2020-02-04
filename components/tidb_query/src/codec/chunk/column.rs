@@ -44,7 +44,7 @@ impl Column {
             FieldTypeTp::Float => Column::new_fixed_len(4, init_cap),
 
             FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
-                Column::new_fixed_len(20, init_cap)
+                Column::new_fixed_len(8, init_cap)
             }
             FieldTypeTp::NewDecimal => Column::new_fixed_len(DECIMAL_STRUCT_SIZE, init_cap),
             _ => Column::new_var_len_column(init_cap),
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn test_column_duration() {
         let fields = vec![field_type(FieldTypeTp::Duration)];
-        let duration = Duration::parse(b"10:11:12", 0).unwrap();
+        let duration = Duration::parse(&mut EvalContext::default(), b"10:11:12", 0).unwrap();
         let data = vec![Datum::Null, Datum::Dur(duration)];
         test_colum_datum(fields, data);
     }

@@ -18,13 +18,14 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
-#![recursion_limit = "200"]
+#![recursion_limit = "400"]
 #![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(box_patterns)]
 #![feature(shrink_to)]
+#![feature(drain_filter)]
 
 #[macro_use]
 extern crate bitflags;
@@ -61,6 +62,7 @@ pub mod coprocessor;
 pub mod import;
 pub mod into_other;
 pub mod raftstore;
+pub mod read_pool;
 pub mod server;
 pub mod storage;
 

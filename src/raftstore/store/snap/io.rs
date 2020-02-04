@@ -4,11 +4,11 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::CfName;
-use engine_traits::IOLimiter;
 use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
 use engine_traits::{Mutable, WriteBatch};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
+use tikv_util::time::Limiter;
 
 use super::Error;
 
@@ -65,26 +65,16 @@ pub fn build_sst_cf_file<E>(
     cf: CfName,
     start_key: &[u8],
     end_key: &[u8],
-    io_limiter: Option<&E::IOLimiter>,
+    io_limiter: &Limiter,
 ) -> Result<BuildStatistics, Error>
 where
     E: KvEngine,
 {
     let mut sst_writer = create_sst_file_writer::<E>(snap, cf, path)?;
     let mut stats = BuildStatistics::default();
-    let base = io_limiter
-        .as_ref()
-        .map_or(0 as i64, |l| l.get_max_bytes_per_time());
-    let mut bytes: i64 = 0;
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
-        if let Some(ref io_limiter) = io_limiter {
-            if bytes >= base {
-                bytes = 0;
-                io_limiter.request(base);
-            }
-            bytes += entry_len as i64
-        }
+        io_limiter.blocking_consume(entry_len);
         stats.key_count += 1;
         stats.total_size += entry_len;
         if let Err(e) = sst_writer.put(key, value) {
@@ -180,6 +170,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::f64::INFINITY;
     use std::sync::Arc;
 
     use super::*;
@@ -188,6 +179,7 @@ mod tests {
     use engine::CF_DEFAULT;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use tempfile::Builder;
+    use tikv_util::time::Limiter;
 
     struct TestStaleDetector;
     impl StaleDetector for TestStaleDetector {
@@ -275,6 +267,7 @@ mod tests {
     #[test]
     fn test_cf_build_and_apply_sst_files() {
         let db_creaters = &[open_test_empty_db, open_test_db];
+        let limiter = Limiter::new(INFINITY);
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
@@ -288,7 +281,7 @@ mod tests {
                     CF_DEFAULT,
                     b"a",
                     b"z",
-                    None,
+                    &limiter,
                 )
                 .unwrap();
                 if stats.key_count == 0 {

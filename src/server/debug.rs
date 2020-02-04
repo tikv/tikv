@@ -24,7 +24,7 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
-use crate::raftstore::coprocessor::properties::{MvccProperties, RangeProperties};
+use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::raftstore::coprocessor::{
     get_region_approximate_keys_cf, get_region_approximate_middle,
 };
@@ -37,6 +37,7 @@ use crate::raftstore::store::{
 use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::Iterator as EngineIterator;
+use engine_rocks::RangeProperties;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;

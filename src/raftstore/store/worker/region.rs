@@ -209,11 +209,11 @@ impl PendingDeleteRanges {
 struct SnapContext<R> {
     engines: Engines,
     batch_size: usize,
-    mgr: SnapManager<RocksEngine>,
+    mgr: SnapManager,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
-    coprocessor_host: Arc<CoprocessorHost>,
+    coprocessor_host: CoprocessorHost,
     router: R,
 }
 
@@ -227,7 +227,7 @@ impl<R: CasualRouter> SnapContext<R> {
         notifier: SyncSender<RaftSnapshot>,
     ) -> Result<()> {
         // do we need to check leader here?
-        let snap = box_try!(store::do_snapshot(
+        let snap = box_try!(store::do_snapshot::<RocksEngine>(
             self.mgr.clone(),
             raft_snap,
             kv_snap,
@@ -325,7 +325,7 @@ impl<R: CasualRouter> SnapContext<R> {
         defer!({
             self.mgr.deregister(&snap_key, &SnapEntry::Applying);
         });
-        let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
+        let mut s = box_try!(self.mgr.get_snapshot_for_applying_to_engine(&snap_key));
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
@@ -336,7 +336,7 @@ impl<R: CasualRouter> SnapContext<R> {
             region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
-            coprocessor_host: Arc::clone(&self.coprocessor_host),
+            coprocessor_host: self.coprocessor_host.clone(),
         };
         s.apply(options)?;
 
@@ -533,11 +533,11 @@ pub struct Runner<R> {
 impl<R: CasualRouter> Runner<R> {
     pub fn new(
         engines: Engines,
-        mgr: SnapManager<RocksEngine>,
+        mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
-        coprocessor_host: Arc<CoprocessorHost>,
+        coprocessor_host: CoprocessorHost,
         router: R,
     ) -> Runner<R> {
         Runner {
@@ -690,7 +690,7 @@ mod tests {
     use engine::Engines;
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_rocks::RocksSnapshot;
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;
@@ -832,7 +832,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
-            Arc::new(CoprocessorHost::default()),
+            CoprocessorHost::default(),
             router,
         );
         let mut timer = Timer::new(1);
@@ -859,7 +859,7 @@ mod tests {
             }
             let data = s1.get_data();
             let key = SnapKey::from_snap(&s1).unwrap();
-            let mgr = SnapManager::<RocksEngine>::new(snap_dir.path().to_str().unwrap(), None);
+            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
             let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();

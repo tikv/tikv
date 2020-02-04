@@ -1345,7 +1345,7 @@ pub fn clear_meta(
 }
 
 pub fn do_snapshot<E>(
-    mgr: SnapManager<E>,
+    mgr: SnapManager,
     raft_snap: E::Snapshot,
     kv_snap: E::Snapshot,
     region_id: u64,
@@ -1420,7 +1420,7 @@ where
     let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = mgr.get_snapshot_for_building(&key)?;
+    let mut s = mgr.get_snapshot_for_building::<E>(&key)?;
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::default();
     snap_data.set_region(state.get_region().clone());
@@ -1979,7 +1979,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
-            Arc::new(CoprocessorHost::default()),
+            CoprocessorHost::default(),
             router,
         );
         worker.start(runner).unwrap();
@@ -2305,7 +2305,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
-            Arc::new(CoprocessorHost::default()),
+            CoprocessorHost::default(),
             router,
         );
         worker.start(runner).unwrap();

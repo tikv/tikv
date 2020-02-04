@@ -12,7 +12,6 @@ use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
-use std::mem;
 
 use codec::prelude::*;
 use tidb_query_datatype::FieldTypeTp;
@@ -482,17 +481,18 @@ mod parser {
                     },
                 )?;
 
-                if components[0].len() == 2 {
-                    parts[0] = adjust_year(parts[0]);
-                }
-                parts.resize(6, 0);
-
                 let (carry, frac) = if let Some(frac) = components.get(6) {
                     parse_frac(frac, fsp, round)?
                 } else {
                     (false, 0)
                 };
+
+                parts.resize(6, 0);
                 parts.push(frac);
+                // Skip a special case "00-00-00".
+                if components[0].len() == 2 && !parts.iter().all(|x| *x == 0u32) {
+                    parts[0] = adjust_year(parts[0]);
+                }
 
                 if carry {
                     round_components(&mut parts)?;
@@ -662,8 +662,7 @@ impl TimeArgs {
         self.fsp = check_fsp(self.fsp).ok()? as i8;
         let (fsp, time_type) = (self.fsp, self.time_type);
         match self.time_type {
-            TimeType::Date => self.check_date(ctx),
-            TimeType::DateTime => self.check_datetime(ctx),
+            TimeType::Date | TimeType::DateTime => self.check_datetime(ctx),
             TimeType::Timestamp => self.check_timestamp(ctx),
         }
         .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
@@ -922,19 +921,19 @@ impl Time {
         time
     }
 
-    fn new(ctx: &mut EvalContext, mut config: TimeArgs) -> Result<Time> {
-        if config.time_type == TimeType::Date {
-            config.hour = 0;
-            config.minute = 0;
-            config.second = 0;
-            config.micro = 0;
-            config.fsp = 0;
-        }
-
+    fn new(ctx: &mut EvalContext, config: TimeArgs) -> Result<Time> {
         let unchecked_time = Self::unchecked_new(config.clone());
-        Ok(Self::unchecked_new(config.check(ctx).ok_or_else(|| {
-            Error::incorrect_datetime_value(unchecked_time)
-        })?))
+        let mut checked = config
+            .check(ctx)
+            .ok_or_else(|| Error::incorrect_datetime_value(unchecked_time))?;
+        if checked.time_type == TimeType::Date {
+            checked.hour = 0;
+            checked.minute = 0;
+            checked.second = 0;
+            checked.micro = 0;
+            checked.fsp = 0;
+        }
+        Ok(Self::unchecked_new(checked))
     }
 
     fn check_month_and_day(
@@ -1556,11 +1555,11 @@ impl ConvertTo<Duration> for Time {
             return Ok(Duration::zero());
         }
         let seconds = i64::from(self.hour() * 3600 + self.minute() * 60 + self.second());
-        // `nanosecond` returns the number of nanoseconds since the whole non-leap second.
+        // `microsecond` returns the number of microseconds since the whole non-leap second.
         // Such as for 2019-09-22 07:21:22.670936103 UTC,
         // it will return 670936103.
-        let nanosecond = i64::from(self.micro());
-        Duration::from_micros(seconds * 1_000_000 + nanosecond, self.fsp() as i8)
+        let microsecond = i64::from(self.micro());
+        Duration::from_micros(seconds * 1_000_000 + microsecond, self.fsp() as i8)
     }
 }
 
@@ -1657,73 +1656,15 @@ impl<T: BufferWriter> TimeEncoder for T {}
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
     fn write_time(&mut self, v: Time) -> Result<()> {
-        if !v.is_zero() {
-            self.write_u32_le(v.hour() as u32)?;
-            self.write_u32_le(v.micro())?;
-            self.write_u16_le(v.year() as u16)?;
-            self.write_u8(v.month() as u8)?;
-            self.write_u8(v.day() as u8)?;
-            self.write_u8(v.minute() as u8)?;
-            self.write_u8(v.second() as u8)?;
-        } else {
-            let len = mem::size_of::<u16>() + 2 * mem::size_of::<u32>() + 4;
-            let buf = vec![0; len];
-            self.write_bytes(&buf)?;
-        }
-        // Encode an useless u16 to make byte alignment 16 bytes.
-        self.write_u16_le(0 as u16)?;
-
-        let tp = FieldTypeTp::from(v.get_time_type());
-        self.write_u8(tp.to_u8().unwrap())?;
-        self.write_u8(v.fsp())?;
-        // Encode an useless u16 to make byte alignment 20 bytes.
-        self.write_u16_le(0 as u16).map_err(From::from)
+        Ok(self.write_u64_le(v.0)?)
     }
 }
 
 pub trait TimeDecoder: NumberDecoder {
     /// Decodes time encoded by `write_time` for Chunk format.
-    fn read_time(&mut self, ctx: &mut EvalContext) -> Result<Time> {
-        let hour = self.read_u32_le()?;
-        let micro = self.read_u32_le()?;
-        let year = i32::from(self.read_u16_le()?);
-        let buf = self.read_bytes(4)?;
-        let (month, day, minute, second) = (
-            u32::from(buf[0]),
-            u32::from(buf[1]),
-            u32::from(buf[2]),
-            u32::from(buf[3]),
-        );
-        let _ = self.read_u16();
-        let buf = self.read_bytes(2)?;
-        let (time_type, fsp): (TimeType, _) = (
-            FieldTypeTp::from_u8(buf[0])
-                .unwrap_or(FieldTypeTp::Unspecified)
-                .try_into()?,
-            buf[1],
-        );
-        let _ = self.read_u16();
-
-        if time_type == TimeType::Timestamp {
-            let utc = chrono_datetime(&Utc, year as u32, month, day, hour, minute, second, micro)?;
-            let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
-            Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
-        } else {
-            Time::new(
-                ctx,
-                TimeArgs {
-                    year: year as u32,
-                    month,
-                    day,
-                    hour,
-                    minute,
-                    second,
-                    micro,
-                    fsp: fsp as i8,
-                    time_type,
-                },
-            )
-        }
+    fn read_time(&mut self, _ctx: &mut EvalContext) -> Result<Time> {
+        let t = self.read_u64_le()?;
+        Ok(Time(t))
     }
 }
 
@@ -1870,6 +1811,7 @@ mod tests {
             ("2019-12-31", "2019.12.31 \t    23.59.59.999999"),
             ("2019-12-31", "2019.12.31 \t  23.59-59.999999"),
             ("2013-05-28", "1305280512.000000000000"),
+            ("0000-00-00", "00:00:00"),
         ];
 
         for (expected, actual) in cases {
@@ -1880,6 +1822,29 @@ mod tests {
             assert_eq!(date.micro(), 0);
             assert_eq!(date.fsp(), 0);
             assert_eq!(expected, date.to_string());
+        }
+
+        let should_fail = vec![
+            ("11-12-13 T 12:34:56"),
+            ("11:12:13 T12:34:56"),
+            ("11:12:13 T12:34:56.12"),
+            ("11:12:13T25:34:56.12"),
+            ("11:12:13T23:61:56.12"),
+            ("11:12:13T23:59:89.12"),
+            ("11121311121.1"),
+            ("1201012736"),
+            ("1201012736.0"),
+            ("111213111.1"),
+            ("11121311.1"),
+            ("1112131.1"),
+            ("111213.1"),
+            ("111213.1"),
+            ("11121.1"),
+            ("1112"),
+        ];
+
+        for case in should_fail {
+            assert!(Time::parse_date(&mut ctx, case).is_err());
         }
         Ok(())
     }
@@ -1958,6 +1923,7 @@ mod tests {
                 3,
                 false,
             ),
+            ("0000-00-00 00:00:00", "00:00:00", 0, false),
         ];
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
@@ -1970,7 +1936,12 @@ mod tests {
             ("11-12-13 T 12:34:56", 0),
             ("11:12:13 T12:34:56", 0),
             ("11:12:13 T12:34:56.12", 7),
+            ("11:12:13T25:34:56.12", 7),
+            ("11:12:13T23:61:56.12", 7),
+            ("11:12:13T23:59:89.12", 7),
             ("11121311121.1", 2),
+            ("1201012736", 2),
+            ("1201012736.0", 2),
             ("111213111.1", 2),
             ("11121311.1", 2),
             ("1112131.1", 2),
@@ -2039,6 +2010,7 @@ mod tests {
                 3,
                 false,
             ),
+            ("0000-00-00 00:00:00", "00:00:00", 0, false),
         ];
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
@@ -2333,7 +2305,7 @@ mod tests {
         let cases = vec!["11:30:45.123456", "-35:30:46"];
         for case in cases {
             let mut ctx = EvalContext::default();
-            let duration = Duration::parse(case.as_bytes(), MAX_FSP)?;
+            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP)?;
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
             let today = actual
@@ -2446,7 +2418,7 @@ mod tests {
         for (lhs, rhs, expected) in normal_cases.clone() {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2454,7 +2426,7 @@ mod tests {
         for (expected, rhs, lhs) in normal_cases {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2471,14 +2443,14 @@ mod tests {
 
         for (lhs, rhs, expected) in dsts.clone() {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
 
         for (expected, rhs, lhs) in dsts {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2495,7 +2467,7 @@ mod tests {
         ];
         for (lhs, rhs, expected) in cases {
             let lhs = Time::parse_datetime(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2503,11 +2475,11 @@ mod tests {
         // Failed cases
         let mut ctx = EvalContext::default();
         let lhs = Time::parse_datetime(&mut ctx, "9999-12-31 23:59:59", 6, false)?;
-        let rhs = Duration::parse(b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
         assert_eq!(lhs.checked_add(&mut ctx, rhs), None);
 
         let lhs = Time::parse_datetime(&mut ctx, "0000-01-01 00:00:01", 6, false)?;
-        let rhs = Duration::parse(b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
         assert_eq!(lhs.checked_sub(&mut ctx, rhs), None);
 
         Ok(())

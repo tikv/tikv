@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use engine::rocks;
 use engine::rocks::DB;
@@ -15,9 +15,9 @@ use crate::raftstore::store::{CasualMessage, CasualRouter};
 
 use super::super::error::Result;
 use super::super::metrics::*;
-use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use engine_rocks::RangeProperties;
 
 pub struct Checker {
     max_size: u64,
@@ -97,19 +97,20 @@ impl SplitChecker for Checker {
     }
 }
 
+#[derive(Clone)]
 pub struct SizeCheckObserver<C> {
-    router: Mutex<C>,
+    router: Arc<Mutex<C>>,
 }
 
 impl<C: CasualRouter> SizeCheckObserver<C> {
     pub fn new(router: C) -> SizeCheckObserver<C> {
         SizeCheckObserver {
-            router: Mutex::new(router),
+            router: Arc::new(Mutex::new(router)),
         }
     }
 }
 
-impl<C> Coprocessor for SizeCheckObserver<C> {}
+impl<C: Send> Coprocessor for SizeCheckObserver<C> {}
 
 impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(
@@ -414,7 +415,7 @@ pub mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(tx)),
+            CoprocessorHost::new(tx),
             cfg,
         );
 
