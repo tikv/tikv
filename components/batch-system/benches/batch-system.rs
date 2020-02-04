@@ -17,6 +17,9 @@ fn end_hook(tx: &std::sync::mpsc::Sender<()>) -> Message {
     }))
 }
 
+/// Benches how it performs when many messages are sent to the bench system.
+///
+/// A better router and lightweight batch scheduling can lead to better result.
 fn bench_spawn_many(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
@@ -46,6 +49,10 @@ fn bench_spawn_many(c: &mut Criterion) {
     system.shutdown();
 }
 
+/// Bench how it performs if two hot FSMs are shown up at the same time.
+///
+/// A good scheduling algorithm should be able to spread the hot FSMs to
+/// all available threads as soon as possible.
 fn bench_imbalance(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
@@ -77,6 +84,10 @@ fn bench_imbalance(c: &mut Criterion) {
     system.shutdown();
 }
 
+/// Bench how it performs when scheduling a lot of quick tasks during an long-polling
+/// tasks.
+///
+/// A good scheduling algorithm should not starve the quick tasks.
 fn bench_fairness(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
@@ -93,6 +104,7 @@ fn bench_fairness(c: &mut Criterion) {
     let running1 = running.clone();
     let handle = std::thread::spawn(move || {
         while running1.load(Ordering::SeqCst) {
+            // Using 4 to ensure all worker threads are busy spinning.
             for id in 0..4 {
                 let _ = router1.send(id, Message::Loop(16));
             }

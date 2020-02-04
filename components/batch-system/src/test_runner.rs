@@ -7,16 +7,22 @@ use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 use tikv_util::mpsc;
 
+/// Message `Runner` can accepts.
 pub enum Message {
+    /// `Runner` will do simple calculation for the given times.
     Loop(usize),
+    /// `Runner` will call the callback directly.
     Callback(Box<dyn FnOnce(&mut Runner) + Send + 'static>),
 }
 
+/// A simple runner used for benchmarking only.
 pub struct Runner {
     is_stopped: bool,
     recv: mpsc::Receiver<Message>,
     mailbox: Option<BasicMailbox<Runner>>,
     pub sender: Option<mpsc::Sender<()>>,
+    /// Result of the calculation triggered by `Message::Loop`.
+    /// Stores it inside `Runner` to avoid accidental optimization.
     res: usize,
 }
 
