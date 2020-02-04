@@ -4,8 +4,18 @@ use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::sync::mpsc::*;
+#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::{
+    event::{
+        row::OpType as EventRowOpType, Entries as EventEntries, Error as EventError,
+        Event as Event_oneof_event, LogType as EventLogType, Row as EventRow,
+    },
+    ChangeDataEvent, Event,
+};
+
+use futures::sync::mpsc::*;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use resolved_ts::Resolver;
@@ -153,7 +163,7 @@ impl Delegate {
     }
 
     fn error_event(&self, err: Error) -> ChangeDataEvent {
-        let mut change_data_event = Event::new();
+        let mut change_data_event = Event::default();
         let mut cdc_err = EventError::default();
         let mut err = err.extract_error_header();
         if err.has_region_not_found() {
@@ -173,7 +183,7 @@ impl Delegate {
         }
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = self.region_id;
-        let mut change_data = ChangeDataEvent::new();
+        let mut change_data = ChangeDataEvent::default();
         change_data.mut_events().push(change_data_event);
         change_data
     }
@@ -249,10 +259,10 @@ impl Delegate {
         };
         info!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
-        let mut change_data_event = Event::new();
+        let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
-        let mut change_data = ChangeDataEvent::new();
+        let mut change_data = ChangeDataEvent::default();
         change_data.mut_events().push(change_data_event);
         self.broadcast(change_data);
     }
@@ -299,31 +309,31 @@ impl Delegate {
                     //   2. commit_ts
                     //   3. key
                     //   4. value
-                    if row.r_type == EventLogType::Rollback {
+                    if row.get_type() == EventLogType::Rollback {
                         // We dont need to send rollbacks to downstream,
                         // because downstream does not needs rollback to clean
                         // prewrite as it drops all previous stashed data.
                         continue;
                     }
-                    row.r_type = EventLogType::Committed;
+                    set_event_row_type(&mut row, EventLogType::Committed);
                     rows.push(row);
                 }
                 None => {
                     let mut row = EventRow::default();
 
                     // This type means scan has finised.
-                    row.r_type = EventLogType::Initialized;
+                    set_event_row_type(&mut row, EventLogType::Initialized);
                     rows.push(row);
                 }
             }
         }
 
-        let mut event_entries = EventEntries::new();
+        let mut event_entries = EventEntries::default();
         event_entries.entries = rows.into();
-        let mut change_data_event = Event::new();
+        let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        let mut change_data = ChangeDataEvent::new();
+        let mut change_data = ChangeDataEvent::default();
         change_data.mut_events().push(change_data_event);
         d.sink(change_data);
     }
@@ -332,10 +342,10 @@ impl Delegate {
         let mut rows = HashMap::default();
         for mut req in requests {
             // CDC cares about put requests only.
-            if req.cmd_type != CmdType::Put {
+            if req.get_cmd_type() != CmdType::Put {
                 // Do not log delete requests because they are issued by GC
                 // frequently.
-                if req.cmd_type != CmdType::Delete {
+                if req.get_cmd_type() != CmdType::Delete {
                     debug!(
                         "skip other command";
                         "region_id" => self.region_id,
@@ -408,13 +418,13 @@ impl Delegate {
         for (_, v) in rows {
             entires.push(v);
         }
-        let mut event_entries = EventEntries::new();
+        let mut event_entries = EventEntries::default();
         event_entries.entries = entires.into();
-        let mut change_data_event = Event::new();
+        let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
         change_data_event.index = index;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        let mut change_data = ChangeDataEvent::new();
+        let mut change_data = ChangeDataEvent::default();
         change_data.mut_events().push(change_data_event);
         self.broadcast(change_data);
     }
@@ -444,6 +454,17 @@ impl Delegate {
     }
 }
 
+fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
+    #[cfg(feature = "prost-codec")]
+    {
+        row.r#type = ty.into();
+    }
+    #[cfg(feature = "protobuf-codec")]
+    {
+        row.r_type = ty;
+    }
+}
+
 fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     let write = WriteRef::parse(value).unwrap().to_owned();
     let (op_type, r_type) = match write.write_type {
@@ -464,8 +485,8 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     row.start_ts = write.start_ts.into_inner();
     row.commit_ts = commit_ts;
     row.key = key.truncate_ts().unwrap().to_raw().unwrap();
-    row.op_type = op_type;
-    row.r_type = r_type;
+    row.op_type = op_type.into();
+    set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
         row.value = value;
     }
@@ -489,8 +510,8 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     let key = Key::from_encoded(key);
     row.start_ts = lock.ts.into_inner();
     row.key = key.to_raw().unwrap();
-    row.op_type = op_type;
-    row.r_type = EventLogType::Prewrite;
+    row.op_type = op_type.into();
+    set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
         row.value = value;
     }
@@ -592,7 +613,7 @@ mod tests {
         let mut region = Region::default();
         region.set_id(1);
         let mut request = AdminRequest::default();
-        request.cmd_type = AdminCmdType::Split;
+        request.set_cmd_type(AdminCmdType::Split);
         let mut response = AdminResponse::default();
         response.mut_split().set_left(region.clone());
         delegate.sink_admin(request, response);
@@ -605,7 +626,7 @@ mod tests {
             .unwrap();
 
         let mut request = AdminRequest::default();
-        request.cmd_type = AdminCmdType::BatchSplit;
+        request.set_cmd_type(AdminCmdType::BatchSplit);
         let mut response = AdminResponse::default();
         response.mut_splits().set_regions(vec![region].into());
         delegate.sink_admin(request, response);
@@ -619,7 +640,7 @@ mod tests {
 
         // Merge
         let mut request = AdminRequest::default();
-        request.cmd_type = AdminCmdType::PrepareMerge;
+        request.set_cmd_type(AdminCmdType::PrepareMerge);
         let response = AdminResponse::default();
         delegate.sink_admin(request, response);
         let mut err = receive_error();
@@ -627,7 +648,7 @@ mod tests {
         assert!(err.take_epoch_not_match().current_regions.is_empty());
 
         let mut request = AdminRequest::default();
-        request.cmd_type = AdminCmdType::CommitMerge;
+        request.set_cmd_type(AdminCmdType::CommitMerge);
         let response = AdminResponse::default();
         delegate.sink_admin(request, response);
         let mut err = receive_error();
@@ -635,7 +656,7 @@ mod tests {
         assert!(err.take_epoch_not_match().current_regions.is_empty());
 
         let mut request = AdminRequest::default();
-        request.cmd_type = AdminCmdType::RollbackMerge;
+        request.set_cmd_type(AdminCmdType::RollbackMerge);
         let response = AdminResponse::default();
         delegate.sink_admin(request, response);
         let mut err = receive_error();
@@ -678,7 +699,7 @@ mod tests {
             let event = change_data_event.event.take().unwrap();
             match event {
                 Event_oneof_event::Entries(entries) => {
-                    assert_eq!(entries.entries, event_rows.into());
+                    assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
                 }
                 _ => panic!("unknown event"),
             }
@@ -729,22 +750,22 @@ mod tests {
         delegate.on_region_ready(resolver, region);
 
         // Flush all pending entries.
-        let mut row1 = EventRow::new();
+        let mut row1 = EventRow::default();
         row1.start_ts = 1;
         row1.commit_ts = 0;
         row1.key = b"a".to_vec();
-        row1.op_type = EventRowOpType::Put;
-        row1.r_type = EventLogType::Prewrite;
+        row1.op_type = EventRowOpType::Put.into();
+        set_event_row_type(&mut row1, EventLogType::Prewrite);
         row1.value = b"b".to_vec();
-        let mut row2 = EventRow::new();
+        let mut row2 = EventRow::default();
         row2.start_ts = 1;
         row2.commit_ts = 2;
         row2.key = b"a".to_vec();
-        row2.op_type = EventRowOpType::Put;
-        row2.r_type = EventLogType::Committed;
+        row2.op_type = EventRowOpType::Put.into();
+        set_event_row_type(&mut row2, EventLogType::Committed);
         row2.value = b"b".to_vec();
-        let mut row3 = EventRow::new();
-        row3.r_type = EventLogType::Initialized;
+        let mut row3 = EventRow::default();
+        set_event_row_type(&mut row3, EventLogType::Initialized);
         check_event(vec![row1, row2, row3]);
     }
 }

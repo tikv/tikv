@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "cdc"
-version = "4.0.0-alpha"
+version = "0.0.1"
 dependencies = [
  "engine",
  "engine_rocks",
