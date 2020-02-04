@@ -7,6 +7,7 @@ mod util;
 use self::util::ReadLiteralExt;
 use failure::Error;
 use std::io::Cursor;
+use tidb_query::codec::datum_codec::DatumFlagAndPayloadEncoder;
 use tidb_query::expr::{EvalConfig, EvalContext};
 
 #[inline(always)]
@@ -262,6 +263,8 @@ fn fuzz_duration(
 
     let u = t;
     u.round_frac(cursor.read_as_i8()?)?;
+    let mut v = Vec::new();
+    let _ = v.write_datum_duration_int(t);
 
     let mut ctx = EvalContext::default();
     let _: Decimal = t.convert(&mut ctx)?;

@@ -294,7 +294,7 @@ mod tests {
                 black_box(&logical_rows),
                 &mut ctx,
             )
-                .unwrap();
+            .unwrap();
             v.write_chunk_column(&column).unwrap();
             black_box(v);
         });
