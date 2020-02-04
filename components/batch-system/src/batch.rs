@@ -312,6 +312,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     } else {
                         if batch.counters[i] > 3 {
                             hot_fsm_count += 1;
+                            // We should only reschedule a half of the hot regions, otherwise,
+                            // it's possible all the hot regions are fetched in a batch the
+                            // next time.
                             if hot_fsm_count & 1 == 1 {
                                 reschedule_fsms.push((i, ReschedulePolicy::Schedule));
                                 continue;
