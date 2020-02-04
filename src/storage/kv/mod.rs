@@ -19,9 +19,6 @@ use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
-use crate::into_other::IntoOther;
-use crate::raftstore::coprocessor::{RegionInfo, RegionInfoCallback, SeekRegionCallback};
-
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::compact_listener::{CompactedEvent, CompactionListener};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -30,6 +27,7 @@ pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use crate::into_other::IntoOther;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -168,22 +166,6 @@ pub trait Iterator: Send {
     fn key(&self) -> &[u8];
     /// Only be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
-}
-
-pub trait RegionInfoProvider: Send + Clone + 'static {
-    /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
-    /// the callback to process the result.
-    fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn find_region_by_id(
-        &self,
-        _reigon_id: u64,
-        _callback: RegionInfoCallback<Option<RegionInfo>>,
-    ) -> Result<()> {
-        unimplemented!()
-    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
