@@ -245,7 +245,7 @@ pub trait DatumFlagAndPayloadEncoder: BufferWriter + DatumPayloadEncoder {
         Ok(())
     }
 
-    fn write_datum_date_time_int(&mut self, val: DateTime, ctx: &mut EvalContext) -> Result<()> {
+    fn write_datum_datetime_int(&mut self, val: DateTime, ctx: &mut EvalContext) -> Result<()> {
         self.write_datum_u64(val.to_packed_u64(ctx)?)
     }
 
@@ -294,7 +294,7 @@ pub trait EvaluableDatumEncoder: DatumFlagAndPayloadEncoder {
         val: DateTime,
         ctx: &mut EvalContext,
     ) -> Result<()> {
-        self.write_datum_date_time_int(val, ctx)
+        self.write_datum_datetime_int(val, ctx)
     }
 
     #[inline]
