@@ -840,7 +840,7 @@ mod tests {
         ];
         for (vargs, expected, is_success) in cases {
             let output = RpnFnScalarEvaluator::new().push_params(vargs.clone());
-            let mut output = if vargs.len() == 1 {
+            let output = if vargs.len() == 1 {
                 output.evaluate(ScalarFuncSig::JsonKeysSig)
             } else {
                 output.evaluate(ScalarFuncSig::JsonKeys2ArgsSig)
