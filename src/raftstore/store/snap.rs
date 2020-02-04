@@ -159,7 +159,7 @@ where
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
-    pub coprocessor_host: Arc<CoprocessorHost>,
+    pub coprocessor_host: CoprocessorHost,
 }
 
 /// `Snapshot` is a trait for snapshot.
@@ -1790,7 +1790,7 @@ pub mod tests {
             region,
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
-            coprocessor_host: Arc::new(CoprocessorHost::default()),
+            coprocessor_host: CoprocessorHost::default(),
         };
         // Verify thte snapshot applying is ok.
         assert!(s4.apply(options).is_ok());
@@ -2115,7 +2115,7 @@ pub mod tests {
             region,
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
-            coprocessor_host: Arc::new(CoprocessorHost::default()),
+            coprocessor_host: CoprocessorHost::default(),
         };
         assert!(s5.apply(options).is_err());
 
