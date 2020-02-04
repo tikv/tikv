@@ -169,9 +169,8 @@ mod parser {
             return Err(nom::Err::Error(()));
         }
 
-        let datetime =
-            DateTime::parse_datetime(&mut EvalContext::default(), input, fsp as i8, true)
-                .map_err(|_| nom::Err::Error(()))?;
+        let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
+            .map_err(|_| nom::Err::Error(()))?;
         Ok((
             rest,
             [
