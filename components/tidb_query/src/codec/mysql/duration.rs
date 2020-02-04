@@ -140,13 +140,15 @@ mod parser {
         Ok((rest, hhmmss))
     }
 
-    fn hhmmss_datetime(input: &str, fsp: u8) -> IResult<&str, [u32; 4], ()> {
+    fn hhmmss_datetime<'a>(
+        ctx: &mut EvalContext,
+        input: &'a str,
+        fsp: u8,
+    ) -> IResult<&'a str, [u32; 4], ()> {
         let (rest, digits) = digit1(input)?;
         if digits.len() == 12 || digits.len() == 14 {
-            // FIXME: use a global context to parse the datetime
-            let datetime =
-                DateTime::parse_datetime(&mut EvalContext::default(), digits, fsp as i8, true)
-                    .map_err(|_| nom::Err::Error(()))?;
+            let datetime = DateTime::parse_datetime(ctx, digits, fsp as i8, true)
+                .map_err(|_| nom::Err::Error(()))?;
             let (rest, fraction) = fraction(input, fsp)?;
             return Ok((
                 rest,
@@ -235,7 +237,7 @@ mod parser {
                 ))
             })
             .or_else(|| {
-                let (_, [h, m, s, f]) = hhmmss_datetime(rest, fsp).ok()?;
+                let (_, [h, m, s, f]) = hhmmss_datetime(ctx, rest, fsp).ok()?;
                 Some(Duration::new_from_parts(neg, h, m, s, f, fsp as i8))
             })
             .and_then(|result| {
@@ -711,14 +713,14 @@ mod tests {
         let cases: Vec<(&'static [u8], i8, &'static str)> = vec![
             (b"-1062600704", 0, "-838:59:59"),
             (b"1062600704", 0, "838:59:59"),
+            // FIXME: some error information lost while converting `Result` to `Option`
+            // (b"4294967295 0:59:59", 0, "838:59:59"),
         ];
 
         for (input, fsp, expect) in cases {
-            let got = Duration::parse(
-                &mut EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING))),
-                input,
-                fsp,
-            );
+            let mut ctx =
+                EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+            let got = Duration::parse(&mut ctx, input, fsp);
             assert_eq!(expect, &format!("{}", got.unwrap()));
         }
     }
@@ -790,8 +792,6 @@ mod tests {
             (b"- 1.1", 1, Some("-00:00:01.1")),
             (b"- 1 .1", 1, Some("-00:00:01.1")),
             (b"18446744073709551615:59:59", 0, None),
-            // FIXME: this case should parse as MAX_DURATION in some contexts,
-            // which means this behavior depends on a global context variable
             (b"4294967295 0:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
