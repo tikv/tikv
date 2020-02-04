@@ -9,10 +9,10 @@ use kvproto::pdpb::CheckPolicy;
 use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
-use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::size::get_region_approximate_size_cf;
 use super::Host;
+use engine_rocks::RangeProperties;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
