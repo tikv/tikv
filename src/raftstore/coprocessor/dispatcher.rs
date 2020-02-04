@@ -5,7 +5,9 @@ use engine::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+
 use std::mem;
+use std::ops::Deref;
 
 use crate::raftstore::store::CasualRouter;
 
@@ -16,16 +18,86 @@ struct Entry<T> {
     observer: T,
 }
 
-// TODO: change it to Send + Clone.
-pub type BoxAdminObserver = Box<dyn AdminObserver + Send + Sync>;
-pub type BoxQueryObserver = Box<dyn QueryObserver + Send + Sync>;
-pub type BoxApplySnapshotObserver = Box<dyn ApplySnapshotObserver + Send + Sync>;
-pub type BoxSplitCheckObserver = Box<dyn SplitCheckObserver + Send + Sync>;
-pub type BoxRoleObserver = Box<dyn RoleObserver + Send + Sync>;
-pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
+impl<T: Clone> Clone for Entry<T> {
+    fn clone(&self) -> Self {
+        Self {
+            priority: self.priority,
+            observer: self.observer.clone(),
+        }
+    }
+}
+
+pub trait ClonableObserver: 'static + Send {
+    type Ob: ?Sized + Send;
+    fn inner(&self) -> &Self::Ob;
+    fn inner_mut(&mut self) -> &mut Self::Ob;
+    fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send>;
+}
+
+macro_rules! impl_box_observer {
+    ($name:ident, $ob: ident, $wrapper: ident) => {
+        pub struct $name(Box<dyn ClonableObserver<Ob = dyn $ob> + Send>);
+        impl $name {
+            pub fn new<T: 'static + $ob + Clone>(observer: T) -> $name {
+                $name(Box::new($wrapper { inner: observer }))
+            }
+        }
+        impl Clone for $name {
+            fn clone(&self) -> $name {
+                $name((**self).box_clone())
+            }
+        }
+        impl Deref for $name {
+            type Target = Box<dyn ClonableObserver<Ob = dyn $ob> + Send>;
+
+            fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob> + Send> {
+                &self.0
+            }
+        }
+
+        struct $wrapper<T: $ob + Clone> {
+            inner: T,
+        }
+        impl<T: 'static + $ob + Clone> ClonableObserver for $wrapper<T> {
+            type Ob = dyn $ob;
+            fn inner(&self) -> &Self::Ob {
+                &self.inner as _
+            }
+
+            fn inner_mut(&mut self) -> &mut Self::Ob {
+                &mut self.inner as _
+            }
+
+            fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
+                Box::new($wrapper {
+                    inner: self.inner.clone(),
+                })
+            }
+        }
+    };
+}
+
+impl_box_observer!(BoxAdminObserver, AdminObserver, WrappedAdminObserver);
+impl_box_observer!(BoxQueryObserver, QueryObserver, WrappedQueryObserver);
+impl_box_observer!(
+    BoxApplySnapshotObserver,
+    ApplySnapshotObserver,
+    WrappedApplySnapshotObserver
+);
+impl_box_observer!(
+    BoxSplitCheckObserver,
+    SplitCheckObserver,
+    WrappedSplitCheckObserver
+);
+impl_box_observer!(BoxRoleObserver, RoleObserver, WrappedRoleObserver);
+impl_box_observer!(
+    BoxRegionChangeObserver,
+    RegionChangeObserver,
+    WrappedRegionChangeObserver
+);
 
 /// Registry contains all registered coprocessors.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Registry {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
@@ -38,7 +110,7 @@ pub struct Registry {
 
 macro_rules! push {
     ($p:expr, $t:ident, $vec:expr) => {
-        $t.start();
+        $t.inner().start();
         let e = Entry {
             priority: $p,
             observer: $t,
@@ -93,11 +165,11 @@ macro_rules! try_loop_ob {
 macro_rules! loop_ob {
     // Execute a hook, return early if error is found.
     (_exec _res, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
-        $o.$hook($ctx, $($args)*)?
+        $o.inner().$hook($ctx, $($args)*)?
     };
     // Execute a hook.
     (_exec _tup, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
-        $o.$hook($ctx, $($args)*)
+        $o.inner().$hook($ctx, $($args)*)
     };
     // When the try loop finishes successfully, the value to be returned.
     (_done _res) => {
@@ -124,7 +196,7 @@ macro_rules! loop_ob {
 }
 
 /// Admin and invoke all coprocessors.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CoprocessorHost {
     pub registry: Registry,
 }
@@ -132,11 +204,20 @@ pub struct CoprocessorHost {
 impl CoprocessorHost {
     pub fn new<C: CasualRouter + Clone + Send + 'static>(ch: C) -> CoprocessorHost {
         let mut registry = Registry::default();
-        registry.register_split_check_observer(200, Box::new(SizeCheckObserver::new(ch.clone())));
-        registry.register_split_check_observer(200, Box::new(KeysCheckObserver::new(ch)));
+        registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(SizeCheckObserver::new(ch.clone())),
+        );
+        registry.register_split_check_observer(
+            200,
+            BoxSplitCheckObserver::new(KeysCheckObserver::new(ch)),
+        );
         // TableCheckObserver has higher priority than SizeCheckObserver.
-        registry.register_split_check_observer(100, Box::new(HalfCheckObserver));
-        registry.register_split_check_observer(400, Box::new(TableCheckObserver::default()));
+        registry.register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
+        registry.register_split_check_observer(
+            400,
+            BoxSplitCheckObserver::new(TableCheckObserver::default()),
+        );
         CoprocessorHost { registry }
     }
 
@@ -268,13 +349,13 @@ impl CoprocessorHost {
 
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
-            entry.observer.stop();
+            entry.observer.inner().stop();
         }
         for entry in &self.registry.query_observers {
-            entry.observer.stop();
+            entry.observer.inner().stop();
         }
         for entry in &self.registry.split_check_observers {
-            entry.observer.stop();
+            entry.observer.inner().stop();
         }
     }
 }
@@ -406,15 +487,15 @@ mod tests {
         let mut host = CoprocessorHost::default();
         let ob = TestCoprocessor::default();
         host.registry
-            .register_admin_observer(1, Box::new(ob.clone()));
+            .register_admin_observer(1, BoxAdminObserver::new(ob.clone()));
         host.registry
-            .register_query_observer(1, Box::new(ob.clone()));
+            .register_query_observer(1, BoxQueryObserver::new(ob.clone()));
         host.registry
-            .register_apply_snapshot_observer(1, Box::new(ob.clone()));
+            .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(ob.clone()));
         host.registry
-            .register_role_observer(1, Box::new(ob.clone()));
+            .register_role_observer(1, BoxRoleObserver::new(ob.clone()));
         host.registry
-            .register_region_change_observer(1, Box::new(ob.clone()));
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(ob.clone()));
         let region = Region::default();
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
@@ -454,14 +535,14 @@ mod tests {
 
         let ob1 = TestCoprocessor::default();
         host.registry
-            .register_admin_observer(3, Box::new(ob1.clone()));
+            .register_admin_observer(3, BoxAdminObserver::new(ob1.clone()));
         host.registry
-            .register_query_observer(3, Box::new(ob1.clone()));
+            .register_query_observer(3, BoxQueryObserver::new(ob1.clone()));
         let ob2 = TestCoprocessor::default();
         host.registry
-            .register_admin_observer(2, Box::new(ob2.clone()));
+            .register_admin_observer(2, BoxAdminObserver::new(ob2.clone()));
         host.registry
-            .register_query_observer(2, Box::new(ob2.clone()));
+            .register_query_observer(2, BoxQueryObserver::new(ob2.clone()));
 
         let region = Region::default();
         let mut admin_req = RaftCmdRequest::default();
