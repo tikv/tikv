@@ -28,15 +28,14 @@ use raft::StateRole;
 use tokio_core::reactor::Handle;
 
 use crate::config::ConfigManager;
-use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::raftstore::store::RegionSnapshot;
 use crate::server::metrics::*;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
-    Snapshot, Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Snapshot, Statistics,
 };
 use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
 use crate::storage::{Callback, Error, ErrorInner, Result};
@@ -1647,6 +1646,7 @@ impl<E: Engine> GcWorker<E> {
 mod tests {
     use super::*;
     use crate::config::{ConfigController, TiKvConfig};
+    use crate::raftstore::coprocessor::Result as CopResult;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::{
@@ -1696,7 +1696,7 @@ mod tests {
     }
 
     impl RegionInfoProvider for MockRegionInfoProvider {
-        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
+        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> CopResult<()> {
             let from = from.to_vec();
             callback(&mut self.regions.range(from..).map(|(_, v)| v));
             Ok(())

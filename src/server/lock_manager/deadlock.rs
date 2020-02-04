@@ -6,8 +6,8 @@ use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
 use crate::raftstore::coprocessor::{
-    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
-    RoleObserver,
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, RoleObserver,
 };
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
@@ -412,9 +412,9 @@ impl RoleChangeNotifier {
 
     pub(crate) fn register(self, host: &mut CoprocessorHost) {
         host.registry
-            .register_role_observer(1, Box::new(self.clone()));
+            .register_role_observer(1, BoxRoleObserver::new(self.clone()));
         host.registry
-            .register_region_change_observer(1, Box::new(self));
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(self));
     }
 }
 
