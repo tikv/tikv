@@ -83,7 +83,7 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 
 mod parser {
     use super::*;
-    use nom::character::complete::{char, digit0, digit1, space0, space1};
+    use nom::character::complete::{anychar, char, digit0, digit1, space0, space1};
     use nom::combinator::opt;
     use nom::IResult;
 
@@ -140,6 +140,57 @@ mod parser {
         Ok((rest, hhmmss))
     }
 
+    fn hhmmss_datetime<'a>(
+        ctx: &mut EvalContext,
+        input: &'a str,
+        fsp: u8,
+    ) -> IResult<&'a str, [u32; 4], ()> {
+        let (rest, digits) = digit1(input)?;
+        if digits.len() == 12 || digits.len() == 14 {
+            let datetime = DateTime::parse_datetime(ctx, digits, fsp as i8, true)
+                .map_err(|_| nom::Err::Error(()))?;
+            let (rest, fraction) = fraction(input, fsp)?;
+            return Ok((
+                rest,
+                [
+                    datetime.hour(),
+                    datetime.minute(),
+                    datetime.second(),
+                    fraction,
+                ],
+            ));
+        }
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+
+        if rest.is_empty() {
+            return Err(nom::Err::Error(()));
+        }
+
+        let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
+            .map_err(|_| nom::Err::Error(()))?;
+        Ok((
+            rest,
+            [
+                datetime.hour(),
+                datetime.minute(),
+                datetime.second(),
+                datetime.micro(),
+            ],
+        ))
+    }
+
+    fn anysep(input: &str) -> IResult<&str, char, ()> {
+        let (rest, sep) = anychar(input)?;
+        if !sep.is_ascii_punctuation() {
+            Err(nom::Err::Error(()))
+        } else {
+            Ok((rest, sep))
+        }
+    }
+
     fn fraction(input: &str, fsp: u8) -> IResult<&str, u32, ()> {
         let fsp = usize::from(fsp);
         let (rest, dot) = opt(char('.'))(input)?;
@@ -158,28 +209,49 @@ mod parser {
         Ok((rest, frac * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
 
-    pub fn parse(input: &str, fsp: u8) -> Option<Duration> {
+    pub fn parse(ctx: &mut EvalContext, input: &str, fsp: u8) -> Option<Duration> {
         if input.is_empty() {
             return Some(Duration::zero());
         }
 
         let (rest, neg) = negative(input).ok()?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
-        let (rest, hhmmss) = day_hhmmss(rest)
+        day_hhmmss(rest)
             .ok()
             .and_then(|(rest, (day, [hh, mm, ss]))| {
                 Some((rest, [day.checked_mul(24)? + hh, mm, ss]))
             })
             .or_else(|| hhmmss_delimited(rest, true).ok())
-            .or_else(|| hhmmss_compact(rest).ok())?;
-        let (rest, _) = space0::<_, ()>(rest).ok()?;
-        let (rest, frac) = fraction(rest, fsp).ok()?;
+            .or_else(|| hhmmss_compact(rest).ok())
+            .and_then(|(rest, hhmmss)| {
+                let (rest, _) = space0::<_, ()>(rest).ok()?;
+                let (rest, frac) = fraction(rest, fsp).ok()?;
 
-        if !rest.is_empty() {
-            return None;
-        }
+                if !rest.is_empty() {
+                    return None;
+                }
 
-        Duration::new_from_parts(neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8).ok()
+                Some(Duration::new_from_parts(
+                    neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8,
+                ))
+            })
+            .or_else(|| {
+                let (_, [h, m, s, f]) = hhmmss_datetime(ctx, rest, fsp).ok()?;
+                Some(Duration::new_from_parts(neg, h, m, s, f, fsp as i8))
+            })
+            .and_then(|result| {
+                result
+                    .or_else(|err| {
+                        if err.is_overflow() {
+                            ctx.handle_overflow_err(Error::truncated_wrong_val("TIME", input))?;
+                            let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
+                            Ok(Duration { nanos, fsp })
+                        } else {
+                            Err(err)
+                        }
+                    })
+                    .ok()
+            })
     }
 } /* parser */
 
@@ -339,10 +411,10 @@ impl Duration {
         nanos: u32,
         fsp: i8,
     ) -> Result<Duration> {
-        check_hour_part(hour)?;
         check_minute_part(minute)?;
         check_second_part(second)?;
         check_nanos_part(nanos)?;
+        check_hour_part(hour)?;
         let fsp = check_fsp(fsp)?;
         let signum = if neg { -1 } else { 1 };
         let minute = minute as i64 + hour as i64 * 60;
@@ -357,25 +429,10 @@ impl Duration {
     /// Parses the time from a formatted string with a fractional seconds part,
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
+    pub fn parse(ctx: &mut EvalContext, input: &[u8], fsp: i8) -> Result<Duration> {
         let input = std::str::from_utf8(input)?.trim();
         let fsp = check_fsp(fsp)?;
-        parser::parse(input, fsp)
-            .or_else(|| {
-                let integer_part = match input.find('.') {
-                    Some(index) => &input[..index],
-                    None => input,
-                };
-                if !integer_part.contains(':') {
-                    let mut ctx = EvalContext::default();
-                    let dt =
-                        DateTime::parse_datetime(&mut ctx, integer_part, fsp as i8, true).ok()?;
-                    dt.convert(&mut ctx).ok()
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
+        parser::parse(ctx, input, fsp).ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.
@@ -593,7 +650,7 @@ mod tests {
         ];
 
         for (input, fsp, exp) in cases {
-            let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let dur = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
             let res = dur.hours();
             assert_eq!(exp, res);
         }
@@ -608,7 +665,7 @@ mod tests {
         ];
 
         for (input, fsp, exp) in cases {
-            let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let dur = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
             let res = dur.minutes();
             assert_eq!(exp, res);
         }
@@ -624,7 +681,7 @@ mod tests {
         ];
 
         for (input, fsp, exp) in cases {
-            let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let dur = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
             let res = dur.secs();
             assert_eq!(exp, res);
         }
@@ -644,9 +701,26 @@ mod tests {
         ];
 
         for (input, fsp, exp) in cases {
-            let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let dur = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
             let res = dur.subsec_micros();
             assert_eq!(exp, res);
+        }
+    }
+
+    #[test]
+    fn test_parse_overflow_as_warning() {
+        let cases: Vec<(&'static [u8], i8, &'static str)> = vec![
+            (b"-1062600704", 0, "-838:59:59"),
+            (b"1062600704", 0, "838:59:59"),
+            // FIXME: some error information lost while converting `Result` to `Option`
+            // (b"4294967295 0:59:59", 0, "838:59:59"),
+        ];
+
+        for (input, fsp, expect) in cases {
+            let mut ctx =
+                EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+            let got = Duration::parse(&mut ctx, input, fsp);
+            assert_eq!(expect, &format!("{}", got.unwrap()));
         }
     }
 
@@ -680,8 +754,10 @@ mod tests {
             (b"-839:00:00", 0, None),
             (b"23:60:59", 0, None),
             (b"54:59:59", 0, Some("54:59:59")),
-            (b"2011-11-11 00:00:01", 0, None),
-            (b"2011-11-11", 0, Some("00:00:00")),
+            (b"2011-11-11 00:00:01", 0, Some("00:00:01")),
+            (b"20111111000001", 0, Some("00:00:01")),
+            (b"201112110102", 0, Some("11:01:02")),
+            (b"2011-11-11", 0, None),
             (b"--23", 0, None),
             (b"232 10", 0, None),
             (b"-232 10", 0, None),
@@ -720,12 +796,11 @@ mod tests {
             (b"1.23 3", 0, None),
             (b"1:62:3", 0, None),
             (b"1:02:63", 0, None),
-            (b"20010101101010", 0, Some("10:10:10")),
             (b"-231342080", 0, None),
         ];
 
         for (input, fsp, expect) in cases {
-            let got = Duration::parse(input, fsp);
+            let got = Duration::parse(&mut EvalContext::default(), input, fsp);
 
             if let Some(expect) = expect {
                 assert_eq!(
@@ -763,7 +838,7 @@ mod tests {
             (b"00:00:00", 6, "000000.000000"),
         ];
         for (s, fsp, expect) in cases {
-            let du = Duration::parse(s, fsp).unwrap();
+            let du = Duration::parse(&mut EvalContext::default(), s, fsp).unwrap();
             let get = du.to_numeric_string();
             assert_eq!(get, expect.to_string());
         }
@@ -790,7 +865,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (input, fsp, exp) in cases {
-            let t = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let t = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
             let dec: Decimal = t.convert(&mut ctx).unwrap();
             let res = format!("{}", dec);
             assert_eq!(exp, res);
@@ -855,7 +930,7 @@ mod tests {
             ("-1 11:59:59.9999", 2, "-36:00:00.00"),
         ];
         for (input, fsp, exp) in cases {
-            let t = Duration::parse(input.as_bytes(), MAX_FSP)
+            let t = Duration::parse(&mut EvalContext::default(), input.as_bytes(), MAX_FSP)
                 .unwrap()
                 .round_frac(fsp)
                 .unwrap();
@@ -877,7 +952,7 @@ mod tests {
             ("-1 11:59:59.9999", 2),
         ];
         for (input, fsp) in cases {
-            let t = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let t = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
             buf.write_duration_to_chunk(t).unwrap();
             let got = buf
@@ -902,24 +977,24 @@ mod tests {
             ("11:30:45.123456", "1 12:30:00", "2 00:00:45.123456"),
         ];
         for (lhs, rhs, exp) in cases.clone() {
-            let lhs = Duration::parse(lhs.as_bytes(), 6).unwrap();
-            let rhs = Duration::parse(rhs.as_bytes(), 6).unwrap();
+            let lhs = Duration::parse(&mut EvalContext::default(), lhs.as_bytes(), 6).unwrap();
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6).unwrap();
             let res = lhs.checked_add(rhs).unwrap();
-            let exp = Duration::parse(exp.as_bytes(), 6).unwrap();
+            let exp = Duration::parse(&mut EvalContext::default(), exp.as_bytes(), 6).unwrap();
             assert_eq!(res, exp);
         }
         for (exp, rhs, lhs) in cases {
-            let lhs = Duration::parse(lhs.as_bytes(), 6).unwrap();
-            let rhs = Duration::parse(rhs.as_bytes(), 6).unwrap();
+            let lhs = Duration::parse(&mut EvalContext::default(), lhs.as_bytes(), 6).unwrap();
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6).unwrap();
             let res = lhs.checked_sub(rhs).unwrap();
-            let exp = Duration::parse(exp.as_bytes(), 6).unwrap();
+            let exp = Duration::parse(&mut EvalContext::default(), exp.as_bytes(), 6).unwrap();
             assert_eq!(res, exp);
         }
 
-        let lhs = Duration::parse(b"00:00:01", 6).unwrap();
+        let lhs = Duration::parse(&mut EvalContext::default(), b"00:00:01", 6).unwrap();
         let rhs = Duration::from_nanos(MAX_TIME_IN_SECS * NANOS_PER_SEC, 6).unwrap();
         assert_eq!(lhs.checked_add(rhs), None);
-        let lhs = Duration::parse(b"-00:00:01", 6).unwrap();
+        let lhs = Duration::parse(&mut EvalContext::default(), b"-00:00:01", 6).unwrap();
         let rhs = Duration::from_nanos(MAX_TIME_IN_SECS * NANOS_PER_SEC, 6).unwrap();
         assert_eq!(lhs.checked_sub(rhs), None);
     }
@@ -932,104 +1007,104 @@ mod tests {
             (
                 8385959,
                 UNSPECIFIED_FSP as i8,
-                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 0).unwrap()),
                 false,
             ),
             (
                 101010,
                 0,
-                Ok(Duration::parse(b"10:10:10", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"10:10:10", 0).unwrap()),
                 false,
             ),
             (
                 101010,
                 5,
-                Ok(Duration::parse(b"10:10:10", 5).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"10:10:10", 5).unwrap()),
                 false,
             ),
             (
                 8385959,
                 0,
-                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 0).unwrap()),
                 false,
             ),
             (
                 8385959,
                 6,
-                Ok(Duration::parse(b"838:59:59", 6).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 6).unwrap()),
                 false,
             ),
             (
                 -101010,
                 0,
-                Ok(Duration::parse(b"-10:10:10", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"-10:10:10", 0).unwrap()),
                 false,
             ),
             (
                 -101010,
                 5,
-                Ok(Duration::parse(b"-10:10:10", 5).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"-10:10:10", 5).unwrap()),
                 false,
             ),
             (
                 -8385959,
                 0,
-                Ok(Duration::parse(b"-838:59:59", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"-838:59:59", 0).unwrap()),
                 false,
             ),
             (
                 -8385959,
                 6,
-                Ok(Duration::parse(b"-838:59:59", 6).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"-838:59:59", 6).unwrap()),
                 false,
             ),
             // will overflow
             (
                 8385960,
                 0,
-                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 0).unwrap()),
                 true,
             ),
             (
                 8385960,
                 1,
-                Ok(Duration::parse(b"838:59:59", 1).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 1).unwrap()),
                 true,
             ),
             (
                 8385960,
                 5,
-                Ok(Duration::parse(b"838:59:59", 5).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 5).unwrap()),
                 true,
             ),
             (
                 8385960,
                 6,
-                Ok(Duration::parse(b"838:59:59", 6).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 6).unwrap()),
                 true,
             ),
             (
                 -8385960,
                 0,
-                Ok(Duration::parse(b"-838:59:59", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"-838:59:59", 0).unwrap()),
                 true,
             ),
             (
                 -8385960,
                 1,
-                Ok(Duration::parse(b"-838:59:59", 1).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"-838:59:59", 1).unwrap()),
                 true,
             ),
             (
                 -8385960,
                 5,
-                Ok(Duration::parse(b"-838:59:59", 5).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"-838:59:59", 5).unwrap()),
                 true,
             ),
             (
                 -8385960,
                 6,
-                Ok(Duration::parse(b"-838:59:59", 6).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), b"-838:59:59", 6).unwrap()),
                 true,
             ),
             // will truncated
@@ -1125,7 +1200,9 @@ mod benches {
         b.iter(|| {
             let cases = test::black_box(&cases);
             for &(s, fsp) in cases {
-                let _ = test::black_box(Duration::parse(s.as_bytes(), fsp).unwrap());
+                let _ = test::black_box(
+                    Duration::parse(&mut EvalContext::default(), s.as_bytes(), fsp).unwrap(),
+                );
             }
         })
     }
@@ -1146,7 +1223,8 @@ mod benches {
 
     #[bench]
     fn bench_to_decimal(b: &mut test::Bencher) {
-        let duration = Duration::parse(b"-12:34:56.123456", 6).unwrap();
+        let duration =
+            Duration::parse(&mut EvalContext::default(), b"-12:34:56.123456", 6).unwrap();
         b.iter(|| {
             let duration = test::black_box(duration);
             let dec: Result<Decimal> = duration.convert(&mut EvalContext::default());
@@ -1156,7 +1234,10 @@ mod benches {
 
     #[bench]
     fn bench_round_frac(b: &mut test::Bencher) {
-        let (duration, fsp) = (Duration::parse(b"12:34:56.789", 3).unwrap(), 2);
+        let (duration, fsp) = (
+            Duration::parse(&mut EvalContext::default(), b"12:34:56.789", 3).unwrap(),
+            2,
+        );
         b.iter(|| {
             let (duration, fsp) = (test::black_box(duration), test::black_box(fsp));
             let _ = test::black_box(duration.round_frac(fsp).unwrap());
@@ -1176,7 +1257,7 @@ mod benches {
             ("1 23:12.1234567", 6),
         ]
         .into_iter()
-        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
+        .map(|(s, fsp)| Duration::parse(&mut EvalContext::default(), s.as_bytes(), fsp).unwrap())
         .collect();
         b.iter(|| {
             let cases = test::black_box(&cases);
@@ -1205,8 +1286,8 @@ mod benches {
         .into_iter()
         .map(|(lhs, rhs)| {
             (
-                Duration::parse(lhs.as_bytes(), MAX_FSP).unwrap(),
-                Duration::parse(rhs.as_bytes(), MAX_FSP).unwrap(),
+                Duration::parse(&mut EvalContext::default(), lhs.as_bytes(), MAX_FSP).unwrap(),
+                Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), MAX_FSP).unwrap(),
             )
         })
         .collect();

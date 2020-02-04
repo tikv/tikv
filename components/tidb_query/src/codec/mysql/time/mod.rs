@@ -2305,7 +2305,7 @@ mod tests {
         let cases = vec!["11:30:45.123456", "-35:30:46"];
         for case in cases {
             let mut ctx = EvalContext::default();
-            let duration = Duration::parse(case.as_bytes(), MAX_FSP)?;
+            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP)?;
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
             let today = actual
@@ -2418,7 +2418,7 @@ mod tests {
         for (lhs, rhs, expected) in normal_cases.clone() {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2426,7 +2426,7 @@ mod tests {
         for (expected, rhs, lhs) in normal_cases {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2443,14 +2443,14 @@ mod tests {
 
         for (lhs, rhs, expected) in dsts.clone() {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
 
         for (expected, rhs, lhs) in dsts {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2467,7 +2467,7 @@ mod tests {
         ];
         for (lhs, rhs, expected) in cases {
             let lhs = Time::parse_datetime(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2475,11 +2475,11 @@ mod tests {
         // Failed cases
         let mut ctx = EvalContext::default();
         let lhs = Time::parse_datetime(&mut ctx, "9999-12-31 23:59:59", 6, false)?;
-        let rhs = Duration::parse(b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
         assert_eq!(lhs.checked_add(&mut ctx, rhs), None);
 
         let lhs = Time::parse_datetime(&mut ctx, "0000-01-01 00:00:01", 6, false)?;
-        let rhs = Duration::parse(b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
         assert_eq!(lhs.checked_sub(&mut ctx, rhs), None);
 
         Ok(())
