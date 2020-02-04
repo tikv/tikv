@@ -19,6 +19,7 @@ use raft::eraftpb::ConfChangeType;
 use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::{CompactionJobInfo, DB};
 use engine::*;
+use engine_rocks::CompactionListener;
 use engine_rocks::RocksEngine;
 use tikv::config::*;
 use tikv::raftstore::store::fsm::RaftRouter;
@@ -26,7 +27,6 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::{lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig};
 use tikv::storage::config::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::storage::kv::CompactionListener;
 use tikv_util::config::*;
 use tikv_util::{escape, HandyRwLock};
 

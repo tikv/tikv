@@ -57,9 +57,9 @@ use crate::raftstore::store::{
     SnapshotDeleter, StoreMsg, StoreTick,
 };
 use crate::raftstore::Result;
-use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
+use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{ConfigClient, PdClient};
 use tikv_util::collections::{HashMap, HashSet};
@@ -2133,7 +2133,7 @@ mod tests {
     use crate::raftstore::coprocessor::CoprocessorHost;
     use crate::raftstore::store::fsm::*;
     use crate::raftstore::store::Transport;
-    use crate::storage::kv::CompactedEvent;
+    use engine_rocks::CompactedEvent;
 
     use batch_system::*;
     use engine::ALL_CFS;
