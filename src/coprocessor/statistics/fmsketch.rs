@@ -138,5 +138,4 @@ mod tests {
         sketch.insert_hash_value(4);
         assert_eq!(sketch.hash_set.len(), max_size);
     }
-
 }

@@ -967,6 +967,7 @@ impl Decimal {
         (buf, word_start_idx, int_len, int_cnt, frac_cnt)
     }
 
+    #[allow(clippy::inherent_to_string_shadow_display)]
     /// `to_string` converts decimal to its printable string representation without rounding.
     fn to_string(&self) -> String {
         let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();

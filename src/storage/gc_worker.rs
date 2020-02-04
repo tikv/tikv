@@ -1228,6 +1228,7 @@ mod tests {
     use futures::Future;
     use kvproto::metapb;
     use std::collections::BTreeMap;
+    use std::f64::EPSILON;
     use std::sync::mpsc::{channel, Receiver, Sender};
 
     struct MockSafePointProvider {
@@ -1749,18 +1750,18 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut gc_worker = GCWorker::new(engine, None, None, GCConfig::default());
         gc_worker.start().unwrap();
-        assert_eq!(gc_worker.limiter.speed_limit(), INFINITY);
+        assert!((gc_worker.limiter.speed_limit() - INFINITY).abs() <= EPSILON);
 
         // Enable io iolimit
         gc_worker.change_io_limit(1024).unwrap();
-        assert_eq!(gc_worker.limiter.speed_limit(), 1024.0);
+        assert!((gc_worker.limiter.speed_limit() - 1024f64).abs() <= EPSILON);
 
         // Change io limit
         gc_worker.change_io_limit(2048).unwrap();
-        assert_eq!(gc_worker.limiter.speed_limit(), 2048.0,);
+        assert!((gc_worker.limiter.speed_limit() - 2048f64).abs() <= EPSILON);
 
         // Disable io limit
         gc_worker.change_io_limit(0).unwrap();
-        assert_eq!(gc_worker.limiter.speed_limit(), INFINITY);
+        assert!((gc_worker.limiter.speed_limit() - INFINITY).abs() <= EPSILON);
     }
 }

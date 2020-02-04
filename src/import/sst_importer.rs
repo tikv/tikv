@@ -22,8 +22,8 @@ use futures_executor::block_on;
 use futures_util::io::{copy, AllowStdIo};
 use tikv_util::time::Limiter;
 
-use super::{Error, Result};
 use super::metrics::*;
+use super::{Error, Result};
 use crate::raftstore::store::keys;
 
 /// SSTImporter manages SST files that are waiting for ingesting.
