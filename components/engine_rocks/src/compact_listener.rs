@@ -2,7 +2,7 @@
 
 use std::cmp;
 
-use crate::raftstore::coprocessor::properties::RangeProperties;
+use crate::properties::RangeProperties;
 use engine::rocks::{CompactionJobInfo, EventListener};
 use tikv_util::collections::hash_set_with_capacity;
 
