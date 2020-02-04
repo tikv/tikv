@@ -24,7 +24,7 @@ pub use self::dispatcher::{
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{
     Callback as RegionInfoCallback, RegionCollector, RegionInfo, RegionInfoAccessor,
-    SeekRegionCallback,
+    RegionInfoProvider, SeekRegionCallback,
 };
 pub use self::split_check::{
     get_region_approximate_keys, get_region_approximate_keys_cf, get_region_approximate_middle,
