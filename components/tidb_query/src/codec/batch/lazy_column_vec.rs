@@ -153,7 +153,7 @@ impl LazyBatchColumnVec {
         for offset in output_offsets {
             let offset = *offset as usize;
             let col = &self.columns[offset];
-            col.encode_chunk(logical_rows, &schema[offset], ctx, output)?;
+            col.encode_chunk(ctx, logical_rows, &schema[offset], output)?;
         }
         Ok(())
     }

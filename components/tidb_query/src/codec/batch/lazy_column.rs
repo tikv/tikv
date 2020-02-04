@@ -234,9 +234,9 @@ impl LazyBatchColumn {
     // FIXME: Use BufferWriter.
     pub fn encode_chunk(
         &self,
+        ctx: &mut EvalContext,
         logical_rows: &[usize],
         field_type: &FieldType,
-        ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
         let column = match self {
