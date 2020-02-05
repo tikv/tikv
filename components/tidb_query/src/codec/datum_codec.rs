@@ -81,24 +81,24 @@ pub trait DatumPayloadDecoder:
     }
 
     #[inline]
-    fn read_datum_payload_date_time_int(
+    fn read_datum_payload_datetime_int(
         &mut self,
         ctx: &mut EvalContext,
         field_type: &FieldType,
     ) -> Result<DateTime> {
         self.read_time_int(ctx, field_type).map_err(|_| {
-            Error::InvalidDataType("Failed to decode datum payload as date time".to_owned())
+            Error::InvalidDataType("Failed to decode datum payload as datetime".to_owned())
         })
     }
 
     #[inline]
-    fn read_datum_payload_date_time_varint(
+    fn read_datum_payload_datetime_varint(
         &mut self,
         ctx: &mut EvalContext,
         field_type: &FieldType,
     ) -> Result<DateTime> {
         self.read_time_varint(ctx, field_type).map_err(|_| {
-            Error::InvalidDataType("Failed to decode datum payload as date time".to_owned())
+            Error::InvalidDataType("Failed to decode datum payload as datetime".to_owned())
         })
     }
 
@@ -425,11 +425,11 @@ pub fn decode_date_time_datum(
         datum::NIL_FLAG => Ok(None),
         // In index, it's flag is `UINT`. See TiDB's `encode()`.
         datum::UINT_FLAG => Ok(Some(
-            raw_datum.read_datum_payload_date_time_int(ctx, field_type)?,
+            raw_datum.read_datum_payload_datetime_int(ctx, field_type)?,
         )),
         // In record, it's flag is `VAR_UINT`. See TiDB's `flatten()` and `encode()`.
         datum::VAR_UINT_FLAG => Ok(Some(
-            raw_datum.read_datum_payload_date_time_varint(ctx, field_type)?,
+            raw_datum.read_datum_payload_datetime_varint(ctx, field_type)?,
         )),
         _ => Err(Error::InvalidDataType(format!(
             "Unsupported datum flag {} for DateTime vector",
