@@ -2612,7 +2612,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.3.13"
-source = "git+https://github.com/YangKeao/pprof-rs?branch=fix_deadlock#6a826adf8137d7ff1a89e942b22d6d06e0297630"
+source = "git+https://github.com/YangKeao/pprof-rs?branch=fix_deadlock#e937a55af5525db6ef210c6b15a93da3614975d6"
 dependencies = [
  "backtrace",
  "inferno",
