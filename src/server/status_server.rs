@@ -412,9 +412,7 @@ impl StatusServer {
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/config") => Self::config_handler(&pd_sender),
-                            (Method::GET, "/debug/pprof/profile") => {
-                                { Self::dump_rsperf_to_resp(req) }
-                            }
+                            (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
                             _ => Box::new(ok(StatusServer::err_response(
                                 StatusCode::NOT_FOUND,
                                 "path not found",
