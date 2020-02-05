@@ -2546,7 +2546,9 @@ impl ApplyFsm {
             self.delegate
                 .handle_raft_committed_entries(ctx, state.pending_entries);
             if let Some(ref mut s) = self.delegate.yield_state {
-                // So the delegate is executing another `CommitMerge` in pending_entries.
+                // So the delegate is expected to yield the CPU.
+                // It can either be executing another `CommitMerge` in pending_msgs
+                // or has been written too much data.
                 s.pending_msgs = state.pending_msgs;
                 return false;
             }
@@ -2556,9 +2558,6 @@ impl ApplyFsm {
             self.handle_tasks(ctx, &mut state.pending_msgs);
         }
 
-        // So the delegate is expected to yield the CPU.
-        // It can either be executing another `CommitMerge` in pending_msgs
-        // or has been written too much data.
         if self.delegate.yield_state.is_some() {
             return false;
         }
