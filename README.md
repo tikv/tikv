@@ -40,6 +40,10 @@ TiKV has the following key features:
 
     Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transactions, support for RDBMS, and NoSQL design patterns.
 
+## Governance
+
+See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
+
 ## Documentation
 
 For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
