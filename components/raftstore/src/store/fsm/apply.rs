@@ -3087,15 +3087,14 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
-    use crate::coprocessor::*;
-    use crate::store::msg::WriteResponse;
-    use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
-    use crate::store::util::{new_learner_peer, new_peer};
-    use engine::rocks::Writable;
+    use crate::raftstore::coprocessor::*;
+    use crate::raftstore::store::msg::WriteResponse;
+    use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
+    use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use engine::Peekable;
-    use engine::{WriteBatch, DB};
-    use engine_rocks::RocksEngine;
-    use engine_traits::Peekable as PeekableTrait;
+    use engine::DB;
+    use engine_rocks::{RocksEngine, Compat};
+    use engine_traits::{Peekable as PeekableTrait, WriteBatch};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -3146,11 +3145,13 @@ mod tests {
 
     #[test]
     fn test_should_write_to_engine() {
+        let (_path, engines) = create_tmp_engine("test-delegate");
+
         // ComputeHash command
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        let wb = WriteBatch::default();
+        let wb = engines.kv.c().write_batch();
         assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // IngestSst command
@@ -3159,12 +3160,12 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        let wb = WriteBatch::default();
+        let wb = engines.kv.c().write_batch();
         assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let wb = WriteBatch::default();
+        let wb = engines.kv.c().write_batch();
         for i in 0..WRITE_BATCH_MAX_KEYS {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -3173,7 +3174,7 @@ mod tests {
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let wb = WriteBatch::default();
+        let wb = engines.kv.c().write_batch();
         for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
