@@ -459,7 +459,7 @@ fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
     {
         row.r#type = ty.into();
     }
-    #[cfg(feature = "protobuf-codec")]
+    #[cfg(not(feature = "prost-codec"))]
     {
         row.r_type = ty;
     }

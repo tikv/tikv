@@ -32,6 +32,7 @@ test_raftstore = { path = "../test_raftstore" }
 tempfile = "3.0"
 
 [features]
+default = ["protobuf-codec"]
 prost-codec = ["tikv/prost-codec"]
 protobuf-codec = ["tikv/protobuf-codec"]
 tcmalloc = ["tikv/tcmalloc"]
