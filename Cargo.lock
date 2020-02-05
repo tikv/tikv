@@ -98,13 +98,12 @@ checksum = "cff77d8686867eceff3105329d4698d96c2391c176d5d03adc90c7389162b5b8"
 
 [[package]]
 name = "arrow"
-version = "0.11.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c665b9e2dfb1e4c7670f33548781aa22d04c409bcbe898fbdd409b818cae6ee"
+checksum = "398bc55d60097e7b7e9be67d1cb03cb41e5bf4901381607ba0fca8b1328584d6"
 dependencies = [
  "bytes 0.4.12",
  "libc",
- "rand 0.5.6",
  "serde_json",
 ]
 
@@ -2611,8 +2610,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.3.13"
-source = "git+https://github.com/YangKeao/pprof-rs?branch=fix_deadlock#e937a55af5525db6ef210c6b15a93da3614975d6"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f66212a6eb222593ebe39ed8f6ccb6f216bf529b4badbfe26f7c305ed9d9da5f"
 dependencies = [
  "backtrace",
  "inferno",
@@ -2998,19 +2998,6 @@ version = "0.6.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8892d0cb5e5f3b7d213ab9c7de44217d52b2751982654c69cdfbfa393940a42a"
 replace = "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
-
-[[package]]
-name = "rand"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c618c47cd3ebd209790115ab837de41425723956ad3ce2e6a7f09890947cacb9"
-dependencies = [
- "cloudabi",
- "fuchsia-cprng",
- "libc",
- "rand_core 0.3.1",
- "winapi 0.3.8",
-]
 
 [[package]]
 name = "rand"

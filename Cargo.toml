@@ -157,7 +157,7 @@ zipf = "5.0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
-pprof = { git = "https://github.com/YangKeao/pprof-rs", branch="fix_deadlock", features = ["flamegraph", "protobuf"] }
+pprof = { version = "^0.3.14" , features = ["flamegraph", "protobuf"] }
 
 [workspace]
 members = [
