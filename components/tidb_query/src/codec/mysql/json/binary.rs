@@ -215,6 +215,15 @@ pub trait JsonEncoder: NumberEncoder {
 
 impl<T: BufferWriter> JsonEncoder for T {}
 
+pub trait JsonDatumPayloadChunkEncoder: BufferWriter {
+    fn write_json_to_chunk_by_datum_payload(&mut self, src_payload: &[u8]) -> Result<()> {
+        self.write_bytes(src_payload)?;
+        Ok(())
+    }
+}
+
+impl<T: BufferWriter> JsonDatumPayloadChunkEncoder for T {}
+
 pub trait JsonDecoder: NumberDecoder {
     // `read_json` decodes value encoded by `write_json` before.
     fn read_json(&mut self) -> Result<Json> {
