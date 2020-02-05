@@ -781,7 +781,7 @@ impl Column {
     #[inline]
     pub fn append_json(&mut self, j: &Json) -> Result<()> {
         self.data.write_json(j.as_ref())?;
-        self.finished_append_var()
+        self.finished_append_var();
         Ok(())
     }
 

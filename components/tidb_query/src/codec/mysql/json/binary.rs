@@ -112,8 +112,6 @@ impl<'a> JsonRef<'a> {
     }
 }
 
-impl<T: BufferReader> JsonDecoder for T {}
-
 #[cfg(test)]
 mod tests {
     use super::super::Json;

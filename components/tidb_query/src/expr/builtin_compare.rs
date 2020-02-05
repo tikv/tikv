@@ -530,17 +530,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         let dec = "1.1".parse::<Decimal>().unwrap();
         let s = "你好".as_bytes().to_owned();
-<<<<<<< HEAD
         let dur = Duration::parse(&mut ctx, b"01:00:00", 0).unwrap();
-        let json = Json::I64(12);
-=======
-        let dur = Duration::parse(b"01:00:00", 0).unwrap();
-<<<<<<< HEAD
-        let json = Json::from_i64(12);
->>>>>>> initial commit
-=======
         let json = Json::from_i64(12).unwrap();
->>>>>>> remove most unwrap
         let t = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:39", 0, true).unwrap();
         let cases = vec![
             (ScalarFuncSig::CoalesceInt, vec![Datum::Null], Datum::Null),
