@@ -36,10 +36,12 @@ pub use self::peer_storage::{
     PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,
 };
-pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
+pub use self::region_snapshot::{new_temp_engine, RegionIterator, RegionSnapshot};
 pub use self::snap::{
-    check_abort, copy_snapshot, ApplyOptions, Error as SnapError, GenericSnapshot, SnapEntry,
-    SnapKey, SnapManager, SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
+    check_abort, copy_snapshot,
+    snap_io::{apply_sst_cf_file, build_sst_cf_file},
+    ApplyOptions, Error as SnapError, GenericSnapshot, SnapEntry, SnapKey, SnapManager,
+    SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::worker::PdTask;
