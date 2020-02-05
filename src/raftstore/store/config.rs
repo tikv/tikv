@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use std::u64;
@@ -8,8 +7,17 @@ use time::Duration as TimeDuration;
 
 use crate::config::ConfigManager;
 use crate::raftstore::{coprocessor, Result};
-use configuration::{ConfigChange, Configuration};
+use configuration::{ConfigChange, ConfigValue, Configuration};
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+
+lazy_static! {
+    pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
+        "tikv_config_raftstore",
+        "Config information of raftstore",
+        &["name"]
+    )
+    .unwrap();
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
@@ -28,19 +36,19 @@ pub struct Config {
     pub capacity: ReadableSize,
 
     // raft_base_tick_interval is a base tick interval (ms).
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_base_tick_interval: ReadableDuration,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_heartbeat_ticks: usize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_election_timeout_ticks: usize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_min_election_timeout_ticks: usize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_max_election_timeout_ticks: usize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_max_size_per_msg: ReadableSize,
-    #[config(skip)]
+    #[config(hidden)]
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
@@ -67,7 +75,7 @@ pub struct Config {
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
     // delay time before deleting a stale peer
-    #[config(skip)]
+    #[config(hidden)]
     pub clean_stale_peer_delay: ReadableDuration,
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
@@ -100,6 +108,7 @@ pub struct Config {
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
 
+    #[config(hidden)]
     pub leader_transfer_max_log_lag: u64,
 
     #[config(skip)]
@@ -108,22 +117,25 @@ pub struct Config {
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_interval: ReadableDuration,
 
+    #[config(hidden)]
     pub report_region_flow_interval: ReadableDuration,
 
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: ReadableDuration,
 
     // Right region derive origin region id when split.
+    #[config(hidden)]
     pub right_derive_when_split: bool,
 
     pub allow_remove_leader: bool,
 
     /// Max log gap allowed to propose merge.
+    #[config(hidden)]
     pub merge_max_log_gap: u64,
     /// Interval to re-propose merge.
     pub merge_check_tick_interval: ReadableDuration,
 
-    #[config(skip)]
+    #[config(hidden)]
     pub use_delete_range: bool,
 
     pub cleanup_import_sst_interval: ReadableDuration,
@@ -142,6 +154,7 @@ pub struct Config {
     pub store_pool_size: usize,
     #[config(skip)]
     pub future_poll_size: usize,
+    #[config(hidden)]
     pub hibernate_regions: bool,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
@@ -375,188 +388,211 @@ impl Config {
     }
 
     pub fn write_into_metrics(&self) {
-        let metrics = register_gauge_vec!(
-            "tikv_config_raftstore",
-            "Config information of raftstore",
-            &["name"]
-        )
-        .unwrap();
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["sync_log"])
             .set((self.sync_log as i32).into());
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["prevote"])
             .set((self.prevote as i32).into());
 
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["capacity"])
             .set(self.capacity.0 as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_base_tick_interval"])
             .set(self.raft_base_tick_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_heartbeat_ticks"])
             .set(self.raft_heartbeat_ticks as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_election_timeout_ticks"])
             .set(self.raft_election_timeout_ticks as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_min_election_timeout_ticks"])
             .set(self.raft_min_election_timeout_ticks as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_max_election_timeout_ticks"])
             .set(self.raft_max_election_timeout_ticks as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_max_size_per_msg"])
             .set(self.raft_max_size_per_msg.0 as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_max_inflight_msgs"])
             .set(self.raft_max_inflight_msgs as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_entry_max_size"])
             .set(self.raft_entry_max_size.0 as f64);
 
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_tick_interval"])
             .set(self.raft_log_gc_tick_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_threshold"])
             .set(self.raft_log_gc_threshold as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_count_limit"])
             .set(self.raft_log_gc_count_limit as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_size_limit"])
             .set(self.raft_log_gc_size_limit.0 as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_entry_cache_life_time"])
             .set(self.raft_entry_cache_life_time.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_reject_transfer_leader_duration"])
             .set(self.raft_reject_transfer_leader_duration.as_secs() as f64);
 
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["split_region_check_tick_interval"])
             .set(self.split_region_check_tick_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_split_check_diff"])
             .set(self.region_split_check_diff.0 as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_check_interval"])
             .set(self.region_compact_check_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["clean_stale_peer_delay"])
             .set(self.clean_stale_peer_delay.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_check_step"])
             .set(self.region_compact_check_step as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_min_tombstones"])
             .set(self.region_compact_min_tombstones as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_tombstones_percent"])
             .set(self.region_compact_tombstones_percent as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
             .set(self.pd_heartbeat_tick_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_store_heartbeat_tick_interval"])
             .set(self.pd_store_heartbeat_tick_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_mgr_gc_tick_interval"])
             .set(self.snap_mgr_gc_tick_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_gc_timeout"])
             .set(self.snap_gc_timeout.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["lock_cf_compact_interval"])
             .set(self.lock_cf_compact_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["lock_cf_compact_bytes_threshold"])
             .set(self.lock_cf_compact_bytes_threshold.0 as f64);
 
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["notify_capacity"])
             .set(self.notify_capacity as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["messages_per_tick"])
             .set(self.messages_per_tick as f64);
 
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_peer_down_duration"])
             .set(self.max_peer_down_duration.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_leader_missing_duration"])
             .set(self.max_leader_missing_duration.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["abnormal_leader_missing_duration"])
             .set(self.abnormal_leader_missing_duration.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["peer_stale_state_check_interval"])
             .set(self.peer_stale_state_check_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["leader_transfer_max_log_lag"])
             .set(self.leader_transfer_max_log_lag as f64);
 
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_apply_batch_size"])
             .set(self.snap_apply_batch_size.0 as f64);
 
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["consistency_check_interval_seconds"])
             .set(self.consistency_check_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["report_region_flow_interval"])
             .set(self.report_region_flow_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_store_max_leader_lease"])
             .set(self.raft_store_max_leader_lease.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["right_derive_when_split"])
             .set((self.right_derive_when_split as i32).into());
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["allow_remove_leader"])
             .set((self.allow_remove_leader as i32).into());
 
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["merge_max_log_gap"])
             .set(self.merge_max_log_gap as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["merge_check_tick_interval"])
             .set(self.merge_check_tick_interval.as_secs() as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["use_delete_range"])
             .set((self.use_delete_range as i32).into());
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cleanup_import_sst_interval"])
             .set(self.cleanup_import_sst_interval.as_secs() as f64);
 
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["local_read_batch_size"])
             .set(self.local_read_batch_size as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_max_batch_size"])
             .set(self.apply_max_batch_size as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_pool_size"])
             .set(self.apply_pool_size as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_max_batch_size"])
             .set(self.store_max_batch_size as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_pool_size"])
             .set(self.store_pool_size as f64);
-        metrics
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
+    }
+
+    fn write_change_into_metrics(change: ConfigChange) {
+        for (name, value) in change {
+            if let Ok(v) = match value {
+                ConfigValue::F64(v) => Ok(v),
+                ConfigValue::U64(v) => Ok(v as f64),
+                ConfigValue::Size(v) => Ok(v as f64),
+                ConfigValue::Usize(v) => Ok(v as f64),
+                ConfigValue::Bool(v) => Ok((v as i32).into()),
+                ConfigValue::Duration(v) => Ok((v / 1000) as f64), // millis -> secs
+                _ => Err(()),
+            } {
+                CONFIG_RAFTSTORE_GAUGE
+                    .with_label_values(&[name.as_str()])
+                    .set(v);
+            }
+        }
     }
 }
 
 pub type RaftstoreConfigManager = Arc<VersionTrack<Config>>;
 
 impl ConfigManager for RaftstoreConfigManager {
-    fn dispatch(&mut self, change: ConfigChange) -> std::result::Result<(), Box<dyn Error>> {
-        self.update(move |cfg: &mut Config| cfg.update(change));
+    fn dispatch(
+        &mut self,
+        change: ConfigChange,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        {
+            let change = change.clone();
+            self.update(move |cfg: &mut Config| cfg.update(change));
+        }
+        info!(
+            "raftstore config changed";
+            "change" => ?change,
+        );
+        Config::write_change_into_metrics(change);
         Ok(())
     }
 }

@@ -8,10 +8,9 @@ use std::time::Duration;
 
 use super::metrics::*;
 use super::{
-    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
-    RoleObserver,
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, Result, RoleObserver,
 };
-use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
@@ -149,9 +148,9 @@ fn register_region_event_listener(
     let listener = RegionEventListener { scheduler };
 
     host.registry
-        .register_role_observer(1, Box::new(listener.clone()));
+        .register_role_observer(1, BoxRoleObserver::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, Box::new(listener));
+        .register_region_change_observer(1, BoxRegionChangeObserver::new(listener));
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the
@@ -496,8 +495,24 @@ impl RegionInfoAccessor {
     }
 }
 
+pub trait RegionInfoProvider: Send + Clone + 'static {
+    /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
+    /// the callback to process the result.
+    fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn find_region_by_id(
+        &self,
+        _reigon_id: u64,
+        _callback: Callback<Option<RegionInfo>>,
+    ) -> Result<()> {
+        unimplemented!()
+    }
+}
+
 impl RegionInfoProvider for RegionInfoAccessor {
-    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
         let msg = RegionInfoQuery::SeekRegion {
             from: from.to_vec(),
             callback,
@@ -511,7 +526,7 @@ impl RegionInfoProvider for RegionInfoAccessor {
         &self,
         region_id: u64,
         callback: Callback<Option<RegionInfo>>,
-    ) -> EngineResult<()> {
+    ) -> Result<()> {
         let msg = RegionInfoQuery::FindRegionById {
             region_id,
             callback,

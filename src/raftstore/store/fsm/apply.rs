@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -11,6 +12,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
+use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::Writable;
@@ -51,7 +53,6 @@ use tikv_util::Either;
 use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
-use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 
 use super::super::RegionTask;
 
@@ -141,6 +142,7 @@ impl PendingCmdQueue {
 
 #[derive(Default, Debug)]
 pub struct ChangePeer {
+    pub index: u64,
     pub conf_change: ConfChange,
     pub peer: PeerMeta,
     pub region: Region,
@@ -278,7 +280,7 @@ impl Notifier {
 struct ApplyContext {
     tag: String,
     timer: Option<SlowTimer>,
-    host: Arc<CoprocessorHost>,
+    host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
@@ -306,11 +308,11 @@ struct ApplyContext {
 impl ApplyContext {
     pub fn new(
         tag: String,
-        host: Arc<CoprocessorHost>,
+        host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
-        router: BatchRouter<ApplyFsm, ControlFsm>,
+        router: ApplyRouter,
         notifier: Notifier,
         cfg: &Config,
     ) -> ApplyContext {
@@ -1377,6 +1379,11 @@ impl ApplyDelegate {
             |_| panic!("should not use return")
         );
         fail_point!(
+            "apply_on_conf_change_3_1",
+            self.id == 3 && self.region_id() == 1,
+            |_| panic!("should not use return")
+        );
+        fail_point!(
             "apply_on_conf_change_all_1",
             self.region_id() == 1,
             |_| panic!("should not use return")
@@ -1550,6 +1557,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
+                index: ctx.exec_ctx.as_ref().unwrap().index,
                 conf_change: Default::default(),
                 peer: peer.clone(),
                 region,
@@ -2748,7 +2756,6 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
-                CmpOrdering::Equal => {}
                 CmpOrdering::Greater => {
                     self.msg_buf.reserve(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
@@ -2757,6 +2764,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                     self.msg_buf.shrink_to(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
+                _ => {}
             }
             self.apply_ctx.enable_sync_log = incoming.sync_log;
         }
@@ -2814,7 +2822,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
 pub struct Builder {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
-    coprocessor_host: Arc<CoprocessorHost>,
+    coprocessor_host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     engines: Engines,
@@ -2864,7 +2872,24 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
     }
 }
 
-pub type ApplyRouter = BatchRouter<ApplyFsm, ControlFsm>;
+#[derive(Clone)]
+pub struct ApplyRouter {
+    pub router: BatchRouter<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyRouter {
+    type Target = BatchRouter<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchRouter<ApplyFsm, ControlFsm> {
+        &self.router
+    }
+}
+
+impl DerefMut for ApplyRouter {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm, ControlFsm> {
+        &mut self.router
+    }
+}
 
 impl ApplyRouter {
     pub fn schedule_task(&self, region_id: u64, msg: Msg) {
@@ -2921,7 +2946,23 @@ impl ApplyRouter {
     }
 }
 
-pub type ApplyBatchSystem = BatchSystem<ApplyFsm, ControlFsm>;
+pub struct ApplyBatchSystem {
+    system: BatchSystem<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyBatchSystem {
+    type Target = BatchSystem<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchSystem<ApplyFsm, ControlFsm> {
+        &self.system
+    }
+}
+
+impl DerefMut for ApplyBatchSystem {
+    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm, ControlFsm> {
+        &mut self.system
+    }
+}
 
 impl ApplyBatchSystem {
     pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
@@ -2936,12 +2977,13 @@ impl ApplyBatchSystem {
 
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
-    super::batch::create_system(
+    let (router, system) = batch_system::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
         tx,
         Box::new(ControlFsm),
-    )
+    );
+    (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
 #[cfg(test)]
@@ -3102,7 +3144,6 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
         let (_tmp, engines) = create_tmp_engine("apply-basic");
-        let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
@@ -3110,7 +3151,7 @@ mod tests {
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
-            coprocessor_host: host,
+            coprocessor_host: CoprocessorHost::default(),
             importer,
             region_scheduler,
             sender,
@@ -3442,10 +3483,10 @@ mod tests {
     fn test_handle_raft_committed_entries() {
         let (_path, engines) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
-        let mut host = CoprocessorHost::default();
         let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::default();
         host.registry
-            .register_query_observer(1, Box::new(obs.clone()));
+            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -3457,7 +3498,7 @@ mod tests {
             cfg,
             sender,
             region_scheduler,
-            coprocessor_host: Arc::new(host),
+            coprocessor_host: host,
             importer: importer.clone(),
             engines: engines.clone(),
             router: router.clone(),
@@ -3789,7 +3830,6 @@ mod tests {
         reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
-        let host = Arc::new(CoprocessorHost::default());
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
@@ -3799,7 +3839,7 @@ mod tests {
             sender,
             importer,
             region_scheduler,
-            coprocessor_host: host,
+            coprocessor_host: CoprocessorHost::default(),
             engines: engines.clone(),
             router: router.clone(),
         };
