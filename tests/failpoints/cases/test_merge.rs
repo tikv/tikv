@@ -140,7 +140,7 @@ fn test_node_merge_restart() {
     cluster.start().unwrap();
 
     // Wait till merge is finished.
-    pd_client.check_merged_timeout(left.get_id(), 5);
+    pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));
 
     cluster.must_put(b"k4", b"v4");
 
@@ -703,7 +703,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     // Now schedule merge
     fail::remove(schedule_merge_fp);
 
-    pd_client.check_merged_timeout(left.get_id(), 2);
+    pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));
 
     cluster.must_put(b"k123", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k123", b"v2");
@@ -847,7 +847,7 @@ fn test_node_merge_transfer_leader() {
         .unwrap();
     fail::remove(schedule_merge_fp);
 
-    pd_client.check_merged_timeout(left.get_id(), 2);
+    pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));
 
     fail::remove(before_handle_raft_ready_1003);
     sleep_ms(100);
