@@ -372,7 +372,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                             data.reserve(result.physical_columns.maximum_encoded_size_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
-                            )?);
+                            ));
                             result.physical_columns.encode_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -384,10 +384,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         _ => {
                             // For the default or unsupported encode type, use datum format.
                             self.encode_type = EncodeType::TypeDefault;
-                            data.reserve(result.physical_columns.maximum_encoded_size(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                            )?);
+                            data.reserve(
+                                result.physical_columns.maximum_encoded_size(
+                                    &result.logical_rows,
+                                    &self.output_offsets,
+                                ),
+                            );
                             result.physical_columns.encode(
                                 &result.logical_rows,
                                 &self.output_offsets,

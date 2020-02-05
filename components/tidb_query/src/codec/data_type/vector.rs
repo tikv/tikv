@@ -158,14 +158,14 @@ impl VectorValue {
     }
 
     /// Returns maximum encoded size in binary format.
-    pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> Result<usize> {
+    pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> usize {
         match self {
-            VectorValue::Int(_) => Ok(logical_rows.len() * 9),
+            VectorValue::Int(_) => logical_rows.len() * 9,
 
             // Some elements might be NULLs which encoded size is 1 byte. However it's fine because
             // this function only calculates a maximum encoded size (for constructing buffers), not
             // actual encoded size.
-            VectorValue::Real(_) => Ok(logical_rows.len() * 9),
+            VectorValue::Real(_) => logical_rows.len() * 9,
             VectorValue::Decimal(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
@@ -181,7 +181,7 @@ impl VectorValue {
                         }
                     }
                 }
-                Ok(size)
+                size
             }
             VectorValue::Bytes(vec) => {
                 let mut size = 0;
@@ -196,10 +196,10 @@ impl VectorValue {
                         }
                     }
                 }
-                Ok(size)
+                size
             }
-            VectorValue::DateTime(_) => Ok(logical_rows.len() * 9),
-            VectorValue::Duration(_) => Ok(logical_rows.len() * 9),
+            VectorValue::DateTime(_) => logical_rows.len() * 9,
+            VectorValue::Duration(_) => logical_rows.len() * 9,
             VectorValue::Json(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
@@ -213,19 +213,19 @@ impl VectorValue {
                         }
                     }
                 }
-                Ok(size)
+                size
             }
         }
     }
 
     /// Returns maximum encoded size in chunk format.
-    pub fn maximum_encoded_size_chunk(&self, logical_rows: &[usize]) -> Result<usize> {
+    pub fn maximum_encoded_size_chunk(&self, logical_rows: &[usize]) -> usize {
         match self {
-            VectorValue::Int(_) => Ok(logical_rows.len() * 9 + 10),
-            VectorValue::Real(_) => Ok(logical_rows.len() * 9 + 10),
-            VectorValue::Decimal(_) => Ok(logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1) + 10),
-            VectorValue::DateTime(_) => Ok(logical_rows.len() * 21 + 10),
-            VectorValue::Duration(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Int(_) => logical_rows.len() * 9 + 10,
+            VectorValue::Real(_) => logical_rows.len() * 9 + 10,
+            VectorValue::Decimal(_) => logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1) + 10,
+            VectorValue::DateTime(_) => logical_rows.len() * 21 + 10,
+            VectorValue::Duration(_) => logical_rows.len() * 9 + 10,
             VectorValue::Bytes(vec) => {
                 let mut size = logical_rows.len() + 10;
                 for idx in logical_rows {
@@ -239,7 +239,7 @@ impl VectorValue {
                         }
                     }
                 }
-                Ok(size)
+                size
             }
             VectorValue::Json(vec) => {
                 let mut size = logical_rows.len() + 10;
@@ -254,7 +254,7 @@ impl VectorValue {
                         }
                     }
                 }
-                Ok(size)
+                size
             }
         }
     }

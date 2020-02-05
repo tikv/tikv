@@ -4,6 +4,8 @@ use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 
 use codec::prelude::*;
+use tidb_query_datatype::FieldTypeAccessor;
+use tipb::FieldType;
 
 use super::{check_fsp, Decimal, DEFAULT_FSP};
 use crate::codec::convert::ConvertTo;
@@ -576,18 +578,21 @@ impl PartialEq for Duration {
 impl Eq for Duration {}
 
 impl PartialOrd for Duration {
+    #[inline]
     fn partial_cmp(&self, rhs: &Duration) -> Option<Ordering> {
         self.nanos.partial_cmp(&rhs.nanos)
     }
 }
 
 impl Ord for Duration {
+    #[inline]
     fn cmp(&self, rhs: &Duration) -> Ordering {
         self.partial_cmp(rhs).unwrap()
     }
 }
 
 impl std::hash::Hash for Duration {
+    #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.nanos.hash(state)
     }
@@ -596,26 +601,51 @@ impl std::hash::Hash for Duration {
 impl<T: BufferWriter> DurationEncoder for T {}
 
 pub trait DurationEncoder: NumberEncoder {
-    fn write_duration(&mut self, val: Duration) -> Result<()> {
-        self.write_i64(val.to_nanos())?;
-        self.write_i64(val.fsp as i64)?;
-        Ok(())
-    }
-
+    #[inline]
     fn write_duration_to_chunk(&mut self, val: Duration) -> Result<()> {
         self.write_i64_le(val.to_nanos())?;
         Ok(())
     }
 }
 
-pub trait DurationDecoder: NumberDecoder {
-    /// `read_duration` decodes duration encoded by `write_duration`.
-    fn read_duration(&mut self) -> Result<Duration> {
-        let nanos = self.read_i64()?;
-        let fsp = self.read_i64()?;
-        Duration::from_nanos(nanos, fsp as i8)
+pub trait DurationDatumPayloadChunkEncoder: NumberEncoder {
+    #[inline]
+    fn write_duration_to_chunk_by_datum_payload_int(
+        &mut self,
+        mut src_payload: &[u8],
+    ) -> Result<()> {
+        let nanos = src_payload.read_i64()?;
+        self.write_i64_le(nanos)?;
+        Ok(())
     }
 
+    #[inline]
+    fn write_duration_to_chunk_by_datum_payload_varint(
+        &mut self,
+        mut src_payload: &[u8],
+    ) -> Result<()> {
+        let nanos = src_payload.read_var_i64()?;
+        self.write_i64_le(nanos)?;
+        Ok(())
+    }
+}
+
+impl<T: BufferWriter> DurationDatumPayloadChunkEncoder for T {}
+
+pub trait DurationDecoder: NumberDecoder {
+    #[inline]
+    fn read_duration_int(&mut self, field_type: &FieldType) -> Result<Duration> {
+        let nanos = self.read_i64()?;
+        Duration::from_nanos(nanos, field_type.as_accessor().decimal() as i8)
+    }
+
+    #[inline]
+    fn read_duration_varint(&mut self, field_type: &FieldType) -> Result<Duration> {
+        let nanos = self.read_var_i64()?;
+        Duration::from_nanos(nanos, field_type.as_accessor().decimal() as i8)
+    }
+
+    #[inline]
     fn read_duration_from_chunk(&mut self, fsp: isize) -> Result<Duration> {
         let nanos = self.read_i64_le()?;
         Duration::from_nanos(nanos, fsp as i8)
