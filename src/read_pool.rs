@@ -2,14 +2,17 @@ use futures::sync::oneshot;
 use futures::{future, Future};
 use futures03::prelude::*;
 use kvproto::kvrpcpb::CommandPri;
+use std::cell::Cell;
 use std::future::Future as StdFuture;
+use std::time::Duration;
 use tikv_util::future_pool::{self, FuturePool};
+use tikv_util::time::Instant;
 use yatp::pool::{Local, Runner};
 use yatp::queue::Extras;
 use yatp::task::future::{Runner as FutureRunner, TaskCell};
 use yatp::Remote;
 
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine};
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 
 #[derive(Clone)]
 pub enum ReadPool {
@@ -81,12 +84,13 @@ impl ReadPool {
 }
 
 #[derive(Clone)]
-pub struct ReadPoolRunner<E: Engine> {
+pub struct ReadPoolRunner<E: Engine, R: FlowStatsReporter> {
     engine: Option<E>,
+    reporter: R,
     inner: FutureRunner,
 }
 
-impl<E: Engine> Runner for ReadPoolRunner<E> {
+impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
     type TaskCell = TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
@@ -95,7 +99,11 @@ impl<E: Engine> Runner for ReadPoolRunner<E> {
     }
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
-        self.inner.handle(local, task_cell)
+        let finished = self.inner.handle(local, task_cell);
+        if finished {
+            self.maybe_flush_metrics();
+        }
+        finished
     }
 
     fn pause(&mut self, local: &mut Local<Self::TaskCell>) -> bool {
@@ -112,12 +120,32 @@ impl<E: Engine> Runner for ReadPoolRunner<E> {
     }
 }
 
-impl<E: Engine> ReadPoolRunner<E> {
-    pub fn new(engine: E, inner: FutureRunner) -> Self {
+impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
+    pub fn new(engine: E, inner: FutureRunner, reporter: R) -> Self {
         ReadPoolRunner {
             engine: Some(engine),
+            reporter,
             inner,
         }
+    }
+
+    fn maybe_flush_metrics(&self) {
+        const TICK_INTERVAL: Duration = Duration::from_secs(1);
+
+        thread_local! {
+            static THREAD_LAST_TICK_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
+        }
+
+        THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
+            let now = Instant::now_coarse();
+            let last_tick = tls_last_tick.get();
+            if now.duration_since(last_tick) < TICK_INTERVAL {
+                return;
+            }
+            tls_last_tick.set(now);
+            crate::storage::metrics::tls_flush(&self.reporter);
+            crate::coprocessor::metrics::tls_flush(&self.reporter);
+        })
     }
 }
 

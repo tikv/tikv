@@ -394,13 +394,21 @@ impl TiKVServer {
         let pd_sender = pd_worker.scheduler();
 
         let unified_read_pool = if self.config.readpool.unify_read_pool {
+            prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone()))
+                .unwrap();
+            prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone()))
+                .unwrap();
             let unified_read_pool_cfg = &self.config.readpool.unified;
             let mut builder = yatp::Builder::new("unified-read-pool");
             builder
                 .min_thread_count(unified_read_pool_cfg.min_thread_count)
                 .max_thread_count(unified_read_pool_cfg.max_thread_count);
             let multilevel_builder = multilevel::Builder::new(Default::default());
-            let read_pool_runner = ReadPoolRunner::new(engines.engine.clone(), Default::default());
+            let read_pool_runner = ReadPoolRunner::new(
+                engines.engine.clone(),
+                Default::default(),
+                pd_sender.clone(),
+            );
             let runner_builder =
                 multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
             Some(builder.build_with_queue_and_runner(
@@ -414,12 +422,12 @@ impl TiKVServer {
         let storage_read_pool = if self.config.readpool.unify_read_pool {
             ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
         } else {
-            let cop_read_pools = storage::build_read_pool(
+            let storage_read_pools = storage::build_read_pool(
                 &self.config.readpool.storage,
                 pd_sender.clone(),
                 engines.engine.clone(),
             );
-            ReadPool::from(cop_read_pools)
+            ReadPool::from(storage_read_pools)
         };
 
         let storage = create_raft_storage(
