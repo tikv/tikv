@@ -274,7 +274,7 @@ impl StatusServer {
         frequency: i32,
     ) -> Box<dyn Future<Item = pprof::Report, Error = pprof::Error> + Send> {
         match pprof::ProfilerGuard::new(frequency) {
-            Ok(mut guard) => {
+            Ok(guard) => {
                 info!(
                     "start profiling {} seconds with frequency {} /s",
                     seconds, frequency
@@ -397,7 +397,7 @@ impl StatusServer {
         let pd_sender = self.pd_sender.clone();
 
         std::thread::spawn(|| {
-            let mut guard = pprof::ProfilerGuard::new(100).unwrap();
+            let guard = pprof::ProfilerGuard::new(100).unwrap();
 
             loop {
                 if let Ok(report) = guard.report().build() {
