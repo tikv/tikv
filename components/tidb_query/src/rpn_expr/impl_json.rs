@@ -219,7 +219,7 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
         Some(j) => j.to_owned(),
     };
     Ok(match parse_json_path_list(&args[1..])? {
-        Some(path_expr_list) => j.json_length(&path_expr_list)?,
+        Some(path_expr_list) => j.as_ref().json_length(&path_expr_list)?,
         None => None,
     })
 }

@@ -2,12 +2,12 @@
 
 use super::super::Result;
 use super::path_expr::PathExpression;
-use super::{Json, JsonType};
+use super::{JsonRef, JsonType};
 
-impl Json {
+impl<'a> JsonRef<'a> {
     fn len(&self) -> Option<i64> {
-        match self.as_ref().get_type() {
-            JsonType::Array | JsonType::Object => Some(self.as_ref().get_elem_count() as i64),
+        match self.get_type() {
+            JsonType::Array | JsonType::Object => Some(self.get_elem_count() as i64),
             _ => Some(1),
         }
     }
@@ -21,14 +21,14 @@ impl Json {
         if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
             return Ok(None);
         }
-        Ok(self.as_ref().extract(path_expr_list)?.and_then(|j| j.len()))
+        Ok(self.extract(path_expr_list)?.and_then(|j| j.as_ref().len()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::path_expr::parse_json_path_expr;
-    use super::*;
+    use super::super::Json;
     #[test]
     fn test_json_length() {
         let mut test_cases = vec![
@@ -76,7 +76,7 @@ mod tests {
                 Some(p) => vec![parse_json_path_expr(p).unwrap()],
                 None => vec![],
             };
-            let got = j.json_length(&exprs[..]).unwrap();
+            let got = j.as_ref().json_length(&exprs[..]).unwrap();
             assert_eq!(
                 got, expected,
                 "#{} expect {:?}, but got {:?}",

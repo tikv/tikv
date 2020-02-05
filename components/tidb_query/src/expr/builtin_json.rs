@@ -94,7 +94,7 @@ impl ScalarFunc {
             Some(list) => list,
             None => return Ok(None),
         };
-        j.json_length(&path_exprs)
+        j.as_ref().as_ref().json_length(&path_exprs)
     }
 
     #[inline]
