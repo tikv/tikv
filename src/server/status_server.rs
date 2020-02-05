@@ -10,7 +10,7 @@ use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 #[cfg(target_os = "linux")]
 use pprof;
 #[cfg(target_os = "linux")]
-use prost::Message;
+use pprof::protos::Message;
 #[cfg(target_os = "linux")]
 use regex::Regex;
 use std::sync::Arc;
@@ -274,7 +274,7 @@ impl StatusServer {
         frequency: i32,
     ) -> Box<dyn Future<Item = pprof::Report, Error = pprof::Error> + Send> {
         match pprof::ProfilerGuard::new(frequency) {
-            Ok(guard) => {
+            Ok(mut guard) => {
                 info!(
                     "start profiling {} seconds with frequency {} /s",
                     seconds, frequency
@@ -395,6 +395,17 @@ impl StatusServer {
         // TODO: support TLS for the status server.
         let builder = Server::try_bind(&addr)?;
         let pd_sender = self.pd_sender.clone();
+
+        std::thread::spawn(|| {
+            let mut guard = pprof::ProfilerGuard::new(100).unwrap();
+
+            loop {
+                if let Ok(report) = guard.report().build() {
+                    println!("{}", report);
+                };
+                std::thread::sleep(std::time::Duration::from_secs(100))
+            }
+        });
 
         // Start to serve.
         let server = builder.serve(move || {
