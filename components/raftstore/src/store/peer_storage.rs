@@ -13,7 +13,7 @@ use engine::rocks::{Writable, WriteBatch, DB};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksSnapshot, RocksWriteBatch};
 use engine_traits::{KvEngine, Peekable as PeekableTrait, Mutable as MutableTrait};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
@@ -229,10 +229,10 @@ impl CacheQueryStats {
 }
 
 pub trait HandleRaftReadyContext {
-    fn kv_wb(&self) -> &WriteBatch;
-    fn kv_wb_mut(&mut self) -> &mut WriteBatch;
-    fn raft_wb(&self) -> &WriteBatch;
-    fn raft_wb_mut(&mut self) -> &mut WriteBatch;
+    fn kv_wb(&self) -> &RocksWriteBatch;
+    fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch;
+    fn raft_wb(&self) -> &RocksWriteBatch;
+    fn raft_wb_mut(&mut self) -> &mut RocksWriteBatch;
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
 }
@@ -286,7 +286,7 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_raft_state_to(&self, raft_wb: &mut WriteBatch) -> Result<()> {
+    pub fn save_raft_state_to(&self, raft_wb: &mut RocksWriteBatch) -> Result<()> {
         raft_wb.put_msg(&keys::raft_state_key(self.region_id), &self.raft_state)?;
         Ok(())
     }
@@ -295,8 +295,7 @@ impl InvokeContext {
     pub fn save_snapshot_raft_state_to(
         &self,
         snapshot_index: u64,
-        kv_engine: &DB,
-        kv_wb: &mut WriteBatch,
+        kv_wb: &mut RocksWriteBatch,
     ) -> Result<()> {
         let mut snapshot_raft_state = self.raft_state.clone();
         snapshot_raft_state
@@ -304,9 +303,8 @@ impl InvokeContext {
             .set_commit(snapshot_index);
         snapshot_raft_state.set_last_index(snapshot_index);
 
-        let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
-            handle,
+            CF_RAFT,
             &keys::snapshot_raft_state_key(self.region_id),
             &snapshot_raft_state,
         )?;
@@ -314,10 +312,9 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_apply_state_to(&self, kv_engine: &DB, kv_wb: &mut WriteBatch) -> Result<()> {
-        let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
+    pub fn save_apply_state_to(&self, kv_wb: &mut RocksWriteBatch) -> Result<()> {
         kv_wb.put_msg_cf(
-            handle,
+            CF_RAFT,
             &keys::apply_state_key(self.region_id),
             &self.apply_state,
         )?;
@@ -327,7 +324,7 @@ impl InvokeContext {
 
 pub fn recover_from_applying_state(
     engines: &Engines,
-    raft_wb: &WriteBatch,
+    raft_wb: &RocksWriteBatch,
     region_id: u64,
 ) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
@@ -900,8 +897,8 @@ impl PeerStorage {
         &mut self,
         ctx: &mut InvokeContext,
         snap: &Snapshot,
-        kv_wb: &WriteBatch,
-        raft_wb: &WriteBatch,
+        kv_wb: &RocksWriteBatch,
+        raft_wb: &RocksWriteBatch,
     ) -> Result<()> {
         info!(
             "begin to apply snapshot";
@@ -928,7 +925,7 @@ impl PeerStorage {
             self.clear_meta(kv_wb, raft_wb)?;
         }
 
-        write_peer_state(&self.engines.kv, kv_wb, &region, PeerState::Applying, None)?;
+        write_peer_state_2(kv_wb, &region, PeerState::Applying, None)?;
 
         let last_index = snap.get_metadata().get_index();
 
@@ -958,9 +955,9 @@ impl PeerStorage {
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
-    pub fn clear_meta(&mut self, kv_wb: &WriteBatch, raft_wb: &WriteBatch) -> Result<()> {
+    pub fn clear_meta(&mut self, kv_wb: &RocksWriteBatch, raft_wb: &RocksWriteBatch) -> Result<()> {
         let region_id = self.get_region_id();
-        clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
+        clear_meta_2(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
         self.cache = EntryCache::default();
         Ok(())
     }
@@ -1164,7 +1161,6 @@ impl PeerStorage {
                 // in case of recv raft log after snapshot.
                 ctx.save_snapshot_raft_state_to(
                     snapshot_index,
-                    &self.engines.kv,
                     &mut ready_ctx.kv_wb_mut(),
                 )?;
             }
@@ -1172,7 +1168,7 @@ impl PeerStorage {
 
         // only when apply snapshot
         if snapshot_index != 0 {
-            ctx.save_apply_state_to(&self.engines.kv, &mut ready_ctx.kv_wb_mut())?;
+            ctx.save_apply_state_to(&mut ready_ctx.kv_wb_mut())?;
         }
 
         Ok(ctx)
@@ -1314,6 +1310,46 @@ pub fn clear_meta(
     let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
     box_try!(kv_wb.delete_cf(handle, &keys::region_state_key(region_id)));
     box_try!(kv_wb.delete_cf(handle, &keys::apply_state_key(region_id)));
+
+    let last_index = last_index(raft_state);
+    let mut first_index = last_index + 1;
+    let begin_log_key = keys::raft_log_key(region_id, 0);
+    let end_log_key = keys::raft_log_key(region_id, first_index);
+    engines
+        .raft
+        .scan(&begin_log_key, &end_log_key, false, |key, _| {
+            first_index = keys::raft_log_index(key).unwrap();
+            Ok(false)
+        })?;
+    for id in first_index..=last_index {
+        box_try!(raft_wb.delete(&keys::raft_log_key(region_id, id)));
+    }
+    box_try!(raft_wb.delete(&keys::raft_state_key(region_id)));
+
+    info!(
+        "finish clear peer meta";
+        "region_id" => region_id,
+        "meta_key" => 1,
+        "apply_key" => 1,
+        "raft_key" => 1,
+        "raft_logs" => last_index + 1 - first_index,
+        "takes" => ?t.elapsed(),
+    );
+    Ok(())
+}
+
+/// Delete all meta belong to the region. Results are stored in `wb`.
+/// FIXME: delete clear_meta and rename this once possible.
+pub fn clear_meta_2(
+    engines: &Engines,
+    kv_wb: &RocksWriteBatch,
+    raft_wb: &RocksWriteBatch,
+    region_id: u64,
+    raft_state: &RaftLocalState,
+) -> Result<()> {
+    let t = Instant::now();
+    box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
+    box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
 
     let last_index = last_index(raft_state);
     let mut first_index = last_index + 1;
@@ -1627,7 +1663,7 @@ mod tests {
             .set_term(ents[0].get_term());
         ctx.apply_state
             .set_applied_index(ents.last().unwrap().get_index());
-        ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
+        ctx.save_apply_state_to(&mut kv_wb)
             .unwrap();
         store.engines.raft.write(&ready_ctx.raft_wb).unwrap();
         store.engines.kv.write(&kv_wb).unwrap();
@@ -1849,7 +1885,7 @@ mod tests {
             }
             if res.is_ok() {
                 let mut kv_wb = WriteBatch::default();
-                ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
+                ctx.save_apply_state_to(&mut kv_wb)
                     .unwrap();
                 store.engines.kv.write(&kv_wb).unwrap();
             }
@@ -1939,7 +1975,7 @@ mod tests {
         ctx.raft_state.set_last_index(7);
         ctx.apply_state.set_applied_index(7);
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
-        ctx.save_apply_state_to(&s.engines.kv, &mut kv_wb).unwrap();
+        ctx.save_apply_state_to(&mut kv_wb).unwrap();
         s.engines.kv.write(&kv_wb).unwrap();
         s.engines.raft.write(&ready_ctx.raft_wb).unwrap();
         s.apply_state = ctx.apply_state;
@@ -1948,7 +1984,7 @@ mod tests {
         let term = s.term(7).unwrap();
         compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
         kv_wb = WriteBatch::default();
-        ctx.save_apply_state_to(&s.engines.kv, &mut kv_wb).unwrap();
+        ctx.save_apply_state_to(&mut kv_wb).unwrap();
         s.engines.kv.write(&kv_wb).unwrap();
         s.apply_state = ctx.apply_state;
 
