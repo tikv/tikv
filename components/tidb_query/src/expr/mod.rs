@@ -241,7 +241,7 @@ impl Expression {
                 .read_u64()
                 .map_err(Error::from)
                 .and_then(|i| {
-                    let fsp = field_type.decimal() as i8;
+                    let fsp = field_type.as_accessor().decimal() as i8;
                     Time::from_packed_u64(ctx, i, field_type.as_accessor().tp().try_into()?, fsp)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), field_type)),
