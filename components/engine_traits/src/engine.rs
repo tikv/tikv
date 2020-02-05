@@ -22,9 +22,9 @@ pub trait KvEngine:
     type Snapshot: Snapshot<Self>;
     type WriteBatch: WriteBatch;
 
-    fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()>;
+    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()>;
     fn write(&self, wb: &Self::WriteBatch) -> Result<()> {
-        self.write_opt(&WriteOptions::default(), wb)
+        self.write_opt(wb, &WriteOptions::default())
     }
     fn write_batch(&self) -> Self::WriteBatch;
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;

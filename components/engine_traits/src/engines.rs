@@ -25,7 +25,7 @@ impl<K: KvEngine, R: KvEngine> KvEngines<K, R> {
     }
 
     pub fn write_kv_opt(&self, wb: &K::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.kv.write_opt(opts, wb)
+        self.kv.write_opt(wb, opts)
     }
 
     pub fn sync_kv(&self) -> Result<()> {
@@ -37,7 +37,7 @@ impl<K: KvEngine, R: KvEngine> KvEngines<K, R> {
     }
 
     pub fn write_raft_opt(&self, wb: &R::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.raft.write_opt(opts, wb)
+        self.raft.write_opt(wb, opts)
     }
 
     pub fn sync_raft(&self) -> Result<()> {

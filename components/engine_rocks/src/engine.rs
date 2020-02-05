@@ -54,7 +54,7 @@ impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
     type WriteBatch = RocksWriteBatch;
 
-    fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()> {
+    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
         if wb.get_db().path() != self.0.path() {
             return Err(Error::Engine("mismatched db path".to_owned()));
         }
