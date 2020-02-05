@@ -163,7 +163,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     }
 
     /// Schedule the normal FSM located at `index`.
-    pub fn schedule(&mut self, router: &BatchRouter<N, C>, index: usize) {
+    pub fn reschedule(&mut self, router: &BatchRouter<N, C>, index: usize) {
         let fsm = self.normals.swap_remove(index);
         self.counters.swap_remove(index);
         router.normal_scheduler.schedule(fsm);
@@ -315,7 +315,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                             // We should only reschedule a half of the hot regions, otherwise,
                             // it's possible all the hot regions are fetched in a batch the
                             // next time.
-                            if hot_fsm_count & 1 == 1 {
+                            if hot_fsm_count % 2 == 0 {
                                 reschedule_fsms.push((i, ReschedulePolicy::Schedule));
                                 continue;
                             }
@@ -333,7 +333,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 match mark {
                     ReschedulePolicy::Release(l) => batch.release(r, l),
                     ReschedulePolicy::Remove => batch.remove(r),
-                    ReschedulePolicy::Schedule => batch.schedule(&self.router, r),
+                    ReschedulePolicy::Schedule => batch.reschedule(&self.router, r),
                 }
             }
             // Fetch batch after every round is finished. It's helpful to protect regions

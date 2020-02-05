@@ -2556,7 +2556,9 @@ impl ApplyFsm {
             self.handle_tasks(ctx, &mut state.pending_msgs);
         }
 
-        // So the delegate is executing another `CommitMerge` in pending_msgs.
+        // So the delegate is expected to yield the CPU.
+        // It can either be executing another `CommitMerge` in pending_msgs
+        // or has been written too much data.
         if self.delegate.yield_state.is_some() {
             return false;
         }
