@@ -60,7 +60,7 @@ impl ConfigManager for GcWorkerConfigManager {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{GcTask, GcWorker};
+    use super::super::gc_worker::{GcTask, GcWorker};
     use super::*;
     use crate::config::{ConfigController, TiKvConfig};
     use crate::storage::kv::TestEngineBuilder;
@@ -115,7 +115,7 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         cfg.validate().unwrap();
         let (gc_worker, mut cfg_controller) = setup_cfg_controller(cfg.clone());
-        let scheduler = gc_worker.worker_scheduler.clone();
+        let scheduler = gc_worker.scheduler();
 
         // update of other module's config should not effect gc worker config
         let mut incoming = cfg.clone();
@@ -146,7 +146,7 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         cfg.validate().unwrap();
         let (gc_worker, mut cfg_controller) = setup_cfg_controller(cfg.clone());
-        let scheduler = gc_worker.worker_scheduler.clone();
+        let scheduler = gc_worker.scheduler();
 
         validate(&scheduler, move |_, limiter: &Limiter| {
             assert_eq!(limiter.speed_limit(), INFINITY);
@@ -187,7 +187,7 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         cfg.validate().unwrap();
         let (gc_worker, _) = setup_cfg_controller(cfg);
-        let scheduler = gc_worker.worker_scheduler.clone();
+        let scheduler = gc_worker.scheduler();
         let config_manager = gc_worker.get_config_manager();
 
         validate(&scheduler, move |_, limiter: &Limiter| {

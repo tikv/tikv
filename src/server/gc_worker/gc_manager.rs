@@ -15,7 +15,8 @@ use crate::raftstore::coprocessor::RegionInfoProvider;
 use crate::raftstore::store::util::find_peer;
 use crate::server::metrics::*;
 
-use super::{gc, GcSafePointProvider, GcTask, Result};
+use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
+use super::Result;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
 
@@ -528,7 +529,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             "trying gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
             "end_key" => next_key.as_ref().map(DisplayValue)
         );
-        if let Err(e) = gc(&self.worker_scheduler, ctx.clone(), self.safe_point) {
+        if let Err(e) = sync_gc(&self.worker_scheduler, ctx.clone(), self.safe_point) {
             error!(
                 "failed gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
                 "end_key" => next_key.as_ref().map(DisplayValue),
