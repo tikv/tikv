@@ -400,8 +400,15 @@ impl StatusServer {
             let guard = pprof::ProfilerGuard::new(100).unwrap();
 
             loop {
+                use std::io::Write;
+
                 if let Ok(report) = guard.report().build() {
-                    println!("{}", report);
+                    let mut file = std::fs::File::create("profile.pb").unwrap();
+                    let profile = report.pprof().unwrap();
+
+                    let mut content = Vec::new();
+                    profile.encode(&mut content).unwrap();
+                    file.write_all(&content).unwrap();
                 };
                 std::thread::sleep(std::time::Duration::from_secs(100))
             }
