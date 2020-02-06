@@ -155,20 +155,19 @@ mod tests {
 
     #[test]
     fn test_s3_config() {
-        let config = Config {
-            region: "ap-southeast-2".to_string(),
-            bucket: "mybucket".to_string(),
-            prefix: "myprefix".to_string(),
-            access_key: "abc".to_string(),
-            secret_access_key: "xyz".to_string(),
-            ..Default::default()
-        };
+        let mut config = Config::default();
+        config.set_region("ap-southeast-2".to_string());
+        config.set_bucket("mybucket".to_string());
+        config.set_prefix("myprefix".to_string());
+        config.set_access_key("abc".to_string());
+        config.set_secret_access_key("xyz".to_string());
         let cases = vec![
             // missing both region and endpoint
-            Config {
-                region: "".to_string(),
-                ..config.clone()
-            },
+            {
+                let mut config = config.clone();
+                config.set_region("".to_string());
+                config
+            }
         ];
         for case in cases {
             let dispatcher = MockRequestDispatcher::with_status(200);
@@ -182,14 +181,13 @@ mod tests {
     #[test]
     fn test_s3_storage() {
         let magic_contents = "5678";
-        let config = Config {
-            region: "ap-southeast-2".to_string(),
-            bucket: "mybucket".to_string(),
-            prefix: "myprefix".to_string(),
-            access_key: "abc".to_string(),
-            secret_access_key: "xyz".to_string(),
-            ..Default::default()
-        };
+        let mut config = Config::default();
+        config.set_region("ap-southeast-2".to_string());
+        config.set_bucket("mybucket".to_string());
+        config.set_prefix("myprefix".to_string());
+        config.set_access_key("abc".to_string());
+        config.set_secret_access_key("xyz".to_string());
+
         let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
             move |req: &SignedRequest| {
                 assert_eq!(req.region.name(), "ap-southeast-2");
