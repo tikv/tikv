@@ -15,9 +15,9 @@ use crate::raftstore::store::{CasualMessage, CasualRouter};
 
 use super::super::error::Result;
 use super::super::metrics::*;
-use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use engine_rocks::RangeProperties;
 
 pub struct Checker {
     max_size: u64,
