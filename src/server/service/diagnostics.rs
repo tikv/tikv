@@ -123,23 +123,9 @@ mod sys {
     use std::string::ToString;
 
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-    use sysinfo::{DiskExt, ProcessExt, ProcessorExt, SystemExt};
+    use sysinfo::{DiskExt, ProcessExt, SystemExt};
 
     fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
-        let mut system = sysinfo::System::new();
-        system.refresh_all();
-        // CPU
-        let processor = system.get_processor_list();
-        for p in processor {
-            let mut pair = ServerInfoPair::default();
-            pair.set_key("usage".to_string());
-            pair.set_value(p.get_cpu_usage().to_string());
-            let mut item = ServerInfoItem::default();
-            item.set_tp("cpu".to_string());
-            item.set_name(p.get_name().to_string());
-            item.set_pairs(vec![pair].into());
-            collector.push(item);
-        }
         // CPU load
         {
             let load = sysinfo::get_avg_load();
@@ -182,10 +168,15 @@ mod sys {
                         continue;
                     }
                     let mut parts = line.split_whitespace();
-                    let name = if let Some(name) = parts.nth(0) {
-                        name
-                    } else {
-                        continue;
+                    let name = match parts.nth(0) {
+                        Some(name) => {
+                            if name == "cpu" {
+                                "cpu-total"
+                            } else {
+                                name
+                            }
+                        }
+                        _ => continue,
                     };
                     let mut pairs = vec![];
                     for (val, name) in parts.zip(&names) {
