@@ -28,9 +28,11 @@ use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
 use crate::config::{ConfigController, ConfigHandler};
 use crate::import::SSTImporter;
+use crate::raftstore::coprocessor::config::SplitCheckConfigManager;
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::config::Config;
+use crate::raftstore::store::config::RaftstoreConfigManager;
 use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
@@ -1023,7 +1025,7 @@ impl RaftBatchSystem {
                 .build(),
         };
         let cfg = Arc::new(VersionTrack::new(cfg));
-        cfg_controller.register("raft_store", Box::new(cfg.clone()));
+        cfg_controller.register("raft_store", Box::new(RaftstoreConfigManager(cfg.clone())));
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
@@ -1118,7 +1120,9 @@ impl RaftBatchSystem {
 
         cfg_controller.register(
             "coprocessor",
-            Box::new(workers.split_check_worker.scheduler()),
+            Box::new(SplitCheckConfigManager(
+                workers.split_check_worker.scheduler(),
+            )),
         );
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
@@ -2127,7 +2131,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::{mpsc, Arc, Mutex};
 
-    use crate::config::*;
+    use crate::config::TiKvConfig;
     use crate::import::SSTImporter;
     use crate::raftstore::coprocessor::properties::{RangeOffsets, RangeProperties};
     use crate::raftstore::coprocessor::CoprocessorHost;
@@ -2227,7 +2231,10 @@ mod tests {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
         let mut cfg_controller = ConfigController::new(cfg, Default::default());
-        cfg_controller.register("raft_store", Box::new(cfg_track.clone()));
+        cfg_controller.register(
+            "raft_store",
+            Box::new(RaftstoreConfigManager(cfg_track.clone())),
+        );
         let builder = RaftPollerBuilder {
             cfg: cfg_track,
             store: Default::default(),

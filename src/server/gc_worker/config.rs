@@ -4,7 +4,7 @@ use configuration::{ConfigChange, Configuration};
 use std::sync::Arc;
 use tikv_util::config::{ReadableSize, VersionTrack};
 
-use crate::config::ConfigManager;
+use configuration::ConfigManager;
 
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
@@ -39,7 +39,8 @@ impl GcConfig {
     }
 }
 
-pub type GcWorkerConfigManager = Arc<VersionTrack<GcConfig>>;
+#[derive(Clone, Default)]
+pub struct GcWorkerConfigManager(pub Arc<VersionTrack<GcConfig>>);
 
 impl ConfigManager for GcWorkerConfigManager {
     fn dispatch(
@@ -48,13 +49,21 @@ impl ConfigManager for GcWorkerConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.update(move |cfg: &mut GcConfig| cfg.update(change));
+            self.0.update(move |cfg: &mut GcConfig| cfg.update(change));
         }
         info!(
             "GC worker config changed";
             "change" => ?change,
         );
         Ok(())
+    }
+}
+
+impl std::ops::Deref for GcWorkerConfigManager {
+    type Target = Arc<VersionTrack<GcConfig>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

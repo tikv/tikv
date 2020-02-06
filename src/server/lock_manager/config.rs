@@ -2,7 +2,7 @@
 
 use super::deadlock::Scheduler as DeadlockScheduler;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use crate::config::ConfigManager;
+use configuration::ConfigManager;
 
 use configuration::{ConfigChange, Configuration};
 

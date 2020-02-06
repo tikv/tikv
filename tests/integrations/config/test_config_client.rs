@@ -253,9 +253,9 @@ fn test_compatible_config() {
 
 #[test]
 fn test_dispatch_change() {
+    use configuration::ConfigManager;
     use std::error::Error;
     use std::result::Result;
-    use tikv::config::ConfigManager;
 
     #[derive(Clone)]
     struct CfgManager(Arc<Mutex<RaftstoreConfig>>);

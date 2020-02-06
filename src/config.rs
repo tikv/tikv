@@ -19,7 +19,7 @@ use std::usize;
 
 use kvproto::configpb::{self, StatusCode};
 
-use configuration::{ConfigChange, ConfigValue, Configuration};
+use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -2093,12 +2093,6 @@ pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) ->
         (Ordering::Less, _) | (_, Ordering::Less) => Ordering::Less,
         _ => Ordering::Greater,
     }
-}
-
-type CfgResult<T> = Result<T, Box<dyn Error>>;
-
-pub trait ConfigManager: Send {
-    fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
 }
 
 #[derive(PartialEq, Eq, Hash)]

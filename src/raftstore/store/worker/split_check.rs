@@ -338,7 +338,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::config::*;
+    use crate::config::{ConfigController, TiKvConfig};
+    use crate::raftstore::coprocessor::config::SplitCheckConfigManager;
     use engine::rocks;
     use tikv_util::worker::{Scheduler, Worker};
 
@@ -369,7 +370,10 @@ mod tests {
         worker.start(runner).unwrap();
 
         let mut cfg_controller = ConfigController::new(cfg, Default::default());
-        cfg_controller.register("coprocessor", Box::new(worker.scheduler()));
+        cfg_controller.register(
+            "coprocessor",
+            Box::new(SplitCheckConfigManager(worker.scheduler())),
+        );
 
         (cfg_controller, worker)
     }

@@ -817,7 +817,7 @@ impl<E: Engine> GcWorker<E> {
             engine,
             local_storage,
             raft_store_router,
-            config_manager: Arc::new(VersionTrack::new(cfg)),
+            config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             region_info_accessor,
             scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
@@ -844,7 +844,7 @@ impl<E: Engine> GcWorker<E> {
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
-            self.config_manager.clone().tracker("gc-woker".to_owned()),
+            self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.region_info_accessor.take(),
             self.config_manager.value().clone(),
         );
@@ -939,7 +939,7 @@ impl<E: Engine> GcWorker<E> {
     }
 
     pub fn get_config_manager(&self) -> GcWorkerConfigManager {
-        Arc::clone(&self.config_manager)
+        self.config_manager.clone()
     }
 
     pub fn physical_scan_lock(
