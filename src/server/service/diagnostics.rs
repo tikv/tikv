@@ -218,29 +218,41 @@ mod sys {
         let used_swap_pct = (used_swap as f64) / (total_swap as f64);
         let free_swap_pct = (free_swap as f64) / (total_swap as f64);
         let infos = vec![
-            ("total-memory", total_memory.to_string()),
-            ("used-memory", used_memory.to_string()),
-            ("free-memory", free_memory.to_string()),
-            ("total-swap", total_swap.to_string()),
-            ("used-swap", used_swap.to_string()),
-            ("free-swap", free_swap.to_string()),
-            ("used-memory-percent", format!("{:.2}", used_memory_pct)),
-            ("free-memory-percent", format!("{:.2}", free_memory_pct)),
-            ("used-swap-percent", format!("{:.2}", used_swap_pct)),
-            ("free-swap-percent", format!("{:.2}", free_swap_pct)),
+            (
+                "virtual",
+                vec![
+                    ("total", total_memory.to_string()),
+                    ("used", used_memory.to_string()),
+                    ("free", free_memory.to_string()),
+                    ("used-percent", format!("{:.2}", used_memory_pct)),
+                    ("free-percent", format!("{:.2}", free_memory_pct)),
+                ],
+            ),
+            (
+                "swap",
+                vec![
+                    ("total", total_swap.to_string()),
+                    ("used", used_swap.to_string()),
+                    ("free", free_swap.to_string()),
+                    ("used-percent", format!("{:.2}", used_swap_pct)),
+                    ("free-percent", format!("{:.2}", free_swap_pct)),
+                ],
+            ),
         ];
-        let mut pairs = vec![];
         for info in infos.into_iter() {
-            let mut pair = ServerInfoPair::default();
-            pair.set_key(info.0.to_string());
-            pair.set_value(info.1);
-            pairs.push(pair);
+            let mut pairs = vec![];
+            for item in info.1.into_iter() {
+                let mut pair = ServerInfoPair::default();
+                pair.set_key(item.0.to_string());
+                pair.set_value(item.1);
+                pairs.push(pair);
+            }
+            let mut item = ServerInfoItem::default();
+            item.set_tp("memory".to_string());
+            item.set_name(info.0.to_string());
+            item.set_pairs(pairs.into());
+            collector.push(item);
         }
-        let mut item = ServerInfoItem::default();
-        item.set_tp("memory".to_string());
-        item.set_name("memory".to_string());
-        item.set_pairs(pairs.into());
-        collector.push(item);
     }
 
     fn nic_load_info(
@@ -549,7 +561,10 @@ mod sys {
             let prev_io = sysinfo::IOLoad::snapshot();
             let mut collector = vec![];
             load_info((prev_nic, prev_io), &mut collector);
+            #[cfg(linux)]
             let tps = vec!["cpu", "memory", "net", "io"];
+            #[cfg(not(linux))]
+            let tps = vec!["cpu", "memory"];
             for tp in tps.into_iter() {
                 assert!(
                     collector.iter().any(|x| x.get_tp() == tp),
@@ -602,31 +617,22 @@ mod sys {
                     ]
                 );
             }
-            // mem
-            let item = collector
-                .iter()
-                .find(|x| x.get_tp() == "memory" && x.get_name() == "memory");
-            let keys = item
-                .unwrap()
-                .get_pairs()
-                .iter()
-                .map(|x| x.get_key())
-                .collect::<Vec<&str>>();
-            assert_eq!(
-                keys,
-                vec![
-                    "total-memory",
-                    "used-memory",
-                    "free-memory",
-                    "total-swap",
-                    "used-swap",
-                    "free-swap",
-                    "used-memory-percent",
-                    "free-memory-percent",
-                    "used-swap-percent",
-                    "free-swap-percent",
-                ]
-            );
+            // memory
+            for name in vec!["virtual", "swap"] {
+                let item = collector
+                    .iter()
+                    .find(|x| x.get_tp() == "memory" && x.get_name() == name);
+                let keys = item
+                    .unwrap()
+                    .get_pairs()
+                    .iter()
+                    .map(|x| x.get_key())
+                    .collect::<Vec<&str>>();
+                assert_eq!(
+                    keys,
+                    vec!["total", "used", "free", "used-percent", "free-percent",]
+                );
+            }
             #[cfg(linux)]
             {
                 // io
