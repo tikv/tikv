@@ -233,8 +233,8 @@ impl Delegate {
             for downstream in pending.downstreams {
                 self.subscribe(downstream);
             }
-            for (downstream_id, entires) in pending.scan {
-                self.on_scan(downstream_id, entires);
+            for (downstream_id, entries) in pending.scan {
+                self.on_scan(downstream_id, entries);
             }
             // TODO iter multi_batch once CDC observer is ready.
             // for batch in pending.multi_batch {
@@ -414,12 +414,12 @@ impl Delegate {
                 }
             }
         }
-        let mut entires = Vec::with_capacity(rows.len());
+        let mut entries = Vec::with_capacity(rows.len());
         for (_, v) in rows {
-            entires.push(v);
+            entries.push(v);
         }
         let mut event_entries = EventEntries::default();
-        event_entries.entries = entires.into();
+        event_entries.entries = entries.into();
         let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
         change_data_event.index = index;
