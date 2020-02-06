@@ -684,11 +684,12 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
     use engine::rocks;
-    use engine::rocks::{ColumnFamilyOptions, Writable, WriteBatch};
+    use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine::{Mutable, Peekable};
+    use engine::{Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{RocksSnapshot, Compat};
+    use engine_traits::{KvEngine, Mutable};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;
@@ -864,8 +865,7 @@ mod tests {
             s3.save().unwrap();
 
             // set applying state
-            let wb = WriteBatch::default();
-            let handle = engine.kv.cf_handle(CF_RAFT).unwrap();
+            let wb = engine.kv.c().write_batch();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
                 .kv
@@ -873,8 +873,8 @@ mod tests {
                 .unwrap()
                 .unwrap();
             region_state.set_state(PeerState::Applying);
-            wb.put_msg_cf(handle, &region_key, &region_state).unwrap();
-            engine.kv.write(&wb).unwrap();
+            wb.put_msg_cf(CF_RAFT, &region_key, &region_state).unwrap();
+            engine.kv.c().write(&wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
