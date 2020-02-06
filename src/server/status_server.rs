@@ -409,6 +409,9 @@ impl StatusServer {
                     let mut content = Vec::new();
                     profile.encode(&mut content).unwrap();
                     file.write_all(&content).unwrap();
+
+                    let file = std::fs::File::create("flamegraph.svg").unwrap();
+                    report.flamegraph(file).unwrap();
                 };
                 std::thread::sleep(std::time::Duration::from_secs(100))
             }
