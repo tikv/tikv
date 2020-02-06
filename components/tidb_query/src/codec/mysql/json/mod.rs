@@ -118,7 +118,7 @@ impl TryFrom<u8> for JsonType {
 }
 
 /// Represents a reference of JSON value aiming to reduce memory copy.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct JsonRef<'a> {
     type_code: JsonType,
     // Referred value

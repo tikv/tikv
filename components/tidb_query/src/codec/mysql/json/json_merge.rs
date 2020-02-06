@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{Json, JsonType};
+use super::{Json, JsonRef, JsonType};
 use crate::codec::{Error, Result};
 use std::collections::BTreeMap;
 
@@ -16,60 +16,82 @@ impl Json {
     ///
     /// See `MergeBinary()` in TiDB `json/binary_function.go`
     #[allow(clippy::comparison_chain)]
-    pub fn merge(mut bjs: Vec<Json>) -> Result<Json> {
+    pub fn merge<'a>(mut bjs: Vec<JsonRef<'a>>) -> Result<Json> {
         let mut result = vec![];
         let mut objects = vec![];
         for j in bjs.drain(..) {
-            if j.as_ref().get_type() != JsonType::Object {
+            if j.get_type() != JsonType::Object {
                 if objects.len() == 1 {
-                    result.append(&mut objects);
+                    let o = objects.pop().unwrap();
+                    result.push(MergeUnit::Ref(o));
                 } else if objects.len() > 1 {
                     // We have adjacent JSON objects, merge them into a single object
-                    result.push(merge_binary_object(&mut objects)?);
+                    result.push(MergeUnit::Owned(merge_binary_object(&mut objects)?));
                 }
-                result.push(j);
+                result.push(MergeUnit::Ref(j));
             } else {
                 objects.push(j);
             }
         }
+        // Resolve the possibly remained objects
         if !objects.is_empty() {
-            result.push(merge_binary_object(&mut objects)?);
+            result.push(MergeUnit::Owned(merge_binary_object(&mut objects)?));
         }
         if result.len() == 1 {
-            return Ok(result.pop().unwrap());
+            return Ok(result.pop().unwrap().into_owned());
         }
-        merge_binary_array(result)
+        merge_binary_array(&result)
+    }
+}
+
+enum MergeUnit<'a> {
+    Ref(JsonRef<'a>),
+    Owned(Json),
+}
+
+impl<'a> MergeUnit<'a> {
+    fn as_ref(&self) -> JsonRef<'_> {
+        match self {
+            MergeUnit::Ref(r) => *r,
+            MergeUnit::Owned(o) => o.as_ref(),
+        }
+    }
+    fn into_owned(self) -> Json {
+        match self {
+            MergeUnit::Ref(r) => r.to_owned(),
+            MergeUnit::Owned(o) => o,
+        }
     }
 }
 
 // See `mergeBinaryArray()` in TiDB `json/binary_function.go`
-fn merge_binary_array(elems: Vec<Json>) -> Result<Json> {
+fn merge_binary_array<'a>(elems: &[MergeUnit<'a>]) -> Result<Json> {
     let mut buf = vec![];
-    for j in elems {
-        if j.as_ref().get_type() != JsonType::Array {
+    for j in elems.iter() {
+        let j = j.as_ref();
+        if j.get_type() != JsonType::Array {
             buf.push(j)
         } else {
-            let child_count = j.as_ref().get_elem_count();
+            let child_count = j.get_elem_count();
             for i in 0..child_count {
-                // TODO: Can we remove `to_owned`
-                buf.push(j.as_ref().array_get_elem(i)?.to_owned());
+                buf.push(j.array_get_elem(i)?);
             }
         }
     }
-    Json::from_array(buf)
+    Json::from_ref_array(buf)
 }
 
 // See `mergeBinaryObject()` in TiDB `json/binary_function.go`
-fn merge_binary_object(objects: &mut Vec<Json>) -> Result<Json> {
-    let mut kv_map = BTreeMap::new();
+fn merge_binary_object<'a>(objects: &mut Vec<JsonRef<'a>>) -> Result<Json> {
+    let mut kv_map: BTreeMap<String, Json> = BTreeMap::new();
     for j in objects.drain(..) {
-        let elem_count = j.as_ref().get_elem_count();
+        let elem_count = j.get_elem_count();
         for i in 0..elem_count {
-            let key = j.as_ref().object_get_key(i);
-            let val = j.as_ref().object_get_val(i)?;
+            let key = j.object_get_key(i);
+            let val = j.object_get_val(i)?;
             let key = String::from_utf8(key.to_owned()).map_err(Error::from)?;
             if let Some(old) = kv_map.remove(&key) {
-                let new = Json::merge(vec![old, val.to_owned()])?;
+                let new = Json::merge(vec![old.as_ref(), val])?;
                 kv_map.insert(key, new);
             } else {
                 kv_map.insert(key, val.to_owned());
@@ -135,13 +157,12 @@ mod tests {
         ];
         for case in test_cases {
             let (to_be_merged, expect) = case.split_at(case.len() - 1);
-            let res = Json::merge(
-                to_be_merged
-                    .iter()
-                    .map(|s| s.parse().unwrap())
-                    .collect::<Vec<Json>>(),
-            )
-            .unwrap();
+            let jsons = to_be_merged
+                .iter()
+                .map(|s| s.parse::<Json>().unwrap())
+                .collect::<Vec<Json>>();
+            let refs = jsons.iter().map(|j| j.as_ref()).collect::<Vec<_>>();
+            let res = Json::merge(refs).unwrap();
             let expect: Json = expect[0].parse().unwrap();
             assert_eq!(res, expect);
         }

@@ -38,7 +38,7 @@ impl<'a> BinaryModifier<'a> {
     /// Replaces the existing value JSON and adds nonexisting value
     /// specified by the expression path with `new`
     pub fn set(mut self, path: &PathExpression, new: Json) -> Result<Json> {
-        let result = extract_json(self.old.clone(), path.legs.as_slice())?;
+        let result = extract_json(self.old, path.legs.as_slice())?;
         if !result.is_empty() {
             self.to_be_modified_ptr = result[0].as_ptr();
             self.new_value = Some(new);
@@ -50,7 +50,7 @@ impl<'a> BinaryModifier<'a> {
 
     /// Replaces the existing value JSON specified by the expression path with `new`
     pub fn replace(mut self, path: &PathExpression, new: Json) -> Result<Json> {
-        let result = extract_json(self.old.clone(), path.legs.as_slice())?;
+        let result = extract_json(self.old, path.legs.as_slice())?;
         if result.is_empty() {
             return Ok(self.old.to_owned());
         }
@@ -62,7 +62,7 @@ impl<'a> BinaryModifier<'a> {
     /// Inserts a `new` into `old` JSON document by given expression path without replacing
     /// existing values
     pub fn insert(mut self, path: &PathExpression, new: Json) -> Result<Json> {
-        let result = extract_json(self.old.clone(), path.legs.as_slice())?;
+        let result = extract_json(self.old, path.legs.as_slice())?;
         if !result.is_empty() {
             // The path-value is existing. The insertion is ignored with no overwrite.
             return Ok(self.old.to_owned());
@@ -77,7 +77,7 @@ impl<'a> BinaryModifier<'a> {
         }
         let legs_len = path_legs.len();
         let (parent_legs, last_leg) = (&path_legs[..legs_len - 1], &path_legs[legs_len - 1]);
-        let result = extract_json(self.old.clone(), parent_legs)?;
+        let result = extract_json(self.old, parent_legs)?;
         if result.is_empty() {
             return Ok(());
         }
@@ -98,7 +98,7 @@ impl<'a> BinaryModifier<'a> {
                         self.new_value = Some(Json::from_ref_array(elems)?);
                     }
                     _ => {
-                        let new_value = vec![parent_node.clone(), new.as_ref()];
+                        let new_value = vec![*parent_node, new.as_ref()];
                         self.new_value = Some(Json::from_ref_array(new_value)?);
                     }
                 }
@@ -141,7 +141,7 @@ impl<'a> BinaryModifier<'a> {
     }
 
     pub fn remove(mut self, path_legs: &[PathLeg]) -> Result<Json> {
-        let result = extract_json(self.old.clone(), path_legs)?;
+        let result = extract_json(self.old, path_legs)?;
         if result.is_empty() {
             return Ok(self.old.to_owned());
         }
@@ -155,7 +155,7 @@ impl<'a> BinaryModifier<'a> {
         }
         let legs_len = path_legs.len();
         let (parent_legs, last_leg) = (&path_legs[..legs_len - 1], &path_legs[legs_len - 1]);
-        let result = extract_json(self.old.clone(), parent_legs)?;
+        let result = extract_json(self.old, parent_legs)?;
         if result.is_empty() {
             // No parent found, just return
             return Ok(());
@@ -232,7 +232,7 @@ impl<'a> BinaryModifier<'a> {
             JsonType::Object | JsonType::Array => {
                 let doc_off = buf.len();
                 let elem_count = self.old.get_elem_count();
-                let current = self.old.clone();
+                let current = self.old;
                 let val_entry_start = match current.get_type() {
                     JsonType::Array => {
                         let copy_size = HEADER_LEN + elem_count * VALUE_ENTRY_LEN;

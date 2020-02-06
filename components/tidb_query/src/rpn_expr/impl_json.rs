@@ -155,10 +155,11 @@ pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
         return Ok(None);
     }
     let mut jsons = vec![];
+    let json_none = Json::none()?;
     for arg in args {
         match arg {
-            None => jsons.push(Json::none()?),
-            Some(j) => jsons.push(j.to_owned()),
+            None => jsons.push(json_none.as_ref()),
+            Some(j) => jsons.push(j.as_ref()),
         }
     }
     Ok(Some(Json::merge(jsons)?))

@@ -150,7 +150,8 @@ impl ScalarFunc {
             let j = try_opt!(parser.get_json_not_none(ctx, e));
             jsons.push(j);
         }
-        Json::merge(jsons).map(|j| Some(Cow::Owned(j)))
+        let refs = jsons.iter().map(|j| j.as_ref()).collect::<Vec<_>>();
+        Json::merge(refs).map(|j| Some(Cow::Owned(j)))
     }
 
     fn json_modify<'a, 'b: 'a>(

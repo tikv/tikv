@@ -15,7 +15,7 @@ impl<'a> JsonRef<'a> {
     pub fn extract(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {
         let mut elem_list = Vec::with_capacity(path_expr_list.len());
         for path_expr in path_expr_list {
-            elem_list.append(&mut extract_json(self.clone(), &path_expr.legs)?)
+            elem_list.append(&mut extract_json(*self, &path_expr.legs)?)
         }
         if elem_list.is_empty() {
             return Ok(None);
@@ -73,7 +73,7 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
             }
         }
         PathLeg::DoubleAsterisk => {
-            ret.append(&mut extract_json(j.clone(), sub_path_legs)?);
+            ret.append(&mut extract_json(j, sub_path_legs)?);
             match j.get_type() {
                 JsonType::Array => {
                     let elem_count = j.get_elem_count();
