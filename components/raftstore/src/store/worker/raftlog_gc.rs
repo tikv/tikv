@@ -5,10 +5,11 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use engine::rocks::Writable;
 use engine::util::MAX_DELETE_BATCH_SIZE;
 use engine::Iterable;
-use engine::{WriteBatch, DB};
+use engine::DB;
+use engine_rocks::Compat;
+use engine_traits::{KvEngine, Mutable, WriteBatch};
 use tikv_util::worker::Runnable;
 
 pub struct Task {
@@ -73,19 +74,19 @@ impl Runner {
             info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
-        let raft_wb = WriteBatch::default();
+        let raft_wb = raft_engine.c().write_batch();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
             if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Avoid large write batch to reduce latency.
-                raft_engine.write(&raft_wb).unwrap();
+                raft_engine.c().write(&raft_wb).unwrap();
                 raft_wb.clear();
             }
         }
         // TODO: disable WAL here.
         if !raft_wb.is_empty() {
-            raft_engine.write(&raft_wb).unwrap();
+            raft_engine.c().write(&raft_wb).unwrap();
         }
         Ok(end_idx - first_idx)
     }
