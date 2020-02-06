@@ -537,6 +537,41 @@ mod sys {
         }
     }
 
+    /// process_info collects all process list
+    /// TODO: use different `ServerInfoType` to collect process list
+    #[allow(dead_code)]
+    pub fn process_info(collector: &mut Vec<ServerInfoItem>) {
+        let mut system = sysinfo::System::new();
+        system.refresh_all();
+        let processes = system.get_process_list();
+        for (pid, p) in processes.iter() {
+            if p.cmd().is_empty() {
+                continue;
+            }
+            let mut pairs = vec![];
+            let infos = vec![
+                ("executable", format!("{:?}", p.exe())),
+                ("cmd", p.cmd().join(" ")),
+                ("cwd", format!("{:?}", p.cwd())),
+                ("start-time", p.start_time().to_string()),
+                ("memory", p.memory().to_string()),
+                ("status", p.status().to_string().to_owned()),
+                ("cpu-usage", p.cpu_usage().to_string()),
+            ];
+            for (key, val) in infos.into_iter() {
+                let mut pair = ServerInfoPair::default();
+                pair.set_key(key.to_string());
+                pair.set_value(val);
+                pairs.push(pair);
+            }
+            let mut item = ServerInfoItem::default();
+            item.set_tp("process".to_string());
+            item.set_name(format!("{}({})", p.name(), pid));
+            item.set_pairs(pairs.into());
+            collector.push(item);
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -641,7 +676,7 @@ mod sys {
         fn test_system_info() {
             let mut collector = vec![];
             system_info(&mut collector);
-            let tps = vec!["system", "process"];
+            let tps = vec!["system"];
             for tp in tps.into_iter() {
                 assert!(
                     collector.iter().any(|x| x.get_tp() == tp),
@@ -655,6 +690,20 @@ mod sys {
                     .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl")
                     .unwrap();
                 assert_ne!(item.count(), 0);
+            }
+        }
+
+        #[test]
+        fn test_process_info() {
+            let mut collector = vec![];
+            process_info(&mut collector);
+            let tps = vec!["process"];
+            for tp in tps.into_iter() {
+                assert!(
+                    collector.iter().any(|x| x.get_tp() == tp),
+                    "expect collect {}, but collect nothing",
+                    tp
+                );
             }
             // at least contains the unit test process
             let processes = collector.iter().find(|x| x.get_tp() == "process").unwrap();
