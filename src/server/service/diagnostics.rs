@@ -648,8 +648,7 @@ mod sys {
             system_info(&mut collector);
             assert!(
                 collector.iter().any(|x| x.get_tp() == "system"),
-                "expect collect {}, but collect nothing",
-                tp
+                "expect collect system, but collect nothing",
             );
             #[cfg(linux)]
             {
@@ -666,8 +665,7 @@ mod sys {
             process_info(&mut collector);
             assert!(
                 collector.iter().any(|x| x.get_tp() == "process"),
-                "expect collect {}, but collect nothing",
-                tp
+                "expect collect process, but collect nothing",
             );
             // at least contains the unit test process
             let processes = collector.iter().find(|x| x.get_tp() == "process").unwrap();
