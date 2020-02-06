@@ -205,6 +205,7 @@ pub enum ExecResult {
 /// The possible returned value when applying logs.
 pub enum ApplyResult {
     None,
+    Yield,
     /// Additional result that needs to be sent back to raftstore.
     Res(ExecResult),
     /// It is unable to apply the `CommitMerge` until the source peer
@@ -549,6 +550,13 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
 /// this struct.
 /// TODO: check whether generator/coroutine is a good choice in this case.
 struct WaitSourceMergeState {
+    /// A flag that indicates whether the source peer has applied to the required
+    /// index. If the source peer is ready, this flag should be set to the region id
+    /// of source peer.
+    logs_up_to_date: Arc<AtomicU64>,
+}
+
+struct YieldState {
     /// All of the entries that need to continue to be applied after
     /// the source peer has applied its logs.
     pending_entries: Vec<Entry>,
@@ -556,17 +564,20 @@ struct WaitSourceMergeState {
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg>,
-    /// A flag that indicates whether the source peer has applied to the required
-    /// index. If the source peer is ready, this flag should be set to the region id
-    /// of source peer.
-    logs_up_to_date: Arc<AtomicU64>,
+}
+
+impl Debug for YieldState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("YieldState")
+            .field("pending_entries", &self.pending_entries.len())
+            .field("pending_msgs", &self.pending_msgs.len())
+            .finish()
+    }
 }
 
 impl Debug for WaitSourceMergeState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WaitSourceMergeState")
-            .field("pending_entries", &self.pending_entries.len())
-            .field("pending_msgs", &self.pending_msgs.len())
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
     }
@@ -599,6 +610,7 @@ pub struct ApplyDelegate {
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
+    written: bool,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -612,6 +624,7 @@ pub struct ApplyDelegate {
     is_merging: bool,
     /// Records the epoch version after the last merge.
     last_merge_version: u64,
+    yield_state: Option<YieldState>,
     /// A temporary state that keeps track of the progress of the source peer state when
     /// CommitMerge is unable to be executed.
     wait_merge_state: Option<WaitSourceMergeState>,
@@ -643,7 +656,9 @@ impl ApplyDelegate {
             term: reg.term,
             stopped: false,
             merged: false,
+            written: false,
             ready_source_region_id: 0,
+            yield_state: None,
             wait_merge_state: None,
             is_merging: false,
             pending_cmds: Default::default(),
@@ -710,19 +725,21 @@ impl ApplyDelegate {
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => results.push_back(res),
-                ApplyResult::WaitMergeSource(logs_up_to_date) => {
+                _ => {
+                    // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= drainer.len() + 1;
                     let mut pending_entries = Vec::with_capacity(drainer.len() + 1);
-                    // Note that CommitMerge is skipped when `WaitMergeSource` is returned.
-                    // So we need to enqueue it again and execute it again when resuming.
+                    // Note that current entry is skipped when yield.
                     pending_entries.push(entry);
                     pending_entries.extend(drainer);
                     apply_ctx.finish_for(self, results);
-                    self.wait_merge_state = Some(WaitSourceMergeState {
+                    self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
-                        logs_up_to_date,
                     });
+                    if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
+                        self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
+                    }
                     return;
                 }
             }
@@ -768,6 +785,10 @@ impl ApplyDelegate {
 
             if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
                 apply_ctx.commit(self);
+                if self.written {
+                    return ApplyResult::Yield;
+                }
+                self.written = true;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -818,7 +839,7 @@ impl ApplyDelegate {
                 }
                 ApplyResult::Res(res)
             }
-            ApplyResult::WaitMergeSource(_) => unreachable!(),
+            ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => unreachable!(),
         }
     }
 
@@ -2370,7 +2391,7 @@ impl ApplyFsm {
 
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries);
-        if self.delegate.wait_merge_state.is_some() {
+        if self.delegate.yield_state.is_some() {
             return;
         }
 
@@ -2446,21 +2467,15 @@ impl ApplyFsm {
         }
     }
 
-    fn resume_pending_merge(&mut self, ctx: &mut ApplyContext) -> bool {
-        match self.delegate.wait_merge_state {
-            Some(ref state) => {
-                let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
-                if source_region_id == 0 {
-                    return false;
-                }
-                self.delegate.ready_source_region_id = source_region_id;
+    fn resume_pending(&mut self, ctx: &mut ApplyContext) -> bool {
+        if let Some(ref state) = self.delegate.wait_merge_state {
+            let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
+            if source_region_id == 0 {
+                return false;
             }
-            None => panic!(
-                "{} is not in waiting state, can't be resume",
-                self.delegate.tag
-            ),
+            self.delegate.ready_source_region_id = source_region_id;
         }
-        let mut state = self.delegate.wait_merge_state.take().unwrap();
+        let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {
             ctx.timer = Some(SlowTimer::new());
@@ -2468,8 +2483,10 @@ impl ApplyFsm {
         if !state.pending_entries.is_empty() {
             self.delegate
                 .handle_raft_committed_entries(ctx, state.pending_entries);
-            if let Some(ref mut s) = self.delegate.wait_merge_state {
-                // So the delegate is executing another `CommitMerge` in pending_entries.
+            if let Some(ref mut s) = self.delegate.yield_state {
+                // So the delegate is expected to yield the CPU.
+                // It can either be executing another `CommitMerge` in pending_msgs
+                // or has been written too much data.
                 s.pending_msgs = state.pending_msgs;
                 return false;
             }
@@ -2479,8 +2496,7 @@ impl ApplyFsm {
             self.handle_tasks(ctx, &mut state.pending_msgs);
         }
 
-        // So the delegate is executing another `CommitMerge` in pending_msgs.
-        if self.delegate.wait_merge_state.is_some() {
+        if self.delegate.yield_state.is_some() {
             return false;
         }
 
@@ -2588,7 +2604,7 @@ impl ApplyFsm {
                         channel_timer = Some(start);
                     }
                     self.handle_apply(apply_ctx, apply);
-                    if let Some(ref mut state) = self.delegate.wait_merge_state {
+                    if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
                         break;
                     }
@@ -2671,12 +2687,15 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm) -> Option<usize> {
         let mut expected_msg_count = None;
-        if normal.delegate.wait_merge_state.is_some() {
-            // We need to query the length first, otherwise there is a race
-            // condition that new messages are queued after resuming and before
-            // query the length.
-            expected_msg_count = Some(normal.receiver.len());
-            if !normal.resume_pending_merge(&mut self.apply_ctx) {
+        normal.delegate.written = false;
+        if normal.delegate.yield_state.is_some() {
+            if normal.delegate.wait_merge_state.is_some() {
+                // We need to query the length first, otherwise there is a race
+                // condition that new messages are queued after resuming and before
+                // query the length.
+                expected_msg_count = Some(normal.receiver.len());
+            }
+            if !normal.resume_pending(&mut self.apply_ctx) {
                 return expected_msg_count;
             }
             expected_msg_count = None;
@@ -2703,6 +2722,9 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         } else if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
             expected_msg_count = Some(0);
+        } else if normal.delegate.yield_state.is_some() {
+            // Let it continue to run next time.
+            expected_msg_count = None;
         }
         expected_msg_count
     }
@@ -3545,6 +3567,10 @@ mod tests {
         check_db_range(&engines.kv, sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
+        // Two continuous writes inside the same region will yield.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
