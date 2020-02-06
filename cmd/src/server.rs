@@ -394,16 +394,19 @@ impl TiKVServer {
         let pd_sender = pd_worker.scheduler();
 
         let unified_read_pool = if self.config.readpool.unify_read_pool {
+            yatp::metrics::set_namespace(Some("tikv"));
             prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone()))
                 .unwrap();
             prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone()))
                 .unwrap();
             let unified_read_pool_cfg = &self.config.readpool.unified;
-            let mut builder = yatp::Builder::new("unified-read-pool");
+            let pool_name = "unified-read-pool";
+            let mut builder = yatp::Builder::new(pool_name);
             builder
                 .min_thread_count(unified_read_pool_cfg.min_thread_count)
                 .max_thread_count(unified_read_pool_cfg.max_thread_count);
-            let multilevel_builder = multilevel::Builder::new(Default::default());
+            let multilevel_builder =
+                multilevel::Builder::new(multilevel::Config::default().name(Some(pool_name)));
             let read_pool_runner = ReadPoolRunner::new(
                 engines.engine.clone(),
                 Default::default(),

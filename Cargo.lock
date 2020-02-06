@@ -5044,7 +5044,7 @@ checksum = "e66366e18dc58b46801afbf2ca7661a9f59cc8c5962c29892b6039b4f86fa992"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/sticnarf/yatp.git?branch=metrics-promethus-0.8#d87b4cc1e734af02d887917b2213596c63974595"
+source = "git+https://github.com/sticnarf/yatp.git?branch=add-metrics#f01b6b7dced4017cdd784a9b9e8ef993ea908e1a"
 dependencies = [
  "crossbeam-deque",
  "dashmap",

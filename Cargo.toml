@@ -156,7 +156,7 @@ prost = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff2
 protobuf-build = { git = "https://github.com/tikv/protobuf-build", rev="42e52b9311f7fb31bbbe089fef5a24ec0392f9ce" }
 
 [patch.'https://github.com/tikv/yatp.git']
-yatp = { git = "https://github.com/sticnarf/yatp.git", branch = "metrics-promethus-0.8" }
+yatp = { git = "https://github.com/sticnarf/yatp.git", branch = "add-metrics" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
