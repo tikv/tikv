@@ -565,16 +565,6 @@ mod sys {
             }
 
             let mut cpu_info = collector.iter().filter(|x| x.get_tp() == "cpu");
-            // core usage
-            let core_usage = cpu_info.next().unwrap();
-            assert_eq!(
-                core_usage
-                    .get_pairs()
-                    .iter()
-                    .map(|x| x.get_key())
-                    .collect::<Vec<&str>>(),
-                vec!["usage"]
-            );
             // load1/5/15
             let cpu_load = cpu_info.find(|x| x.get_name() == "cpu").unwrap();
             let keys = cpu_load
