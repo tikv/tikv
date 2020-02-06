@@ -424,7 +424,7 @@ fn extract_scalar_value_date_time(
         .as_slice()
         .read_u64()
         .map_err(|_| other_err!("Unable to decode date time from the request"))?;
-    let fsp = field_type.decimal() as i8;
+    let fsp = field_type.as_accessor().decimal() as i8;
     let value = DateTime::from_packed_u64(ctx, v, field_type.as_accessor().tp().try_into()?, fsp)
         .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     Ok(ScalarValue::DateTime(Some(value)))

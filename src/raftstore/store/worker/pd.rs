@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
+use futures::sync::oneshot;
 use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
@@ -22,7 +23,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
-use crate::config::ConfigHandler;
+use crate::config::{ConfigHandler, TiKvConfig};
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
 use crate::raftstore::store::util::is_epoch_stale;
@@ -32,7 +33,7 @@ use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
 use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionStat};
+use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
@@ -93,6 +94,9 @@ pub enum Task {
         write_io_rates: RecordPairVec,
     },
     RefreshConfig,
+    GetConfig {
+        cfg_sender: oneshot::Sender<TiKvConfig>,
+    },
 }
 
 pub struct StoreStat {
@@ -206,6 +210,7 @@ impl Display for Task {
                 cpu_usages, read_io_rates, write_io_rates,
             ),
             Task::RefreshConfig => write!(f, "refresh config"),
+            Task::GetConfig {..} => write!(f, "get config"),
         }
     }
 }
@@ -287,7 +292,7 @@ impl StatsMonitor {
     }
 }
 
-pub struct Runner<T: PdClient> {
+pub struct Runner<T: PdClient + ConfigClient> {
     store_id: u64,
     pd_client: Arc<T>,
     config_handler: ConfigHandler,
@@ -306,7 +311,7 @@ pub struct Runner<T: PdClient> {
     stats_monitor: StatsMonitor,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<T: PdClient + ConfigClient> Runner<T> {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
@@ -481,7 +486,7 @@ impl<T: PdClient> Runner<T> {
 
         let f = self
             .pd_client
-            .region_heartbeat(term, region.clone(), peer.clone(), region_stat)
+            .region_heartbeat(term, region.clone(), peer, region_stat)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -639,7 +644,7 @@ impl<T: PdClient> Runner<T> {
                             return Ok(());
                         }
                         info!(
-                            "peer is still valid a member of region";
+                            "peer is still a valid member of region";
                             "region_id" => local_region.get_id(),
                             "peer_id" => peer.get_id(),
                             "pd_region" => ?pd_region
@@ -779,13 +784,13 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_refresh_config(&mut self, handle: &Handle) {
         let config_handler = &mut self.config_handler;
-        info!(
+        debug!(
             "refresh config";
             "component id" => config_handler.get_id(),
             "version" => ?config_handler.get_version()
         );
         if let Err(e) = config_handler.refresh_config(self.pd_client.clone()) {
-            error!(
+            warn!(
                 "failed to refresh config";
                 "component id" => config_handler.get_id(),
                 "version" => ?config_handler.get_version(),
@@ -804,9 +809,16 @@ impl<T: PdClient> Runner<T> {
             });
         handle.spawn(f);
     }
+
+    fn handle_get_config(&self, cfg_sender: oneshot::Sender<TiKvConfig>) {
+        let cfg = self.config_handler.get_config().clone();
+        let _ = cfg_sender
+            .send(cfg)
+            .map_err(|_| error!("failed to send config"));
+    }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
@@ -920,6 +932,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
             Task::RefreshConfig => self.handle_refresh_config(handle),
+            Task::GetConfig { cfg_sender } => self.handle_get_config(cfg_sender),
         };
     }
 
@@ -1038,7 +1051,7 @@ fn send_destroy_peer_message(
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());
-    message.set_to_peer(peer.clone());
+    message.set_to_peer(peer);
     message.set_region_epoch(pd_region.get_region_epoch().clone());
     message.set_is_tombstone(true);
     if let Err(e) = router.send_raft_message(message) {
@@ -1070,8 +1083,7 @@ mod tests {
             scheduler: Scheduler<Task>,
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
-            let mut stats_monitor =
-                StatsMonitor::new(Duration::from_secs(interval), scheduler.clone());
+            let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
             if let Err(e) = stats_monitor.start() {
                 error!("failed to start stats collector, error = {:?}", e);
             }

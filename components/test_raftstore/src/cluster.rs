@@ -22,6 +22,7 @@ use engine_rocks::RocksEngine;
 use pd_client::PdClient;
 use tikv::config::TiKvConfig;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
+use tikv::raftstore::store::transport::CasualRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
@@ -419,7 +420,7 @@ impl<T: Simulator> Cluster<T> {
         region.mut_region_epoch().set_version(INIT_EPOCH_VER);
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         let peer = new_peer(peer_id, peer_id);
-        region.mut_peers().push(peer.clone());
+        region.mut_peers().push(peer);
         self.pd_client.add_region(&region);
         Ok(())
     }
@@ -851,16 +852,16 @@ impl<T: Simulator> Cluster<T> {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let split_key = split_key.to_vec();
-        router
-            .send(
-                region.get_id(),
-                PeerMsg::CasualMessage(CasualMessage::SplitRegion {
-                    region_epoch: region.get_region_epoch().clone(),
-                    split_keys: vec![split_key.clone()],
-                    callback: cb,
-                }),
-            )
-            .unwrap();
+        CasualRouter::send(
+            &router,
+            region.get_id(),
+            CasualMessage::SplitRegion {
+                region_epoch: region.get_region_epoch().clone(),
+                split_keys: vec![split_key],
+                callback: cb,
+            },
+        )
+        .unwrap();
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
@@ -1037,17 +1038,17 @@ impl<T: Simulator> Cluster<T> {
         // Request snapshot.
         let (request_tx, request_rx) = mpsc::channel();
         let router = self.sim.rl().get_router(store_id).unwrap();
-        router
-            .send(
-                region_id,
-                PeerMsg::CasualMessage(CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
-                    let idx = peer.peer.raft_group.get_store().committed_index();
-                    peer.peer.raft_group.request_snapshot(idx).unwrap();
-                    debug!("{} request snapshot at {}", idx, peer.peer.tag);
-                    request_tx.send(idx).unwrap();
-                }))),
-            )
-            .unwrap();
+        CasualRouter::send(
+            &router,
+            region_id,
+            CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
+                let idx = peer.peer.raft_group.get_store().committed_index();
+                peer.peer.raft_group.request_snapshot(idx).unwrap();
+                debug!("{} request snapshot at {}", idx, peer.peer.tag);
+                request_tx.send(idx).unwrap();
+            })),
+        )
+        .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
     }
 }

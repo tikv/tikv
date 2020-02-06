@@ -50,7 +50,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         let default_handler = Arc::clone(&handler);
         let mocker = PdMock {
             default_handler,
-            case: case.clone(),
+            case,
         };
         let mut server = Server {
             server: None,
@@ -166,8 +166,23 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         hijack_unary(self, ctx, sink, |c| c.get_members(&req))
     }
 
-    fn tso(&mut self, _: RpcContext<'_>, _: RequestStream<TsoRequest>, _: DuplexSink<TsoResponse>) {
-        unimplemented!()
+    fn tso(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RequestStream<TsoRequest>,
+        resp: DuplexSink<TsoResponse>,
+    ) {
+        let header = Service::header();
+        let fut = resp
+            .send_all(req.map(move |_| {
+                let mut r = TsoResponse::default();
+                r.set_header(header.clone());
+                r.mut_timestamp().physical = 42;
+                (r, WriteFlags::default())
+            }))
+            .map_err(|_| ())
+            .map(|_| ());
+        ctx.spawn(fut);
     }
 
     fn bootstrap(

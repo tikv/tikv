@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::raftstore::store::{util, PeerStorage};
-use crate::raftstore::Result;
+use crate::raftstore::{Error, Result};
 use engine_rocks::RocksEngine;
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
@@ -25,7 +25,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot<E: KvEngine> {
-    snap: <E::Snapshot as Snapshot>::SyncSnapshot,
+    snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
 }
@@ -44,7 +44,7 @@ where
     }
 
     pub fn from_snapshot(
-        snap: <E::Snapshot as Snapshot>::SyncSnapshot,
+        snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Region,
     ) -> RegionSnapshot<E> {
         RegionSnapshot {
@@ -132,18 +132,11 @@ where
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        if !it.seek(start_key)? {
-            return Ok(());
+        let mut it_valid = it.seek(start_key)?;
+        while it_valid {
+            it_valid = f(it.key(), it.value())? && it.next()?;
         }
-        while it.valid() {
-            let r = f(it.key(), it.value())?;
-
-            if !r || !it.next() {
-                break;
-            }
-        }
-
-        it.status()
+        Ok(())
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
@@ -292,7 +285,7 @@ where
     E: KvEngine,
 {
     pub fn new(
-        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
     ) -> RegionIterator<E> {
@@ -305,7 +298,7 @@ where
     }
 
     pub fn new_cf(
-        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
         cf: &str,
@@ -318,12 +311,12 @@ where
         RegionIterator { iter, region }
     }
 
-    pub fn seek_to_first(&mut self) -> bool {
-        self.iter.seek_to_first()
+    pub fn seek_to_first(&mut self) -> Result<bool> {
+        self.iter.seek_to_first().map_err(Error::from)
     }
 
-    pub fn seek_to_last(&mut self) -> bool {
-        self.iter.seek_to_last()
+    pub fn seek_to_last(&mut self) -> Result<bool> {
+        self.iter.seek_to_last().map_err(Error::from)
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
@@ -332,27 +325,23 @@ where
         });
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        Ok(self.iter.seek(key.as_slice().into()))
+        self.iter.seek(key.as_slice().into()).map_err(Error::from)
     }
 
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        Ok(self.iter.seek_for_prev(key.as_slice().into()))
+        self.iter
+            .seek_for_prev(key.as_slice().into())
+            .map_err(Error::from)
     }
 
-    pub fn prev(&mut self) -> bool {
-        if !self.valid() {
-            return false;
-        }
-        self.iter.prev()
+    pub fn prev(&mut self) -> Result<bool> {
+        self.iter.prev().map_err(Error::from)
     }
 
-    pub fn next(&mut self) -> bool {
-        if !self.valid() {
-            return false;
-        }
-        self.iter.next()
+    pub fn next(&mut self) -> Result<bool> {
+        self.iter.next().map_err(Error::from)
     }
 
     #[inline]
@@ -366,13 +355,8 @@ where
     }
 
     #[inline]
-    pub fn valid(&self) -> bool {
-        self.iter.valid()
-    }
-
-    #[inline]
-    pub fn status(&self) -> Result<()> {
-        self.iter.status().map_err(From::from)
+    pub fn valid(&self) -> Result<bool> {
+        self.iter.valid().map_err(Error::from)
     }
 
     #[inline]
@@ -398,58 +382,51 @@ fn handle_check_key_in_region_error(e: crate::raftstore::Error) -> Result<()> {
     }
 }
 
+pub fn new_temp_engine(path: &tempfile::TempDir) -> engine::Engines {
+    let raft_path = path.path().join(std::path::Path::new("raft"));
+    let shared_block_cache = false;
+    engine::Engines::new(
+        Arc::new(
+            engine::rocks::util::new_engine(
+                path.path().to_str().unwrap(),
+                None,
+                engine::ALL_CFS,
+                None,
+            )
+            .unwrap(),
+        ),
+        Arc::new(
+            engine::rocks::util::new_engine(
+                raft_path.to_str().unwrap(),
+                None,
+                &[engine::CF_DEFAULT],
+                None,
+            )
+            .unwrap(),
+        ),
+        shared_block_cache,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::thread;
-    use std::time::Duration;
-
-    use kvproto::metapb::{Peer, Region};
-    use tempfile::{Builder, TempDir};
-
-    use crate::config::TiKvConfig;
-    use crate::raftstore::store::snap::snap_io::{apply_sst_cf_file, build_sst_cf_file};
     use crate::raftstore::store::PeerStorage;
     use crate::raftstore::Result;
-    use crate::storage::mvcc::ScannerBuilder;
-    use crate::storage::mvcc::{Write, WriteType};
-    use crate::storage::txn::Scanner;
-    use crate::storage::{CfStatistics, Cursor, ScanMode};
-    use engine::rocks;
+
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{IngestExternalFileOptions, Writable};
-    use engine::util::{delete_all_files_in_range, delete_all_in_range};
+    use engine::rocks::Writable;
     use engine::Engines;
     use engine::*;
-    use engine::{ALL_CFS, CF_DEFAULT};
-    use engine_rocks::RocksIOLimiter;
-    use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
-    use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
+    use engine_rocks::RocksEngine;
+    use engine_traits::Peekable;
     use keys::data_key;
-    use tikv_util::config::{ReadableDuration, ReadableSize};
+    use kvproto::metapb::{Peer, Region};
+    use tempfile::Builder;
     use tikv_util::worker;
-    use txn_types::Key;
 
     use super::*;
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
-
-    fn new_temp_engine(path: &TempDir) -> Engines {
-        let raft_path = path.path().join(Path::new("raft"));
-        let shared_block_cache = false;
-        Engines::new(
-            Arc::new(
-                rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
-                    .unwrap(),
-            ),
-            Arc::new(
-                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                    .unwrap(),
-            ),
-            shared_block_cache,
-        )
-    }
 
     fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
         let (sched, _) = worker::dummy_scheduler();
@@ -551,7 +528,7 @@ mod tests {
     fn test_seek_and_seek_prev() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let (store, _) = load_default_dataset(engines.clone());
+        let (store, _) = load_default_dataset(engines);
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
 
         let check_seek_result = |snap: &RegionSnapshot<RocksEngine>,
@@ -635,7 +612,7 @@ mod tests {
 
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let (store, _) = load_multiple_levels_dataset(engines.clone());
+        let (store, _) = load_multiple_levels_dataset(engines);
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
 
         seek_table = vec![
@@ -685,11 +662,11 @@ mod tests {
         assert_eq!(data.len(), 1);
 
         let mut iter = snap.iter(IterOption::default());
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -713,11 +690,11 @@ mod tests {
         let mut iter = snap.iter(IterOption::default());
         assert!(iter.seek(b"a1").unwrap());
 
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -731,117 +708,15 @@ mod tests {
             Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
             true,
         ));
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
         assert_eq!(res, base_data[0..2].to_vec());
-    }
-
-    #[test]
-    fn test_reverse_iterate() {
-        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
-        let engines = new_temp_engine(&path);
-        let (store, test_data) = load_default_dataset(engines.clone());
-
-        let snap = RegionSnapshot::<RocksEngine>::new(&store);
-        let mut statistics = CfStatistics::default();
-        let it = snap.iter(IterOption::default());
-        let mut iter = Cursor::new(it, ScanMode::Mixed);
-        assert!(!iter
-            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
-            .unwrap());
-        let mut pair = (
-            iter.key(&mut statistics).to_vec(),
-            iter.value(&mut statistics).to_vec(),
-        );
-        assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
-            .unwrap());
-        pair = (
-            iter.key(&mut statistics).to_vec(),
-            iter.value(&mut statistics).to_vec(),
-        );
-        assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(!iter
-            .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-            .is_err());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
-            .is_err());
-
-        assert!(iter.seek_to_last(&mut statistics));
-        let mut res = vec![];
-        loop {
-            res.push((
-                iter.key(&mut statistics).to_vec(),
-                iter.value(&mut statistics).to_vec(),
-            ));
-            if !iter.prev(&mut statistics) {
-                break;
-            }
-        }
-        let mut expect = test_data[1..3].to_vec();
-        expect.reverse();
-        assert_eq!(res, expect);
-
-        // test last region
-        let mut region = Region::default();
-        region.mut_peers().push(Peer::default());
-        let store = new_peer_storage(engines, &region);
-        let snap = RegionSnapshot::<RocksEngine>::new(&store);
-        let it = snap.iter(IterOption::default());
-        let mut iter = Cursor::new(it, ScanMode::Mixed);
-        assert!(!iter
-            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-            .unwrap());
-        let pair = (
-            iter.key(&mut statistics).to_vec(),
-            iter.value(&mut statistics).to_vec(),
-        );
-        assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
-        for kv_pairs in test_data.windows(2) {
-            let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
-            assert!(
-                iter.reverse_seek(&seek_key, &mut statistics).unwrap(),
-                "{}",
-                seek_key
-            );
-            let pair = (
-                iter.key(&mut statistics).to_vec(),
-                iter.value(&mut statistics).to_vec(),
-            );
-            assert_eq!(pair, kv_pairs[0]);
-        }
-
-        assert!(iter.seek_to_last(&mut statistics));
-        let mut res = vec![];
-        loop {
-            res.push((
-                iter.key(&mut statistics).to_vec(),
-                iter.value(&mut statistics).to_vec(),
-            ));
-            if !iter.prev(&mut statistics) {
-                break;
-            }
-        }
-        let mut expect = test_data.clone();
-        expect.reverse();
-        assert_eq!(res, expect);
     }
 
     #[test]
@@ -854,266 +729,15 @@ mod tests {
         let mut iter_opt = IterOption::default();
         iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);
-        assert!(iter.seek_to_last());
+        assert!(iter.seek_to_last().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev() {
+            if !iter.prev().unwrap() {
                 break;
             }
         }
         res.sort();
         assert_eq!(res, test_data[1..3].to_vec());
-    }
-
-    #[test]
-    fn test_delete_files_in_range_for_titan() {
-        let path = Builder::new()
-            .prefix("test-titan-delete-files-in-range")
-            .tempdir()
-            .unwrap();
-
-        // Set configs and create engines
-        let mut cfg = TiKvConfig::default();
-        let cache = cfg.storage.block_cache.build_shared_cache();
-        cfg.rocksdb.titan.enabled = true;
-        cfg.rocksdb.titan.disable_gc = true;
-        cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
-        cfg.rocksdb.defaultcf.disable_auto_compactions = true;
-        // Disable dynamic_level_bytes, otherwise SST files would be ingested to L0.
-        cfg.rocksdb.defaultcf.dynamic_level_bytes = false;
-        cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize(0);
-        cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
-        cfg.rocksdb.defaultcf.titan.sample_ratio = 1.0;
-        cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
-        let kv_db_opts = cfg.rocksdb.build_opt();
-        let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
-
-        let raft_path = path.path().join(Path::new("titan"));
-        let shared_block_cache = false;
-        let engines = Engines::new(
-            Arc::new(
-                rocks::util::new_engine(
-                    path.path().to_str().unwrap(),
-                    Some(kv_db_opts),
-                    ALL_CFS,
-                    Some(kv_cfs_opts),
-                )
-                .unwrap(),
-            ),
-            Arc::new(
-                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                    .unwrap(),
-            ),
-            shared_block_cache,
-        );
-
-        // Write some mvcc keys and values into db
-        // default_cf : a_7, b_7
-        // write_cf : a_8, b_8
-        let start_ts = 7.into();
-        let commit_ts = 8.into();
-        let write = Write::new(WriteType::Put, start_ts, None);
-        let db = &engines.kv;
-        let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
-        let write_cf = db.cf_handle(CF_WRITE).unwrap();
-        db.put_cf(
-            &default_cf,
-            &data_key(Key::from_raw(b"a").append_ts(start_ts).as_encoded()),
-            b"a_value",
-        )
-        .unwrap();
-        db.put_cf(
-            &write_cf,
-            &data_key(Key::from_raw(b"a").append_ts(commit_ts).as_encoded()),
-            &write.as_ref().to_bytes(),
-        )
-        .unwrap();
-        db.put_cf(
-            &default_cf,
-            &data_key(Key::from_raw(b"b").append_ts(start_ts).as_encoded()),
-            b"b_value",
-        )
-        .unwrap();
-        db.put_cf(
-            &write_cf,
-            &data_key(Key::from_raw(b"b").append_ts(commit_ts).as_encoded()),
-            &write.as_ref().to_bytes(),
-        )
-        .unwrap();
-
-        // Flush and compact the kvs into L6.
-        db.flush(true).unwrap();
-        compact_files_in_range(&db, None, None, None).unwrap();
-        let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
-        assert_eq!(value, 0);
-        let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
-        assert_eq!(value, 1);
-
-        // Delete one mvcc kvs we have written above.
-        // Here we make the kvs on the L5 by ingesting SST.
-        let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
-        let mut writer = RocksSstWriterBuilder::new()
-            .build(&sst_file_path.to_str().unwrap())
-            .unwrap();
-        writer
-            .delete(&data_key(
-                Key::from_raw(b"a").append_ts(start_ts).as_encoded(),
-            ))
-            .unwrap();
-        writer.finish().unwrap();
-        let mut opts = IngestExternalFileOptions::new();
-        opts.move_files(true);
-        db.ingest_external_file_cf(&default_cf, &opts, &[sst_file_path.to_str().unwrap()])
-            .unwrap();
-
-        // Now the LSM structure of default cf is:
-        // L5: [delete(a_7)]
-        // L6: [put(a_7, blob1), put(b_7, blob1)]
-        // the ranges of two SST files are overlapped.
-        //
-        // There is one blob file in Titan
-        // blob1: (a_7, a_value), (b_7, b_value)
-        let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
-        assert_eq!(value, 0);
-        let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
-        assert_eq!(value, 1);
-        let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
-        assert_eq!(value, 1);
-
-        // Used to trigger titan gc
-        let db = &engines.kv;
-        db.put(b"1", b"1").unwrap();
-        db.flush(true).unwrap();
-        db.put(b"2", b"2").unwrap();
-        db.flush(true).unwrap();
-        compact_files_in_range(db, Some(b"0"), Some(b"3"), Some(1)).unwrap();
-
-        // Now the LSM structure of default cf is:
-        // memtable: [put(b_7, blob4)] (because of Titan GC)
-        // L0: [put(1, blob2), put(2, blob3)]
-        // L5: [delete(a_7)]
-        // L6: [put(a_7, blob1), put(b_7, blob1)]
-        // the ranges of two SST files are overlapped.
-        //
-        // There is four blob files in Titan
-        // blob1: (a_7, a_value), (b_7, b_value)
-        // blob2: (1, 1)
-        // blob3: (2, 2)
-        // blob4: (b_7, b_value)
-        let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
-        assert_eq!(value, 0);
-        let value = db.get_property_int(&"rocksdb.num-files-at-level1").unwrap();
-        assert_eq!(value, 1);
-        let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
-        assert_eq!(value, 1);
-        let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
-        assert_eq!(value, 1);
-
-        // Wait Titan to purge obsolete files
-        thread::sleep(Duration::from_secs(2));
-        // Now the LSM structure of default cf is:
-        // memtable: [put(b_7, blob4)] (because of Titan GC)
-        // L0: [put(1, blob2), put(2, blob3)]
-        // L5: [delete(a_7)]
-        // L6: [put(a_7, blob1), put(b_7, blob1)]
-        // the ranges of two SST files are overlapped.
-        //
-        // There is three blob files in Titan
-        // blob2: (1, 1)
-        // blob3: (2, 2)
-        // blob4: (b_7, b_value)
-
-        // `delete_files_in_range` may expose some old keys.
-        // For Titan it may encounter `missing blob file` in `delete_all_in_range`,
-        // so we set key_only for Titan.
-        delete_all_files_in_range(
-            &engines.kv,
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
-        )
-        .unwrap();
-        delete_all_in_range(
-            &engines.kv,
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
-            false,
-        )
-        .unwrap();
-
-        // Now the LSM structure of default cf is:
-        // memtable: [put(b_7, blob4)] (because of Titan GC)
-        // L0: [put(1, blob2), put(2, blob3)]
-        // L6: [put(a_7, blob1), put(b_7, blob1)]
-        // the ranges of two SST files are overlapped.
-        //
-        // There is three blob files in Titan
-        // blob2: (1, 1)
-        // blob3: (2, 2)
-        // blob4: (b_7, b_value)
-        let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
-        assert_eq!(value, 0);
-        let value = db.get_property_int(&"rocksdb.num-files-at-level1").unwrap();
-        assert_eq!(value, 1);
-        let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
-        assert_eq!(value, 0);
-        let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
-        assert_eq!(value, 1);
-
-        // Generate a snapshot
-        let default_sst_file_path = path.path().join("default.sst");
-        let write_sst_file_path = path.path().join("write.sst");
-        build_sst_cf_file::<RocksIOLimiter>(
-            &default_sst_file_path.to_str().unwrap(),
-            &RocksSnapshot::new(Arc::clone(&engines.kv)),
-            CF_DEFAULT,
-            b"",
-            b"{",
-            None,
-        )
-        .unwrap();
-        build_sst_cf_file::<RocksIOLimiter>(
-            &write_sst_file_path.to_str().unwrap(),
-            &RocksSnapshot::new(Arc::clone(&engines.kv)),
-            CF_WRITE,
-            b"",
-            b"{",
-            None,
-        )
-        .unwrap();
-
-        // Apply the snapshot to other DB.
-        let dir1 = Builder::new()
-            .prefix("test-snap-cf-db-apply")
-            .tempdir()
-            .unwrap();
-        let engines1 = new_temp_engine(&dir1);
-        apply_sst_cf_file(
-            &default_sst_file_path.to_str().unwrap(),
-            engines1.kv.c(),
-            CF_DEFAULT,
-        )
-        .unwrap();
-        apply_sst_cf_file(
-            &write_sst_file_path.to_str().unwrap(),
-            engines1.kv.c(),
-            CF_WRITE,
-        )
-        .unwrap();
-
-        // Do scan on other DB.
-        let mut r = Region::default();
-        r.mut_peers().push(Peer::default());
-        r.set_start_key(b"a".to_vec());
-        r.set_end_key(b"z".to_vec());
-        let snapshot = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&engines1.kv), r);
-        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
-            .range(Some(Key::from_raw(b"a")), None)
-            .build()
-            .unwrap();
-        assert_eq!(
-            scanner.next().unwrap(),
-            Some((Key::from_raw(b"b"), b"b_value".to_vec())),
-        );
     }
 }

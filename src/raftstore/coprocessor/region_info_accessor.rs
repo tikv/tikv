@@ -8,10 +8,9 @@ use std::time::Duration;
 
 use super::metrics::*;
 use super::{
-    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
-    RoleObserver,
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, Result, RoleObserver,
 };
-use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
@@ -69,7 +68,8 @@ impl RegionInfo {
 type RegionsMap = HashMap<u64, RegionInfo>;
 type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
 
-pub type SeekRegionCallback = Box<dyn Fn(&mut dyn Iterator<Item = &RegionInfo>) + Send>;
+pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
+pub type SeekRegionCallback = Box<dyn FnOnce(&mut dyn Iterator<Item = &RegionInfo>) + Send>;
 
 /// `RegionInfoAccessor` has its own thread. Queries and updates are done by sending commands to the
 /// thread.
@@ -78,6 +78,10 @@ enum RegionInfoQuery {
     SeekRegion {
         from: Vec<u8>,
         callback: SeekRegionCallback,
+    },
+    FindRegionById {
+        region_id: u64,
+        callback: Callback<Option<RegionInfo>>,
     },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
@@ -89,6 +93,9 @@ impl Display for RegionInfoQuery {
             RegionInfoQuery::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
             RegionInfoQuery::SeekRegion { from, .. } => {
                 write!(f, "SeekRegion(from: {})", hex::encode_upper(from))
+            }
+            RegionInfoQuery::FindRegionById { region_id, .. } => {
+                write!(f, "FindRegionById(region_id: {})", region_id)
             }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
@@ -141,9 +148,9 @@ fn register_region_event_listener(
     let listener = RegionEventListener { scheduler };
 
     host.registry
-        .register_role_observer(1, Box::new(listener.clone()));
+        .register_role_observer(1, BoxRoleObserver::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, Box::new(listener));
+        .register_region_change_observer(1, BoxRegionChangeObserver::new(listener));
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the
@@ -205,7 +212,7 @@ impl RegionCollector {
         }
 
         // If the region already exists, update it and keep the original role.
-        *old_region = region.clone();
+        *old_region = region;
     }
 
     fn handle_create_region(&mut self, region: Region, role: StateRole) {
@@ -349,6 +356,10 @@ impl RegionCollector {
         callback(&mut iter)
     }
 
+    pub fn handle_find_region_by_id(&self, region_id: u64, callback: Callback<Option<RegionInfo>>) {
+        callback(self.regions.get(&region_id).cloned());
+    }
+
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         {
             let region = event.get_region();
@@ -398,6 +409,12 @@ impl Runnable<RegionInfoQuery> for RegionCollector {
             }
             RegionInfoQuery::SeekRegion { from, callback } => {
                 self.handle_seek_region(from, callback);
+            }
+            RegionInfoQuery::FindRegionById {
+                region_id,
+                callback,
+            } => {
+                self.handle_find_region_by_id(region_id, callback);
             }
             RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
@@ -478,10 +495,40 @@ impl RegionInfoAccessor {
     }
 }
 
+pub trait RegionInfoProvider: Send + Clone + 'static {
+    /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
+    /// the callback to process the result.
+    fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn find_region_by_id(
+        &self,
+        _reigon_id: u64,
+        _callback: Callback<Option<RegionInfo>>,
+    ) -> Result<()> {
+        unimplemented!()
+    }
+}
+
 impl RegionInfoProvider for RegionInfoAccessor {
-    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
         let msg = RegionInfoQuery::SeekRegion {
             from: from.to_vec(),
+            callback,
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+    }
+
+    fn find_region_by_id(
+        &self,
+        region_id: u64,
+        callback: Callback<Option<RegionInfo>>,
+    ) -> Result<()> {
+        let msg = RegionInfoQuery::FindRegionById {
+            region_id,
             callback,
         };
         self.scheduler

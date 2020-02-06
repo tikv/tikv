@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use engine::rocks;
 use engine::rocks::DB;
@@ -15,9 +15,9 @@ use crate::raftstore::store::{CasualMessage, CasualRouter};
 
 use super::super::error::Result;
 use super::super::metrics::*;
-use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use engine_rocks::RangeProperties;
 
 pub struct Checker {
     max_size: u64,
@@ -97,30 +97,20 @@ impl SplitChecker for Checker {
     }
 }
 
+#[derive(Clone)]
 pub struct SizeCheckObserver<C> {
-    region_max_size: u64,
-    split_size: u64,
-    split_limit: u64,
-    router: Mutex<C>,
+    router: Arc<Mutex<C>>,
 }
 
 impl<C: CasualRouter> SizeCheckObserver<C> {
-    pub fn new(
-        region_max_size: u64,
-        split_size: u64,
-        split_limit: u64,
-        router: C,
-    ) -> SizeCheckObserver<C> {
+    pub fn new(router: C) -> SizeCheckObserver<C> {
         SizeCheckObserver {
-            region_max_size,
-            split_size,
-            split_limit,
-            router: Mutex::new(router),
+            router: Arc::new(Mutex::new(router)),
         }
     }
 }
 
-impl<C> Coprocessor for SizeCheckObserver<C> {}
+impl<C: Send> Coprocessor for SizeCheckObserver<C> {}
 
 impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(
@@ -142,9 +132,9 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 );
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
-                    self.region_max_size,
-                    self.split_size,
-                    self.split_limit,
+                    host.cfg.region_max_size.0,
+                    host.cfg.region_split_size.0,
+                    host.cfg.batch_split_limit,
                     policy,
                 )));
                 return;
@@ -162,22 +152,22 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
         }
 
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        if region_size >= self.region_max_size {
+        if region_size >= host.cfg.region_max_size.0 {
             info!(
                 "approximate size over threshold, need to do split check";
                 "region_id" => region.get_id(),
                 "size" => region_size,
-                "threshold" => self.region_max_size,
+                "threshold" => host.cfg.region_max_size.0,
             );
             // when meet large region use approximate way to produce split keys
-            if region_size >= self.region_max_size * self.split_limit * 2 {
+            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit * 2 {
                 policy = CheckPolicy::Approximate
             }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
-                self.region_max_size,
-                self.split_size,
-                self.split_limit,
+                host.cfg.region_max_size.0,
+                host.cfg.region_split_size.0,
+                host.cfg.batch_split_limit,
                 policy,
             )));
         } else {
@@ -186,7 +176,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 "approximate size less than threshold, does not need to do split check";
                 "region_id" => region.get_id(),
                 "size" => region_size,
-                "threshold" => self.region_max_size,
+                "threshold" => host.cfg.region_max_size.0,
             );
         }
     }
@@ -425,7 +415,8 @@ pub mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
+            CoprocessorHost::new(tx),
+            cfg,
         );
 
         // so split key will be [z0006]
@@ -434,7 +425,11 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
             Ok((region_id, CasualMessage::RegionApproximateSize { .. })) => {
@@ -452,7 +447,11 @@ pub mod tests {
         // we flush it to SST so we can use the size properties instead.
         engine.flush(true).unwrap();
 
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         must_split_at(&rx, &region, vec![b"0006".to_vec()]);
 
         // so split keys will be [z0006, z0012]
@@ -461,7 +460,11 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
         engine.flush(true).unwrap();
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         must_split_at(&rx, &region, vec![b"0006".to_vec(), b"0012".to_vec()]);
 
         // for test batch_split_limit
@@ -471,7 +474,11 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
         engine.flush(true).unwrap();
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         must_split_at(
             &rx,
             &region,
@@ -486,7 +493,7 @@ pub mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(region, true, CheckPolicy::Scan));
     }
 
     #[test]

@@ -14,16 +14,20 @@ use engine::rocks::Writable;
 use engine::WriteBatch;
 use engine::CF_RAFT;
 use engine::{util as engine_util, Engines, Mutable, Peekable};
-use engine_rocks::{Compat, RocksSnapshot};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
+use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
 use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use crate::raftstore::store::{self, check_abort, ApplyOptions, SnapEntry, SnapKey, SnapManager};
+use crate::raftstore::store::transport::CasualRouter;
+use crate::raftstore::store::{
+    self, check_abort, ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
+};
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time;
 use tikv_util::timer::Timer;
@@ -202,16 +206,18 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext {
+struct SnapContext<R> {
     engines: Engines,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
+    coprocessor_host: CoprocessorHost,
+    router: R,
 }
 
-impl SnapContext {
+impl<R: CasualRouter> SnapContext<R> {
     /// Generates the snapshot of the Region.
     fn generate_snap(
         &self,
@@ -221,7 +227,7 @@ impl SnapContext {
         notifier: SyncSender<RaftSnapshot>,
     ) -> Result<()> {
         // do we need to check leader here?
-        let snap = box_try!(store::do_snapshot(
+        let snap = box_try!(store::do_snapshot::<RocksEngine>(
             self.mgr.clone(),
             raft_snap,
             kv_snap,
@@ -237,6 +243,10 @@ impl SnapContext {
                 "err" => %e,
             );
         }
+        // The error can be ignored as snapshot will be sent in next heartbeat in the end.
+        let _ = self
+            .router
+            .send(region_id, CasualMessage::SnapshotGenerated);
         Ok(())
     }
 
@@ -315,7 +325,7 @@ impl SnapContext {
         defer!({
             self.mgr.deregister(&snap_key, &SnapEntry::Applying);
         });
-        let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
+        let mut s = box_try!(self.mgr.get_snapshot_for_applying_to_engine(&snap_key));
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
@@ -323,9 +333,10 @@ impl SnapContext {
         let timer = Instant::now();
         let options = ApplyOptions {
             db: self.engines.kv.c().clone(),
-            region: region.clone(),
+            region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
+            coprocessor_host: self.coprocessor_host.clone(),
         };
         s.apply(options)?;
 
@@ -510,23 +521,25 @@ impl SnapContext {
     }
 }
 
-pub struct Runner {
+pub struct Runner<R> {
     pool: ThreadPool<DefaultContext>,
-    ctx: SnapContext,
+    ctx: SnapContext<R>,
 
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task>,
 }
 
-impl Runner {
+impl<R: CasualRouter> Runner<R> {
     pub fn new(
         engines: Engines,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
-    ) -> Runner {
+        coprocessor_host: CoprocessorHost,
+        router: R,
+    ) -> Runner<R> {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
                 .thread_count(GENERATE_POOL_SIZE)
@@ -538,12 +551,14 @@ impl Runner {
                 use_delete_range,
                 clean_stale_peer_delay,
                 pending_delete_ranges: PendingDeleteRanges::default(),
+                coprocessor_host,
+                router,
             },
             pending_applies: VecDeque::new(),
         }
     }
 
-    pub fn new_timer() -> Timer<Event> {
+    pub fn new_timer(&self) -> Timer<Event> {
         let mut timer = Timer::new(2);
         timer.add_task(
             Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
@@ -572,7 +587,10 @@ impl Runner {
     }
 }
 
-impl Runnable<Task> for Runner {
+impl<R> Runnable<Task> for Runner<R>
+where
+    R: CasualRouter + Send + Clone + 'static,
+{
     fn run(&mut self, task: Task) {
         match task {
             Task::Gen {
@@ -630,7 +648,10 @@ pub enum Event {
     CheckApply,
 }
 
-impl RunnableWithTimer<Task, Event> for Runner {
+impl<R> RunnableWithTimer<Task, Event> for Runner<R>
+where
+    R: CasualRouter + Send + Clone + 'static,
+{
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {
@@ -659,10 +680,11 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use crate::raftstore::coprocessor::CoprocessorHost;
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
-    use crate::raftstore::store::{SnapKey, SnapManager};
+    use crate::raftstore::store::{CasualMessage, SnapKey, SnapManager};
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable, WriteBatch};
     use engine::Engines;
@@ -768,7 +790,7 @@ mod tests {
             rocks::util::CFOptions::new("lock", cf_opts.clone()),
             rocks::util::CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts.clone());
+        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,
@@ -803,7 +825,16 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let runner = RegionRunner::new(engines.clone(), mgr, 0, true, Duration::from_secs(0));
+        let (router, receiver) = mpsc::sync_channel(1);
+        let runner = RegionRunner::new(
+            engines.clone(),
+            mgr,
+            0,
+            true,
+            Duration::from_secs(0),
+            CoprocessorHost::default(),
+            router,
+        );
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
         worker.start_with_timer(runner, timer).unwrap();
@@ -820,6 +851,12 @@ mod tests {
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
+            match receiver.recv() {
+                Ok((region_id, CasualMessage::SnapshotGenerated)) => {
+                    assert_eq!(region_id, id);
+                }
+                msg => panic!("expected SnapshotGenerated, but got {:?}", msg),
+            }
             let data = s1.get_data();
             let key = SnapKey::from_snap(&s1).unwrap();
             let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
