@@ -169,13 +169,7 @@ mod sys {
                     }
                     let mut parts = line.split_whitespace();
                     let name = match parts.nth(0) {
-                        Some(name) => {
-                            if name == "cpu" {
-                                "cpu-total"
-                            } else {
-                                name
-                            }
-                        }
+                        Some(name) if name != "cpu" => name,
                         _ => continue,
                     };
                     let mut pairs = vec![];
