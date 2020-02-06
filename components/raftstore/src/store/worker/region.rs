@@ -10,11 +10,10 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine::rocks;
-use engine::rocks::Writable;
-use engine::WriteBatch;
 use engine::CF_RAFT;
-use engine::{util as engine_util, Engines, Mutable, Peekable};
+use engine::{util as engine_util, Engines, Peekable};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngine, Mutable};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -340,12 +339,11 @@ impl<R: CasualRouter> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let wb = WriteBatch::default();
+        let wb = self.engines.kv.c().write_batch();
         region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT));
-        box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
-        box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(&wb).unwrap_or_else(|e| {
+        box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
+        box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
+        self.engines.kv.c().write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
