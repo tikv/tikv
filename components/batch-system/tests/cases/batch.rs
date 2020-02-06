@@ -1,13 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::*;
+use batch_system::test_runner::*;
 use batch_system::*;
 use std::time::Duration;
 use tikv_util::mpsc;
 
 #[test]
 fn test_batch() {
-    let (control_tx, control_fsm) = new_runner(10);
+    let (control_tx, control_fsm) = Runner::new(10);
     let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
     let builder = Builder::new();
     let metrics = builder.metrics.clone();
@@ -18,8 +18,8 @@ fn test_batch() {
     let tx_ = tx.clone();
     let r = router.clone();
     router
-        .send_control(Some(Box::new(move |_: &mut Runner| {
-            let (tx, runner) = new_runner(10);
+        .send_control(Message::Callback(Box::new(move |_: &mut Runner| {
+            let (tx, runner) = Runner::new(10);
             let mailbox = BasicMailbox::new(tx, runner);
             r.register(1, mailbox);
             tx_.send(1).unwrap();
@@ -29,7 +29,7 @@ fn test_batch() {
     router
         .send(
             1,
-            Some(Box::new(move |_: &mut Runner| {
+            Message::Callback(Box::new(move |_: &mut Runner| {
                 tx.send(2).unwrap();
             })),
         )
