@@ -66,7 +66,7 @@ impl SplitChecker for Checker {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TableCheckObserver;
 
 impl Coprocessor for TableCheckObserver {}
@@ -336,8 +336,7 @@ mod tests {
         cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(stx);
-        let mut runnable =
-            SplitCheckRunner::new(Arc::clone(&engine), tx, Arc::new(coprocessor), cfg);
+        let mut runnable = SplitCheckRunner::new(Arc::clone(&engine), tx, coprocessor, cfg);
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {

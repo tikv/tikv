@@ -555,7 +555,8 @@ mod tests {
         ];
 
         for (arg, fsp, h, m, s, ms) in cases {
-            let duration = Some(Duration::parse(arg.as_bytes(), fsp).unwrap());
+            let duration =
+                Some(Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap());
             let test_case_func = |sig, res| {
                 let output = RpnFnScalarEvaluator::new()
                     .push_param(duration.clone())

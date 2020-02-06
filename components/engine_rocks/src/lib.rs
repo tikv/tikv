@@ -18,6 +18,8 @@
 extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
+#[macro_use]
+extern crate slog_global;
 
 mod cf_handle;
 pub use crate::cf_handle::*;
@@ -48,3 +50,9 @@ pub mod util;
 
 mod compat;
 pub use compat::*;
+
+mod compact_listener;
+pub use compact_listener::*;
+
+mod properties;
+pub use properties::*;
