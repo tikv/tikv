@@ -13,17 +13,18 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 
+use bitfield::bitfield;
+use boolinator::Boolinator;
+use chrono::prelude::*;
+
 use codec::prelude::*;
-use tidb_query_datatype::FieldTypeTp;
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+use tipb::FieldType;
 
 use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::{check_fsp, Decimal, Duration};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::{EvalContext, Flag, SqlMode};
-
-use bitfield::bitfield;
-use boolinator::Boolinator;
-use chrono::prelude::*;
 
 const MIN_TIMESTAMP: i64 = 0;
 const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
@@ -289,6 +290,7 @@ impl Time {
 
 mod parser {
     use super::*;
+
     fn bytes_to_u32(input: &[u8]) -> Option<u32> {
         input.iter().try_fold(0u32, |acc, d| {
             d.is_ascii_digit().as_option()?;
@@ -1655,14 +1657,57 @@ impl<T: BufferWriter> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
+    #[inline]
     fn write_time(&mut self, v: Time) -> Result<()> {
         Ok(self.write_u64_le(v.0)?)
     }
 }
 
+pub trait TimeDatumPayloadChunkEncoder: TimeEncoder {
+    #[inline]
+    fn write_time_to_chunk_by_datum_payload_int(
+        &mut self,
+        mut src_payload: &[u8],
+        ctx: &mut EvalContext,
+        field_type: &FieldType,
+    ) -> Result<()> {
+        let time = src_payload.read_time_int(ctx, field_type)?;
+        self.write_time(time)
+    }
+
+    #[inline]
+    fn write_time_to_chunk_by_datum_payload_varint(
+        &mut self,
+        mut src_payload: &[u8],
+        ctx: &mut EvalContext,
+        field_type: &FieldType,
+    ) -> Result<()> {
+        let time = src_payload.read_time_varint(ctx, field_type)?;
+        self.write_time(time)
+    }
+}
+
+impl<T: BufferWriter> TimeDatumPayloadChunkEncoder for T {}
+
 pub trait TimeDecoder: NumberDecoder {
-    /// Decodes time encoded by `write_time` for Chunk format.
-    fn read_time(&mut self, _ctx: &mut EvalContext) -> Result<Time> {
+    #[inline]
+    fn read_time_int(&mut self, ctx: &mut EvalContext, field_type: &FieldType) -> Result<Time> {
+        let v = self.read_u64()?;
+        let fsp = field_type.as_accessor().decimal() as i8;
+        let time_type = field_type.as_accessor().tp().try_into()?;
+        Time::from_packed_u64(ctx, v, time_type, fsp)
+    }
+
+    #[inline]
+    fn read_time_varint(&mut self, ctx: &mut EvalContext, field_type: &FieldType) -> Result<Time> {
+        let v = self.read_var_u64()?;
+        let fsp = field_type.as_accessor().decimal() as i8;
+        let time_type = field_type.as_accessor().tp().try_into()?;
+        Time::from_packed_u64(ctx, v, time_type, fsp)
+    }
+
+    #[inline]
+    fn read_time_from_chunk(&mut self) -> Result<Time> {
         let t = self.read_u64_le()?;
         Ok(Time(t))
     }
@@ -2123,7 +2168,7 @@ mod tests {
             ..TimeEnv::default()
         });
 
-        assert!(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false,).is_err());
+        assert!(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false).is_err());
 
         // Enable NO_ZERO_DATE, STRICT_MODE and IGNORE_TRUNCATE.
         // If zero-date is encountered, an error is returned.
@@ -2136,7 +2181,7 @@ mod tests {
 
         assert_eq!(
             "0000-00-00 00:00:00",
-            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false,)?.to_string()
+            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false)?.to_string()
         );
 
         assert!(ctx.warnings.warning_cnt > 0);
@@ -2188,7 +2233,7 @@ mod tests {
 
         assert_eq!(
             "0000-00-00 00:00:00",
-            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false,)?.to_string()
+            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false)?.to_string()
         );
 
         assert!(ctx.warnings.warning_cnt > 0);
@@ -2305,7 +2350,7 @@ mod tests {
         let cases = vec!["11:30:45.123456", "-35:30:46"];
         for case in cases {
             let mut ctx = EvalContext::default();
-            let duration = Duration::parse(case.as_bytes(), MAX_FSP)?;
+            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP)?;
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
             let today = actual
@@ -2418,7 +2463,7 @@ mod tests {
         for (lhs, rhs, expected) in normal_cases.clone() {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2426,7 +2471,7 @@ mod tests {
         for (expected, rhs, lhs) in normal_cases {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2443,14 +2488,14 @@ mod tests {
 
         for (lhs, rhs, expected) in dsts.clone() {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
 
         for (expected, rhs, lhs) in dsts {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2467,7 +2512,7 @@ mod tests {
         ];
         for (lhs, rhs, expected) in cases {
             let lhs = Time::parse_datetime(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2475,11 +2520,11 @@ mod tests {
         // Failed cases
         let mut ctx = EvalContext::default();
         let lhs = Time::parse_datetime(&mut ctx, "9999-12-31 23:59:59", 6, false)?;
-        let rhs = Duration::parse(b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
         assert_eq!(lhs.checked_add(&mut ctx, rhs), None);
 
         let lhs = Time::parse_datetime(&mut ctx, "0000-01-01 00:00:01", 6, false)?;
-        let rhs = Duration::parse(b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
         assert_eq!(lhs.checked_sub(&mut ctx, rhs), None);
 
         Ok(())
