@@ -205,7 +205,6 @@ pub struct Peer {
     pub peers_start_pending_time: Vec<(u64, Instant)>,
     /// A inaccurate cache about which peer is marked as down.
     down_peer_ids: Vec<u64>,
-    pub recent_conf_change_time: Instant,
 
     /// An inaccurate difference in region size since last reset.
     /// It is used to decide whether split check is needed.
@@ -299,7 +298,6 @@ impl Peer {
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
-            recent_conf_change_time: Instant::now(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
@@ -1810,8 +1808,6 @@ impl Peer {
 
     fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
         // Checks if safe to transfer leader.
-        // Check `has_pending_conf` is necessary because `recent_conf_change_time` is updated
-        // on applied. TODO: fix the transfer leader issue in Raft.
         if self.raft_group.raft.has_pending_conf() {
             debug!(
                 "reject transfer leader due to the region was config changed recently";
@@ -1822,6 +1818,8 @@ impl Peer {
             return false;
         }
 
+        // Broadcast heartbeat to make sure followers commit the entries immediately.
+        // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group.ping();
         let mut msg = eraftpb::Message::new();
         msg.set_to(peer.get_id());
@@ -1835,13 +1833,9 @@ impl Peer {
     fn ready_to_transfer_leader<T, C>(
         &self,
         ctx: &mut PollContext<T, C>,
-        index: u64,
+        mut index: u64,
         peer: &metapb::Peer,
     ) -> bool {
-        if index == 0 {
-            return false;
-        }
-
         let peer_id = peer.get_id();
         let status = self.raft_group.status_ref();
         let progress = status.progress.unwrap();
@@ -1850,14 +1844,19 @@ impl Peer {
             return false;
         }
 
-        for (_, progress) in progress.voters() {
+        for (id, progress) in progress.voters() {
             if progress.state == ProgressState::Snapshot {
                 return false;
             }
+            if *id == peer_id && index == 0 {
+                // index will be zero if it's sent from an instance without
+                // pre-transfer-leader feature. Set it to matched to make it
+                // possible to transfer leader to an older version. It may be
+                // useful during rolling restart.
+                index = progress.matched;
+            }
         }
 
-        // Checks if safe to transfer leader.
-        // TODO: fix the transfer leader issue in Raft.
         if self.raft_group.raft.has_pending_conf()
             || self.raft_group.raft.pending_conf_index > index
         {
@@ -2255,7 +2254,22 @@ impl Peer {
         self.raft_group.raft.msgs.push(msg);
     }
 
-    // Return true to if the transfer leader request is accepted.
+    /// Return true to if the transfer leader request is accepted.
+    ///
+    /// When transferring leadership begins, leader sends a pre-transfer
+    /// to target follower first to ensures it's ready to become leader.
+    /// After that the real transfer leader process begin.
+    ///
+    /// 1. pre_transfer_leader on leader:
+    ///     Leader will send a MsgTransferLeader to follower.
+    /// 2. execute_transfer_leader on follower
+    ///     If follower passes all necessary checks, it will reply an
+    ///     ACK with type MsgTransferLeader and its promised persistent index.
+    /// 3. execute_transfer_leader on leader:
+    ///     Leader checks if it's appropriate to transfer leadership. If it
+    ///     does, it calls raft transfer_leader API to do the remaining work.
+    ///
+    /// See also: tikv/rfcs#37.
     fn propose_transfer_leader<T, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
