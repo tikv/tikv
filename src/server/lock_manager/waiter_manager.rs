@@ -618,6 +618,7 @@ pub mod tests {
     use super::*;
     use tikv_util::future::paired_future_callback;
     use tikv_util::worker::FutureWorker;
+    use txn_types::Value;
 
     use std::sync::mpsc;
 
@@ -705,7 +706,9 @@ pub mod tests {
     pub(crate) type WaiterCtx = (
         Waiter,
         LockInfo,
-        tokio_sync::oneshot::Receiver<Result<Vec<Result<(), StorageError>>, StorageError>>,
+        tokio_sync::oneshot::Receiver<
+            Result<Result<Option<(Option<Value>, TimeStamp)>, StorageError>, StorageError>,
+        >,
     );
 
     pub(crate) fn new_test_waiter(
@@ -721,10 +724,10 @@ pub mod tests {
         info.set_primary_lock(primary);
         info.set_lock_ttl(3000);
         info.set_txn_size(16);
-        let pr = ProcessResult::MultiRes {
-            results: vec![Err(StorageError::from(TxnError::from(MvccError::from(
+        let pr = ProcessResult::PessimisticLockRes {
+            res: Err(StorageError::from(TxnError::from(MvccError::from(
                 MvccErrorInner::KeyIsLocked(info.clone()),
-            ))))],
+            )))),
         };
         let lock = Lock {
             ts: lock_ts,
@@ -733,7 +736,7 @@ pub mod tests {
         let (cb, f) = paired_future_callback();
         let waiter = Waiter::new(
             waiter_ts,
-            StorageCallback::Booleans(cb),
+            StorageCallback::PessimisticLock(cb),
             pr,
             lock,
             Instant::now() + Duration::from_millis(3000),
@@ -823,7 +826,7 @@ pub mod tests {
     fn test_waiter_notify() {
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
         waiter.notify();
-        expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info);
+        expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info);
 
         // A waiter can conflict with other transactions more than once.
         for conflict_times in 1..=3 {
@@ -1055,7 +1058,7 @@ pub mod tests {
             WaitTimeout::Millis(1000),
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
             900,
             1200,
         );
@@ -1070,7 +1073,7 @@ pub mod tests {
             WaitTimeout::Millis(100),
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
             50,
             300,
         );
@@ -1085,7 +1088,7 @@ pub mod tests {
             WaitTimeout::Millis(3000),
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
             900,
             1200,
         );
@@ -1271,13 +1274,13 @@ pub mod tests {
         );
         // Should notify duplicated waiter immediately.
         assert_elapsed(
-            || expect_key_is_locked(f1.wait().unwrap().unwrap().pop().unwrap(), lock_info1),
+            || expect_key_is_locked(f1.wait().unwrap().unwrap(), lock_info1),
             0,
             200,
         );
         // The new waiter will be wake up after timeout.
         assert_elapsed(
-            || expect_key_is_locked(f2.wait().unwrap().unwrap().pop().unwrap(), lock_info2),
+            || expect_key_is_locked(f2.wait().unwrap().unwrap(), lock_info2),
             900,
             1200,
         );

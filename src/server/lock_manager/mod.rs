@@ -336,7 +336,7 @@ mod tests {
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
             2900,
             3200,
         );
@@ -455,7 +455,7 @@ mod tests {
             None,
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
             0,
             200,
         );
