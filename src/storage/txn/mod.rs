@@ -18,7 +18,7 @@ use kvproto::kvrpcpb::LockInfo;
 use std::error;
 use std::fmt;
 use std::io::Error as IoError;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, TimeStamp, Value};
 
 pub use self::commands::Command;
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
@@ -30,13 +30,30 @@ pub use self::store::{Scanner, SnapshotStore, Store};
 /// Process result of a command.
 pub enum ProcessResult {
     Res,
-    MultiRes { results: Vec<StorageResult<()>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Locks { locks: Vec<LockInfo> },
-    TxnStatus { txn_status: TxnStatus },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
+    MultiRes {
+        results: Vec<StorageResult<()>>,
+    },
+    MvccKey {
+        mvcc: MvccInfo,
+    },
+    MvccStartTs {
+        mvcc: Option<(Key, MvccInfo)>,
+    },
+    Locks {
+        locks: Vec<LockInfo>,
+    },
+    TxnStatus {
+        txn_status: TxnStatus,
+    },
+    NextCommand {
+        cmd: Command,
+    },
+    Failed {
+        err: StorageError,
+    },
+    PessimisticLockRes {
+        res: StorageResult<Option<(Option<Value>, TimeStamp)>>,
+    },
 }
 
 quick_error! {

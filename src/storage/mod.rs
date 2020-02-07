@@ -489,12 +489,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     callback
                 );
             }
-            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
+            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { keys, force, .. }) => {
                 check_key_size!(
                     keys.iter().map(|k| k.0.as_encoded()),
                     self.max_key_size,
                     callback
                 );
+                if *force && keys.len() != 1 {
+                    callback(Err(Error::from(ErrorInner::Other(box_err!(
+                        "force pessimistic lock only support single mutation"
+                    )))));
+                    return Ok(());
+                }
             }
             _ => {}
         }

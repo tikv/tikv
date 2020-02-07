@@ -459,7 +459,7 @@ fn wake_up_waiters_if_needed<L: LockManager>(
     }
 }
 
-fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
+fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
     match res {
         Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
@@ -606,11 +606,12 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             is_first_lock,
             for_update_ts,
             wait_timeout,
+            force,
             ..
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
-            let mut locks = vec![];
             let rows = keys.len();
+            let mut res = Ok(None);
             for (k, should_not_exist) in keys {
                 match txn.acquire_pessimistic_lock(
                     k,
@@ -618,10 +619,17 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     should_not_exist,
                     lock_ttl,
                     for_update_ts,
+                    force,
                 ) {
-                    Ok(_) => {}
+                    Ok(r) => {
+                        if force {
+                            assert_eq!(rows, 1);
+                            res = Ok(r);
+                            break;
+                        }
+                    }
                     e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                        res = e.map_err(Error::from).map_err(StorageError::from);
                         break;
                     }
                     Err(e) => return Err(Error::from(e)),
@@ -629,14 +637,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             }
 
             statistics.add(&txn.take_statistics());
-            // no conflict
-            if locks.is_empty() {
-                let pr = ProcessResult::MultiRes { results: vec![] };
+            if res.is_ok() {
+                let pr = ProcessResult::PessimisticLockRes { res };
                 let modifies = txn.into_modifies();
                 (pr, modifies, rows, cmd.ctx, None)
             } else {
-                let lock = extract_lock_from_result(&locks[0]);
-                let pr = ProcessResult::MultiRes { results: locks };
+                let lock = extract_lock_from_result(&res);
+                let pr = ProcessResult::PessimisticLockRes { res };
                 let lock_info = Some((lock, is_first_lock, wait_timeout));
                 // Wait for lock released
                 (pr, vec![], 0, cmd.ctx, lock_info)
@@ -983,7 +990,7 @@ mod tests {
         let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
             MvccError::from(MvccErrorInner::KeyIsLocked(info)),
         ))));
-        let lock = extract_lock_from_result(&Err(case));
+        let lock = extract_lock_from_result::<()>(&Err(case));
         assert_eq!(lock.ts, ts.into());
         assert_eq!(lock.hash, key.gen_hash());
     }
