@@ -2612,8 +2612,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.3.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc5942d2bd52ec562b572798496532e343c2f69383777740e1eeddf0e468cf3"
+source = "git+https://github.com/YangKeao/pprof-rs.git?branch=refine_protobuf_support#da7c23cd2492bb0ad684f588ef8699f453bdce37"
 dependencies = [
  "backtrace",
  "inferno",
