@@ -2435,11 +2435,7 @@ impl ApplyFsm {
             apply_ctx.timer = Some(SlowTimer::new());
         }
 
-        fail_point!(
-            "on_handle_apply_1000_1003",
-            self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
-            |_| {}
-        );
+        fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         fail_point!("on_handle_apply", |_| {});
 
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
@@ -2498,8 +2494,8 @@ impl ApplyFsm {
             ctx.flush();
         }
         fail_point!(
-            "before_peer_destroy_1000_1003",
-            self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
+            "before_peer_destroy_1003",
+            self.delegate.id() == 1003,
             |_| {}
         );
         info!(
@@ -2603,8 +2599,8 @@ impl ApplyFsm {
 
         fail_point!("after_handle_catch_up_logs_for_merge");
         fail_point!(
-            "after_handle_catch_up_logs_for_merge_1000_1003",
-            self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
+            "after_handle_catch_up_logs_for_merge_1003",
+            self.delegate.id() == 1003,
             |_| {}
         );
 
