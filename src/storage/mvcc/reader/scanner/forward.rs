@@ -689,19 +689,18 @@ where
     }
 }
 
-#[cfg(test)]
-mod test_util {
+pub mod test_util {
     use super::*;
     use crate::storage::mvcc::Write;
 
     #[derive(Default)]
     pub struct EntryBuilder {
-        key: Vec<u8>,
-        value: Vec<u8>,
-        primary: Vec<u8>,
-        start_ts: TimeStamp,
-        commit_ts: TimeStamp,
-        for_update_ts: TimeStamp,
+        pub key: Vec<u8>,
+        pub value: Vec<u8>,
+        pub primary: Vec<u8>,
+        pub start_ts: TimeStamp,
+        pub commit_ts: TimeStamp,
+        pub for_update_ts: TimeStamp,
     }
 
     impl EntryBuilder {
@@ -785,6 +784,15 @@ mod test_util {
             TxnEntry::Prewrite {
                 default: (key, value),
                 lock: (lock_key.into_encoded(), lock_value.to_bytes()),
+            }
+        }
+        pub fn build_rollback(&self) -> TxnEntry {
+            let write_key = Key::from_raw(&self.key).append_ts(self.start_ts.into());
+            let write_value = Write::new(WriteType::Rollback, self.start_ts, None);
+            // For now, rollback is enclosed in Commit.
+            TxnEntry::Commit {
+                default: (vec![], vec![]),
+                write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
             }
         }
     }
