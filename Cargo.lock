@@ -318,7 +318,7 @@ dependencies = [
 [[package]]
 name = "bzip2-sys"
 version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#96cc4909a1a180a62ca8e3716785dc6f7a7f9ac0"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#a8ee5cb4d0587409d03b4367bbfa8d7d6266378e"
 dependencies = [
  "cc",
  "libc",
@@ -612,7 +612,7 @@ dependencies = [
  "clap",
  "criterion-plot 0.3.1",
  "csv",
- "itertools 0.8.0",
+ "itertools 0.8.2",
  "lazy_static 1.4.0",
  "libc",
  "num-traits 0.2.5",
@@ -639,7 +639,7 @@ dependencies = [
  "clap",
  "criterion-plot 0.4.0",
  "csv",
- "itertools 0.8.0",
+ "itertools 0.8.2",
  "lazy_static 1.4.0",
  "num-traits 0.2.5",
  "rand_core 0.5.1",
@@ -672,7 +672,7 @@ checksum = "76f9212ddf2f4a9eb2d401635190600656a1f88a932ef53d06e7fa4c7e02fb8e"
 dependencies = [
  "byteorder 1.2.7",
  "cast",
- "itertools 0.8.0",
+ "itertools 0.8.2",
 ]
 
 [[package]]
@@ -682,7 +682,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eccdc6ce8bbe352ca89025bee672aa6d24f4eb8c53e3a8b5d1bc58011da072a2"
 dependencies = [
  "cast",
- "itertools 0.8.0",
+ "itertools 0.8.2",
 ]
 
 [[package]]
@@ -1672,9 +1672,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.8.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b8467d9c1cebe26feb08c640139247fac215782d35371ade9a2136ed6085358"
+checksum = "f56a2d0bc861f9165be4eb3442afd3c236d8a98afd426f65d92324ae1091a484"
 dependencies = [
  "either",
 ]
@@ -1827,7 +1827,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.x#e26d5bd6078f0c7196ad56e7f67cef1c09269892"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.x#ad9f3b694b21c02191a89bbeb725ebc901d4cbf5"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1844,7 +1844,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.x#e26d5bd6078f0c7196ad56e7f67cef1c09269892"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.x#ad9f3b694b21c02191a89bbeb725ebc901d4cbf5"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2625,7 +2625,7 @@ checksum = "eb788126ea840817128183f8f603dce02cb7aea25c2a0b764359d8e20010702e"
 dependencies = [
  "bytes",
  "heck",
- "itertools 0.8.0",
+ "itertools 0.8.2",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "multimap 0.4.0",
  "petgraph",
@@ -2655,7 +2655,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e7dc378b94ac374644181a2247cebf59a6ec1c88b49ac77f3a94b86b79d0e11"
 dependencies = [
  "failure",
- "itertools 0.8.0",
+ "itertools 0.8.2",
  "proc-macro2 0.4.29",
  "quote 0.6.10",
  "syn 0.15.33",
@@ -2706,7 +2706,7 @@ version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb1a649b870f7fe03c965bf2fa6728361f6abbb6f3b72079515af8cb56d769cf"
 dependencies = [
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2796,7 +2796,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43648985159f2c4c25f934182a63b0dd4c5cc06a5ae96e5d40e12c3a3785abde"
 dependencies = [
  "fxhash",
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf",
  "quick-error 1.2.2",
  "rand 0.5.5",
@@ -3129,7 +3129,7 @@ checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.x#e26d5bd6078f0c7196ad56e7f67cef1c09269892"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.x#ad9f3b694b21c02191a89bbeb725ebc901d4cbf5"
 dependencies = [
  "crc",
  "libc",
@@ -4703,9 +4703,10 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.15+zstd.1.4.4"
-source = "git+https://github.com/gyscos/zstd-rs.git#c0e8491d460311117bacd0262374f8b973ec8b69"
+source = "git+https://github.com/gyscos/zstd-rs.git#3df21bbc06a5257967ca7f30ba33a6512e0cde4b"
 dependencies = [
  "cc",
  "glob",
+ "itertools 0.8.2",
  "libc",
 ]
