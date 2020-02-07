@@ -135,20 +135,20 @@ impl Peekable for RocksEngine {
 }
 
 impl Mutable for RocksEngine {
-    fn put_opt(&self, _: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.0.put(key, value).map_err(Error::Engine)
     }
 
-    fn put_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.0, cf)?;
         self.0.put_cf(handle, key, value).map_err(Error::Engine)
     }
 
-    fn delete_opt(&self, _: &WriteOptions, key: &[u8]) -> Result<()> {
+    fn delete(&self, key: &[u8]) -> Result<()> {
         self.0.delete(key).map_err(Error::Engine)
     }
 
-    fn delete_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.0, cf)?;
         self.0.delete_cf(handle, key).map_err(Error::Engine)
     }

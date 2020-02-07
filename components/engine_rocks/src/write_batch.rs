@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{self, Error, Mutable, Result, WriteOptions};
+use engine_traits::{self, Error, Mutable, Result};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::util::get_cf_handle;
@@ -73,20 +73,20 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
 }
 
 impl Mutable for RocksWriteBatch {
-    fn put_opt(&self, _: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.wb.put(key, value).map_err(Error::Engine)
     }
 
-    fn put_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.put_cf(handle, key, value).map_err(Error::Engine)
     }
 
-    fn delete_opt(&self, _: &WriteOptions, key: &[u8]) -> Result<()> {
+    fn delete(&self, key: &[u8]) -> Result<()> {
         self.wb.delete(key).map_err(Error::Engine)
     }
 
-    fn delete_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.delete_cf(handle, key).map_err(Error::Engine)
     }
