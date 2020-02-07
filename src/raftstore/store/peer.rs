@@ -205,7 +205,6 @@ pub struct Peer {
     pub peers_start_pending_time: Vec<(u64, Instant)>,
     /// A inaccurate cache about which peer is marked as down.
     down_peer_ids: Vec<u64>,
-    pub recent_conf_change_time: Instant,
 
     /// An inaccurate difference in region size since last reset.
     /// It is used to decide whether split check is needed.
@@ -299,7 +298,6 @@ impl Peer {
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
-            recent_conf_change_time: Instant::now(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
@@ -713,7 +711,11 @@ impl Peer {
     }
 
     /// Steps the raft message.
-    pub fn step(&mut self, mut m: eraftpb::Message) -> Result<()> {
+    pub fn step<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        mut m: eraftpb::Message,
+    ) -> Result<()> {
         fail_point!(
             "step_message_3_1",
             { self.peer.get_store_id() == 3 && self.region_id == 1 },
@@ -745,6 +747,10 @@ impl Peer {
                 self.pending_messages.push(resp);
                 return Ok(());
             }
+        }
+        if msg_type == MessageType::MsgTransferLeader {
+            self.execute_transfer_leader(ctx, &m);
+            return Ok(());
         }
 
         self.raft_group.step(m)?;
@@ -1799,34 +1805,11 @@ impl Peer {
         self.raft_group.transfer_leader(peer.get_id());
     }
 
-    fn ready_to_transfer_leader<T, C>(
-        &self,
-        ctx: &mut PollContext<T, C>,
-        peer: &metapb::Peer,
-    ) -> bool {
-        let peer_id = peer.get_id();
-        let status = self.raft_group.status_ref();
-        let progress = status.progress.unwrap();
-
-        if !progress.voter_ids().contains(&peer_id) {
-            return false;
-        }
-
-        for (_, progress) in progress.voters() {
-            if progress.state == ProgressState::Snapshot {
-                return false;
-            }
-        }
-
+    fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
         // Checks if safe to transfer leader.
-        // Check `has_pending_conf` is necessary because `recent_conf_change_time` is updated
-        // on applied. TODO: fix the transfer leader issue in Raft.
-        if self.raft_group.raft.has_pending_conf()
-            || duration_to_sec(self.recent_conf_change_time.elapsed())
-                < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
-        {
-            debug!(
-                "reject transfer leader due to the region was config changed recently";
+        if self.raft_group.raft.has_pending_conf() {
+            info!(
+                "reject transfer leader due to pending conf change";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "peer" => ?peer,
@@ -1834,8 +1817,56 @@ impl Peer {
             return false;
         }
 
+        // Broadcast heartbeat to make sure followers commit the entries immediately.
+        // It's only necessary to ping the target peer, but ping all for simplicity.
+        self.raft_group.ping();
+        let mut msg = eraftpb::Message::new();
+        msg.set_to(peer.get_id());
+        msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
+        msg.set_from(self.peer_id());
+        msg.set_term(self.term());
+        self.raft_group.raft.msgs.push(msg);
+        true
+    }
+
+    fn ready_to_transfer_leader<T, C>(
+        &self,
+        ctx: &mut PollContext<T, C>,
+        mut index: u64,
+        peer: &metapb::Peer,
+    ) -> Option<&'static str> {
+        let peer_id = peer.get_id();
+        let status = self.raft_group.status_ref();
+        let progress = status.progress.unwrap();
+
+        if !progress.voter_ids().contains(&peer_id) {
+            return Some("non voter");
+        }
+
+        for (id, progress) in progress.voters() {
+            if progress.state == ProgressState::Snapshot {
+                return Some("pending snapshot");
+            }
+            if *id == peer_id && index == 0 {
+                // index will be zero if it's sent from an instance without
+                // pre-transfer-leader feature. Set it to matched to make it
+                // possible to transfer leader to an older version. It may be
+                // useful during rolling restart.
+                index = progress.matched;
+            }
+        }
+
+        if self.raft_group.raft.has_pending_conf()
+            || self.raft_group.raft.pending_conf_index > index
+        {
+            return Some("pending conf change");
+        }
+
         let last_index = self.get_store().last_index();
-        last_index <= progress.get(peer_id).unwrap().matched + ctx.cfg.leader_transfer_max_log_lag
+        if last_index >= index + ctx.cfg.leader_transfer_max_log_lag {
+            return Some("log gap");
+        }
+        None
     }
 
     fn read_local<T, C>(
@@ -2176,7 +2207,75 @@ impl Peer {
         Ok(propose_index)
     }
 
-    // Return true to if the transfer leader request is accepted.
+    fn execute_transfer_leader<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        msg: &eraftpb::Message,
+    ) {
+        if msg.get_term() != self.term() {
+            return;
+        }
+
+        if self.is_leader() {
+            let from = match self.get_peer_from_cache(msg.get_from()) {
+                Some(p) => p,
+                None => return,
+            };
+            match self.ready_to_transfer_leader(ctx, msg.get_index(), &from) {
+                Some(reason) => {
+                    info!(
+                        "reject to transfer leader";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "to" => ?from,
+                        "reason" => reason,
+                        "index" => msg.get_index(),
+                        "last_index" => self.get_store().last_index(),
+                    );
+                }
+                None => self.transfer_leader(&from),
+            }
+            return;
+        }
+
+        if self.is_applying_snapshot()
+            || self.has_pending_snapshot()
+            || msg.get_from() != self.leader_id()
+        {
+            info!(
+                "reject transferring leader";
+                "region_id" =>self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "from" => msg.get_from(),
+            );
+            return;
+        }
+
+        let mut msg = eraftpb::Message::new();
+        msg.set_from(self.peer_id());
+        msg.set_to(self.leader_id());
+        msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
+        msg.set_index(self.get_store().applied_index());
+        msg.set_term(self.term());
+        self.raft_group.raft.msgs.push(msg);
+    }
+
+    /// Return true to if the transfer leader request is accepted.
+    ///
+    /// When transferring leadership begins, leader sends a pre-transfer
+    /// to target follower first to ensures it's ready to become leader.
+    /// After that the real transfer leader process begin.
+    ///
+    /// 1. pre_transfer_leader on leader:
+    ///     Leader will send a MsgTransferLeader to follower.
+    /// 2. execute_transfer_leader on follower
+    ///     If follower passes all necessary checks, it will reply an
+    ///     ACK with type MsgTransferLeader and its promised persistent index.
+    /// 3. execute_transfer_leader on leader:
+    ///     Leader checks if it's appropriate to transfer leadership. If it
+    ///     does, it calls raft transfer_leader API to do the remaining work.
+    ///
+    /// See also: tikv/rfcs#37.
     fn propose_transfer_leader<T, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
@@ -2188,18 +2287,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transferred = if self.ready_to_transfer_leader(ctx, peer) {
-            self.transfer_leader(peer);
-            true
-        } else {
-            info!(
-                "transfer leader message ignored directly";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "message" => ?req,
-            );
-            false
-        };
+        let transferred = self.pre_transfer_leader(peer);
 
         // transfer leader command doesn't need to replicate log and apply, so we
         // return immediately. Note that this command may fail, we can view it just as an advice
