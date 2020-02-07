@@ -1809,8 +1809,8 @@ impl Peer {
     fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
         // Checks if safe to transfer leader.
         if self.raft_group.raft.has_pending_conf() {
-            debug!(
-                "reject transfer leader due to the region was config changed recently";
+            info!(
+                "reject transfer leader due to pending conf change";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "peer" => ?peer,
@@ -1835,18 +1835,18 @@ impl Peer {
         ctx: &mut PollContext<T, C>,
         mut index: u64,
         peer: &metapb::Peer,
-    ) -> bool {
+    ) -> Option<&'static str> {
         let peer_id = peer.get_id();
         let status = self.raft_group.status_ref();
         let progress = status.progress.unwrap();
 
         if !progress.voter_ids().contains(&peer_id) {
-            return false;
+            return Some("non voter");
         }
 
         for (id, progress) in progress.voters() {
             if progress.state == ProgressState::Snapshot {
-                return false;
+                return Some("pending snapshot");
             }
             if *id == peer_id && index == 0 {
                 // index will be zero if it's sent from an instance without
@@ -1860,17 +1860,14 @@ impl Peer {
         if self.raft_group.raft.has_pending_conf()
             || self.raft_group.raft.pending_conf_index > index
         {
-            debug!(
-                "reject transfer leader due to the region was config changed recently";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "peer" => ?peer,
-            );
-            return false;
+            return Some("pending conf change");
         }
 
         let last_index = self.get_store().last_index();
-        last_index <= index + ctx.cfg.leader_transfer_max_log_lag
+        if last_index >= index + ctx.cfg.leader_transfer_max_log_lag {
+            return Some("log gap");
+        }
+        None
     }
 
     fn read_local<T, C>(
@@ -2231,9 +2228,19 @@ impl Peer {
                 Some(p) => p,
                 None => return,
             };
-            if self.ready_to_transfer_leader(ctx, msg.get_index(), &from) {
-                self.transfer_leader(&from);
-                return;
+            match self.ready_to_transfer_leader(ctx, msg.get_index(), &from) {
+                Some(reason) => {
+                    info!(
+                        "reject to transfer leader";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "to" => ?from,
+                        "reason" => reason,
+                        "index" => msg.get_index(),
+                        "last_index" => self.get_store().last_index(),
+                    );
+                }
+                None => self.transfer_leader(&from),
             }
             return;
         }
@@ -2242,6 +2249,12 @@ impl Peer {
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
         {
+            info!(
+                "reject transferring leader";
+                "region_id" =>self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "from" => msg.get_from(),
+            );
             return;
         }
 
@@ -2282,14 +2295,6 @@ impl Peer {
         let peer = transfer_leader.get_peer();
 
         let transferred = self.pre_transfer_leader(peer);
-        if !transferred {
-            info!(
-                "transfer leader message ignored directly";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "message" => ?req,
-            );
-        }
 
         // transfer leader command doesn't need to replicate log and apply, so we
         // return immediately. Note that this command may fail, we can view it just as an advice
