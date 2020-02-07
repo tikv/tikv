@@ -215,7 +215,7 @@ docker-tag-with-git-tag:
 # Run tests under a variety of conditions. This should pass before
 # submitting pull requests. Note though that the CI system tests TiKV
 # through its own scripts and does not use this rule.
-test:
+test: doc_test
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
 	# The special linux case below is testing the mem-profiling
@@ -244,6 +244,9 @@ test:
 ci_test:
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --all-targets --no-run --message-format=json
 	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
+
+doc_test:
+	cargo test --all --doc
 
 ## Static analysis
 ## ---------------
