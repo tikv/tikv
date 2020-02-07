@@ -206,7 +206,6 @@ mod tests {
     };
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::mvcc::{TimeStamp, Write, WriteType};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
@@ -219,7 +218,7 @@ mod tests {
     use std::u64;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
-    use txn_types::Key;
+    use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
 
