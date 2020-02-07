@@ -167,7 +167,7 @@ mod tests {
                 let mut config = config.clone();
                 config.set_region("".to_string());
                 config
-            }
+            },
         ];
         for case in cases {
             let dispatcher = MockRequestDispatcher::with_status(200);
