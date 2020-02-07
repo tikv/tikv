@@ -136,6 +136,7 @@ mod tests {
     use super::*;
 
     use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::{EvalType, FieldTypeAccessor};
     use tipb_helper::ExprDefBuilder;
 
     use crate::aggr_fn::parser::AggrDefinitionParser;
