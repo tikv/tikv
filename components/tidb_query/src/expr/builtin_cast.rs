@@ -488,7 +488,7 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = format!("{}", val);
         // TODO: port NumberToDuration from tidb.
-        match Duration::parse(s.as_bytes(), self.field_type.decimal() as i8) {
+        match Duration::parse(ctx, s.as_bytes(), self.field_type.decimal() as i8) {
             Ok(dur) => Ok(Some(dur)),
             Err(e) => {
                 if e.is_overflow() {
@@ -508,7 +508,7 @@ impl ScalarFunc {
     ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
-        let dur = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
+        let dur = Duration::parse(ctx, s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(dur))
     }
 
@@ -519,7 +519,7 @@ impl ScalarFunc {
     ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
-        let dur = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
+        let dur = Duration::parse(ctx, s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(dur))
     }
 
@@ -529,7 +529,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let dur = Duration::parse(val.as_ref(), self.field_type.decimal() as i8)?;
+        let dur = Duration::parse(ctx, val.as_ref(), self.field_type.decimal() as i8)?;
         Ok(Some(dur))
     }
 
@@ -562,7 +562,7 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.unquote()?;
         // TODO: tidb would handle truncate here
-        let d = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
+        let d = Duration::parse(ctx, s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(d))
     }
 
@@ -781,7 +781,7 @@ mod tests {
         let t = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:23", 0, true).unwrap();
         #[allow(clippy::inconsistent_digit_grouping)]
         let time_int = 2012_12_12_12_00_23i64;
-        let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
+        let duration_t = Duration::parse(&mut ctx, b"12:00:23", 0).unwrap();
         let cases = vec![
             (
                 ScalarFuncSig::CastIntAsInt,
@@ -904,7 +904,7 @@ mod tests {
         let t = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:23", 0, false).unwrap();
         #[allow(clippy::inconsistent_digit_grouping)]
         let int_t = 2012_12_12_12_00_23u64;
-        let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
+        let duration_t = Duration::parse(&mut ctx, b"12:00:23", 0).unwrap();
         let cases = vec![
             (
                 ScalarFuncSig::CastIntAsReal,
@@ -1048,7 +1048,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:23", 0, false).unwrap();
         let int_t = 20121212120023u64;
-        let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
+        let duration_t = Duration::parse(&mut ctx, b"12:00:23", 0).unwrap();
         let cases = vec![
             (
                 ScalarFuncSig::CastIntAsDecimal,
@@ -1187,7 +1187,7 @@ mod tests {
         let t_str = "2012-12-12 12:00:23";
         let t = Time::parse_datetime(&mut ctx, t_str, 0, false).unwrap();
         let dur_str = b"12:00:23";
-        let duration_t = Duration::parse(dur_str, 0).unwrap();
+        let duration_t = Duration::parse(&mut ctx, dur_str, 0).unwrap();
         let s = "您好world";
         let exp_s = "您好w";
         let cases = vec![
@@ -1363,7 +1363,7 @@ mod tests {
             .unwrap();
 
         let dur_str = "12:00:23";
-        let duration_t = Duration::parse(dur_str.as_bytes(), 0).unwrap();
+        let duration_t = Duration::parse(&mut ctx, dur_str.as_bytes(), 0).unwrap();
         let dur_to_time_str = format!("{} 12:00:23", t_date_str);
         let dur_to_time = Time::parse_datetime(&mut ctx, &dur_to_time_str, 0, false).unwrap();
         let mut dur_to_date = dur_to_time;
@@ -1537,7 +1537,7 @@ mod tests {
 
         let dur_str = "12:00:23";
         let dur_int = 120023u64;
-        let duration = Duration::parse(dur_str.as_bytes(), 0).unwrap();
+        let duration = Duration::parse(&mut ctx, dur_str.as_bytes(), 0).unwrap();
         let dur_to_time_str = format!("{} 12:00:23", t_date_str);
         let dur_to_time = Time::parse_datetime(&mut ctx, &dur_to_time_str, 0, false).unwrap();
         let mut dur_to_date = dur_to_time;
@@ -1864,7 +1864,9 @@ mod tests {
 
         let cases = vec![
             (
-                vec![Datum::Dur(Duration::parse(dur_str.as_bytes(), 0).unwrap())],
+                vec![Datum::Dur(
+                    Duration::parse(&mut ctx, dur_str.as_bytes(), 0).unwrap(),
+                )],
                 Some(Json::String(String::from(dur_str_expect))),
             ),
             (vec![Datum::Null], None),

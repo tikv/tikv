@@ -37,6 +37,10 @@ make_static_metric! {
         raw_delete_range,
         raw_batch_delete,
         unsafe_destroy_range,
+        physical_scan_lock,
+        register_lock_observer,
+        check_lock_observer,
+        remove_lock_observer,
         coprocessor,
         coprocessor_stream,
         mvcc_get_by_key,
@@ -166,6 +170,12 @@ lazy_static! {
         "tikv_gcworker_autogc_processed_regions",
         "Processed regions by auto gc",
         &["type"]
+    )
+    .unwrap();
+    pub static ref GC_PHYSICAL_SCAN_LOCK_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_gcworker_physical_scan_lock_keys",
+        "Counter of keys affected during physical_scan_lock",
+        &["cf", "tag"]
     )
     .unwrap();
     pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(

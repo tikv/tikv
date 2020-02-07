@@ -164,17 +164,12 @@ impl Display for Task {
 pub struct Runner<S> {
     engine: Arc<DB>,
     router: S,
-    coprocessor: Arc<CoprocessorHost>,
+    coprocessor: CoprocessorHost,
     cfg: Config,
 }
 
 impl<S: CasualRouter> Runner<S> {
-    pub fn new(
-        engine: Arc<DB>,
-        router: S,
-        coprocessor: Arc<CoprocessorHost>,
-        cfg: Config,
-    ) -> Runner<S> {
+    pub fn new(engine: Arc<DB>, router: S, coprocessor: CoprocessorHost, cfg: Config) -> Runner<S> {
         Runner {
             engine,
             router,
@@ -307,7 +302,7 @@ impl<S: CasualRouter> Runner<S> {
 
     fn change_cfg(&mut self, change: ConfigChange) {
         info!(
-            "split check config updated!";
+            "split check config updated";
             "change" => ?change
         );
         self.cfg.update(change);
@@ -367,13 +362,13 @@ mod tests {
         let runner = Runner::new(
             engine,
             router.clone(),
-            Arc::new(CoprocessorHost::new(router)),
+            CoprocessorHost::new(router),
             cfg.coprocessor.clone(),
         );
         let mut worker: Worker<Task> = Worker::new("split-check-config");
         worker.start(runner).unwrap();
 
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("coprocessor", Box::new(worker.scheduler()));
 
         (cfg_controller, worker)

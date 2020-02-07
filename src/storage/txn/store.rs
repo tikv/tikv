@@ -173,6 +173,10 @@ impl EntryBatch {
         self.entries.len() == 0
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &TxnEntry> {
+        self.entries.iter()
+    }
+
     pub fn drain(&mut self) -> std::vec::Drain<'_, TxnEntry> {
         self.entries.drain(..)
     }
@@ -883,7 +887,7 @@ mod tests {
         data.insert(
             Key::from_raw(b"zz"),
             Err(Error::from(ErrorInner::Mvcc(MvccError::from(
-                txn_types::Error::BadFormatLock,
+                txn_types::Error::from(txn_types::ErrorInner::BadFormatLock),
             )))),
         );
 

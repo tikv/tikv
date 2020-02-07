@@ -22,8 +22,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             enabled: true,
-            wait_for_lock_timeout: 3000,
-            wake_up_delay_duration: 100,
+            wait_for_lock_timeout: 1000,
+            wake_up_delay_duration: 20,
         }
     }
 }
@@ -131,7 +131,7 @@ mod tests {
             mgr.waiter_mgr_scheduler.clone(),
             mgr.detector_scheduler.clone(),
         );
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("pessimistic_txn", Box::new(mgr));
 
         (cfg_controller, w, d, lock_mgr)

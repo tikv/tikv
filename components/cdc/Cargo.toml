@@ -1,0 +1,44 @@
+[package]
+name = "cdc"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+tikv = { path = "../../", default-features = false }
+log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+protobuf = "2.8"
+futures = "0.1"
+tokio-threadpool = "0.1"
+grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ], default-features = false }
+raft = { version = "0.6.0-alpha", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+tikv_util = { path = "../tikv_util" }
+resolved_ts = { path = "../resolved_ts" }
+pd_client = { path = "../pd_client", default-features = false }
+keys = { path = "../keys" }
+failure = "0.1"
+engine = { path = "../engine" }
+engine_rocks = { path = "../engine_rocks" }
+engine_traits = { path = "../engine_traits" }
+txn_types = { path = "../txn_types" }
+tikv_alloc = { path = "../tikv_alloc", default-features = false }
+
+[dev-dependencies]
+test_util = { path = "../test_util" }
+test_raftstore = { path = "../test_raftstore" }
+tempfile = "3.0"
+
+[features]
+default = ["protobuf-codec"]
+prost-codec = ["tikv/prost-codec"]
+protobuf-codec = ["tikv/protobuf-codec"]
+tcmalloc = ["tikv/tcmalloc"]
+jemalloc = ["tikv/jemalloc"]
+mimalloc = ["tikv/mimalloc"]
+portable = ["tikv/portable"]
+sse = ["tikv/sse"]
+mem-profiling = ["tikv/mem-profiling"]
+failpoints = ["tikv/failpoints"]

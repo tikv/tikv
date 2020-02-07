@@ -22,6 +22,7 @@ pub trait SstReader: Iterable + Sized {
 /// SstWriter is used to create sst files that can be added to database later.
 pub trait SstWriter {
     type ExternalSstFileInfo: ExternalSstFileInfo;
+    type ExternalSstFileReader: std::io::Read;
 
     /// Add key, value to currently opened file
     /// REQUIRES: key is after any previously added key according to comparator.
@@ -38,7 +39,7 @@ pub trait SstWriter {
     fn finish(self) -> Result<Self::ExternalSstFileInfo>;
 
     /// Finalize writing to sst file and read the contents into the buffer.
-    fn finish_into(self, buf: &mut Vec<u8>) -> Result<Self::ExternalSstFileInfo>;
+    fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
 }
 
 /// A builder builds a SstWriter.

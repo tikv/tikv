@@ -583,10 +583,16 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn scan_locks_ok(
         &self,
         max_ts: impl Into<TimeStamp>,
-        start_key: Vec<u8>,
+        start_key: &[u8],
         limit: usize,
         expect: Vec<LockInfo>,
     ) {
+        let start_key = if start_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(&start_key))
+        };
+
         assert_eq!(
             self.store
                 .scan_locks(self.ctx.clone(), max_ts.into(), start_key, limit)

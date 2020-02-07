@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -11,6 +12,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
+use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::Writable;
@@ -51,7 +53,6 @@ use tikv_util::Either;
 use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
-use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 
 use super::super::RegionTask;
 
@@ -141,6 +142,7 @@ impl PendingCmdQueue {
 
 #[derive(Default, Debug)]
 pub struct ChangePeer {
+    pub index: u64,
     pub conf_change: ConfChange,
     pub peer: PeerMeta,
     pub region: Region,
@@ -207,6 +209,7 @@ pub enum ExecResult {
 /// The possible returned value when applying logs.
 pub enum ApplyResult {
     None,
+    Yield,
     /// Additional result that needs to be sent back to raftstore.
     Res(ExecResult),
     /// It is unable to apply the `CommitMerge` until the source peer
@@ -278,7 +281,7 @@ impl Notifier {
 struct ApplyContext {
     tag: String,
     timer: Option<SlowTimer>,
-    host: Arc<CoprocessorHost>,
+    host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
@@ -306,11 +309,11 @@ struct ApplyContext {
 impl ApplyContext {
     pub fn new(
         tag: String,
-        host: Arc<CoprocessorHost>,
+        host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
-        router: BatchRouter<ApplyFsm, ControlFsm>,
+        router: ApplyRouter,
         notifier: Notifier,
         cfg: &Config,
     ) -> ApplyContext {
@@ -557,6 +560,13 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
 /// this struct.
 /// TODO: check whether generator/coroutine is a good choice in this case.
 struct WaitSourceMergeState {
+    /// A flag that indicates whether the source peer has applied to the required
+    /// index. If the source peer is ready, this flag should be set to the region id
+    /// of source peer.
+    logs_up_to_date: Arc<AtomicU64>,
+}
+
+struct YieldState {
     /// All of the entries that need to continue to be applied after
     /// the source peer has applied its logs.
     pending_entries: Vec<Entry>,
@@ -564,17 +574,20 @@ struct WaitSourceMergeState {
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg>,
-    /// A flag that indicates whether the source peer has applied to the required
-    /// index. If the source peer is ready, this flag should be set to the region id
-    /// of source peer.
-    logs_up_to_date: Arc<AtomicU64>,
+}
+
+impl Debug for YieldState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("YieldState")
+            .field("pending_entries", &self.pending_entries.len())
+            .field("pending_msgs", &self.pending_msgs.len())
+            .finish()
+    }
 }
 
 impl Debug for WaitSourceMergeState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WaitSourceMergeState")
-            .field("pending_entries", &self.pending_entries.len())
-            .field("pending_msgs", &self.pending_msgs.len())
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
     }
@@ -607,6 +620,7 @@ pub struct ApplyDelegate {
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
+    written: bool,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -620,6 +634,7 @@ pub struct ApplyDelegate {
     is_merging: bool,
     /// Records the epoch version after the last merge.
     last_merge_version: u64,
+    yield_state: Option<YieldState>,
     /// A temporary state that keeps track of the progress of the source peer state when
     /// CommitMerge is unable to be executed.
     wait_merge_state: Option<WaitSourceMergeState>,
@@ -653,7 +668,9 @@ impl ApplyDelegate {
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             stopped: false,
+            written: false,
             ready_source_region_id: 0,
+            yield_state: None,
             wait_merge_state: None,
             is_merging: reg.is_merging,
             pending_cmds: Default::default(),
@@ -721,19 +738,21 @@ impl ApplyDelegate {
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => results.push_back(res),
-                ApplyResult::WaitMergeSource(logs_up_to_date) => {
+                _ => {
+                    // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= drainer.len() + 1;
                     let mut pending_entries = Vec::with_capacity(drainer.len() + 1);
-                    // Note that CommitMerge is skipped when `WaitMergeSource` is returned.
-                    // So we need to enqueue it again and execute it again when resuming.
+                    // Note that current entry is skipped when yield.
                     pending_entries.push(entry);
                     pending_entries.extend(drainer);
                     apply_ctx.finish_for(self, results);
-                    self.wait_merge_state = Some(WaitSourceMergeState {
+                    self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
-                        logs_up_to_date,
                     });
+                    if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
+                        self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
+                    }
                     return;
                 }
             }
@@ -779,6 +798,10 @@ impl ApplyDelegate {
 
             if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
                 apply_ctx.commit(self);
+                if self.written {
+                    return ApplyResult::Yield;
+                }
+                self.written = true;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -827,7 +850,7 @@ impl ApplyDelegate {
                 }
                 ApplyResult::Res(res)
             }
-            ApplyResult::WaitMergeSource(_) => unreachable!(),
+            ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => unreachable!(),
         }
     }
 
@@ -1377,6 +1400,11 @@ impl ApplyDelegate {
             |_| panic!("should not use return")
         );
         fail_point!(
+            "apply_on_conf_change_3_1",
+            self.id == 3 && self.region_id() == 1,
+            |_| panic!("should not use return")
+        );
+        fail_point!(
             "apply_on_conf_change_all_1",
             self.region_id() == 1,
             |_| panic!("should not use return")
@@ -1550,6 +1578,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
+                index: ctx.exec_ctx.as_ref().unwrap().index,
                 conf_change: Default::default(),
                 peer: peer.clone(),
                 region,
@@ -2422,7 +2451,7 @@ impl ApplyFsm {
 
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries);
-        if self.delegate.wait_merge_state.is_some() {
+        if self.delegate.yield_state.is_some() {
             return;
         }
 
@@ -2500,21 +2529,15 @@ impl ApplyFsm {
         }
     }
 
-    fn resume_pending_merge(&mut self, ctx: &mut ApplyContext) -> bool {
-        match self.delegate.wait_merge_state {
-            Some(ref state) => {
-                let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
-                if source_region_id == 0 {
-                    return false;
-                }
-                self.delegate.ready_source_region_id = source_region_id;
+    fn resume_pending(&mut self, ctx: &mut ApplyContext) -> bool {
+        if let Some(ref state) = self.delegate.wait_merge_state {
+            let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
+            if source_region_id == 0 {
+                return false;
             }
-            None => panic!(
-                "{} is not in waiting state, can't be resume",
-                self.delegate.tag
-            ),
+            self.delegate.ready_source_region_id = source_region_id;
         }
-        let mut state = self.delegate.wait_merge_state.take().unwrap();
+        let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {
             ctx.timer = Some(SlowTimer::new());
@@ -2522,8 +2545,10 @@ impl ApplyFsm {
         if !state.pending_entries.is_empty() {
             self.delegate
                 .handle_raft_committed_entries(ctx, state.pending_entries);
-            if let Some(ref mut s) = self.delegate.wait_merge_state {
-                // So the delegate is executing another `CommitMerge` in pending_entries.
+            if let Some(ref mut s) = self.delegate.yield_state {
+                // So the delegate is expected to yield the CPU.
+                // It can either be executing another `CommitMerge` in pending_msgs
+                // or has been written too much data.
                 s.pending_msgs = state.pending_msgs;
                 return false;
             }
@@ -2533,8 +2558,7 @@ impl ApplyFsm {
             self.handle_tasks(ctx, &mut state.pending_msgs);
         }
 
-        // So the delegate is executing another `CommitMerge` in pending_msgs.
-        if self.delegate.wait_merge_state.is_some() {
+        if self.delegate.yield_state.is_some() {
             return false;
         }
 
@@ -2670,7 +2694,7 @@ impl ApplyFsm {
                         channel_timer = Some(start);
                     }
                     self.handle_apply(apply_ctx, apply);
-                    if let Some(ref mut state) = self.delegate.wait_merge_state {
+                    if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
                         break;
                     }
@@ -2748,7 +2772,6 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
-                CmpOrdering::Equal => {}
                 CmpOrdering::Greater => {
                     self.msg_buf.reserve(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
@@ -2757,6 +2780,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                     self.msg_buf.shrink_to(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
+                _ => {}
             }
             self.apply_ctx.enable_sync_log = incoming.sync_log;
         }
@@ -2769,12 +2793,15 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm) -> Option<usize> {
         let mut expected_msg_count = None;
-        if normal.delegate.wait_merge_state.is_some() {
-            // We need to query the length first, otherwise there is a race
-            // condition that new messages are queued after resuming and before
-            // query the length.
-            expected_msg_count = Some(normal.receiver.len());
-            if !normal.resume_pending_merge(&mut self.apply_ctx) {
+        normal.delegate.written = false;
+        if normal.delegate.yield_state.is_some() {
+            if normal.delegate.wait_merge_state.is_some() {
+                // We need to query the length first, otherwise there is a race
+                // condition that new messages are queued after resuming and before
+                // query the length.
+                expected_msg_count = Some(normal.receiver.len());
+            }
+            if !normal.resume_pending(&mut self.apply_ctx) {
                 return expected_msg_count;
             }
             expected_msg_count = None;
@@ -2797,6 +2824,9 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
             expected_msg_count = Some(0);
+        } else if normal.delegate.yield_state.is_some() {
+            // Let it continue to run next time.
+            expected_msg_count = None;
         }
         expected_msg_count
     }
@@ -2814,7 +2844,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
 pub struct Builder {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
-    coprocessor_host: Arc<CoprocessorHost>,
+    coprocessor_host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     engines: Engines,
@@ -2864,7 +2894,24 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
     }
 }
 
-pub type ApplyRouter = BatchRouter<ApplyFsm, ControlFsm>;
+#[derive(Clone)]
+pub struct ApplyRouter {
+    pub router: BatchRouter<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyRouter {
+    type Target = BatchRouter<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchRouter<ApplyFsm, ControlFsm> {
+        &self.router
+    }
+}
+
+impl DerefMut for ApplyRouter {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm, ControlFsm> {
+        &mut self.router
+    }
+}
 
 impl ApplyRouter {
     pub fn schedule_task(&self, region_id: u64, msg: Msg) {
@@ -2921,7 +2968,23 @@ impl ApplyRouter {
     }
 }
 
-pub type ApplyBatchSystem = BatchSystem<ApplyFsm, ControlFsm>;
+pub struct ApplyBatchSystem {
+    system: BatchSystem<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyBatchSystem {
+    type Target = BatchSystem<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchSystem<ApplyFsm, ControlFsm> {
+        &self.system
+    }
+}
+
+impl DerefMut for ApplyBatchSystem {
+    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm, ControlFsm> {
+        &mut self.system
+    }
+}
 
 impl ApplyBatchSystem {
     pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
@@ -2936,12 +2999,13 @@ impl ApplyBatchSystem {
 
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
-    super::batch::create_system(
+    let (router, system) = batch_system::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
         tx,
         Box::new(ControlFsm),
-    )
+    );
+    (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
 #[cfg(test)]
@@ -3102,7 +3166,6 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
         let (_tmp, engines) = create_tmp_engine("apply-basic");
-        let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
@@ -3110,7 +3173,7 @@ mod tests {
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
-            coprocessor_host: host,
+            coprocessor_host: CoprocessorHost::default(),
             importer,
             region_scheduler,
             sender,
@@ -3442,10 +3505,10 @@ mod tests {
     fn test_handle_raft_committed_entries() {
         let (_path, engines) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
-        let mut host = CoprocessorHost::default();
         let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::default();
         host.registry
-            .register_query_observer(1, Box::new(obs.clone()));
+            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -3457,7 +3520,7 @@ mod tests {
             cfg,
             sender,
             region_scheduler,
-            coprocessor_host: Arc::new(host),
+            coprocessor_host: host,
             importer: importer.clone(),
             engines: engines.clone(),
             router: router.clone(),
@@ -3650,6 +3713,10 @@ mod tests {
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
+        // Two continuous writes inside the same region will yield.
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
         let mut entries = vec![];
@@ -3789,7 +3856,6 @@ mod tests {
         reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
-        let host = Arc::new(CoprocessorHost::default());
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
@@ -3799,7 +3865,7 @@ mod tests {
             sender,
             importer,
             region_scheduler,
-            coprocessor_host: host,
+            coprocessor_host: CoprocessorHost::default(),
             engines: engines.clone(),
             router: router.clone(),
         };

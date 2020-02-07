@@ -1,16 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::future::{err, ok};
+use futures::sync::oneshot;
 #[cfg(feature = "failpoints")]
 use futures::Stream;
 use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
-#[cfg(target_os = "linux")]
 use pprof;
-#[cfg(target_os = "linux")]
-use prost::Message;
-#[cfg(target_os = "linux")]
+use pprof::protos::Message;
 use regex::Regex;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -21,11 +19,12 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
-use crate::config::TiKvConfig;
+use crate::raftstore::store::PdTask;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::worker::FutureScheduler;
 
 mod profiler_guard {
     use tikv_alloc::error::ProfResult;
@@ -81,11 +80,11 @@ pub struct StatusServer {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
-    config: Arc<TiKvConfig>,
+    pd_sender: Arc<FutureScheduler<PdTask>>,
 }
 
 impl StatusServer {
-    pub fn new(status_thread_pool_size: usize, tikv_config: TiKvConfig) -> Self {
+    pub fn new(status_thread_pool_size: usize, pd_sender: FutureScheduler<PdTask>) -> Self {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
@@ -102,7 +101,7 @@ impl StatusServer {
             tx,
             rx: Some(rx),
             addr: None,
-            config: Arc::new(tikv_config),
+            pd_sender: Arc::new(pd_sender),
         }
     }
 
@@ -208,22 +207,36 @@ impl StatusServer {
     }
 
     fn config_handler(
-        config: Arc<TiKvConfig>,
+        pd_sender: &FutureScheduler<PdTask>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        let res = match serde_json::to_string(config.as_ref()) {
-            Ok(json) => Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap(),
-            Err(_) => StatusServer::err_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal Server Error",
-            ),
-        };
-        Box::new(ok(res))
+        let (cfg_sender, rx) = oneshot::channel();
+        if pd_sender
+            .schedule(PdTask::GetConfig { cfg_sender })
+            .is_err()
+        {
+            error!("failed to schedule GetConfig task");
+        }
+        let res = rx.then(|res| {
+            let err_resp = || {
+                StatusServer::err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal Server Error",
+                )
+            };
+            match res {
+                Ok(cfg) => match serde_json::to_string(&cfg) {
+                    Ok(json) => Ok(Response::builder()
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(json))
+                        .unwrap()),
+                    Err(_) => Ok(err_resp()),
+                },
+                Err(_) => Ok(err_resp()),
+            }
+        });
+        Box::new(res)
     }
 
-    #[cfg(target_os = "linux")]
     fn extract_thread_name(thread_name: &str) -> String {
         lazy_static! {
             static ref THREAD_NAME_RE: Regex =
@@ -243,7 +256,6 @@ impl StatusServer {
             .unwrap_or_else(|| thread_name.to_owned())
     }
 
-    #[cfg(target_os = "linux")]
     fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
         move |frames| {
             let name = Self::extract_thread_name(&frames.thread_name);
@@ -251,7 +263,6 @@ impl StatusServer {
         }
     }
 
-    #[cfg(target_os = "linux")]
     pub fn dump_rsprof(
         seconds: u64,
         frequency: i32,
@@ -290,7 +301,6 @@ impl StatusServer {
         }
     }
 
-    #[cfg(target_os = "linux")]
     pub fn dump_rsperf_to_resp(
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
@@ -377,11 +387,11 @@ impl StatusServer {
 
         // TODO: support TLS for the status server.
         let builder = Server::try_bind(&addr)?;
-        let config = self.config.clone();
+        let pd_sender = self.pd_sender.clone();
 
         // Start to serve.
         let server = builder.serve(move || {
-            let config = config.clone();
+            let pd_sender = pd_sender.clone();
             // Create a status service.
             service_fn(
                     move |req: Request<Body>| -> Box<
@@ -401,13 +411,8 @@ impl StatusServer {
                             (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
-                            (Method::GET, "/config") => Self::config_handler(config.clone()),
-                            (Method::GET, "/debug/pprof/profile") => {
-                                #[cfg(target_os = "linux")]
-                                { Self::dump_rsperf_to_resp(req) }
-                                #[cfg(not(target_os = "linux"))]
-                                { Box::new(ok(Response::default())) }
-                            }
+                            (Method::GET, "/config") => Self::config_handler(&pd_sender),
+                            (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
                             _ => Box::new(ok(StatusServer::err_response(
                                 StatusCode::NOT_FOUND,
                                 "path not found",
@@ -519,15 +524,17 @@ fn handle_fail_points_request(
 #[cfg(test)]
 mod tests {
     use crate::config::TiKvConfig;
+    use crate::raftstore::store::PdTask;
     use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
     use futures::Stream;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
+    use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
+    use tokio_core::reactor::Handle;
 
     #[test]
     fn test_status_service() {
-        let config = TiKvConfig::default();
-        let mut status_server = StatusServer::new(1, config);
+        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let uri = Uri::builder()
@@ -553,8 +560,21 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let config = TiKvConfig::default();
-        let mut status_server = StatusServer::new(1, config);
+        struct Runner;
+        impl FutureRunnable<PdTask> for Runner {
+            fn run(&mut self, t: PdTask, _: &Handle) {
+                match t {
+                    PdTask::GetConfig { cfg_sender } => {
+                        cfg_sender.send(TiKvConfig::default()).unwrap()
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+        let mut worker = FutureWorker::new("test-worker");
+        worker.start(Runner).unwrap();
+
+        let mut status_server = StatusServer::new(1, worker.scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let uri = Uri::builder()
@@ -590,8 +610,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let config = TiKvConfig::default();
-        let mut status_server = StatusServer::new(1, config);
+        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -723,8 +742,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let config = TiKvConfig::default();
-        let mut status_server = StatusServer::new(1, config);
+        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -765,8 +783,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let config = TiKvConfig::default();
-        let mut status_server = StatusServer::new(1, config);
+        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -798,7 +815,6 @@ mod tests {
         status_server.stop();
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn test_extract_thread_name() {
         assert_eq!(
