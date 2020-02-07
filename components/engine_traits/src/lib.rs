@@ -119,16 +119,6 @@
 //!   trait IOLimiter { }
 //!   ```
 //!
-//!   ```
-//!   // in engine_rust
-//!
-//!   impl IOLimiterExt for RocksEngine {
-//!       type IOLimiter = RocksIOLimiter;
-//!   }
-//!
-//!   impl IOLimiter for RocksIOLimiter { }
-//!   ```
-//!
 //! - All engines use the same error type, defined in this crate. Thus
 //!   engine-specific type information is boxed and hidden.
 //!
