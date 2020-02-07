@@ -30,7 +30,9 @@ use std::{
     time::Duration,
 };
 use tikv::config::ConfigHandler;
+use tikv::raftstore::coprocessor::config::SplitCheckConfigManager;
 use tikv::raftstore::router::ServerRaftStoreRouter;
+use tikv::raftstore::store::config::RaftstoreConfigManager;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
@@ -56,6 +58,7 @@ use tikv::{
     },
     storage,
 };
+use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     security::SecurityManager,
@@ -476,10 +479,33 @@ impl TiKVServer {
 
         let import_path = self.store_path.join("import");
         let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+
+        let split_check_worker = Worker::new("split-check");
+        cfg_controller.register(
+            "coprocessor",
+            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+        );
+
+        self.config
+            .raft_store
+            .validate()
+            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
+        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        cfg_controller.register(
+            "raft_store",
+            Box::new(RaftstoreConfigManager(raft_store.clone())),
+        );
+        let config_client = ConfigHandler::start(
+            self.config.server.advertise_addr.clone(),
+            cfg_controller,
+            pd_worker.scheduler(),
+        )
+        .unwrap_or_else(|e| fatal!("failed to start config client: {}", e));
+
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config,
-            &self.config.raft_store,
+            raft_store,
             self.pd_client.clone(),
         );
         node.start(
@@ -490,7 +516,8 @@ impl TiKVServer {
             engines.store_meta.clone(),
             coprocessor_host,
             importer.clone(),
-            cfg_controller,
+            split_check_worker,
+            Box::new(config_client) as _,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

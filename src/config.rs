@@ -2287,7 +2287,7 @@ impl ConfigHandler {
 
     /// Update the local config if remote config had been changed,
     /// rollback the remote config if the change are invalid.
-    pub fn refresh_config(&mut self, cfg_client: Arc<impl ConfigClient>) -> CfgResult<()> {
+    pub fn refresh_config(&mut self, cfg_client: &dyn ConfigClient) -> CfgResult<()> {
         let mut resp = cfg_client.get_config(self.get_id(), self.version.clone())?;
         let version = resp.take_version();
         match resp.get_status().get_code() {
@@ -2329,7 +2329,7 @@ impl ConfigHandler {
         &mut self,
         version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
-        cfg_client: Arc<impl ConfigClient>,
+        cfg_client: &dyn ConfigClient,
     ) -> CfgResult<()> {
         let mut resp = cfg_client.update_config(self.get_id(), version, entries)?;
         match resp.get_status().get_code() {
@@ -2342,6 +2342,31 @@ impl ConfigHandler {
                 Err(format!("{:?}", resp).into())
             }
         }
+    }
+}
+
+use crate::raftstore::store::DynamicConfig;
+impl DynamicConfig for ConfigHandler {
+    fn refresh(&mut self, cfg_client: &dyn ConfigClient) {
+        debug!(
+            "refresh config";
+            "component id" => self.get_id(),
+            "version" => ?self.get_version()
+        );
+        if let Err(e) = self.refresh_config(cfg_client) {
+            warn!(
+                "failed to refresh config";
+                "component id" => self.get_id(),
+                "version" => ?self.get_version(),
+                "err" => ?e
+            )
+        }
+    }
+    fn refresh_interval(&self) -> Duration {
+        self.get_refresh_interval()
+    }
+    fn get(&self) -> String {
+        toml::to_string(self.get_config()).unwrap()
     }
 }
 

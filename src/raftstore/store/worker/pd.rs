@@ -23,7 +23,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
-use crate::config::{ConfigHandler, TiKvConfig};
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
 use crate::raftstore::store::util::is_epoch_stale;
@@ -67,6 +66,12 @@ impl FlowStatsReporter for Scheduler<Task> {
             error!("Failed to send read flow statistics"; "err" => ?e);
         }
     }
+}
+
+pub trait DynamicConfig: Send + 'static {
+    fn refresh(&mut self, cfg_client: &dyn ConfigClient);
+    fn refresh_interval(&self) -> Duration;
+    fn get(&self) -> String;
 }
 
 /// Uses an asynchronous thread to tell PD something.
@@ -123,7 +128,7 @@ pub enum Task {
     },
     RefreshConfig,
     GetConfig {
-        cfg_sender: oneshot::Sender<TiKvConfig>,
+        cfg_sender: oneshot::Sender<String>,
     },
 }
 
@@ -323,7 +328,7 @@ impl StatsMonitor {
 pub struct Runner<T: PdClient + ConfigClient> {
     store_id: u64,
     pd_client: Arc<T>,
-    config_handler: ConfigHandler,
+    config_handler: Box<dyn DynamicConfig>,
     router: RaftRouter,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
@@ -345,7 +350,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        config_handler: ConfigHandler,
+        config_handler: Box<dyn DynamicConfig>,
         router: RaftRouter,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
@@ -811,22 +816,10 @@ impl<T: PdClient + ConfigClient> Runner<T> {
     }
 
     fn handle_refresh_config(&mut self, handle: &Handle) {
-        let config_handler = &mut self.config_handler;
-        debug!(
-            "refresh config";
-            "component id" => config_handler.get_id(),
-            "version" => ?config_handler.get_version()
-        );
-        if let Err(e) = config_handler.refresh_config(self.pd_client.clone()) {
-            warn!(
-                "failed to refresh config";
-                "component id" => config_handler.get_id(),
-                "version" => ?config_handler.get_version(),
-                "err" => ?e
-            )
-        }
+        self.config_handler.refresh(self.pd_client.as_ref() as _);
+
         let scheduler = self.scheduler.clone();
-        let when = Instant::now() + config_handler.get_refresh_interval();
+        let when = Instant::now() + self.config_handler.refresh_interval();
         let f = Delay::new(when)
             .map_err(|e| warn!("timeout timer delay errored"; "err" => ?e))
             .then(move |_| {
@@ -838,8 +831,8 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         handle.spawn(f);
     }
 
-    fn handle_get_config(&self, cfg_sender: oneshot::Sender<TiKvConfig>) {
-        let cfg = self.config_handler.get_config().clone();
+    fn handle_get_config(&self, cfg_sender: oneshot::Sender<String>) {
+        let cfg = self.config_handler.get();
         let _ = cfg_sender
             .send(cfg)
             .map_err(|_| error!("failed to send config"));

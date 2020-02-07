@@ -26,13 +26,10 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
-use crate::config::{ConfigController, ConfigHandler};
 use crate::import::SSTImporter;
-use crate::raftstore::coprocessor::config::SplitCheckConfigManager;
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::config::Config;
-use crate::raftstore::store::config::RaftstoreConfigManager;
 use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
@@ -53,6 +50,7 @@ use crate::raftstore::store::worker::{
     ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
     ReadDelegate, RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
 };
+use crate::raftstore::store::DynamicConfig;
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
@@ -988,10 +986,11 @@ impl RaftBatchSystem {
         self.router.clone()
     }
 
+    // TODO: reduce arguments
     pub fn spawn<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
         &mut self,
         meta: metapb::Store,
-        mut cfg: Config,
+        cfg: Arc<VersionTrack<Config>>,
         engines: Engines,
         trans: T,
         pd_client: Arc<C>,
@@ -1000,11 +999,11 @@ impl RaftBatchSystem {
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-        mut cfg_controller: ConfigController,
+        split_check_worker: Worker<SplitCheckTask>,
+        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
-        cfg.validate()?;
 
         // TODO load coprocessors from configuration
         coprocessor_host
@@ -1012,7 +1011,7 @@ impl RaftBatchSystem {
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
         let workers = Workers {
-            split_check_worker: Worker::new("split-check"),
+            split_check_worker,
             region_worker: Worker::new("snapshot-worker"),
             pd_worker,
             consistency_check_worker: Worker::new("consistency-check"),
@@ -1021,11 +1020,9 @@ impl RaftBatchSystem {
             coprocessor_host,
             future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
-                .pool_size(cfg.future_poll_size)
+                .pool_size(cfg.value().future_poll_size)
                 .build(),
         };
-        let cfg = Arc::new(VersionTrack::new(cfg));
-        cfg_controller.register("raft_store", Box::new(RaftstoreConfigManager(cfg.clone())));
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
@@ -1049,7 +1046,7 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        self.start_system(workers, region_peers, builder, cfg_controller)?;
+        self.start_system(workers, region_peers, builder, dyn_cfg)?;
         Ok(())
     }
 
@@ -1058,7 +1055,7 @@ impl RaftBatchSystem {
         mut workers: Workers,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
         builder: RaftPollerBuilder<T, C>,
-        mut cfg_controller: ConfigController,
+        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1118,17 +1115,18 @@ impl RaftBatchSystem {
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
 
-        cfg_controller.register(
-            "coprocessor",
-            Box::new(SplitCheckConfigManager(
-                workers.split_check_worker.scheduler(),
-            )),
-        );
+        // cfg_controller.register(
+        //     "coprocessor",
+        //     Box::new(SplitCheckConfigManager(
+        //         workers.split_check_worker.scheduler(),
+        //     )),
+        // );
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             self.router.clone(),
             workers.coprocessor_host.clone(),
-            cfg_controller.get_current().coprocessor.clone(),
+            // cfg_controller.get_current().coprocessor.clone(),
+            Default::default(),
         );
         box_try!(workers.split_check_worker.start(split_check_runner));
 
@@ -1157,15 +1155,10 @@ impl RaftBatchSystem {
         let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
         box_try!(workers.cleanup_worker.start(cleanup_runner));
 
-        let config_client = box_try!(ConfigHandler::start(
-            cfg_controller.get_current().server.advertise_addr.clone(),
-            cfg_controller,
-            workers.pd_worker.scheduler(),
-        ));
         let pd_runner = PdRunner::new(
             store.get_id(),
             Arc::clone(&pd_client),
-            config_client,
+            dyn_cfg,
             self.router.clone(),
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
@@ -2131,10 +2124,12 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::{mpsc, Arc, Mutex};
 
+    use crate::config::ConfigController;
     use crate::config::TiKvConfig;
     use crate::import::SSTImporter;
     use crate::raftstore::coprocessor::properties::{RangeOffsets, RangeProperties};
     use crate::raftstore::coprocessor::CoprocessorHost;
+    use crate::raftstore::store::config::RaftstoreConfigManager;
     use crate::raftstore::store::fsm::*;
     use crate::raftstore::store::Transport;
     use engine_rocks::CompactedEvent;

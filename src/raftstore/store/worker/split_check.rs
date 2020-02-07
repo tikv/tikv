@@ -340,6 +340,7 @@ mod tests {
     use super::*;
     use crate::config::{ConfigController, TiKvConfig};
     use crate::raftstore::coprocessor::config::SplitCheckConfigManager;
+    use crate::raftstore::store::DynamicConfig;
     use engine::rocks;
     use tikv_util::worker::{Scheduler, Worker};
 
