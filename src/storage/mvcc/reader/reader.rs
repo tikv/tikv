@@ -164,8 +164,11 @@ impl<S: Snapshot> MvccReader<S> {
 
     /// Returns the latest value and its commit version.
     /// If the value is not found, return zero commit version.
-    pub fn force_get(&mut self, key: &Key) -> Result<(Option<Value>, TimeStamp)> {
-        let mut ts = TimeStamp::max();
+    pub fn force_get(
+        &mut self,
+        key: &Key,
+        mut ts: TimeStamp,
+    ) -> Result<(Option<Value>, TimeStamp)> {
         loop {
             match self.seek_write(key, ts)? {
                 Some((commit_ts, mut write)) => match write.write_type {

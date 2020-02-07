@@ -2,7 +2,7 @@
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::metrics::*;
-use crate::storage::mvcc::reader::MvccReader;
+use crate::storage::mvcc::{self, reader::MvccReader};
 use crate::storage::mvcc::{ErrorInner, Result};
 use crate::storage::types::TxnStatus;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -261,7 +261,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 .into());
             }
             let res = if force {
-                Ok(Some(self.reader.force_get(&key)?))
+                Ok(Some(self.reader.force_get(&key, TimeStamp::max())?))
             } else {
                 Ok(None)
             };
@@ -277,7 +277,9 @@ impl<S: Snapshot> MvccTxn<S> {
             return res;
         }
 
-        if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
+        let res = if let Some((commit_ts, mut write)) =
+            self.reader.seek_write(&key, TimeStamp::max())?
+        {
             // The isolation level of pessimistic transactions is RC. `for_update_ts` is
             // the commit_ts of the data this transaction read. If exists a commit version
             // whose commit timestamp is larger than current `for_update_ts`, the
@@ -325,13 +327,35 @@ impl<S: Snapshot> MvccTxn<S> {
 
             // Check data constraint when acquiring pessimistic lock.
             self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-        }
 
-        let res = if force {
-            Ok(Some(self.reader.force_get(&key)?))
+            // Quick path for force pessimistic lock. If it's a valid Write, no need to read again.
+            match write.write_type {
+                WriteType::Put => {
+                    if write.short_value.is_some() {
+                        Ok(Some((write.short_value.take(), commit_ts)))
+                    } else {
+                        match self.reader.load_data(&key, write.start_ts)? {
+                            None => {
+                                return Err(mvcc::default_not_found_error(key.to_raw()?, "get"));
+                            }
+                            Some(v) => Ok(Some((Some(v), commit_ts))),
+                        }
+                    }
+                }
+                WriteType::Delete => Ok(Some((None, commit_ts))),
+                WriteType::Lock | WriteType::Rollback => {
+                    // Try to find a valid Write.
+                    Ok(Some(self.reader.force_get(&key, commit_ts.prev())?))
+                }
+            }
+        } else if force {
+            // Write not found
+            Ok(Some((None, TimeStamp::zero())))
         } else {
+            // Don't need value
             Ok(None)
         };
+
         let lock = pessimistic_lock(primary, self.start_ts, lock_ttl, for_update_ts);
         self.put_lock(key, &lock);
         res
