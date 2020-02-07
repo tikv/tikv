@@ -359,7 +359,7 @@ impl ApplyContext {
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
-        if self.last_applied_index < delegate.apply_state.get_applied_index() {
+        if self.last_applied_index < delegate.apply_state.get_applied_index() && self.sync_log_hint {
             delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
         }
         // last_applied_index doesn't need to be updated, set persistent to true will
@@ -410,7 +410,7 @@ impl ApplyContext {
 
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult>) {
-        if !delegate.pending_remove {
+        if !delegate.pending_remove && self.sync_log_hint {
             delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
         }
         self.commit_opt(delegate, false);
