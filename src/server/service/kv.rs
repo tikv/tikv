@@ -1458,7 +1458,16 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     resp.set_errors(extract_key_errors(v).into())
 });
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
-    resp.set_errors(extract_key_errors(v).into())
+    match v {
+        Ok(Ok(Some((val, commit_ts)))) => {
+            if let Some(val) = val {
+                resp.set_value(val);
+            }
+            resp.set_commit_ts(commit_ts.into_inner());
+        }
+        Ok(Ok(None)) => (),
+        Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+    }
 });
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())

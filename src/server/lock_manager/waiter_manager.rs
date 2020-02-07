@@ -252,9 +252,9 @@ impl Waiter {
     /// Extracts key and primary key from `ProcessResult`.
     fn extract_key_info(&mut self) -> (Vec<u8>, Vec<u8>) {
         match &mut self.pr {
-            ProcessResult::MultiRes { results } => match results.pop().expect("mustn't be empty") {
+            ProcessResult::PessimisticLockRes { res } => match res {
                 Err(StorageError(box StorageErrorInner::Txn(TxnError(
-                    box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(mut info))),
+                    box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))),
                 )))) => (info.take_key(), info.take_primary_lock()),
                 _ => panic!("unexpected mvcc error"),
             },

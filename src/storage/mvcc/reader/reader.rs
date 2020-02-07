@@ -162,6 +162,34 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(())
     }
 
+    /// Returns the latest value and its commit version.
+    /// If the value is not found, return zero commit version.
+    pub fn force_get(&mut self, key: &Key) -> Result<(Option<Value>, TimeStamp)> {
+        let mut ts = TimeStamp::max();
+        loop {
+            match self.seek_write(key, ts)? {
+                Some((commit_ts, mut write)) => match write.write_type {
+                    WriteType::Put => {
+                        if write.short_value.is_some() {
+                            return Ok((write.short_value.take(), commit_ts));
+                        }
+                        match self.load_data(key, write.start_ts)? {
+                            None => {
+                                return Err(default_not_found_error(key.to_raw()?, "get"));
+                            }
+                            Some(v) => return Ok((Some(v), commit_ts)),
+                        };
+                    }
+                    WriteType::Delete => {
+                        return Ok((None, commit_ts));
+                    }
+                    WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
+                },
+                None => return Ok((None, TimeStamp::zero())),
+            }
+        }
+    }
+
     pub fn get(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
@@ -547,7 +575,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into())
+            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into(), false)
                 .unwrap();
             self.write(txn.into_modifies());
         }

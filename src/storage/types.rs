@@ -142,6 +142,7 @@ storage_callback! {
     MvccInfoByStartTs(Option<(Key, MvccInfo)>) ProcessResult::MvccStartTs { mvcc } => mvcc,
     Locks(Vec<kvrpcpb::LockInfo>) ProcessResult::Locks { locks } => locks,
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
+    PessimisticLock(Result<Option<(Option<Value>, TimeStamp)>>) ProcessResult::PessimisticLockRes { res } => res,
 }
 
 pub trait StorageCallbackType: Sized {
