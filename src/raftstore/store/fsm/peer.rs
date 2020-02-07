@@ -1501,9 +1501,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-                unimplemented!()
-            }
         }
 
         // In pattern matching above, if the peer is the leader,

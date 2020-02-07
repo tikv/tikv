@@ -530,12 +530,15 @@ impl Debugger {
                 max_inflight_msgs: 256,
                 applied: apply_state.get_applied_index(),
                 check_quorum: true,
-                tag,
                 skip_bcast_commit: true,
                 ..Default::default()
             };
 
-            box_try!(RawNode::new(&raft_cfg, peer_storage));
+            box_try!(RawNode::new(
+                &raft_cfg,
+                peer_storage,
+                &slog_global::get_global()
+            ));
             Ok(())
         };
 
