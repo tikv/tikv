@@ -71,6 +71,7 @@ pub struct PanicSstWriter;
 
 impl SstWriter for PanicSstWriter {
     type ExternalSstFileInfo = PanicExternalSstFileInfo;
+    type ExternalSstFileReader = PanicExternalSstFileReader;
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         panic!()
@@ -84,7 +85,7 @@ impl SstWriter for PanicSstWriter {
     fn finish(self) -> Result<Self::ExternalSstFileInfo> {
         panic!()
     }
-    fn finish_into(self, buf: &mut Vec<u8>) -> Result<Self::ExternalSstFileInfo> {
+    fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)> {
         panic!()
     }
 }
@@ -131,6 +132,14 @@ impl ExternalSstFileInfo for PanicExternalSstFileInfo {
         panic!()
     }
     fn num_entries(&self) -> u64 {
+        panic!()
+    }
+}
+
+pub struct PanicExternalSstFileReader;
+
+impl std::io::Read for PanicExternalSstFileReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         panic!()
     }
 }

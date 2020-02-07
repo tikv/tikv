@@ -23,8 +23,6 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use import::*;
-mod io_limiter;
-pub use io_limiter::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
