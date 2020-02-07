@@ -383,6 +383,7 @@ fn test_read_index_when_transfer_leader_1() {
     let filter = Box::new(
         RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
             .direction(Direction::Recv)
+            .skip(MessageType::MsgTransferLeader)
             .when(Arc::new(AtomicBool::new(true)))
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
