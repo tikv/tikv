@@ -279,18 +279,8 @@ clippy: pre-clippy
 	@cargo clippy --all --exclude cdc --exclude backup \
 		--all-targets --no-default-features \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
-	@for pkg in "cdc" "backup"; do \
-		cd components/$$pkg && \
-		cargo clippy -p $$pkg --all-targets --no-default-features \
-			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-		cd ../.. ;\
-	done
-
-# TODO fix tests warnings
-# @cd tests && \
-# cargo clippy -p tests --all-targets --no-default-features \
-# 	--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-# cd ..
+	cd components/cdc && cargo clippy -p cdc --all-targets --no-default-features --features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && cd ../..
+	cd components/backup && cargo clippy -p backup --all-targets --no-default-features --features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && cd ../..
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))

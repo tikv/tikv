@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "cdc"
-version = "4.0.0-alpha"
+version = "0.0.1"
 dependencies = [
  "engine",
  "engine_rocks",
@@ -4126,7 +4126,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#44f75c9bef33cef5c39e0e0e4fed71b15c735313"
+source = "git+https://github.com/pingcap/tipb.git#c4d518eb1d60c21f05b028b36729e64610346dac"
 dependencies = [
  "bytes 0.4.12",
  "lazy_static",

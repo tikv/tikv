@@ -536,6 +536,11 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonContainsSig
             | ScalarFuncSig::JsonKeys2ArgsSig
             | ScalarFuncSig::JsonValidStringSig
+            | ScalarFuncSig::PlusIntUnsignedUnsigned
+            | ScalarFuncSig::PlusIntUnsignedSigned
+            | ScalarFuncSig::PlusIntSignedUnsigned
+            | ScalarFuncSig::PlusIntSignedSigned
+            | ScalarFuncSig::UpperUtf8
             | ScalarFuncSig::JsonValidOthersSig => return Err(Error::UnknownSignature(sig)),
 
             // PbCode is unspecified
