@@ -17,7 +17,7 @@ use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::raftstore::store::fsm::PeerFsm;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
-use crate::storage::kv::CompactedEvent;
+use engine_rocks::CompactedEvent;
 use tikv_util::escape;
 
 use super::RegionSnapshot;
