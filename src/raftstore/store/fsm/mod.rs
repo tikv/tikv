@@ -5,8 +5,10 @@
 //! stores. They are mixed for now, will be separated in the future.
 
 pub mod apply;
+mod batch;
 mod metrics;
 mod peer;
+mod router;
 pub mod store;
 
 pub use self::apply::{
@@ -15,7 +17,11 @@ pub use self::apply::{
     Msg as ApplyTask, Notifier as ApplyNotifier, Proposal, RegionProposal, Registration,
     TaskRes as ApplyTaskRes,
 };
-pub use self::peer::{DestroyPeerJob, GroupState, PeerFsm};
+pub use self::batch::{
+    BatchRouter, BatchSystem, Fsm, HandlerBuilder, NormalScheduler, PollHandler,
+};
+pub use self::peer::{DestroyPeerJob, GroupState};
+pub use self::router::{BasicMailbox, Mailbox};
 pub use self::store::{
     create_raft_batch_system, new_compaction_listener, RaftBatchSystem, RaftPollerBuilder,
     RaftRouter, StoreInfo,
