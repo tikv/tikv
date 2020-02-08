@@ -111,6 +111,7 @@ impl ScalarFunc {
             | ScalarFuncSig::DateFormatSig
             | ScalarFuncSig::Sha2
             | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::TruncateUint
             | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::TruncateReal
@@ -389,8 +390,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Pi => (0, 0),
 
             // unimplemented signature
-            ScalarFuncSig::TruncateUint
-            | ScalarFuncSig::AesDecryptIv
+            ScalarFuncSig::AesDecryptIv
             | ScalarFuncSig::AesEncryptIv
             | ScalarFuncSig::Encode
             | ScalarFuncSig::Decode
@@ -827,6 +827,8 @@ dispatch_call! {
         RoundWithFracInt => round_with_frac_int,
 
         TruncateInt => truncate_int,
+        TruncateUint => truncate_uint,
+
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -1216,6 +1218,7 @@ mod tests {
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::TruncateInt,
+                    ScalarFuncSig::TruncateUint,
                     ScalarFuncSig::TruncateReal,
                     ScalarFuncSig::TruncateDecimal,
                     ScalarFuncSig::Atan2Args,
@@ -1541,7 +1544,6 @@ mod tests {
 
         // unimplemented signature
         let cases = vec![
-            ScalarFuncSig::TruncateUint,
             ScalarFuncSig::AesDecryptIv,
             ScalarFuncSig::AesEncryptIv,
             ScalarFuncSig::Encode,

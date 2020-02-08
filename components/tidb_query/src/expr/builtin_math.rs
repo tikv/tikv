@@ -375,6 +375,23 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn truncate_uint(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let x = try_opt!(self.children[0].eval_int(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        let d = if self.children[1].is_unsigned() { 0 } else { d };
+        if d >= 0 {
+            Ok(Some(x))
+        } else {
+            if d < -19 {
+                return Ok(Some(0));
+            }
+            let x = x as u64;
+            let shift = 10_u64.pow(-d as u32);
+            Ok(Some((x / shift * shift) as i64))
+        }
+    }
+
+    #[inline]
     pub fn truncate_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
@@ -1265,6 +1282,41 @@ mod tests {
                         .as_mut_accessor()
                         .set_flag(FieldTypeFlag::UNSIGNED);
                 }
+            })
+            .unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_truncate_uint() {
+        let tests = vec![
+            (
+                Datum::U64(18446744073709551615),
+                Datum::U64(u64::max_value()),
+                Datum::U64(18446744073709551615),
+            ),
+            (
+                Datum::U64(18446744073709551615),
+                Datum::I64(-2),
+                Datum::U64(18446744073709551600),
+            ),
+            (
+                Datum::U64(18446744073709551615),
+                Datum::I64(-20),
+                Datum::U64(0),
+            ),
+            (
+                Datum::U64(18446744073709551615),
+                Datum::I64(2),
+                Datum::U64(18446744073709551615),
+            ),
+        ];
+        for (x, d, exp) in tests {
+            let got = eval_func_with(ScalarFuncSig::TruncateUint, &[x, d], |op, _args| {
+                op.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             })
             .unwrap();
             assert_eq!(got, exp);
