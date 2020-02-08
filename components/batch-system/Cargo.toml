@@ -1,0 +1,29 @@
+[package]
+name = "batch-system"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+crossbeam = "0.7"
+tikv_util = { path = "../tikv_util" }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
+derive_more = "0.15.0"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[test]]
+name = "tests"
+path = "tests/cases/mod.rs"
+required-features = ["test-runner"]
+
+[[bench]]
+name = "router"
+harness = false
+required-features = ["test-runner"]
+
+[[bench]]
+name = "batch-system"
+harness = false
+required-features = ["test-runner"]
