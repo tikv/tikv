@@ -6,7 +6,7 @@ use std::str;
 
 use codec::prelude::*;
 
-use super::{Collation, DecodeError, DecodeOrWriteError};
+use super::{Collator, DecodeError, DecodeOrWriteError};
 
 const GENERAL_CI_PLANE_00: [[u16; 3]; 256] = [
     [0x0000, 0x0000, 0x0000],
@@ -526,7 +526,7 @@ const GENERAL_CI_PLANE_01: [[u16; 3]; 256] = [
     [0x01FE, 0x01FF, 0x00D8],
 ];
 
-pub struct CollateUtf8Mb4GeneralCi;
+pub struct CollatorUtf8Mb4GeneralCi;
 
 fn general_ci_weight(c: char) -> u16 {
     let mut plane = &GENERAL_CI_PLANE_00;
@@ -537,7 +537,7 @@ fn general_ci_weight(c: char) -> u16 {
     plane[(r & 0xFF) as usize][2]
 }
 
-impl Collation for CollateUtf8Mb4GeneralCi {
+impl Collator for CollatorUtf8Mb4GeneralCi {
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],
         writer: &mut W,
@@ -573,9 +573,9 @@ impl Collation for CollateUtf8Mb4GeneralCi {
     }
 }
 
-pub struct CollateUtf8Mb4Bin;
+pub struct CollatorUtf8Mb4Bin;
 
-impl Collation for CollateUtf8Mb4Bin {
+impl Collator for CollatorUtf8Mb4Bin {
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],
         writer: &mut W,
@@ -607,7 +607,7 @@ mod tests {
     fn test_general_ci() {
         let s1 = "cAfe".as_bytes();
         let s2 = "café".as_bytes();
-        type C = CollateUtf8Mb4GeneralCi;
+        type C = CollatorUtf8Mb4GeneralCi;
         assert_eq!(C::sort_key(s1).unwrap(), C::sort_key(s2).unwrap());
         assert_eq!(C::sort_compare(s1, s2).unwrap(), Ordering::Equal);
     }

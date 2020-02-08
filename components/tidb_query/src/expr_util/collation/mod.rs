@@ -55,7 +55,7 @@ impl From<DecodeOrWriteError> for crate::error::EvaluateError {
     }
 }
 
-pub trait Collation {
+pub trait Collator {
     /// Writes the SortKey of `bstr` into `writer`.
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],
