@@ -93,11 +93,8 @@ impl DAGSelect {
         self
     }
 
-    pub fn count(mut self) -> DAGSelect {
-        let mut expr = Expr::default();
-        expr.set_tp(ExprType::Count);
-        self.aggregate.push(expr);
-        self
+    pub fn count(self, col: &Column) -> DAGSelect {
+        self.aggr_col(col, ExprType::Count)
     }
 
     pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DAGSelect {
@@ -107,7 +104,12 @@ impl DAGSelect {
         col_expr.set_tp(ExprType::ColumnRef);
         col_expr.mut_val().encode_i64(col_offset).unwrap();
         let mut expr = Expr::default();
-        expr.set_field_type(col.as_field_type());
+        let mut expr_ft = col.as_field_type();
+        // Avg will contains two auxiliary columns (sum, count) and the sum should be a `Decimal`
+        if aggr_t == ExprType::Avg || aggr_t == ExprType::Sum {
+            expr_ft.set_tp(0xf6); // FieldTypeTp::NewDecimal
+        }
+        expr.set_field_type(expr_ft);
         expr.set_tp(aggr_t);
         expr.mut_children().push(col_expr);
         self.aggregate.push(expr);
@@ -178,8 +180,7 @@ impl DAGSelect {
     }
 
     pub fn build_with(mut self, ctx: Context, flags: &[u64]) -> Request {
-        let has_aggr = !self.aggregate.is_empty() || !self.group_by.is_empty();
-        if has_aggr {
+        if !self.aggregate.is_empty() || !self.group_by.is_empty() {
             let mut exec = Executor::default();
             exec.set_tp(ExecType::TypeAggregation);
             let mut aggr = Aggregation::default();
@@ -223,12 +224,7 @@ impl DAGSelect {
         let output_offsets = if self.output_offsets.is_some() {
             self.output_offsets.take().unwrap()
         } else {
-            let len = if has_aggr {
-                self.cols.len() + 1
-            } else {
-                self.cols.len()
-            };
-            (0..len as u32).collect()
+            (0..self.cols.len() as u32).collect()
         };
         dag.set_output_offsets(output_offsets);
 

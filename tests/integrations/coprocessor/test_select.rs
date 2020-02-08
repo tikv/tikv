@@ -253,12 +253,15 @@ fn test_group_by() {
     // for dag
     let req = DAGSelect::from(&product)
         .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     // should only have name:0, name:2 and name:1
     let mut row_count = 0;
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
-    for (row, name) in spliter.zip(&[b"name:0", b"name:2", b"name:1"]) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 0, Bytes);
+    for (row, name) in results.iter().zip(&[b"name:0", b"name:1", b"name:2"]) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[Datum::Bytes(name.to_vec())])
                 .unwrap();
@@ -283,22 +286,25 @@ fn test_aggr_count() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
     let exp = vec![
+        (Datum::Null, 1),
         (Datum::Bytes(b"name:0".to_vec()), 2),
         (Datum::Bytes(b"name:3".to_vec()), 1),
         (Datum::Bytes(b"name:5".to_vec()), 2),
-        (Datum::Null, 1),
     ];
 
     // for dag
     let req = DAGSelect::from(&product)
-        .count()
+        .count(&product["count"])
         .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0, 1]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
-    for (row, (name, cnt)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 1, Bytes);
+    for (row, (name, cnt)) in results.iter().zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -309,23 +315,25 @@ fn test_aggr_count() {
     assert_eq!(row_count, exp_len);
 
     let exp = vec![
+        (vec![Datum::Null, Datum::I64(4)], 1),
+        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)], 1),
         (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)], 1),
         (vec![Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)], 1),
-        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)], 1),
         (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2),
-        (vec![Datum::Null, Datum::I64(4)], 1),
     ];
 
     // for dag
     let req = DAGSelect::from(&product)
-        .count()
+        .count(&product["id"])
         .group_by(&[&product["name"], &product["count"]])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
-    for (row, (gk_data, cnt)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 1, Bytes);
+    for (row, (gk_data, cnt)) in results.iter().zip(exp) {
         let mut expected_datum = vec![Datum::U64(cnt)];
         expected_datum.extend_from_slice(gk_data.as_slice());
         let expected_encoded =
@@ -356,22 +364,25 @@ fn test_aggr_first() {
     let (_, endpoint) = init_with_data(&product, &data);
 
     let exp = vec![
+        (Datum::Null, 7),
         (Datum::Bytes(b"name:0".to_vec()), 1),
         (Datum::Bytes(b"name:3".to_vec()), 2),
         (Datum::Bytes(b"name:5".to_vec()), 3),
-        (Datum::Null, 7),
     ];
 
     // for dag
     let req = DAGSelect::from(&product)
         .first(&product["id"])
         .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0, 1]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
-    for (row, (name, id)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 1, Bytes);
+    for (row, (name, id)) in results.iter().zip(exp) {
         let expected_datum = vec![Datum::I64(id), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -382,24 +393,27 @@ fn test_aggr_first() {
     assert_eq!(row_count, exp_len);
 
     let exp = vec![
-        (2, Datum::Bytes(b"name:0".to_vec())),
-        (3, Datum::Bytes(b"name:3".to_vec())),
-        (1, Datum::Bytes(b"name:0".to_vec())),
-        (4, Datum::Bytes(b"name:5".to_vec())),
         (5, Datum::Null),
         (6, Datum::Null),
+        (2, Datum::Bytes(b"name:0".to_vec())),
+        (1, Datum::Bytes(b"name:0".to_vec())),
+        (3, Datum::Bytes(b"name:3".to_vec())),
+        (4, Datum::Bytes(b"name:5".to_vec())),
     ];
 
     // for dag
     let req = DAGSelect::from(&product)
         .first(&product["name"])
         .group_by(&[&product["count"]])
+        .output_offsets(Some(vec![0, 1]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
-    for (row, (count, name)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 0, Bytes);
+    for (row, (count, name)) in results.iter().zip(exp) {
         let expected_datum = vec![name, Datum::I64(count)];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -434,11 +448,11 @@ fn test_aggr_avg() {
     store.commit();
 
     let exp = vec![
+        (Datum::Null, (Datum::Dec(4.into()), 1)),
         (Datum::Bytes(b"name:0".to_vec()), (Datum::Dec(3.into()), 2)),
         (Datum::Bytes(b"name:3".to_vec()), (Datum::Dec(3.into()), 1)),
-        (Datum::Bytes(b"name:5".to_vec()), (Datum::Dec(8.into()), 2)),
-        (Datum::Null, (Datum::Dec(4.into()), 1)),
         (Datum::Bytes(b"name:4".to_vec()), (Datum::Null, 0)),
+        (Datum::Bytes(b"name:5".to_vec()), (Datum::Dec(8.into()), 2)),
     ];
     // for dag
     let req = DAGSelect::from(&product)
@@ -449,7 +463,9 @@ fn test_aggr_avg() {
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
-    for (row, (name, (sum, cnt))) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 2, Bytes);
+    for (row, (name, (sum, cnt))) in results.iter().zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), sum, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -475,21 +491,24 @@ fn test_aggr_sum() {
     let (_, endpoint) = init_with_data(&product, &data);
 
     let exp = vec![
+        (Datum::Null, 4),
         (Datum::Bytes(b"name:0".to_vec()), 3),
         (Datum::Bytes(b"name:3".to_vec()), 3),
         (Datum::Bytes(b"name:5".to_vec()), 8),
-        (Datum::Null, 4),
     ];
     // for dag
     let req = DAGSelect::from(&product)
         .sum(&product["count"])
         .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0, 1]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
-    for (row, (name, cnt)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 1, Bytes);
+    for (row, (name, cnt)) in results.iter().zip(exp) {
         let expected_datum = vec![Datum::Dec(cnt.into()), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -526,6 +545,7 @@ fn test_aggr_extre() {
     store.commit();
 
     let exp = vec![
+        (Datum::Null, Datum::I64(4), Datum::I64(4)),
         (
             Datum::Bytes(b"name:0".to_vec()),
             Datum::I64(2),
@@ -541,7 +561,6 @@ fn test_aggr_extre() {
             Datum::I64(5),
             Datum::I64(4),
         ),
-        (Datum::Null, Datum::I64(4), Datum::I64(4)),
         (Datum::Bytes(b"name:6".to_vec()), Datum::Null, Datum::Null),
     ];
 
@@ -555,7 +574,9 @@ fn test_aggr_extre() {
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
-    for (row, (name, max, min)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 2, Bytes);
+    for (row, (name, max, min)) in results.iter().zip(exp) {
         let expected_datum = vec![max, min, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -625,6 +646,7 @@ fn test_aggr_bit_ops() {
         .bit_or(&product["count"])
         .bit_xor(&product["count"])
         .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0, 1, 2, 3]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -965,7 +987,7 @@ fn test_index_aggr_count() {
     let (_, endpoint) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from_index(&product, &product["name"])
-        .count()
+        .count(&product["id"])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
@@ -989,7 +1011,7 @@ fn test_index_aggr_count() {
     ];
     // for dag
     let req = DAGSelect::from_index(&product, &product["name"])
-        .count()
+        .count(&product["id"])
         .group_by(&[&product["name"]])
         .build();
     resp = handle_select(&endpoint, req);
@@ -1014,7 +1036,7 @@ fn test_index_aggr_count() {
         (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2),
     ];
     let req = DAGSelect::from_index(&product, &product["name"])
-        .count()
+        .count(&product["id"])
         .group_by(&[&product["name"], &product["count"]])
         .build();
     resp = handle_select(&endpoint, req);
@@ -1062,7 +1084,9 @@ fn test_index_aggr_first() {
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
-    for (row, (name, id)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 1, Bytes);
+    for (row, (name, id)) in results.iter().zip(exp) {
         let expected_datum = vec![Datum::I64(id), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -1147,12 +1171,15 @@ fn test_index_aggr_sum() {
     let req = DAGSelect::from_index(&product, &product["name"])
         .sum(&product["count"])
         .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0, 1]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
-    for (row, (name, cnt)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 1, Bytes);
+    for (row, (name, cnt)) in results.iter().zip(exp) {
         let expected_datum = vec![Datum::Dec(cnt.into()), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
