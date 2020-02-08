@@ -176,6 +176,7 @@ dependencies = [
 name = "batch-system"
 version = "0.1.0"
 dependencies = [
+ "criterion 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "derive_more 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
