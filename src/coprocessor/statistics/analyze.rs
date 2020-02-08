@@ -86,7 +86,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             hist.append(bytes);
             if let Some(c) = cms.as_mut() {
                 for end_offset in end_offsets {
-                    c.insert(&bytes[..end_offset])
+                    c.insert(&bytes[..end_offset])?
                 }
             }
         }
@@ -220,7 +220,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                 }
             }
             for (collector, val) in collectors.iter_mut().zip(cols_iter) {
-                collector.collect(val);
+                collector.collect(val)?;
             }
         }
         Ok((collectors, pk_builder))
@@ -272,20 +272,20 @@ impl SampleCollector {
         s
     }
 
-    pub fn collect(&mut self, data: Vec<u8>) {
+    pub fn collect(&mut self, data: Vec<u8>) -> Result<()> {
         if data[0] == datum::NIL_FLAG {
             self.null_count += 1;
-            return;
+            return Ok(());
         }
         self.count += 1;
-        self.fm_sketch.insert(&data);
+        self.fm_sketch.insert(&data)?;
         if let Some(c) = self.cm_sketch.as_mut() {
-            c.insert(&data)
+            c.insert(&data)?
         }
         self.total_size += data.len() as u64;
         if self.samples.len() < self.max_sample_size {
             self.samples.push(data);
-            return;
+            return Ok(());
         }
         if self.rng.gen_range(0, self.count) < self.max_sample_size as u64 {
             let idx = self.rng.gen_range(0, self.max_sample_size);
@@ -293,6 +293,7 @@ impl SampleCollector {
             self.samples.remove(idx);
             self.samples.push(data);
         }
+        Ok(())
     }
 }
 
@@ -318,7 +319,9 @@ mod tests {
         let cases = vec![Datum::I64(1), Datum::Null, Datum::I64(2), Datum::I64(5)];
 
         for data in cases {
-            sample.collect(datum::encode_value(&mut EvalContext::default(), &[data]).unwrap());
+            sample
+                .collect(datum::encode_value(&mut EvalContext::default(), &[data]).unwrap())
+                .unwrap();
         }
         assert_eq!(sample.samples.len(), max_sample_size);
         assert_eq!(sample.null_count, 1);

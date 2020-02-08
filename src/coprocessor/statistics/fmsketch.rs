@@ -1,9 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{ByteOrder, LittleEndian};
-use murmur3::murmur3_x64_128;
 use tikv_util::collections::HashSet;
 use tipb;
+
+use crate::coprocessor::error::{Error, Result};
 
 /// `FmSketch` is used to count the approximate number of distinct
 /// elements in multiset.
@@ -24,13 +24,14 @@ impl FmSketch {
         }
     }
 
-    pub fn insert(&mut self, mut bytes: &[u8]) {
+    pub fn insert(&mut self, mut bytes: &[u8]) -> Result<()> {
         let hash = {
-            let mut out: [u8; 16] = [0; 16];
-            murmur3_x64_128(&mut bytes, 0, &mut out);
-            LittleEndian::read_u64(&out[0..8])
+            let out = murmur3::murmur3_x64_128(&mut bytes, 0)
+                .map_err(|err| Error::Other(err.to_string()))?;
+            u64::from_le(out as u64)
         };
         self.insert_hash_value(hash);
+        Ok(())
     }
 
     pub fn into_proto(self) -> tipb::FmSketch {
@@ -109,7 +110,7 @@ mod tests {
         let mut s = FmSketch::new(max_size);
         for value in values {
             let bytes = datum::encode_value(&mut EvalContext::default(), from_ref(value))?;
-            s.insert(&bytes);
+            s.insert(&bytes).unwrap();
         }
         Ok(s)
     }

@@ -84,6 +84,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "components/log_wrappers" }
 mime = "0.3.13"
 more-asserts = "0.1"
+murmur3 = "0.5.1"
 nix = "0.11"
 nom = "5.0.1"
 pd_client = { path = "components/pd_client" }
@@ -124,9 +125,6 @@ toml = "0.4"
 url = "2"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
 vlog = "0.1.4"
-
-[dependencies.murmur3]
-git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
