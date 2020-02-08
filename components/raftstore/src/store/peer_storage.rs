@@ -1486,6 +1486,18 @@ pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Resu
     Ok(())
 }
 
+// When we bootstrap the region we must call this to initialize region local state first.
+// TODO: remove the _2 and delete the other version of this function
+pub fn write_initial_raft_state_2<T: MutableTrait>(raft_wb: &T, region_id: u64) -> Result<()> {
+    let mut raft_state = RaftLocalState::default();
+    raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
+    raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
+    raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
+
+    raft_wb.put_msg(&keys::raft_state_key(region_id), &raft_state)?;
+    Ok(())
+}
+
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region apply state first.
 pub fn write_initial_apply_state<T: Mutable>(
