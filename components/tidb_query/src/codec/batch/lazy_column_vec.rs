@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::FieldType;
 
 use super::LazyBatchColumn;
@@ -9,7 +8,6 @@ use crate::codec::data_type::VectorValue;
 use crate::codec::Result;
 use crate::expr::EvalContext;
 
-use std::convert::TryFrom;
 
 /// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
 #[derive(Clone, Debug)]
@@ -193,13 +191,6 @@ impl LazyBatchColumnVec {
         // Step 3 : Encode chunk to output.
         output.encode_chunk(&chunk).unwrap();
         Ok(())
-    }
-
-    #[inline]
-    pub fn is_arrow_encodable(schema: &[FieldType]) -> bool {
-        schema
-            .iter()
-            .all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
     }
 
     /// Truncates columns into equal length. The new length of all columns would be the length of

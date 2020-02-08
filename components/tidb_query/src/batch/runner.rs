@@ -1,17 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kvproto::coprocessor::KeyRange;
+use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::deadline::Deadline;
-use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
 use yatp::task::future::reschedule;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
-use crate::codec::batch::LazyBatchColumnVec;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
 use crate::storage::Storage;
@@ -111,6 +112,13 @@ impl BatchExecutorsRunner<()> {
 
         Ok(())
     }
+}
+
+#[inline]
+fn is_arrow_encodable(schema: &[FieldType]) -> bool {
+    schema
+        .iter()
+        .all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
 pub fn build_executors<S: Storage + 'static>(
@@ -363,7 +371,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     self.out_most_executor.schema().len()
                 );
                 let mut chunk = Chunk::default();
-                if !LazyBatchColumnVec::is_arrow_encodable(self.out_most_executor.schema()) {
+                if !is_arrow_encodable(self.out_most_executor.schema()) {
                     self.encode_type = EncodeType::TypeDefault;
                 }
                 {
