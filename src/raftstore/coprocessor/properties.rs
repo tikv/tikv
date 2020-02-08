@@ -4,7 +4,6 @@ use std::cmp;
 use std::collections::HashMap;
 use std::u64;
 
-use crate::storage::mvcc::{TimeStamp, Write, WriteType};
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory, DB,
 };
@@ -13,7 +12,7 @@ pub use engine_rocks::{
     RangePropertiesCollector, RangePropertiesCollectorFactory, UserProperties,
 };
 use tikv_util::codec::Result;
-use txn_types::Key;
+use txn_types::{Key, TimeStamp, Write, WriteType};
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -223,11 +222,10 @@ mod tests {
     use test::Bencher;
 
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-    use crate::storage::mvcc::{Write, WriteType};
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::{CF_WRITE, LARGE_CFS};
-    use txn_types::Key;
+    use txn_types::{Key, Write, WriteType};
 
     use super::*;
 
