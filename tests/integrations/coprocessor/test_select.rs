@@ -28,6 +28,19 @@ fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
     }
 }
 
+/// sort_by sorts the `$v`(a vector of `Vec<Datum>`) by the $index elements in `Vec<Datum>`
+macro_rules! sort_by {
+    ($v:ident,  $index:expr, $t:ident) => {
+        $v.sort_by(|a, b| match (&a[$index], &b[$index]) {
+            (Datum::Null, Datum::Null) => std::cmp::Ordering::Equal,
+            (Datum::$t(a), Datum::$t(b)) => a.cmp(&b),
+            (Datum::Null, _) => std::cmp::Ordering::Less,
+            (_, Datum::Null) => std::cmp::Ordering::Greater,
+            _ => unreachable!(),
+        });
+    };
+}
+
 #[test]
 fn test_select() {
     let data = vec![
@@ -579,30 +592,30 @@ fn test_aggr_bit_ops() {
     store.commit();
 
     let exp = vec![
+        (Datum::Null, Datum::I64(4), Datum::I64(4), Datum::I64(4)),
         (
             Datum::Bytes(b"name:0".to_vec()),
-            Datum::U64(0),
-            Datum::U64(3),
-            Datum::U64(3),
+            Datum::I64(0),
+            Datum::I64(3),
+            Datum::I64(3),
         ),
         (
             Datum::Bytes(b"name:3".to_vec()),
-            Datum::U64(3),
-            Datum::U64(3),
-            Datum::U64(3),
+            Datum::I64(3),
+            Datum::I64(3),
+            Datum::I64(3),
         ),
         (
             Datum::Bytes(b"name:5".to_vec()),
-            Datum::U64(4),
-            Datum::U64(5),
-            Datum::U64(1),
+            Datum::I64(4),
+            Datum::I64(5),
+            Datum::I64(1),
         ),
-        (Datum::Null, Datum::U64(4), Datum::U64(4), Datum::U64(4)),
         (
             Datum::Bytes(b"name:6".to_vec()),
-            Datum::U64(18446744073709551615),
-            Datum::U64(0),
-            Datum::U64(0),
+            Datum::I64(-1),
+            Datum::I64(0),
+            Datum::I64(0),
         ),
     ];
 
@@ -617,7 +630,9 @@ fn test_aggr_bit_ops() {
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 4);
-    for (row, (name, bitand, bitor, bitxor)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 3, Bytes);
+    for (row, (name, bitand, bitor, bitxor)) in results.iter().zip(exp) {
         let expected_datum = vec![bitand, bitor, bitxor, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
