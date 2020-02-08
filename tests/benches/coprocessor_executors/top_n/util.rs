@@ -7,9 +7,9 @@ use criterion::measurement::Measurement;
 
 use tipb::Expr;
 
-use tidb_query::batch::executors::BatchTopNExecutor;
-use tidb_query::executor::{Executor, TopNExecutor};
-use tidb_query::expr::EvalConfig;
+use tidb_query_datatype::expr::EvalConfig;
+use tidb_query_normal_executors::executor::{Executor, TopNExecutor};
+use tidb_query_vec_executors::executors::BatchTopNExecutor;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;

@@ -7,7 +7,7 @@ pub use self::storage_impl::TiKVStorage;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tidb_query::storage::IntervalRange;
+use tidb_query_datatype::storage::IntervalRange;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 use crate::coprocessor::metrics::*;
@@ -60,7 +60,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
         // TODO: support batch executor while handling server-side streaming requests
         // https://github.com/tikv/tikv/pull/5945
         if self.enable_batch_if_possible && !self.is_streaming {
-            tidb_query::batch::runner::BatchExecutorsRunner::check_supported(
+            tidb_query_vec_executors::runner::BatchExecutorsRunner::check_supported(
                 self.req.get_executors(),
             )?;
             COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
@@ -89,7 +89,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
 }
 
 pub struct DAGHandler {
-    runner: tidb_query::executor::ExecutorsRunner<Statistics>,
+    runner: tidb_query_normal_executors::executor::ExecutorsRunner<Statistics>,
     data_version: Option<u64>,
 }
 
@@ -104,7 +104,7 @@ impl DAGHandler {
         is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self {
-            runner: tidb_query::executor::ExecutorsRunner::from_request(
+            runner: tidb_query_normal_executors::executor::ExecutorsRunner::from_request(
                 req,
                 ranges,
                 TiKVStorage::from(store),
@@ -133,7 +133,7 @@ impl RequestHandler for DAGHandler {
 }
 
 pub struct BatchDAGHandler {
-    runner: tidb_query::batch::runner::BatchExecutorsRunner<Statistics>,
+    runner: tidb_query_vec_executors::runner::BatchExecutorsRunner<Statistics>,
     data_version: Option<u64>,
 }
 
@@ -146,7 +146,7 @@ impl BatchDAGHandler {
         deadline: Deadline,
     ) -> Result<Self> {
         Ok(Self {
-            runner: tidb_query::batch::runner::BatchExecutorsRunner::from_request(
+            runner: tidb_query_vec_executors::runner::BatchExecutorsRunner::from_request(
                 req,
                 ranges,
                 TiKVStorage::from(store),
@@ -169,10 +169,10 @@ impl RequestHandler for BatchDAGHandler {
 }
 
 fn handle_qe_response(
-    result: tidb_query::Result<SelectResponse>,
+    result: tidb_query_datatype::Result<SelectResponse>,
     data_version: Option<u64>,
 ) -> Result<Response> {
-    use tidb_query::error::ErrorInner;
+    use tidb_query_datatype::error::ErrorInner;
 
     match result {
         Ok(sel_resp) => {
@@ -200,9 +200,9 @@ fn handle_qe_response(
 }
 
 fn handle_qe_stream_response(
-    result: tidb_query::Result<(Option<(StreamResponse, IntervalRange)>, bool)>,
+    result: tidb_query_datatype::Result<(Option<(StreamResponse, IntervalRange)>, bool)>,
 ) -> Result<(Option<Response>, bool)> {
-    use tidb_query::error::ErrorInner;
+    use tidb_query_datatype::error::ErrorInner;
 
     match result {
         Ok((Some((s_resp, range)), finished)) => {

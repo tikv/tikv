@@ -8,8 +8,8 @@ use kvproto::coprocessor::KeyRange;
 use tipb::ColumnInfo;
 
 use test_coprocessor::*;
-use tidb_query::batch::interface::*;
-use tidb_query::executor::Executor;
+use tidb_query_normal_executors::executor::Executor;
+use tidb_query_vec_executors::interface::*;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 

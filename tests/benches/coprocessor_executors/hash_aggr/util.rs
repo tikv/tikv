@@ -8,11 +8,11 @@ use criterion::measurement::Measurement;
 use tipb::Aggregation;
 use tipb::Expr;
 
-use tidb_query::batch::executors::BatchFastHashAggregationExecutor;
-use tidb_query::batch::executors::BatchSlowHashAggregationExecutor;
-use tidb_query::batch::interface::*;
-use tidb_query::executor::{Executor, HashAggExecutor};
-use tidb_query::expr::EvalConfig;
+use tidb_query_datatype::expr::EvalConfig;
+use tidb_query_normal_executors::executor::{Executor, HashAggExecutor};
+use tidb_query_vec_executors::executors::BatchFastHashAggregationExecutor;
+use tidb_query_vec_executors::executors::BatchSlowHashAggregationExecutor;
+use tidb_query_vec_executors::interface::*;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;

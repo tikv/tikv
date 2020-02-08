@@ -19,7 +19,7 @@ protobuf-codec = [
   "kvproto/protobuf-codec",
   "raft/protobuf-codec",
   "raftstore/protobuf-codec",
-  "tidb_query/protobuf-codec",
+  "tidb_query_datatype/protobuf-codec",
   "tikv/protobuf-codec",
   "txn_types/protobuf-codec",
 ]
@@ -32,7 +32,7 @@ prost-codec = [
   "kvproto/prost-codec",
   "raft/prost-codec",
   "raftstore/prost-codec",
-  "tidb_query/prost-codec",
+  "tidb_query_datatype/prost-codec",
   "tikv/prost-codec",
   "txn_types/prost-codec",
 ]
@@ -66,7 +66,7 @@ serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
-tidb_query = { path = "../tidb_query" }
+tidb_query_datatype = { path = "../tidb_query_datatype" }
 tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
