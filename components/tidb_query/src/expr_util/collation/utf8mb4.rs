@@ -528,6 +528,7 @@ const GENERAL_CI_PLANE_01: [[u16; 3]; 256] = [
 
 pub struct CollatorUtf8Mb4GeneralCi;
 
+#[inline]
 fn general_ci_weight(c: char) -> u16 {
     let mut plane = &GENERAL_CI_PLANE_00;
     let r = c as u32;
@@ -576,6 +577,7 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
 pub struct CollatorUtf8Mb4Bin;
 
 impl Collator for CollatorUtf8Mb4Bin {
+    #[inline]
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],
         writer: &mut W,
@@ -585,12 +587,14 @@ impl Collator for CollatorUtf8Mb4Bin {
         Ok(bstr.len())
     }
 
+    #[inline]
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering, DecodeError> {
         str::from_utf8(a)?;
         str::from_utf8(b)?;
         Ok(a.cmp(b))
     }
 
+    #[inline]
     fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError> {
         str::from_utf8(bstr)?;
         state.write(bstr);

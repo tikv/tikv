@@ -80,3 +80,27 @@ pub trait Collator {
     /// WARN: `sort_hash(str) != hash(sort_key(str))`.
     fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError>;
 }
+
+pub struct CollatorBinary;
+
+impl Collator for CollatorBinary {
+    #[inline]
+    fn write_sort_key<W: BufferWriter>(
+        bstr: &[u8],
+        writer: &mut W,
+    ) -> Result<usize, DecodeOrWriteError> {
+        writer.write_bytes(bstr)?;
+        Ok(bstr.len())
+    }
+
+    #[inline]
+    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering, DecodeError> {
+        Ok(a.cmp(b))
+    }
+
+    #[inline]
+    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError> {
+        state.write(bstr);
+        Ok(())
+    }
+}
