@@ -152,6 +152,11 @@ impl Mutable for RocksEngine {
         let handle = get_cf_handle(&self.0, cf)?;
         self.0.delete_cf(handle, key).map_err(Error::Engine)
     }
+
+    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let handle = get_cf_handle(&self.0, cf)?;
+        self.0.delete_range_cf(handle, begin_key, end_key).map_err(Error::Engine)
+    }
 }
 
 #[cfg(test)]

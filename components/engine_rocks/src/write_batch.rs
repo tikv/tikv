@@ -90,4 +90,9 @@ impl Mutable for RocksWriteBatch {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.delete_cf(handle, key).map_err(Error::Engine)
     }
+
+    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let handle = get_cf_handle(self.db.as_ref(), cf)?;
+        self.wb.delete_range_cf(handle, begin_key, end_key).map_err(Error::Engine)
+    }
 }
