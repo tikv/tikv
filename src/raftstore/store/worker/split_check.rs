@@ -129,7 +129,7 @@ pub enum Task {
         policy: CheckPolicy,
     },
     ChangeConfig(ConfigChange),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
 }
 
@@ -155,7 +155,7 @@ impl Display for Task {
                 auto_split
             ),
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
         }
     }
@@ -318,7 +318,7 @@ impl<S: CasualRouter> Runnable<Task> for Runner<S> {
                 policy,
             } => self.check_split(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(&self.cfg),
         }
     }
@@ -329,104 +329,5 @@ fn new_split_region(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> Casu
         region_epoch,
         split_keys,
         callback: Callback::None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::mpsc::{self, sync_channel};
-    use std::time::Duration;
-
-    use super::*;
-    use crate::config::{ConfigController, TiKvConfig};
-    use crate::raftstore::coprocessor::config::SplitCheckConfigManager;
-    use crate::raftstore::store::DynamicConfig;
-    use engine::rocks;
-    use tikv_util::worker::{Scheduler, Worker};
-
-    use tempfile::Builder;
-
-    fn tmp_engine() -> Arc<DB> {
-        let path = Builder::new().prefix("test-config").tempdir().unwrap();
-        Arc::new(
-            rocks::util::new_engine(
-                path.path().join("db").to_str().unwrap(),
-                None,
-                &["split-check-config"],
-                None,
-            )
-            .unwrap(),
-        )
-    }
-
-    fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
-        let (router, _) = sync_channel(1);
-        let runner = Runner::new(
-            engine,
-            router.clone(),
-            CoprocessorHost::new(router),
-            cfg.coprocessor.clone(),
-        );
-        let mut worker: Worker<Task> = Worker::new("split-check-config");
-        worker.start(runner).unwrap();
-
-        let mut cfg_controller = ConfigController::new(cfg, Default::default());
-        cfg_controller.register(
-            "coprocessor",
-            Box::new(SplitCheckConfigManager(worker.scheduler())),
-        );
-
-        (cfg_controller, worker)
-    }
-
-    fn validate<F>(scheduler: &Scheduler<Task>, f: F)
-    where
-        F: FnOnce(&Config) + Send + 'static,
-    {
-        let (tx, rx) = mpsc::channel();
-        scheduler
-            .schedule(Task::Validate(Box::new(move |cfg: &Config| {
-                f(cfg);
-                tx.send(()).unwrap();
-            })))
-            .unwrap();
-        rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    }
-
-    #[test]
-    fn test_update_split_check_config() {
-        let mut cfg = TiKvConfig::default();
-        cfg.validate().unwrap();
-        let engine = tmp_engine();
-        let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine);
-        let scheduler = worker.scheduler();
-
-        let cop_config = cfg.coprocessor.clone();
-        let mut incoming = cfg.clone();
-        incoming.raft_store.raft_log_gc_threshold = 2000;
-        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-        // update of other module's config should not effect split check config
-        assert_eq!(rollback.right(), Some(true));
-        validate(&scheduler, move |cfg: &Config| {
-            assert_eq!(cfg, &cop_config);
-        });
-
-        let cop_config = {
-            let mut cop_config = cfg.coprocessor.clone();
-            cop_config.split_region_on_table = true;
-            cop_config.batch_split_limit = 123;
-            cop_config.region_split_keys = 12345;
-            cop_config
-        };
-        let mut incoming = cfg;
-        incoming.coprocessor = cop_config.clone();
-        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-        // config should be updated
-        assert_eq!(rollback.right(), Some(true));
-        validate(&scheduler, move |cfg: &Config| {
-            assert_eq!(cfg, &cop_config);
-        });
-
-        worker.stop().unwrap().join().unwrap();
     }
 }

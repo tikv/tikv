@@ -42,7 +42,7 @@ use tikv::{
         store::{
             fsm,
             fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder,
+            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
         },
     },
     read_pool::{ReadPool, ReadPoolRunner},
@@ -480,7 +480,14 @@ impl TiKVServer {
         let import_path = self.store_path.join("import");
         let importer = Arc::new(SSTImporter::new(import_path).unwrap());
 
-        let split_check_worker = Worker::new("split-check");
+        let mut split_check_worker = Worker::new("split-check");
+        let split_check_runner = SplitCheckRunner::new(
+            engines.engines.kv.clone(),
+            self.router.clone(),
+            coprocessor_host.clone(),
+            self.config.coprocessor.clone(),
+        );
+        split_check_worker.start(split_check_runner).unwrap();
         cfg_controller.register(
             "coprocessor",
             Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
