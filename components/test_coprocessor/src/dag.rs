@@ -84,6 +84,7 @@ impl DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut item = ByItem::default();
         let mut expr = Expr::default();
+        expr.set_field_type(col.as_field_type());
         expr.set_tp(ExprType::ColumnRef);
         expr.mut_val().encode_i64(col_offset).unwrap();
         item.set_expr(expr);
@@ -102,9 +103,11 @@ impl DAGSelect {
     pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut col_expr = Expr::default();
+        col_expr.set_field_type(col.as_field_type());
         col_expr.set_tp(ExprType::ColumnRef);
         col_expr.mut_val().encode_i64(col_offset).unwrap();
         let mut expr = Expr::default();
+        expr.set_field_type(col.as_field_type());
         expr.set_tp(aggr_t);
         expr.mut_children().push(col_expr);
         self.aggregate.push(expr);
@@ -147,6 +150,7 @@ impl DAGSelect {
         for col in cols {
             let offset = offset_for_column(&self.cols, col.id);
             let mut expr = Expr::default();
+            expr.set_field_type(col.as_field_type());
             expr.set_tp(ExprType::ColumnRef);
             expr.mut_val().encode_i64(offset).unwrap();
             self.group_by.push(expr);
@@ -174,7 +178,8 @@ impl DAGSelect {
     }
 
     pub fn build_with(mut self, ctx: Context, flags: &[u64]) -> Request {
-        if !self.aggregate.is_empty() || !self.group_by.is_empty() {
+        let has_aggr = !self.aggregate.is_empty() || !self.group_by.is_empty();
+        if has_aggr {
             let mut exec = Executor::default();
             exec.set_tp(ExecType::TypeAggregation);
             let mut aggr = Aggregation::default();
@@ -218,7 +223,12 @@ impl DAGSelect {
         let output_offsets = if self.output_offsets.is_some() {
             self.output_offsets.take().unwrap()
         } else {
-            (0..self.cols.len() as u32).collect()
+            let len = if has_aggr {
+                self.cols.len() + 1
+            } else {
+                self.cols.len()
+            };
+            (0..len as u32).collect()
         };
         dag.set_output_offsets(output_offsets);
 
