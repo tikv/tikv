@@ -1,8 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use murmur3::murmur3_x64_128;
 use tipb;
-
-use crate::coprocessor::error::{Error, Result};
 
 /// `CmSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
@@ -29,23 +28,21 @@ impl CmSketch {
     }
 
     // `hash` hashes the data into two u64 using murmur hash.
-    fn hash(mut bytes: &[u8]) -> Result<(u64, u64)> {
-        let out =
-            murmur3::murmur3_x64_128(&mut bytes, 0).map_err(|err| Error::Other(err.to_string()))?;
-        Ok((u64::from_le(out as u64), u64::from_le((out >> 64) as u64)))
+    fn hash(mut bytes: &[u8]) -> (u64, u64) {
+        let out = murmur3_x64_128(&mut bytes, 0).unwrap();
+        (out as u64, (out >> 64) as u64)
     }
 
     // `insert` inserts the data into cm sketch. For each row i, the position at
     // (h1 + h2*i) % width will be incremented by one, where the (h1, h2) is the hash value
     // of data.
-    pub fn insert(&mut self, bytes: &[u8]) -> Result<()> {
+    pub fn insert(&mut self, bytes: &[u8]) {
         self.count = self.count.wrapping_add(1);
-        let (h1, h2) = CmSketch::hash(bytes)?;
+        let (h1, h2) = CmSketch::hash(bytes);
         for (i, row) in self.table.iter_mut().enumerate() {
             let j = (h1.wrapping_add(h2.wrapping_mul(i as u64)) % self.width as u64) as usize;
             row[j] = row[j].saturating_add(1);
         }
-        Ok(())
     }
 
     pub fn into_proto(self) -> tipb::CmSketch {
@@ -78,7 +75,7 @@ mod tests {
 
     impl CmSketch {
         fn query(&self, bytes: &[u8]) -> u32 {
-            let (h1, h2) = CmSketch::hash(bytes).unwrap();
+            let (h1, h2) = CmSketch::hash(bytes);
             let mut vals = vec![0u32; self.depth];
             let mut min_counter = u32::max_value();
             for (i, row) in self.table.iter().enumerate() {
@@ -110,7 +107,7 @@ mod tests {
             let bytes =
                 datum::encode_value(&mut EvalContext::default(), from_ref(&Datum::U64(val)))
                     .unwrap();
-            c.insert(&bytes).unwrap();
+            c.insert(&bytes);
             let counter = map.entry(val).or_insert(0);
             *counter += 1;
         }
@@ -132,11 +129,11 @@ mod tests {
 
     #[test]
     fn test_hash() {
-        let hash_result = CmSketch::hash("€".as_bytes()).unwrap();
+        let hash_result = CmSketch::hash("€".as_bytes());
         assert_eq!(hash_result.0, 0x59E3303A2FDD9555);
         assert_eq!(hash_result.1, 0x4F9D8BB3E4BC3164);
 
-        let hash_result = CmSketch::hash("€€€€€€€€€€".as_bytes()).unwrap();
+        let hash_result = CmSketch::hash("€€€€€€€€€€".as_bytes());
         assert_eq!(hash_result.0, 0xCECFEB77375EEF6F);
         assert_eq!(hash_result.1, 0xE9830BC26869E2C6);
     }
