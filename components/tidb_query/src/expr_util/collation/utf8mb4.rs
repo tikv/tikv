@@ -603,6 +603,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::string_lit_as_bytes)]
     fn test_general_ci() {
         let s1 = "cAfe".as_bytes();
         let s2 = "café".as_bytes();
