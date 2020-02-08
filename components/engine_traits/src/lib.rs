@@ -109,7 +109,7 @@
 //!
 //!   Example:
 //!
-//!   ```
+//!   ```ignore
 //!   // in engine_traits
 //!
 //!   trait IOLimiterExt {
@@ -117,6 +117,16 @@
 //!   }
 //!
 //!   trait IOLimiter { }
+//!   ```
+//!
+//!   ```ignore
+//!   // in engine_rust
+//!
+//!   impl IOLimiterExt for RocksEngine {
+//!       type IOLimiter = RocksIOLimiter;
+//!   }
+//!
+//!   impl IOLimiter for RocksIOLimiter { }
 //!   ```
 //!
 //! - All engines use the same error type, defined in this crate. Thus
