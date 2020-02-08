@@ -956,12 +956,15 @@ fn test_index_group_by() {
     // for dag
     let req = DAGSelect::from_index(&product, &product["name"])
         .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     // should only have name:0, name:2 and name:1
     let mut row_count = 0;
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
-    for (row, name) in spliter.zip(&[b"name:0", b"name:1", b"name:2"]) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 0, Bytes);
+    for (row, name) in results.iter().zip(&[b"name:0", b"name:1", b"name:2"]) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[Datum::Bytes(name.to_vec())])
                 .unwrap();
@@ -988,6 +991,7 @@ fn test_index_aggr_count() {
     // for dag
     let req = DAGSelect::from_index(&product, &product["name"])
         .count(&product["id"])
+        .output_offsets(Some(vec![0]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
@@ -1013,12 +1017,15 @@ fn test_index_aggr_count() {
     let req = DAGSelect::from_index(&product, &product["name"])
         .count(&product["id"])
         .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0, 1]))
         .build();
     resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
-    for (row, (name, cnt)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 1, Bytes);
+    for (row, (name, cnt)) in results.iter().zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -1043,7 +1050,9 @@ fn test_index_aggr_count() {
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
-    for (row, (gk_data, cnt)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 1, Bytes);
+    for (row, (gk_data, cnt)) in results.iter().zip(exp) {
         let mut expected_datum = vec![Datum::U64(cnt)];
         expected_datum.extend_from_slice(gk_data.as_slice());
         let expected_encoded =
@@ -1079,6 +1088,7 @@ fn test_index_aggr_first() {
     let req = DAGSelect::from_index(&product, &product["name"])
         .first(&product["id"])
         .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0, 1]))
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -1091,6 +1101,12 @@ fn test_index_aggr_first() {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+
+        assert_eq!(
+            &*result_encoded, &*expected_encoded,
+            "exp: {:?}, got: {:?}",
+            expected_datum, row
+        );
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1136,7 +1152,9 @@ fn test_index_aggr_avg() {
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
-    for (row, (name, (sum, cnt))) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 2, Bytes);
+    for (row, (name, (sum, cnt))) in results.iter().zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), sum, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -1244,7 +1262,9 @@ fn test_index_aggr_extre() {
     let mut row_count = 0;
     let exp_len = exp.len();
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
-    for (row, (name, max, min)) in spliter.zip(exp) {
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 2, Bytes);
+    for (row, (name, max, min)) in results.iter().zip(exp) {
         let expected_datum = vec![max, min, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
@@ -1324,6 +1344,7 @@ fn test_where() {
 
 #[test]
 fn test_handle_truncate() {
+    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
@@ -1339,20 +1360,34 @@ fn test_handle_truncate() {
             // count > "2x"
             let mut col = Expr::default();
             col.set_tp(ExprType::ColumnRef);
+            col.mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
             let count_offset = offset_for_column(&cols, product["count"].id);
             col.mut_val().encode_i64(count_offset).unwrap();
 
             // "2x" will be truncated.
             let mut value = Expr::default();
+            value
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::String);
             value.set_tp(ExprType::String);
             value.set_val(String::from("2x").into_bytes());
 
             let mut right = Expr::default();
+            right
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
             right.set_tp(ExprType::ScalarFunc);
             right.set_sig(ScalarFuncSig::CastStringAsInt);
             right.mut_children().push(value);
 
             let mut cond = Expr::default();
+            cond.mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
             cond.set_tp(ExprType::ScalarFunc);
             cond.set_sig(ScalarFuncSig::LtInt);
             cond.mut_children().push(col);
@@ -1362,28 +1397,47 @@ fn test_handle_truncate() {
         {
             // id
             let mut col_id = Expr::default();
+            col_id
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
             col_id.set_tp(ExprType::ColumnRef);
             let id_offset = offset_for_column(&cols, product["id"].id);
             col_id.mut_val().encode_i64(id_offset).unwrap();
 
             // "3x" will be truncated.
             let mut value = Expr::default();
+            value
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::String);
             value.set_tp(ExprType::String);
             value.set_val(String::from("3x").into_bytes());
 
             let mut int_3 = Expr::default();
+            int_3
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
             int_3.set_tp(ExprType::ScalarFunc);
             int_3.set_sig(ScalarFuncSig::CastStringAsInt);
             int_3.mut_children().push(value);
 
             // count
             let mut col_count = Expr::default();
+            col_count
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
             col_count.set_tp(ExprType::ColumnRef);
             let count_offset = offset_for_column(&cols, product["count"].id);
             col_count.mut_val().encode_i64(count_offset).unwrap();
 
             // "3x" + count
             let mut plus = Expr::default();
+            plus.mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
             plus.set_tp(ExprType::ScalarFunc);
             plus.set_sig(ScalarFuncSig::PlusInt);
             plus.mut_children().push(int_3);
@@ -1391,6 +1445,9 @@ fn test_handle_truncate() {
 
             // id = "3x" + count
             let mut cond = Expr::default();
+            cond.mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
             cond.set_tp(ExprType::ScalarFunc);
             cond.set_sig(ScalarFuncSig::EqInt);
             cond.mut_children().push(col_id);

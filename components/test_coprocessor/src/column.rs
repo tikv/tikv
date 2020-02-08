@@ -38,7 +38,7 @@ impl Column {
         ft
     }
 
-    fn col_field_type(&self) -> i32 {
+    pub fn col_field_type(&self) -> i32 {
         match self.col_type {
             TYPE_LONG => 8,      // FieldTypeTp::LongLong
             TYPE_VAR_CHAR => 15, // FieldTypeTp::VarChar
