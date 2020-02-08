@@ -8,7 +8,6 @@ use crate::codec::data_type::VectorValue;
 use crate::codec::Result;
 use crate::expr::EvalContext;
 
-
 /// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
 #[derive(Clone, Debug)]
 pub struct LazyBatchColumnVec {
