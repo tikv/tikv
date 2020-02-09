@@ -700,7 +700,11 @@ impl Peer {
     }
 
     /// Steps the raft message.
-    pub fn step<T, C>(&mut self, ctx: &mut PollContext<T, C>, m: eraftpb::Message) -> Result<()> {
+    pub fn step<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        mut m: eraftpb::Message,
+    ) -> Result<()> {
         fail_point!(
             "step_message_3_1",
             { self.peer.get_store_id() == 3 && self.region_id == 1 },
