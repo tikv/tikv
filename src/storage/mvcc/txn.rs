@@ -329,31 +329,41 @@ impl<S: Snapshot> MvccTxn<S> {
             self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
 
             // Quick path for force pessimistic lock. If it's a valid Write, no need to read again.
-            match write.write_type {
-                WriteType::Put => {
-                    if write.short_value.is_some() {
-                        Ok(Some((write.short_value.take(), commit_ts)))
-                    } else {
-                        match self.reader.load_data(&key, write.start_ts)? {
-                            None => {
-                                return Err(mvcc::default_not_found_error(key.to_raw()?, "get"));
+            if force {
+                match write.write_type {
+                    WriteType::Put => {
+                        if write.short_value.is_some() {
+                            Ok(Some((write.short_value.take(), commit_ts)))
+                        } else {
+                            match self.reader.load_data(&key, write.start_ts)? {
+                                None => {
+                                    return Err(mvcc::default_not_found_error(
+                                        key.to_raw()?,
+                                        "get",
+                                    ));
+                                }
+                                Some(v) => Ok(Some((Some(v), commit_ts))),
                             }
-                            Some(v) => Ok(Some((Some(v), commit_ts))),
                         }
                     }
+                    WriteType::Delete => Ok(Some((None, commit_ts))),
+                    WriteType::Lock | WriteType::Rollback => {
+                        // Try to find a valid Write.
+                        Ok(Some(self.reader.force_get(&key, commit_ts.prev())?))
+                    }
                 }
-                WriteType::Delete => Ok(Some((None, commit_ts))),
-                WriteType::Lock | WriteType::Rollback => {
-                    // Try to find a valid Write.
-                    Ok(Some(self.reader.force_get(&key, commit_ts.prev())?))
-                }
+            } else {
+                // Don't need value
+                Ok(None)
             }
-        } else if force {
-            // Write not found
-            Ok(Some((None, TimeStamp::zero())))
         } else {
-            // Don't need value
-            Ok(None)
+            if force {
+                // Write not found
+                Ok(Some((None, TimeStamp::zero())))
+            } else {
+                // Don't need value
+                Ok(None)
+            }
         };
 
         let lock = pessimistic_lock(primary, self.start_ts, lock_ttl, for_update_ts);
