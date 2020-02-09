@@ -751,6 +751,22 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_datetime() {
+        let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
+            (b"2010-02-12", 0, None),
+            (b"2010-02-12T12:23:34", 0, Some("12:23:34")),
+            (b"2010-02-12 12:23:34", 0, Some("12:23:34")),
+            (b"2010-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
+            (b"10-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
+        ];
+
+        for (input, fsp, expected) in cases {
+            let actual = Duration::parse(&mut EvalContext::default(), input, fsp).ok();
+            assert_eq!(actual.map(|d| d.to_string()), expected.map(|s| s.to_string()));
+        }
+    }
+
+    #[test]
     fn test_parse() {
         let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
             (b"10:11:12", 0, Some("10:11:12")),
