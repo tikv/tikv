@@ -1151,7 +1151,6 @@ impl DBConfigManger {
 impl ConfigManager for DBConfigManger {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
         let change_str = format!("{:?}", change);
-        warn!("change db config"; "DBConfigChange" => change_str);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
         let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
         for (cf_name, cf_change) in cf_config {
