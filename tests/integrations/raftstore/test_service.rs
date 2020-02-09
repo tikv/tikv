@@ -951,6 +951,17 @@ fn kv_pessimistic_lock(
     client.kv_pessimistic_lock(&req).unwrap()
 }
 
+fn must_kv_pessimistic_rollback(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let mut req = PessimisticRollbackRequest::default();
+    req.set_context(ctx);
+    req.set_keys(vec![key].into_iter().collect());
+    req.start_version = ts;
+    req.for_update_ts = ts;
+    let resp = client.kv_pessimistic_rollback(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+}
+
 #[test]
 fn test_force_pessimistic_lock() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
@@ -974,7 +985,14 @@ fn test_force_pessimistic_lock() {
     assert_eq!(resp.errors.len(), 1);
     assert!(resp.errors[0].has_conflict());
 
-    let resp = kv_pessimistic_lock(&client, ctx, k, 40, 40, true);
+    let resp = kv_pessimistic_lock(&client, ctx.clone(), k.clone(), 40, 40, false);
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.errors.is_empty());
+    assert_eq!(resp.commit_ts, 0);
+    assert!(resp.value.is_empty());
+    must_kv_pessimistic_rollback(&client, ctx.clone(), k.clone(), 40);
+
+    let resp = kv_pessimistic_lock(&client, ctx, k, 50, 50, true);
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.errors.is_empty());
     assert_eq!(resp.commit_ts, 30);
