@@ -151,10 +151,7 @@ mod parser {
         if digits.len() == 12 || digits.len() == 14 {
             let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
                 .map_err(|_| nom::Err::Error(()))?;
-            return Ok((
-                &input[input.len()..],
-                datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?,
-            ));
+            return Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?));
         }
         let (rest, _) = anysep(rest)?;
         let (rest, _) = digit1(rest)?;
@@ -173,10 +170,7 @@ mod parser {
 
         let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
             .map_err(|_| nom::Err::Error(()))?;
-        Ok((
-            &input[input.len()..],
-            datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?,
-        ))
+        Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?))
     }
 
     fn anysep(input: &str) -> IResult<&str, char, ()> {
@@ -762,7 +756,10 @@ mod tests {
 
         for (input, fsp, expected) in cases {
             let actual = Duration::parse(&mut EvalContext::default(), input, fsp).ok();
-            assert_eq!(actual.map(|d| d.to_string()), expected.map(|s| s.to_string()));
+            assert_eq!(
+                actual.map(|d| d.to_string()),
+                expected.map(|s| s.to_string())
+            );
         }
     }
 
