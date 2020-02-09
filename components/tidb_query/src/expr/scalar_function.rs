@@ -991,7 +991,10 @@ mod tests {
 
         let err = format!("{:?}", Error::UnknownSignature(ScalarFuncSig::Version));
         assert_eq!(
-            format!("{:?}", ScalarFunc::check_args(ScalarFuncSig::Version, 1).unwrap_err()),
+            format!(
+                "{:?}",
+                ScalarFunc::check_args(ScalarFuncSig::Version, 1).unwrap_err()
+            ),
             err
         );
     }
