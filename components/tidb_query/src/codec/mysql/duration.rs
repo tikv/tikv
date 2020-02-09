@@ -146,20 +146,14 @@ mod parser {
         ctx: &mut EvalContext,
         input: &'a str,
         fsp: u8,
-    ) -> IResult<&'a str, [u32; 4], ()> {
+    ) -> IResult<&'a str, Duration, ()> {
         let (rest, digits) = digit1(input)?;
         if digits.len() == 12 || digits.len() == 14 {
-            let datetime = DateTime::parse_datetime(ctx, digits, fsp as i8, true)
+            let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
                 .map_err(|_| nom::Err::Error(()))?;
-            let (rest, fraction) = fraction(input, fsp)?;
             return Ok((
-                rest,
-                [
-                    datetime.hour(),
-                    datetime.minute(),
-                    datetime.second(),
-                    fraction,
-                ],
+                &input[input.len()..],
+                datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?,
             ));
         }
         let (rest, _) = anysep(rest)?;
@@ -167,20 +161,21 @@ mod parser {
         let (rest, _) = anysep(rest)?;
         let (rest, _) = digit1(rest)?;
 
-        if rest.is_empty() {
+        let has_datetime_sep = match rest.chars().next() {
+            Some(c) if c != 'T' && c != ' ' => false,
+            None => false,
+            _ => true,
+        };
+
+        if !has_datetime_sep {
             return Err(nom::Err::Error(()));
         }
 
         let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
             .map_err(|_| nom::Err::Error(()))?;
         Ok((
-            rest,
-            [
-                datetime.hour(),
-                datetime.minute(),
-                datetime.second(),
-                datetime.micro(),
-            ],
+            &input[input.len()..],
+            datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?,
         ))
     }
 
@@ -238,8 +233,9 @@ mod parser {
                 ))
             })
             .or_else(|| {
-                let (_, [h, m, s, f]) = hhmmss_datetime(ctx, rest, fsp).ok()?;
-                Some(Duration::new_from_parts(neg, h, m, s, f, fsp as i8))
+                hhmmss_datetime(ctx, rest, fsp)
+                    .ok()
+                    .map(|(_, duration)| Ok(duration))
             })
             .and_then(|result| {
                 result
