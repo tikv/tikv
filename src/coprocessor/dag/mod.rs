@@ -25,14 +25,9 @@ pub fn build_handler<S: Store + 'static>(
     enable_batch_if_possible: bool,
 ) -> Result<Box<dyn RequestHandler>> {
     // TODO: support batch executor while handling server-side streaming requests
-    let is_batch = if enable_batch_if_possible && !is_streaming {
+    // https://github.com/tikv/tikv/pull/5945
+    if enable_batch_if_possible && !is_streaming {
         tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors())?;
-        true
-    } else {
-        false
-    };
-
-    if is_batch {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
         Ok(BatchDAGHandler::new(req, ranges, store, data_version, deadline)?.into_boxed())
     } else {

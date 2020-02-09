@@ -304,10 +304,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
-        let encode_type = req.get_encode_type();
 
         let out_most_executor =
             build_executors(req.take_executors().into(), storage, ranges, config.clone())?;
+
+        let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
+            EncodeType::TypeDefault
+        } else {
+            req.get_encode_type()
+        };
 
         // Check output offsets
         let output_offsets = req.take_output_offsets();
@@ -371,9 +376,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     self.out_most_executor.schema().len()
                 );
                 let mut chunk = Chunk::default();
-                if !is_arrow_encodable(self.out_most_executor.schema()) {
-                    self.encode_type = EncodeType::TypeDefault;
-                }
                 {
                     let data = chunk.mut_rows_data();
                     // Although `schema()` can be deeply nested, it is ok since we process data in
