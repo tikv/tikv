@@ -61,11 +61,12 @@ const GENERAL_CI_PLANE_01: [u16; 256] = [
 pub struct CollatorUtf8Mb4GeneralCi;
 
 fn general_ci_weight(c: char) -> u16 {
-    let mut plane = &GENERAL_CI_PLANE_00;
     let r = c as u32;
-    if (r >> 8) > 0 {
-        plane = &GENERAL_CI_PLANE_01;
-    }
+    let plane = if (r >> 8) > 0 {
+        &GENERAL_CI_PLANE_01
+    } else {
+        &GENERAL_CI_PLANE_00
+    };
     plane[(r & 0xFF) as usize]
 }
 
