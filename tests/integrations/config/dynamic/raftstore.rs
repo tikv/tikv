@@ -5,14 +5,14 @@ use std::time::Duration;
 
 use engine::rocks;
 use kvproto::raft_serverpb::RaftMessage;
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::config::{Config, RaftstoreConfigManager};
+use raftstore::store::fsm::StoreMeta;
+use raftstore::store::fsm::*;
+use raftstore::store::{SnapManager, StoreMsg, Transport};
+use raftstore::Result;
 use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
 use tikv::import::SSTImporter;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::config::{Config, RaftstoreConfigManager};
-use tikv::raftstore::store::fsm::StoreMeta;
-use tikv::raftstore::store::fsm::*;
-use tikv::raftstore::store::{SnapManager, StoreMsg, Transport};
-use tikv::raftstore::Result;
 
 use engine::Engines;
 use engine::ALL_CFS;

@@ -20,6 +20,17 @@ use kvproto::{
     diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
 use pd_client::{PdClient, RpcClient};
+use raftstore::coprocessor::config::SplitCheckConfigManager;
+use raftstore::router::ServerRaftStoreRouter;
+use raftstore::store::config::RaftstoreConfigManager;
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionInfoAccessor},
+    store::{
+        fsm,
+        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+        new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
+    },
+};
 use std::{
     convert::TryFrom,
     fmt,
@@ -30,21 +41,10 @@ use std::{
     time::Duration,
 };
 use tikv::config::ConfigHandler;
-use tikv::raftstore::coprocessor::config::SplitCheckConfigManager;
-use tikv::raftstore::router::ServerRaftStoreRouter;
-use tikv::raftstore::store::config::RaftstoreConfigManager;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
-    raftstore::{
-        coprocessor::{CoprocessorHost, RegionInfoAccessor},
-        store::{
-            fsm,
-            fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
-        },
-    },
     read_pool::{ReadPool, ReadPoolRunner},
     server::{
         config::Config as ServerConfig,

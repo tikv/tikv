@@ -28,10 +28,6 @@ use engine::rocks::{
 use slog;
 
 use crate::import::Config as ImportConfig;
-use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-use crate::raftstore::coprocessor::Config as CopConfig;
-use crate::raftstore::store::Config as RaftstoreConfig;
-use crate::raftstore::store::PdTask;
 use crate::server::gc_worker::GcConfig;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
@@ -49,6 +45,10 @@ use engine_rocks::{
 };
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient};
+use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
+use raftstore::coprocessor::Config as CopConfig;
+use raftstore::store::Config as RaftstoreConfig;
+use raftstore::store::PdTask;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
@@ -2336,7 +2336,7 @@ impl ConfigHandler {
     }
 }
 
-use crate::raftstore::store::DynamicConfig;
+use raftstore::store::DynamicConfig;
 impl DynamicConfig for ConfigHandler {
     fn refresh(&mut self, cfg_client: &dyn ConfigClient) {
         debug!(
