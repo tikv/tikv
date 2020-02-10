@@ -200,7 +200,6 @@ impl<E: Engine> Endpoint<E> {
                     dag::build_handler(
                         dag,
                         ranges,
-                        start_ts,
                         store,
                         data_version,
                         req_ctx.deadline,
