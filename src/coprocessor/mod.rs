@@ -111,6 +111,9 @@ pub struct ReqContext {
     ///
     /// None means don't try to hit the cache.
     pub cache_match_version: Option<u64>,
+
+    /// The maximum time used on handling this request. `None` means unlimited.
+    pub execution_time_limit: Option<Duration>,
 }
 
 impl ReqContext {
@@ -123,6 +126,7 @@ impl ReqContext {
         is_desc_scan: Option<bool>,
         txn_start_ts: Option<u64>,
         cache_match_version: Option<u64>,
+        execution_time_limit: Option<Duration>,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
@@ -137,6 +141,7 @@ impl ReqContext {
             ranges_len: ranges.len(),
             bypass_locks,
             cache_match_version,
+            execution_time_limit,
         }
     }
 
@@ -147,6 +152,7 @@ impl ReqContext {
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),
+            None,
             None,
             None,
             None,

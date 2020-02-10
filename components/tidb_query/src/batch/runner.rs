@@ -13,6 +13,7 @@ use yatp::task::future::reschedule;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
+use crate::error::EvaluateError;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
 use crate::storage::Storage;
@@ -29,6 +30,8 @@ pub const BATCH_MAX_SIZE: usize = 1024;
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
+/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time a coroutine
+/// can run without being yielded.
 const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
@@ -36,6 +39,10 @@ pub struct BatchExecutorsRunner<SS> {
     /// whether or not the deadline is exceeded and break the process if so.
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
+
+    /// Unlike `deadline`, `execution_time_limit` limits the time used on this handler, excluding
+    /// all waiting time.
+    execution_time_limit: Option<Duration>,
 
     out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
 
@@ -300,6 +307,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
+        execution_time_limit: Option<Duration>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -331,6 +339,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         Ok(Self {
             deadline,
+            execution_time_limit,
             out_most_executor,
             output_offsets,
             config,
@@ -346,9 +355,17 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
 
+        let mut total_execution_time = Duration::default();
         let mut time_slice_start = Instant::now();
         loop {
-            if time_slice_start.elapsed() > MAX_TIME_SLICE {
+            let time_slice_len = time_slice_start.elapsed();
+            total_execution_time += time_slice_len;
+            if let Some(limit) = self.execution_time_limit {
+                if total_execution_time > limit {
+                    return Err(EvaluateError::ExecutionTimeLimitExceeded.into());
+                }
+            }
+            if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }

@@ -184,6 +184,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(is_desc_scan),
                     Some(start_ts),
                     cache_match_version,
+                    None, // no execution time limit by default
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 let enable_batch_if_possible = self.enable_batch_if_possible;
@@ -203,6 +204,7 @@ impl<E: Engine> Endpoint<E> {
                         store,
                         data_version,
                         req_ctx.deadline,
+                        req_ctx.execution_time_limit,
                         batch_row_limit,
                         is_streaming,
                         enable_batch_if_possible,
@@ -226,6 +228,9 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     Some(start_ts),
                     cache_match_version,
+                    // Currently analyze requests are not executed in coroutines so we don't
+                    // need this limit
+                    None,
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
@@ -252,6 +257,9 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     Some(start_ts),
                     cache_match_version,
+                    // Currently checksum requests are not executed in coroutines so we don't
+                    // need this limit
+                    None,
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
@@ -541,8 +549,8 @@ fn make_error_response(e: Error) -> coppb::Response {
             tag = "meet_lock";
             resp.set_locked(info);
         }
-        Error::MaxExecuteTimeExceeded => {
-            tag = "max_execute_time_exceeded";
+        Error::DeadlineExceeded => {
+            tag = "deadline_exceeded";
             resp.set_other_error(e.to_string());
         }
         Error::MaxPendingTasksExceeded => {
@@ -553,6 +561,11 @@ fn make_error_response(e: Error) -> coppb::Response {
             errorpb.set_message(e.to_string());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
+        }
+        Error::ExecutionTimeLimitExceeded => {
+            debug_unreachable!("ExecutionTimeLimitExceeded should be handled in TiKV");
+            tag = "max_execute_time_exceeded";
+            resp.set_other_error(e.to_string());
         }
         Error::Other(_) => {
             tag = "other";
@@ -724,6 +737,7 @@ mod tests {
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(0),
+            None,
             None,
             None,
             None,
