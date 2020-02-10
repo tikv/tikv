@@ -5,9 +5,7 @@ use std::time::Duration;
 
 use engine::rocks;
 use kvproto::raft_serverpb::RaftMessage;
-use tikv::config::ConfigController;
-use tikv::config::ConfigHandler;
-use tikv::config::TiKvConfig;
+use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -76,7 +74,7 @@ fn start_raftstore(
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
     let mut cfg_controller = ConfigController::new(cfg, Default::default());
     cfg_controller.register(
-        "raft_store",
+        Module::Raftstore,
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
     );
     let pd_worker = FutureWorker::new("store-config");

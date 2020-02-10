@@ -16,8 +16,7 @@ use tempfile::{Builder, TempDir};
 use super::*;
 use engine::Engines;
 use engine_rocks::RocksEngine;
-use tikv::config::ConfigHandler;
-use tikv::config::{ConfigController, TiKvConfig};
+use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::config::SplitCheckConfigManager;
@@ -272,14 +271,17 @@ impl Simulator for ServerCluster {
         );
         split_check_worker.start(split_check_runner).unwrap();
         cfg_controller.register(
-            "coprocessor",
+            Module::Coprocessor,
             Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
         );
 
         let mut raftstore_cfg = cfg.raft_store.clone();
         raftstore_cfg.validate().unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
-        cfg_controller.register("raft_store", Box::new(RaftstoreConfigManager(raft_store)));
+        cfg_controller.register(
+            Module::Raftstore,
+            Box::new(RaftstoreConfigManager(raft_store)),
+        );
         let config_client = ConfigHandler::start(
             cfg.server.advertise_addr,
             cfg_controller,

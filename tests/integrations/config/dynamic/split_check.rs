@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use engine::{rocks, DB};
-use tikv::config::{ConfigController, TiKvConfig};
+use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::raftstore::coprocessor::{
     config::{Config, SplitCheckConfigManager},
     CoprocessorHost,
@@ -41,7 +41,7 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
 
     let mut cfg_controller = ConfigController::new(cfg, Default::default());
     cfg_controller.register(
-        "coprocessor",
+        Module::Coprocessor,
         Box::new(SplitCheckConfigManager(worker.scheduler())),
     );
 

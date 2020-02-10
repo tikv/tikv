@@ -2095,7 +2095,7 @@ pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) ->
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Module {
     Readpool,
     Server,
@@ -2192,14 +2192,9 @@ impl ConfigController {
         Ok(Either::Right(true))
     }
 
-    pub fn register(&mut self, module: &str, cfg_mgr: Box<dyn ConfigManager>) {
-        match Module::from(module) {
-            Module::Unknown(name) => warn!("tried to register unknown module: {}", name),
-            m => {
-                if self.config_mgrs.insert(m, cfg_mgr).is_some() {
-                    warn!("config manager for module {} already registered", module)
-                }
-            }
+    pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
+        if self.config_mgrs.insert(module.clone(), cfg_mgr).is_some() {
+            warn!("config manager for module {:?} already registered", module)
         }
     }
 
@@ -2580,7 +2575,7 @@ mod tests {
 
         let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register(
-            "rocksdb",
+            Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
         );
         (engine, cfg_controller)

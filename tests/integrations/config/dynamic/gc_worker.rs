@@ -3,7 +3,7 @@
 use std::f64::INFINITY;
 use std::sync::mpsc::channel;
 use std::time::Duration;
-use tikv::config::{ConfigController, TiKvConfig};
+use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::server::gc_worker::GcConfig;
 use tikv::server::gc_worker::{GcTask, GcWorker};
 use tikv::storage::kv::TestEngineBuilder;
@@ -29,7 +29,7 @@ fn setup_cfg_controller(
     gc_worker.start().unwrap();
 
     let mut cfg_controller = ConfigController::new(cfg, Default::default());
-    cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
+    cfg_controller.register(Module::Gc, Box::new(gc_worker.get_config_manager()));
 
     (gc_worker, cfg_controller)
 }

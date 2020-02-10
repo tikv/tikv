@@ -335,11 +335,11 @@ impl TiKVServer {
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
-            "rocksdb",
+            tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
         );
         cfg_controller.register(
-            "raftdb",
+            tikv::config::Module::Raftdb,
             Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
         );
 
@@ -377,14 +377,20 @@ impl TiKVServer {
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
-        cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
+        cfg_controller.register(
+            tikv::config::Module::Gc,
+            Box::new(gc_worker.get_config_manager()),
+        );
 
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
         let lock_mgr = if self.config.pessimistic_txn.enabled {
             let lock_mgr = LockManager::new();
-            cfg_controller.register("pessimistic_txn", Box::new(lock_mgr.config_manager()));
+            cfg_controller.register(
+                tikv::config::Module::PessimisticTxn,
+                Box::new(lock_mgr.config_manager()),
+            );
             lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
             Some(lock_mgr)
         } else {
@@ -489,7 +495,7 @@ impl TiKVServer {
         );
         split_check_worker.start(split_check_runner).unwrap();
         cfg_controller.register(
-            "coprocessor",
+            tikv::config::Module::Coprocessor,
             Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
         );
 
@@ -499,7 +505,7 @@ impl TiKVServer {
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         cfg_controller.register(
-            "raft_store",
+            tikv::config::Module::Raftstore,
             Box::new(RaftstoreConfigManager(raft_store.clone())),
         );
         let config_client = ConfigHandler::start(
