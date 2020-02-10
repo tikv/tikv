@@ -2268,7 +2268,7 @@ impl Peer {
         msg.set_to(self.leader_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_index(self.get_store().applied_index());
-        msg.set_term(self.term());
+        msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
     }
 
