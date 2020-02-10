@@ -31,7 +31,6 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
-use crate::storage::FlowStatistics;
 use pd_client::metrics::*;
 use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -40,6 +39,35 @@ use tikv_util::time::UnixSecs;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
+
+#[derive(Default, Debug, Clone)]
+pub struct FlowStatistics {
+    pub read_keys: usize,
+    pub read_bytes: usize,
+}
+
+impl FlowStatistics {
+    pub fn add(&mut self, other: &Self) {
+        self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
+        self.read_keys = self.read_keys.saturating_add(other.read_keys);
+    }
+}
+
+// Reports flow statistics to outside.
+pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
+    // Reports read flow statistics, the argument `read_stats` is a hash map
+    // saves the flow statistics of different region.
+    // TODO: maybe we need to return a Result later?
+    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
+}
+
+impl FlowStatsReporter for Scheduler<Task> {
+    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
+        if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
+            error!("Failed to send read flow statistics"; "err" => ?e);
+        }
+    }
+}
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {
@@ -644,7 +672,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                             return Ok(());
                         }
                         info!(
-                            "peer is still valid a member of region";
+                            "peer is still a valid member of region";
                             "region_id" => local_region.get_id(),
                             "peer_id" => peer.get_id(),
                             "pd_region" => ?pd_region

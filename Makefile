@@ -48,9 +48,7 @@ endif
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
-TEST_THREADS := --test-threads=2
-else
-TEST_THREADS := ""
+RUST_TEST_THREADS ?= 2
 endif
 
 # Build portable binary by default unless disable explicitly
@@ -228,8 +226,8 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
@@ -240,7 +238,7 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS)
+	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture
 
 # This is used for CI test
 ci_test:
@@ -264,16 +262,32 @@ format: pre-format
 pre-clippy: unset-override
 	@rustup component add clippy
 
+ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
+	-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
+	-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
+	-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
+	-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
+	-A clippy::needless_range_loop -A clippy::redundant_closure \
+	-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
+	-A clippy::identity_conversion -A clippy::new_ret_no_self
+
+# PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 clippy: pre-clippy
-	@cargo clippy --all --all-targets --no-default-features --features "${ENABLE_FEATURES}" -- \
-		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
-		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
-		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
-		-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
-		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
-		-A clippy::needless_range_loop -A clippy::redundant_closure \
-		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
-		-A clippy::identity_conversion -A clippy::new_ret_no_self
+	@cargo clippy --all --exclude cdc --exclude backup \
+		--all-targets --no-default-features \
+		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
+	@for pkg in "cdc" "backup"; do \
+		cd components/$$pkg && \
+		cargo clippy -p $$pkg --all-targets --no-default-features \
+			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
+		cd ../.. ;\
+	done
+
+# TODO fix tests warnings
+# @cd tests && \
+# cargo clippy -p tests --all-targets --no-default-features \
+# 	--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
+# cd ..
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))

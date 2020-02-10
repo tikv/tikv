@@ -28,12 +28,7 @@ use engine::rocks::{
 use slog;
 
 use crate::import::Config as ImportConfig;
-use crate::raftstore::coprocessor::properties::{
-    MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
-};
-use crate::raftstore::coprocessor::properties::{
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
-};
+use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::Config as RaftstoreConfig;
 use crate::raftstore::store::PdTask;
@@ -48,6 +43,10 @@ use engine::rocks::util::{
     FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DB};
+use engine_rocks::{
+    RangePropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
@@ -1111,7 +1110,7 @@ impl DBConfigManger {
         // Write config to metric
         for (cfg_name, cfg_value) in opts {
             let cfg_value = match cfg_value {
-                v if *v == "ture" => Ok(1f64),
+                v if *v == "true" => Ok(1f64),
                 v if *v == "false" => Ok(0f64),
                 v => v.parse::<f64>(),
             };
