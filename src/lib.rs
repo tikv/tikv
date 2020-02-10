@@ -21,7 +21,6 @@
 #![recursion_limit = "200"]
 #![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
-#![feature(duration_float)]
 #![feature(specialization)]
 #![feature(const_fn)]
 

@@ -17,7 +17,7 @@ use tikv_util::time::Instant;
 use super::client::*;
 use super::metrics::*;
 use super::service::*;
-use super::{Config, Error, KVImporter, error_inc};
+use super::{error_inc, Config, Error, KVImporter};
 
 #[derive(Clone)]
 pub struct ImportKVService {

@@ -3,15 +3,15 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
 use engine::rocks::{SstWriter, SstWriterBuilder};
 use engine::{CF_DEFAULT, CF_WRITE, DB};
 use external_storage::ExternalStorage;
+use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::raftstore::store::keys;
 use tikv::storage::txn::TxnEntry;
-use tikv_util::{self, box_err};
+use tikv_util::{self, box_err, file::Sha256Reader, time::Limiter};
 
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -57,24 +57,32 @@ impl Writer {
     }
 
     fn save_and_build_file(
-        mut self,
+        self,
         name: &str,
         cf: &'static str,
-        buf: &mut Vec<u8>,
-        limiter: Option<Arc<IOLimiter>>,
+        limiter: Limiter,
         storage: &dyn ExternalStorage,
     ) -> Result<File> {
-        buf.reserve(self.writer.file_size() as _);
-        self.writer.finish_into(buf)?;
+        let (sst_info, sst_reader) = self.writer.finish_read()?;
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
             .with_label_values(&[cf])
-            .observe(buf.len() as _);
+            .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
-        let sha256 = tikv_util::file::sha256(&buf)
+
+        let (reader, hasher) = Sha256Reader::new(sst_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
-        let mut contents = buf as &[u8];
-        let mut limit_reader = LimitReader::new(limiter, &mut contents);
-        storage.write(&file_name, &mut limit_reader)?;
+        storage.write(
+            &file_name,
+            Box::new(limiter.limit(AllowStdIo::new(reader))),
+            sst_info.file_size(),
+        )?;
+        let sha256 = hasher
+            .lock()
+            .unwrap()
+            .finish()
+            .map(|digest| digest.to_vec())
+            .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
+
         let mut file = File::new();
         file.set_name(file_name);
         file.set_sha256(sha256);
@@ -94,12 +102,12 @@ pub struct BackupWriter {
     name: String,
     default: Writer,
     write: Writer,
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Limiter,
 }
 
 impl BackupWriter {
     /// Create a new BackupWriter.
-    pub fn new(db: Arc<DB>, name: &str, limiter: Option<Arc<IOLimiter>>) -> Result<BackupWriter> {
+    pub fn new(db: Arc<DB>, name: &str, limiter: Limiter) -> Result<BackupWriter> {
         let default = SstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
@@ -153,26 +161,22 @@ impl BackupWriter {
     pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         let start = Instant::now();
         let mut files = Vec::with_capacity(2);
-        let mut buf = Vec::new();
         let write_written = !self.write.is_empty() || !self.default.is_empty();
         if !self.default.is_empty() {
             // Save default cf contents.
             let default = self.default.save_and_build_file(
                 &self.name,
                 CF_DEFAULT,
-                &mut buf,
                 self.limiter.clone(),
                 storage,
             )?;
             files.push(default);
-            buf.clear();
         }
         if write_written {
             // Save write cf contents.
             let write = self.write.save_and_build_file(
                 &self.name,
                 CF_WRITE,
-                &mut buf,
                 self.limiter.clone(),
                 storage,
             )?;
@@ -190,6 +194,7 @@ mod tests {
     use super::*;
     use engine::Iterable;
     use std::collections::BTreeMap;
+    use std::f64::INFINITY;
     use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
@@ -244,12 +249,12 @@ mod tests {
         let storage = external_storage::create_storage(&backend).unwrap();
 
         // Test empty file.
-        let mut writer = BackupWriter::new(db.clone(), "foo", None).unwrap();
+        let mut writer = BackupWriter::new(db.clone(), "foo", Limiter::new(INFINITY)).unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
-        let mut writer = BackupWriter::new(db.clone(), "foo1", None).unwrap();
+        let mut writer = BackupWriter::new(db.clone(), "foo1", Limiter::new(INFINITY)).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -268,7 +273,7 @@ mod tests {
         );
 
         // Test write and default.
-        let mut writer = BackupWriter::new(db.clone(), "foo2", None).unwrap();
+        let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY)).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
