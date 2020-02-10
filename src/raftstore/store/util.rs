@@ -183,8 +183,22 @@ pub fn check_region_epoch(
     }
 
     let from_epoch = req.get_header().get_region_epoch();
-    let current_epoch = region.get_region_epoch();
+    compare_region_epoch(
+        from_epoch,
+        region,
+        check_conf_ver,
+        check_ver,
+        include_region,
+    )
+}
 
+pub fn compare_region_epoch(
+    from_epoch: &metapb::RegionEpoch,
+    region: &metapb::Region,
+    check_conf_ver: bool,
+    check_ver: bool,
+    include_region: bool,
+) -> Result<()> {
     // We must check epochs strictly to avoid key not in region error.
     //
     // A 3 nodes TiKV cluster with merge enabled, after commit merge, TiKV A
@@ -194,6 +208,7 @@ pub fn check_region_epoch(
     // request is higher than TiKV B, the request must be denied due to epoch
     // not match, so it does not read on a stale snapshot, thus avoid the
     // KeyNotInRegion error.
+    let current_epoch = region.get_region_epoch();
     if (check_conf_ver && from_epoch.get_conf_ver() != current_epoch.get_conf_ver())
         || (check_ver && from_epoch.get_version() != current_epoch.get_version())
     {
