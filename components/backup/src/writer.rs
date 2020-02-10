@@ -69,14 +69,18 @@ impl Writer {
             .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
 
-        let reader = Sha256Reader::new(sst_reader)
+        let (reader, hasher) = Sha256Reader::new(sst_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
-        let mut reader = limiter.limit(AllowStdIo::new(reader));
-        storage.write(&file_name, &mut reader)?;
-        let sha256 = reader
-            .into_inner()
-            .into_inner()
-            .hash()
+        storage.write(
+            &file_name,
+            Box::new(limiter.limit(AllowStdIo::new(reader))),
+            sst_info.file_size(),
+        )?;
+        let sha256 = hasher
+            .lock()
+            .unwrap()
+            .finish()
+            .map(|digest| digest.to_vec())
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
 
         let mut file = File::new();
