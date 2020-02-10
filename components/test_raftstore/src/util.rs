@@ -28,7 +28,7 @@ use tikv::server::{lock_manager::Config as PessimisticTxnConfig, Config as Serve
 use tikv::storage::kv::CompactionListener;
 use tikv::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::config::*;
-use tikv_util::escape;
+use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
@@ -437,6 +437,33 @@ pub fn read_on_peer<T: Simulator>(
     );
     request.mut_header().set_peer(peer);
     cluster.call_command(request, timeout)
+}
+
+pub fn async_read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+    replica_read: bool,
+) -> mpsc::Receiver<RaftCmdResponse> {
+    let node_id = peer.get_id();
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    request.mut_header().set_replica_read(replica_read);
+    let (tx, rx) = mpsc::sync_channel(1);
+    let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
+    cluster
+        .sim
+        .wl()
+        .async_command_on_node(node_id, request, cb)
+        .unwrap();
+    rx
 }
 
 pub fn read_index_on_peer<T: Simulator>(

@@ -1,9 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::f64::INFINITY;
 use std::sync::{Arc, Mutex};
 
 use engine::name_to_cf;
-use engine::rocks::util::{compact_files_in_range, io_limiter::IOLimiter};
+use engine::rocks::util::compact_files_in_range;
 use engine::rocks::{SstWriterBuilder, DB};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
@@ -16,12 +17,12 @@ use kvproto::raft_cmdpb::*;
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
 use tikv_util::future::paired_future_callback;
-use tikv_util::time::Instant;
+use tikv_util::time::{Instant, Limiter};
 
 use super::import_mode::*;
 use super::metrics::*;
 use super::service::*;
-use super::{Config, Error, SSTImporter, error_inc};
+use super::{error_inc, Config, Error, SSTImporter};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -35,7 +36,7 @@ pub struct ImportSSTService<Router> {
     threads: CpuPool,
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Limiter,
 }
 
 impl<Router: RaftStoreRouter> ImportSSTService<Router> {
@@ -56,7 +57,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
             threads,
             importer,
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
-            limiter: None,
+            limiter: Limiter::new(INFINITY),
         }
     }
 }
@@ -290,11 +291,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "set_download_speed_limit";
         let timer = Instant::now_coarse();
 
-        match (req.get_speed_limit(), &mut self.limiter) {
-            (0, limiter) => *limiter = None,
-            (s, Some(l)) => l.set_bytes_per_second(s as i64),
-            (s, limiter) => *limiter = Some(Arc::new(IOLimiter::new(s))),
-        }
+        let speed_limit = req.get_speed_limit();
+        self.limiter.set_speed_limit(if speed_limit > 0 {
+            speed_limit as f64
+        } else {
+            INFINITY
+        });
 
         ctx.spawn(
             future::ok::<_, Error>(SetDownloadSpeedLimitResponse::default())
