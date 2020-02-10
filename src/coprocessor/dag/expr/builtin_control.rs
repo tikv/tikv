@@ -532,5 +532,4 @@ mod tests {
             assert_eq!(res, exp);
         }
     }
-
 }
