@@ -26,7 +26,7 @@ use crate::storage::{
 };
 
 use pd_client::PdClient;
-use spin::Mutex;
+use parking_lot::Mutex;
 use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
