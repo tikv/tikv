@@ -2237,10 +2237,6 @@ impl ConfigHandler {
         })
     }
 
-    pub fn get_refresh_interval(&self) -> Duration {
-        Duration::from(self.config_controller.current.refresh_config_interval)
-    }
-
     pub fn get_id(&self) -> String {
         self.id.clone()
     }
@@ -2363,7 +2359,7 @@ impl DynamicConfig for ConfigHandler {
         }
     }
     fn refresh_interval(&self) -> Duration {
-        self.get_refresh_interval()
+        Duration::from(self.config_controller.current.refresh_config_interval)
     }
     fn get(&self) -> String {
         toml::to_string(self.get_config()).unwrap()

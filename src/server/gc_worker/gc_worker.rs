@@ -90,7 +90,7 @@ pub enum GcTask {
         max_ts: TimeStamp,
         sender: future_mpsc::Sender<Result<Vec<LockInfo>>>,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),
 }
 
@@ -100,7 +100,7 @@ impl GcTask {
             GcTask::Gc { .. } => "gc",
             GcTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
             GcTask::PhysicalScanLock { .. } => "physical_scan_lock",
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => "validate_config",
         }
     }
@@ -130,7 +130,7 @@ impl Display for GcTask {
                 .debug_struct("PhysicalScanLock")
                 .field("max_ts", max_ts)
                 .finish(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => write!(f, "Validate gc worker config"),
         }
     }
@@ -696,7 +696,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 max_ts,
                 sender,
             } => self.handle_physical_scan_lock(handle, &ctx, max_ts, sender),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(f) => {
                 f(&self.cfg, &self.limiter);
             }
@@ -879,7 +879,6 @@ impl<E: Engine> GcWorker<E> {
         Ok(())
     }
 
-    #[cfg(test)]
     pub fn scheduler(&self) -> FutureScheduler<GcTask> {
         self.worker_scheduler.clone()
     }
