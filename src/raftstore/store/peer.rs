@@ -686,6 +686,8 @@ impl Peer {
                 MessageType::MsgHeartbeat => metrics.heartbeat += 1,
                 MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp += 1,
                 MessageType::MsgTransferLeader => metrics.transfer_leader += 1,
+                MessageType::MsgReadIndex => metrics.read_index += 1,
+                MessageType::MsgReadIndexResp => metrics.read_index_resp += 1,
                 MessageType::MsgTimeoutNow => {
                     // After a leader transfer procedure is triggered, the lease for
                     // the old leader may be expired earlier than usual, since a new leader
@@ -705,9 +707,7 @@ impl Peer {
                 | MessageType::MsgPropose
                 | MessageType::MsgUnreachable
                 | MessageType::MsgSnapStatus
-                | MessageType::MsgCheckQuorum
-                | MessageType::MsgReadIndex
-                | MessageType::MsgReadIndexResp => {}
+                | MessageType::MsgCheckQuorum => {}
             }
             self.send_raft_message(msg, trans);
         }
