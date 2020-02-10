@@ -1110,7 +1110,7 @@ impl DBConfigManger {
         // Write config to metric
         for (cfg_name, cfg_value) in opts {
             let cfg_value = match cfg_value {
-                v if *v == "ture" => Ok(1f64),
+                v if *v == "true" => Ok(1f64),
                 v if *v == "false" => Ok(0f64),
                 v => v.parse::<f64>(),
             };
