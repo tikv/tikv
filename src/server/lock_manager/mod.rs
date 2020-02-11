@@ -25,8 +25,8 @@ use crate::storage::{
     ProcessResult, StorageCallback,
 };
 
-use pd_client::PdClient;
 use parking_lot::Mutex;
+use pd_client::PdClient;
 use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
