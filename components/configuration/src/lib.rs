@@ -93,7 +93,8 @@ impl_into!(bool, Bool);
 impl_into!(String, String);
 impl_into!(ConfigChange, Module);
 
-/// the Configuration trait
+/// The Configuration trait
+///
 /// There are four type of fields inside derived Configuration struct:
 /// 1. `#[config(skip)]` field, these fields will not return
 /// by `diff` method and have not effect of `update` method
@@ -113,6 +114,12 @@ pub trait Configuration<'a> {
     /// Get encoder that can be serialize with `serde::Serializer`
     /// with the disappear of `#[config(hidden)]` field
     fn get_encoder(&'a self) -> Self::Encoder;
+}
+
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+pub trait ConfigManager: Send {
+    fn dispatch(&mut self, _: ConfigChange) -> Result<()>;
 }
 
 #[cfg(test)]
