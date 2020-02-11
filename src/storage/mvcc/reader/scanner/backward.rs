@@ -1130,5 +1130,4 @@ mod tests {
         assert_eq!(statistics.lock.prev, 255);
         assert_eq!(statistics.write.prev, 1);
     }
-
 }
