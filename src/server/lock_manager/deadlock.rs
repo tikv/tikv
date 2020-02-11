@@ -99,7 +99,7 @@ impl DetectTable {
 
     /// Returns the key hash which causes deadlock.
     pub fn detect(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) -> Option<u64> {
-        let _timer = DETECTOR_HISTOGRAM_VEC.detect.start_coarse_timer();
+        let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
         TASK_COUNTER_VEC.detect.inc();
 
         self.now = Instant::now_coarse();
@@ -509,10 +509,12 @@ where
         if self.inner.borrow().role != role {
             match role {
                 Role::Leader => {
-                    info!("became the leader of deadlock detector!"; "self_id" => self.store_id)
+                    info!("became the leader of deadlock detector!"; "self_id" => self.store_id);
+                    DETECTOR_LEADER_GAUGE.set(1);
                 }
                 Role::Follower => {
-                    info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id)
+                    info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id);
+                    DETECTOR_LEADER_GAUGE.set(0);
                 }
             }
         }
