@@ -5,9 +5,8 @@ use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
-use crate::config::ConfigManager;
 use crate::raftstore::{coprocessor, Result};
-use configuration::{ConfigChange, ConfigValue, Configuration};
+use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration};
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 lazy_static! {
@@ -638,7 +637,7 @@ impl Config {
     }
 }
 
-pub type RaftstoreConfigManager = Arc<VersionTrack<Config>>;
+pub struct RaftstoreConfigManager(pub Arc<VersionTrack<Config>>);
 
 impl ConfigManager for RaftstoreConfigManager {
     fn dispatch(
@@ -647,7 +646,7 @@ impl ConfigManager for RaftstoreConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.update(move |cfg: &mut Config| cfg.update(change));
+            self.0.update(move |cfg: &mut Config| cfg.update(change));
         }
         info!(
             "raftstore config changed";
@@ -655,6 +654,14 @@ impl ConfigManager for RaftstoreConfigManager {
         );
         Config::write_change_into_metrics(change);
         Ok(())
+    }
+}
+
+impl std::ops::Deref for RaftstoreConfigManager {
+    type Target = Arc<VersionTrack<Config>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
