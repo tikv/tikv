@@ -1342,4 +1342,77 @@ mod tests {
             );
         }
     }
+
+    struct TimeLimitedHandler {
+        handle_duration: Duration,
+        execution_time_limit: Option<Duration>,
+        handle_times: usize,
+    }
+
+    impl TimeLimitedHandler {
+        pub fn new(handle_duration: Duration) -> TimeLimitedHandler {
+            TimeLimitedHandler {
+                handle_duration,
+                execution_time_limit: None,
+                handle_times: 0,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RequestHandler for TimeLimitedHandler {
+        async fn handle_request(&mut self) -> Result<coppb::Response> {
+            self.handle_times += 1;
+            if let Some(limit) = self.execution_time_limit {
+                if self.handle_duration > limit {
+                    return Err(Error::ExecutionTimeLimitExceeded);
+                }
+            }
+            let mut res = coppb::Response::default();
+            res.data = self.handle_times.to_le_bytes().to_vec();
+            Ok(res)
+        }
+
+        fn set_execution_time_limit(&mut self, execution_time_limit: Option<Duration>) {
+            self.execution_time_limit = execution_time_limit;
+        }
+    }
+
+    #[test]
+    fn test_endpoint_semaphore() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        cop.semaphore = Some(Arc::new(Semaphore::new(1)));
+
+        let handler_builder_gen = || {
+            Box::new(|_, _: &_| Ok(TimeLimitedHandler::new(LIGHT_TASK_THRESHOLD * 2).into_boxed()))
+        };
+
+        // semaphore has free permit, we only handle once
+        let resp = cop
+            .handle_unary_request(ReqContext::default_for_test(), handler_builder_gen())
+            .wait()
+            .unwrap();
+        assert_eq!(resp.data, 1usize.to_le_bytes());
+
+        // remove all permits
+        std::mem::forget(cop.semaphore.as_ref().unwrap().try_acquire().unwrap());
+        let resp_fut =
+            cop.handle_unary_request(ReqContext::default_for_test(), handler_builder_gen());
+
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            tx.send(resp_fut.wait()).unwrap();
+        });
+        // should block when no resource for a big request
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        // when there is free resource, the task should finish
+        cop.semaphore.as_ref().unwrap().add_permits(1);
+        let resp = rx
+            .recv_timeout(Duration::from_millis(200))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resp.data, 2usize.to_le_bytes());
+    }
 }

@@ -497,3 +497,84 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.out_most_executor.collect_storage_stats(dest);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::batch::interface::BatchExecuteResult;
+    use crate::codec::batch::LazyBatchColumnVec;
+    use crate::error::{Error, ErrorInner, EvaluateError};
+    use crate::expr::EvalWarnings;
+    use crate::storage::IntervalRange;
+    use futures::executor::block_on;
+
+    pub struct MockExecutor {
+        left_batch_count: usize,
+        batch_duration: Duration,
+    }
+
+    impl MockExecutor {
+        fn new(batch_count: usize, batch_duration: Duration) -> Self {
+            MockExecutor {
+                left_batch_count: batch_count,
+                batch_duration,
+            }
+        }
+    }
+
+    impl BatchExecutor for MockExecutor {
+        type StorageStats = ();
+
+        fn schema(&self) -> &[FieldType] {
+            &[]
+        }
+
+        fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+            std::thread::sleep(self.batch_duration);
+            self.left_batch_count -= 1;
+            BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::empty(),
+                logical_rows: vec![],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(self.left_batch_count == 0),
+            }
+        }
+
+        fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {}
+
+        fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {}
+
+        fn take_scanned_range(&mut self) -> IntervalRange {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_execution_time_limit() {
+        // Exceed the limit
+        let mut runner = BatchExecutorsRunner {
+            deadline: Deadline::from_now(Duration::from_secs(60)),
+            execution_time_limit: Some(Duration::from_millis(5)),
+            out_most_executor: Box::new(MockExecutor::new(10, Duration::from_millis(1))),
+            output_offsets: vec![],
+            config: Arc::new(EvalConfig::default_for_test()),
+            collect_exec_summary: false,
+            exec_stats: ExecuteStats::new(1),
+            encode_type: EncodeType::TypeDefault,
+        };
+        match block_on(runner.handle_request()) {
+            Err(Error(box ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded))) => {}
+            _ => panic!("should return ExecutionTimeLimitExceeded error"),
+        }
+
+        // Not exceed the limit
+        runner.execution_time_limit = Some(Duration::from_secs(1));
+        runner.out_most_executor = Box::new(MockExecutor::new(10, Duration::from_millis(5)));
+        assert!(block_on(runner.handle_request()).is_ok());
+
+        // Unlimited
+        runner.execution_time_limit = None;
+        runner.out_most_executor = Box::new(MockExecutor::new(10, Duration::from_millis(5)));
+        assert!(block_on(runner.handle_request()).is_ok());
+    }
+}

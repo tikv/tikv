@@ -68,3 +68,4 @@ rev = "4e3ac06b948f1c2dffe92986a760ef561d0bdbb9"
 profiler = { path = "../profiler" }
 panic_hook = { path = "../panic_hook" }
 tipb_helper = { path = "../tipb_helper" }
+futures = "0.3"
