@@ -216,7 +216,7 @@ pub fn get_cast_fn_rpn_node(
         func_meta,
         args_len: 1,
         field_type: to_field_type,
-        metadata: Box::new(()),
+        metadata: Box::new(tipb::InUnionMetadata::default()),
     })
 }
 
@@ -3188,7 +3188,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3196,7 +3196,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3204,7 +3204,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3212,7 +3212,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3220,7 +3220,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3228,7 +3228,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3236,7 +3236,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3244,7 +3244,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             // bin_str, so need pad_zero
@@ -3271,7 +3271,7 @@ mod tests {
                 false,
                 CHARSET_ASCII,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3279,7 +3279,7 @@ mod tests {
                 false,
                 CHARSET_LATIN1,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3287,7 +3287,7 @@ mod tests {
                 false,
                 CHARSET_BIN,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             // branch 3 of ProduceStrWithSpecifiedTp ,

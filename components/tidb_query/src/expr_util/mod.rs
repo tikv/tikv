@@ -2,6 +2,7 @@
 
 //! Common utility implementations for both RPN expression and normal expression.
 
+pub mod collation;
 pub mod conv;
 pub mod like;
 pub mod miscellaneous;
