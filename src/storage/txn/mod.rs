@@ -56,6 +56,21 @@ pub enum ProcessResult {
     },
 }
 
+impl ProcessResult {
+    pub fn maybe_clone(&self) -> Option<ProcessResult> {
+        match self {
+            ProcessResult::PessimisticLockRes { res } => {
+                if let Ok(r) = res {
+                    Some(ProcessResult::PessimisticLockRes { res: Ok(r.clone()) })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
 quick_error! {
     #[derive(Debug)]
     pub enum ErrorInner {

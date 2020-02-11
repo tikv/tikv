@@ -816,6 +816,13 @@ impl Command {
             _ => false,
         }
     }
+
+    pub fn can_pipelined(&self) -> bool {
+        match &self.kind {
+            CommandKind::AcquirePessimisticLock(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Display for Command {

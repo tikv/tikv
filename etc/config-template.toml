@@ -752,6 +752,9 @@
 ## one more likely acquires the lock.
 # wake-up-delay-duration = 20
 
+## Enable pipelined pessimistic lock
+# pipelined = false
+
 [gc]
 ## The number of keys to GC in one batch.
 # batch-keys = 512

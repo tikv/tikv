@@ -177,6 +177,8 @@ make_static_metric! {
         write_finish,
         async_write_err,
         error,
+        pipelined_write,
+        pipelined_write_finish,
     }
 
     pub label_enum CommandPriority {
