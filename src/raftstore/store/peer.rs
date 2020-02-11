@@ -684,6 +684,8 @@ impl Peer {
                 MessageType::MsgHeartbeat => metrics.heartbeat += 1,
                 MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp += 1,
                 MessageType::MsgTransferLeader => metrics.transfer_leader += 1,
+                MessageType::MsgReadIndex => metrics.read_index += 1,
+                MessageType::MsgReadIndexResp => metrics.read_index_resp += 1,
                 MessageType::MsgTimeoutNow => {
                     // After a leader transfer procedure is triggered, the lease for
                     // the old leader may be expired earlier than usual, since a new leader
@@ -703,9 +705,7 @@ impl Peer {
                 | MessageType::MsgPropose
                 | MessageType::MsgUnreachable
                 | MessageType::MsgSnapStatus
-                | MessageType::MsgCheckQuorum
-                | MessageType::MsgReadIndex
-                | MessageType::MsgReadIndexResp => {}
+                | MessageType::MsgCheckQuorum => {}
             }
             self.send_raft_message(msg, trans);
         }
@@ -1825,7 +1825,10 @@ impl Peer {
         msg.set_to(peer.get_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_from(self.peer_id());
-        msg.set_term(self.term());
+        // log term here represents the term of last log. For leader, the term of last
+        // log is always its current term. Not just set term because raft library forbids
+        // setting it for MsgTransferLeader messages.
+        msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
         true
     }
@@ -2219,7 +2222,9 @@ impl Peer {
         ctx: &mut PollContext<T, C>,
         msg: &eraftpb::Message,
     ) {
-        if msg.get_term() != self.term() {
+        // log_term is set by original leader, represents the term last log is written
+        // in, which should be equal to the original leader's term.
+        if msg.get_log_term() != self.term() {
             return;
         }
 
@@ -2263,7 +2268,7 @@ impl Peer {
         msg.set_to(self.leader_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_index(self.get_store().applied_index());
-        msg.set_term(self.term());
+        msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
     }
 

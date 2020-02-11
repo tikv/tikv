@@ -216,7 +216,7 @@ pub fn get_cast_fn_rpn_node(
         func_meta,
         args_len: 1,
         field_type: to_field_type,
-        metadata: Box::new(()),
+        metadata: Box::new(tipb::InUnionMetadata::default()),
     })
 }
 
