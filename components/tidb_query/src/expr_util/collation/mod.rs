@@ -100,7 +100,9 @@ impl Collator for CollatorBinary {
 
     #[inline]
     fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError> {
-        state.write(bstr);
+        use std::hash::Hash;
+
+        bstr.hash(state);
         Ok(())
     }
 }

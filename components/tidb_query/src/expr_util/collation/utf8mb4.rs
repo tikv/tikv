@@ -98,7 +98,10 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
     fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError> {
         use std::hash::Hash;
 
+        // We follow the `[T]::hash` implementation to hash length as well.
+        // See `impl<T> Hash for [T]` in https://doc.rust-lang.org/std/hash/trait.Hash.html
         bstr.len().hash(state);
+
         let s = str::from_utf8(bstr)?;
         for ch in s.chars() {
             state.write_u16(general_ci_weight(ch));
@@ -129,8 +132,10 @@ impl Collator for CollatorUtf8Mb4Bin {
 
     #[inline]
     fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError> {
+        use std::hash::Hash;
+
         str::from_utf8(bstr)?;
-        state.write(bstr);
+        bstr.hash(state);
         Ok(())
     }
 }
