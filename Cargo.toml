@@ -19,7 +19,7 @@ mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
-failpoints = ["fail/failpoints"]
+failpoints = ["fail/failpoints", "raftstore/failpoints"]
 prost-codec = [
   "tipb/prost-codec",
   "kvproto/prost-codec",
@@ -40,7 +40,7 @@ protobuf-codec = [
   "pd_client/protobuf-codec",
   "raftstore/protobuf-codec",
 ]
-testexport = []
+testexport = ["raftstore/testexport"]
 
 [lib]
 name = "tikv"
@@ -62,7 +62,7 @@ crossbeam = "0.7.2"
 derive-new = "0.5"
 derive_more = "0.15.0"
 engine = { path = "components/engine" }
-engine_panic = { path = "components/engine_panic" }
+engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 external_storage = { path = "components/external_storage" }

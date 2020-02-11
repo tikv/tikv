@@ -99,7 +99,7 @@ fn test_server_catching_api_error() {
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx.clone());
     let mut mutation = kvrpcpb::Mutation::default();
-    mutation.op = Op::Put;
+    mutation.op = Op::Put.into();
     mutation.key = b"k3".to_vec();
     mutation.value = b"v3".to_vec();
     prewrite_req.set_mutations(vec![mutation].into_iter().collect());

@@ -3063,7 +3063,6 @@ dependencies = [
  "tokio-executor",
  "tokio-threadpool",
  "tokio-timer",
- "toml",
  "txn_types",
  "url 2.1.0",
  "uuid 0.7.4",
