@@ -38,6 +38,7 @@ protobuf-codec = [
   "sst_importer/protobuf-codec",
   "pd_client/protobuf-codec",
 ]
+testexport = []
 
 [lib]
 name = "tikv"
