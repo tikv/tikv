@@ -226,8 +226,9 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" -p cdc ${EXTRA_CARGO_ARGS} -- --nocapture && cd ../.. && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
@@ -238,11 +239,12 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture
+	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && cd .. && \
+	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture
 
 # This is used for CI test
 ci_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --all-targets --no-run --message-format=json
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc --all-targets --no-run --message-format=json
 	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
 
 ## Static analysis
