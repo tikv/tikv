@@ -519,7 +519,7 @@ impl Debugger {
                 region,
                 fake_snap_worker.scheduler(),
                 peer_id,
-                tag.clone(),
+                tag,
             ));
 
             let raft_cfg = raft::Config {
