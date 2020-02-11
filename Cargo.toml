@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "4.0.0-alpha"
+version = "4.1.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -38,6 +38,7 @@ protobuf-codec = [
   "sst_importer/protobuf-codec",
   "pd_client/protobuf-codec",
 ]
+testexport = []
 
 [lib]
 name = "tikv"
@@ -59,6 +60,7 @@ crossbeam = "0.7.2"
 derive-new = "0.5"
 derive_more = "0.15.0"
 engine = { path = "components/engine" }
+engine_panic = { path = "components/engine_panic" }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 external_storage = { path = "components/external_storage" }

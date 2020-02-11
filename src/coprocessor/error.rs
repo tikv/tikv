@@ -13,11 +13,11 @@ pub enum Error {
     #[fail(display = "Key is locked (will clean up) {:?}", _0)]
     Locked(kvproto::kvrpcpb::LockInfo),
 
-    #[fail(display = "Coprocessor task terminated due to exceeding deadline")]
+    #[fail(display = "Coprocessor task terminated due to exceeding the deadline")]
     DeadlineExceeded,
 
     #[fail(
-        display = "Coprocessor task is cancelled due to exceeding execution time limit (will retry)"
+        display = "Coprocessor task is cancelled due to exceeding the execution time limit (will retry)"
     )]
     ExecutionTimeLimitExceeded,
 
