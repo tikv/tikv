@@ -159,9 +159,8 @@ mod parser {
         let (rest, _) = digit1(rest)?;
 
         let has_datetime_sep = match rest.chars().next() {
-            Some(c) if c != 'T' && c != ' ' => false,
-            None => false,
-            _ => true,
+            Some(c) if c == 'T' || c == ' ' => true,
+            _ => false,
         };
 
         if !has_datetime_sep {
@@ -748,6 +747,7 @@ mod tests {
     fn test_parse_datetime() {
         let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
             (b"2010-02-12", 0, None),
+            (b"2010-02-12t12:23:34", 0, None),
             (b"2010-02-12T12:23:34", 0, Some("12:23:34")),
             (b"2010-02-12 12:23:34", 0, Some("12:23:34")),
             (b"2010-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
@@ -758,7 +758,9 @@ mod tests {
             let actual = Duration::parse(&mut EvalContext::default(), input, fsp).ok();
             assert_eq!(
                 actual.map(|d| d.to_string()),
-                expected.map(|s| s.to_string())
+                expected.map(|s| s.to_string()),
+                "failed case: {}",
+                std::str::from_utf8(input).unwrap()
             );
         }
     }
