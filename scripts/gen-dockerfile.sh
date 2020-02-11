@@ -67,7 +67,7 @@ COPY Cargo.lock ./Cargo.lock
 EOT
 
 # Get components, remove test and profiler components
-components=($(find . -type f -name 'Cargo.toml' | sed -r 's|/[^/]+$||' | sort -u))
+components=$(find . -type f -name 'Cargo.toml' | sed -r 's|/[^/]+$||' | sort -u)
 src_dirs=$(for i in ${components[@]}; do echo ${i}/src; done | xargs)
 lib_files=$(for i in ${components[@]}; do echo ${i}/src/lib.rs; done | xargs)
 # List components and add their Cargo files
