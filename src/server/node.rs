@@ -79,6 +79,7 @@ where
         }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
         store.set_status_address(cfg.status_addr.clone());
+        store.set_start_timestamp(chrono::Local::now().timestamp());
         store.set_git_hash(
             option_env!("TIKV_BUILD_GIT_HASH")
                 .unwrap_or("Unknown git hash")
