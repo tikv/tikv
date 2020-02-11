@@ -307,7 +307,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
-        execution_time_limit: Option<Duration>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -339,7 +338,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         Ok(Self {
             deadline,
-            execution_time_limit,
+            execution_time_limit: None,
             out_most_executor,
             output_offsets,
             config,
@@ -359,16 +358,20 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut time_slice_start = Instant::now();
         loop {
             let time_slice_len = time_slice_start.elapsed();
-            total_execution_time += time_slice_len;
+            // Check whether we should cancel the execution because it tends to take a long time
+            // while not having a permit from the coprocessor semaphore
             if let Some(limit) = self.execution_time_limit {
-                if total_execution_time > limit {
+                if total_execution_time + time_slice_len > limit {
                     return Err(EvaluateError::ExecutionTimeLimitExceeded.into());
                 }
             }
+            // Check whether we should yield from the execution
             if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;
+                total_execution_time += time_slice_len;
                 time_slice_start = Instant::now();
             }
+
             self.deadline.check()?;
 
             let mut result = self.out_most_executor.next_batch(batch_size);
@@ -484,6 +487,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 }
             }
         }
+    }
+
+    pub fn set_execution_time_limit(&mut self, execution_time_limit: Option<Duration>) {
+        self.execution_time_limit = execution_time_limit;
     }
 
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {

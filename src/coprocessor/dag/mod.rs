@@ -22,7 +22,6 @@ pub fn build_handler<S: Store + 'static>(
     store: S,
     data_version: Option<u64>,
     deadline: Deadline,
-    execution_time_limit: Option<Duration>,
     batch_row_limit: usize,
     is_streaming: bool,
     enable_batch_if_possible: bool,
@@ -32,15 +31,7 @@ pub fn build_handler<S: Store + 'static>(
     if enable_batch_if_possible && !is_streaming {
         tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors())?;
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDAGHandler::new(
-            req,
-            ranges,
-            store,
-            data_version,
-            deadline,
-            execution_time_limit,
-        )?
-        .into_boxed())
+        Ok(BatchDAGHandler::new(req, ranges, store, data_version, deadline)?.into_boxed())
     } else {
         COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
         Ok(DAGHandler::new(
@@ -112,7 +103,6 @@ impl BatchDAGHandler {
         store: S,
         data_version: Option<u64>,
         deadline: Deadline,
-        execution_time_limit: Option<Duration>,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query::batch::runner::BatchExecutorsRunner::from_request(
@@ -120,7 +110,6 @@ impl BatchDAGHandler {
                 ranges,
                 TiKVStorage::from(store),
                 deadline,
-                execution_time_limit,
             )?,
             data_version,
         })
@@ -131,6 +120,10 @@ impl BatchDAGHandler {
 impl RequestHandler for BatchDAGHandler {
     async fn handle_request(&mut self) -> Result<Response> {
         handle_qe_response(self.runner.handle_request().await, self.data_version)
+    }
+
+    fn set_execution_time_limit(&mut self, execution_time_limit: Option<Duration>) {
+        self.runner.set_execution_time_limit(execution_time_limit);
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
@@ -157,7 +150,7 @@ fn handle_qe_response(
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
             ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded) => {
-                return Err(Error::ExecutionTimeLimitExceeded)
+                Err(Error::ExecutionTimeLimitExceeded)
             }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
@@ -189,7 +182,7 @@ fn handle_qe_stream_response(
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
             ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded) => {
-                return Err(Error::ExecutionTimeLimitExceeded)
+                Err(Error::ExecutionTimeLimitExceeded)
             }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();

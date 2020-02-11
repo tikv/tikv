@@ -9,7 +9,7 @@ use futures::{future, Future, Stream};
 use futures03::channel::mpsc;
 use futures03::prelude::*;
 use rand::prelude::*;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
@@ -29,6 +29,10 @@ use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+
+/// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
+/// which means they don't need a permit from the semaphore before execution.
+const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
@@ -184,7 +188,6 @@ impl<E: Engine> Endpoint<E> {
                     Some(is_desc_scan),
                     Some(start_ts),
                     cache_match_version,
-                    None, // no execution time limit by default
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 let enable_batch_if_possible = self.enable_batch_if_possible;
@@ -204,7 +207,6 @@ impl<E: Engine> Endpoint<E> {
                         store,
                         data_version,
                         req_ctx.deadline,
-                        req_ctx.execution_time_limit,
                         batch_row_limit,
                         is_streaming,
                         enable_batch_if_possible,
@@ -228,9 +230,6 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     Some(start_ts),
                     cache_match_version,
-                    // Currently analyze requests are not executed in coroutines so we don't
-                    // need this limit
-                    None,
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
@@ -257,9 +256,6 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     Some(start_ts),
                     cache_match_version,
-                    // Currently checksum requests are not executed in coroutines so we don't
-                    // need this limit
-                    None,
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
@@ -300,6 +296,40 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
+    /// Try to acquire a permit from the semaphore.
+    ///
+    /// When `is_heavy` is false, it means the request can be a light task and is allowed to
+    /// run without a permit, but the execution time should be limited by the returned `Duration`.
+    ///
+    /// When `is_heavy` is true, the function won't return until a permit is acquired successfully.
+    async fn acquire_permit(
+        semaphore: Option<&Semaphore>,
+        is_heavy: bool,
+    ) -> (Option<SemaphorePermit<'_>>, Option<Duration>) {
+        if let Some(semaphore) = semaphore {
+            // Heavy requests must acquire a permit to avoid that too many concurrent heavy
+            // requests cause starving and OOM.
+            if is_heavy {
+                let res = (Some(semaphore.acquire().await), None);
+                COPR_ACQUIRE_SEMAPHORE_RESULT.acquired_heavy.inc();
+                res
+            } else {
+                match semaphore.try_acquire() {
+                    Ok(permit) => {
+                        COPR_ACQUIRE_SEMAPHORE_RESULT.acquired_generic.inc();
+                        (Some(permit), None)
+                    }
+                    Err(_) => {
+                        COPR_ACQUIRE_SEMAPHORE_RESULT.unacquired.inc();
+                        (None, Some(LIGHT_TASK_THRESHOLD))
+                    }
+                }
+            }
+        } else {
+            (None, None)
+        }
+    }
+
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
@@ -310,12 +340,8 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
-        let _permit = if let Some(semaphore) = semaphore.as_ref() {
-            Some(semaphore.acquire().await)
-        } else {
-            None
-        };
-
+        let (_permit, execution_time_limit) =
+            Self::acquire_permit(semaphore.as_deref(), false).await;
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.req_ctx.deadline.check()?;
@@ -340,10 +366,21 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
         tracker.on_begin_item();
+
+        handler.set_execution_time_limit(execution_time_limit);
+        let mut result = handler.handle_request().await;
+
+        // Retry if execution time limit exceeded, but this time a permit from the semaphore is
+        // compulsory.
+        if let Err(Error::ExecutionTimeLimitExceeded) = result {
+            // Because `is_heavy` is set to true, there must be no execution time limit.
+            let (_permit, _) = Self::acquire_permit(semaphore.as_deref(), true).await;
+            handler.set_execution_time_limit(None);
+            result = handler.handle_request().await;
+        }
+
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
-        let result = handler.handle_request().await;
-
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
 
@@ -737,7 +774,6 @@ mod tests {
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(0),
-            None,
             None,
             None,
             None,

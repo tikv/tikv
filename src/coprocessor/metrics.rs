@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
+use prometheus_static_metric::*;
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
@@ -60,4 +61,24 @@ lazy_static! {
         "Total bytes of response body"
     )
     .unwrap();
+    pub static ref COPR_ACQUIRE_SEMAPHORE_RESULT: CoprAcquireSemaphoreResultCounterVec =
+        register_static_int_counter_vec!(
+            CoprAcquireSemaphoreResultCounterVec,
+            "tikv_coprocessor_acquire_semaphore_result",
+            "The acquire result of the coprocessor semaphore",
+            &["result"],
+        )
+        .unwrap();
+}
+
+make_static_metric! {
+    pub label_enum AcquireSemaphoreType {
+        acquired_generic,
+        acquired_heavy,
+        unacquired,
+    }
+
+    pub struct CoprAcquireSemaphoreResultCounterVec: IntCounter {
+        "result" => AcquireSemaphoreType,
+    }
 }
