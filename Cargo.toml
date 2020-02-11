@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "4.0.0-alpha"
+version = "4.1.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
