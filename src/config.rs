@@ -19,7 +19,7 @@ use std::usize;
 
 use kvproto::configpb::{self, StatusCode};
 
-use configuration::{ConfigChange, ConfigValue, Configuration};
+use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -1110,7 +1110,7 @@ impl DBConfigManger {
         // Write config to metric
         for (cfg_name, cfg_value) in opts {
             let cfg_value = match cfg_value {
-                v if *v == "ture" => Ok(1f64),
+                v if *v == "true" => Ok(1f64),
                 v if *v == "false" => Ok(0f64),
                 v => v.parse::<f64>(),
             };
@@ -2095,13 +2095,7 @@ pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) ->
     }
 }
 
-type CfgResult<T> = Result<T, Box<dyn Error>>;
-
-pub trait ConfigManager: Send {
-    fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
-}
-
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Module {
     Readpool,
     Server,
@@ -2198,14 +2192,9 @@ impl ConfigController {
         Ok(Either::Right(true))
     }
 
-    pub fn register(&mut self, module: &str, cfg_mgr: Box<dyn ConfigManager>) {
-        match Module::from(module) {
-            Module::Unknown(name) => warn!("tried to register unknown module: {}", name),
-            m => {
-                if self.config_mgrs.insert(m, cfg_mgr).is_some() {
-                    warn!("config manager for module {} already registered", module)
-                }
-            }
+    pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
+        if self.config_mgrs.insert(module.clone(), cfg_mgr).is_some() {
+            warn!("config manager for module {:?} already registered", module)
         }
     }
 
@@ -2241,10 +2230,6 @@ impl ConfigHandler {
             version,
             config_controller: controller,
         })
-    }
-
-    pub fn get_refresh_interval(&self) -> Duration {
-        Duration::from(self.config_controller.current.refresh_config_interval)
     }
 
     pub fn get_id(&self) -> String {
@@ -2293,7 +2278,7 @@ impl ConfigHandler {
 
     /// Update the local config if remote config had been changed,
     /// rollback the remote config if the change are invalid.
-    pub fn refresh_config(&mut self, cfg_client: Arc<impl ConfigClient>) -> CfgResult<()> {
+    pub fn refresh_config(&mut self, cfg_client: &dyn ConfigClient) -> CfgResult<()> {
         let mut resp = cfg_client.get_config(self.get_id(), self.version.clone())?;
         let version = resp.take_version();
         match resp.get_status().get_code() {
@@ -2335,7 +2320,7 @@ impl ConfigHandler {
         &mut self,
         version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
-        cfg_client: Arc<impl ConfigClient>,
+        cfg_client: &dyn ConfigClient,
     ) -> CfgResult<()> {
         let mut resp = cfg_client.update_config(self.get_id(), version, entries)?;
         match resp.get_status().get_code() {
@@ -2348,6 +2333,31 @@ impl ConfigHandler {
                 Err(format!("{:?}", resp).into())
             }
         }
+    }
+}
+
+use crate::raftstore::store::DynamicConfig;
+impl DynamicConfig for ConfigHandler {
+    fn refresh(&mut self, cfg_client: &dyn ConfigClient) {
+        debug!(
+            "refresh config";
+            "component id" => self.get_id(),
+            "version" => ?self.get_version()
+        );
+        if let Err(e) = self.refresh_config(cfg_client) {
+            warn!(
+                "failed to refresh config";
+                "component id" => self.get_id(),
+                "version" => ?self.get_version(),
+                "err" => ?e
+            )
+        }
+    }
+    fn refresh_interval(&self) -> Duration {
+        Duration::from(self.config_controller.current.refresh_config_interval)
+    }
+    fn get(&self) -> String {
+        toml::to_string(self.get_config()).unwrap()
     }
 }
 
@@ -2565,7 +2575,7 @@ mod tests {
 
         let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register(
-            "rocksdb",
+            Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
         );
         (engine, cfg_controller)

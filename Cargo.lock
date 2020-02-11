@@ -1019,6 +1019,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_panic"
+version = "0.0.1"
+dependencies = [
+ "engine_traits",
+ "tikv_alloc",
+]
+
+[[package]]
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
@@ -1825,7 +1833,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#80122c79a6646d84788559c14ea2bfdfde5812ff"
+source = "git+https://github.com/pingcap/kvproto.git#a965739f8162eda4f60ffa4352172ea67e9ec6d1"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -4287,6 +4295,7 @@ dependencies = [
  "derive-new",
  "derive_more",
  "engine",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
  "external_storage",
