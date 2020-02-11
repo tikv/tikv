@@ -7,7 +7,8 @@ mod metrics;
 pub mod waiter_manager;
 
 pub use self::config::{Config, LockManagerConfigManager};
-pub use self::deadlock::Service as DeadlockService;
+pub use self::deadlock::{Scheduler as DetectorScheduler, Service as DeadlockService};
+pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -15,8 +16,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use self::deadlock::{Detector, RoleChangeNotifier, Scheduler as DetectorScheduler};
-use self::waiter_manager::{Scheduler as WaiterMgrScheduler, WaiterManager};
+use self::deadlock::{Detector, RoleChangeNotifier};
+use self::waiter_manager::WaiterManager;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
