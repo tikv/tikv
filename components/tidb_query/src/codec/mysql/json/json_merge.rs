@@ -16,10 +16,10 @@ impl Json {
     ///
     /// See `MergeBinary()` in TiDB `json/binary_function.go`
     #[allow(clippy::comparison_chain)]
-    pub fn merge<'a>(mut bjs: Vec<JsonRef<'a>>) -> Result<Json> {
+    pub fn merge<'a>(bjs: Vec<JsonRef<'a>>) -> Result<Json> {
         let mut result = vec![];
         let mut objects = vec![];
-        for j in bjs.drain(..) {
+        for j in bjs {
             if j.get_type() != JsonType::Object {
                 if objects.len() == 1 {
                     let o = objects.pop().unwrap();

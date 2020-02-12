@@ -41,19 +41,20 @@ impl<'a> JsonRef<'a> {
 impl<'a> Eq for JsonRef<'a> {}
 
 impl<'a> Ord for JsonRef<'a> {
-    fn cmp<'b>(&self, right: &JsonRef<'b>) -> Ordering {
+    fn cmp(&self, right: &JsonRef<'_>) -> Ordering {
         self.partial_cmp(right).unwrap()
     }
 }
 
 impl<'a> PartialEq for JsonRef<'a> {
-    fn eq<'b>(&self, right: &JsonRef<'b>) -> bool {
+    fn eq(&self, right: &JsonRef<'_>) -> bool {
         self.partial_cmp(right)
             .map_or(false, |r| r == Ordering::Equal)
     }
 }
 impl<'a> PartialOrd for JsonRef<'a> {
-    fn partial_cmp<'b>(&self, right: &JsonRef<'b>) -> Option<Ordering> {
+    // See `CompareBinary` in TiDB `types/json/binary_functions.go`
+    fn partial_cmp(&self, right: &JsonRef<'_>) -> Option<Ordering> {
         let precedence_diff = self.get_precedence() - right.get_precedence();
         if precedence_diff == 0 {
             if self.get_precedence() == PRECEDENCE_NULL {

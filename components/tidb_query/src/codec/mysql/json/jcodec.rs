@@ -27,10 +27,12 @@ pub trait JsonEncoder: NumberEncoder {
         self.write_bytes(data.value()).map_err(Error::from)
     }
 
+    // See `appendBinaryObject` in TiDB `types/json/binary.go`
     fn write_json_obj_from_keys_values<'a>(
         &mut self,
-        entries: Vec<(&[u8], JsonRef<'a>)>,
+        mut entries: Vec<(&[u8], JsonRef<'a>)>,
     ) -> Result<()> {
+        entries.sort_by(|a, b| a.0.cmp(b.0));
         // object: element-count size key-entry* value-entry* key* value*
         let element_count = entries.len();
         // key-entry ::= key-offset(uint32) key-length(uint16)
@@ -74,6 +76,7 @@ pub trait JsonEncoder: NumberEncoder {
         Ok(())
     }
 
+    // See `appendBinaryObject` in TiDB `types/json/binary.go`
     fn write_json_obj(&mut self, data: &BTreeMap<String, Json>) -> Result<()> {
         // object: element-count size key-entry* value-entry* key* value*
         let element_count = data.len();
@@ -118,6 +121,7 @@ pub trait JsonEncoder: NumberEncoder {
         Ok(())
     }
 
+    // See `appendBinaryArray` in TiDB `types/json/binary.go`
     fn write_json_ref_array<'a>(&mut self, data: &[JsonRef<'a>]) -> Result<()> {
         let element_count = data.len();
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
@@ -139,6 +143,7 @@ pub trait JsonEncoder: NumberEncoder {
         Ok(())
     }
 
+    // See `appendBinaryArray` in TiDB `types/json/binary.go`
     fn write_json_array(&mut self, data: &[Json]) -> Result<()> {
         // array ::= element-count size value-entry* value*
         let element_count = data.len();
@@ -161,6 +166,7 @@ pub trait JsonEncoder: NumberEncoder {
         Ok(())
     }
 
+    // See `appendBinaryValElem` in TiDB `types/json/binary.go`
     fn write_value_entry<'a>(&mut self, value_offset: &mut u32, v: &JsonRef<'a>) -> Result<()> {
         let tp = v.get_type();
         self.write_u8(tp as u8)?;
@@ -180,22 +186,27 @@ pub trait JsonEncoder: NumberEncoder {
         Ok(())
     }
 
+    // See `appendBinary` in TiDB `types/json/binary.go`
     fn write_json_literal(&mut self, data: u8) -> Result<()> {
         self.write_u8(data).map_err(Error::from)
     }
 
+    // See `appendBinary` in TiDB `types/json/binary.go`
     fn write_json_i64(&mut self, data: i64) -> Result<()> {
         self.write_i64_le(data).map_err(Error::from)
     }
 
+    // See `appendBinaryUint64` in TiDB `types/json/binary.go`
     fn write_json_u64(&mut self, data: u64) -> Result<()> {
         self.write_u64_le(data).map_err(Error::from)
     }
 
+    // See `appendBinaryFloat64` in TiDB `types/json/binary.go`
     fn write_json_f64(&mut self, data: f64) -> Result<()> {
         self.write_f64_le(data).map_err(Error::from)
     }
 
+    // See `appendBinaryString` in TiDB `types/json/binary.go`
     fn write_json_str(&mut self, data: &str) -> Result<()> {
         let bytes = data.as_bytes();
         let bytes_len = bytes.len() as u64;

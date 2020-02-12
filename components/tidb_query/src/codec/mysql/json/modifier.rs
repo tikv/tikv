@@ -89,7 +89,7 @@ impl<'a> BinaryModifier<'a> {
                 match parent_node.get_type() {
                     JsonType::Array => {
                         let elem_count = parent_node.get_elem_count();
-                        let mut elems = vec![];
+                        let mut elems = Vec::with_capacity(elem_count + 1);
                         for i in 0..elem_count {
                             elems.push(parent_node.array_get_elem(i)?);
                         }

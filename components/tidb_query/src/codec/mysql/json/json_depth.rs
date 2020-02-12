@@ -6,10 +6,7 @@ use super::{JsonRef, JsonType};
 impl<'a> JsonRef<'a> {
     /// Returns maximum depth of JSON document
     pub fn depth(&self) -> Result<i64> {
-        match self.get_type() {
-            JsonType::Object | JsonType::Array => depth_json(&self),
-            _ => Ok(1),
-        }
+        depth_json(&self)
     }
 }
 
