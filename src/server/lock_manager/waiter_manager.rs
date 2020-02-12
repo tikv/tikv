@@ -120,7 +120,7 @@ pub enum Task {
         timeout: Option<u64>,
         delay: Option<u64>,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(u64, u64) + Send>),
 }
 
@@ -146,7 +146,7 @@ impl Display for Task {
                 "change config to default_wait_for_lock_timeout: {:?}, wake_up_delay_duration: {:?}",
                 timeout, delay
             ),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "validate waiter manager config"),
         }
     }
@@ -436,7 +436,7 @@ impl Scheduler {
         self.notify_scheduler(Task::ChangeConfig { timeout, delay });
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testexport"))]
     pub fn validate(&self, f: Box<dyn FnOnce(u64, u64) + Send>) {
         self.notify_scheduler(Task::Validate(f));
     }
@@ -604,7 +604,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
             }
             Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(
                 self.default_wait_for_lock_timeout,
                 self.wake_up_delay_duration,
