@@ -7,11 +7,12 @@ use std::future::Future as StdFuture;
 use std::time::Duration;
 use tikv_util::future_pool::{self, FuturePool};
 use tikv_util::time::Instant;
-use yatp::pool::{Local, Runner};
-use yatp::queue::Extras;
+use yatp::pool::{CloneRunnerBuilder, Local, Runner};
+use yatp::queue::{multilevel, Extras, QueueType};
 use yatp::task::future::{Runner as FutureRunner, TaskCell};
 use yatp::Remote;
 
+use crate::config::UnifiedReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 
 #[derive(Clone)]
@@ -147,6 +148,23 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
             crate::coprocessor::metrics::tls_flush(&self.reporter);
         })
     }
+}
+
+pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
+    config: &UnifiedReadPoolConfig,
+    reporter: R,
+    engine: E,
+) -> yatp::ThreadPool<TaskCell> {
+    let pool_name = "unified-read-pool";
+    let mut builder = yatp::Builder::new(pool_name);
+    builder
+        .min_thread_count(config.min_thread_count)
+        .max_thread_count(config.max_thread_count);
+    let multilevel_builder =
+        multilevel::Builder::new(multilevel::Config::default().name(Some(pool_name)));
+    let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter);
+    let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+    builder.build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder)
 }
 
 impl From<Vec<FuturePool>> for ReadPool {

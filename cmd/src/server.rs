@@ -31,6 +31,7 @@ use std::{
 };
 use tikv::config::ConfigHandler;
 use tikv::raftstore::router::ServerRaftStoreRouter;
+use tikv::read_pool::build_yatp_read_pool;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
@@ -43,7 +44,7 @@ use tikv::{
             new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder,
         },
     },
-    read_pool::{ReadPool, ReadPoolRunner},
+    read_pool::ReadPool,
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -62,10 +63,6 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
 };
-use yatp::{
-    pool::CloneRunnerBuilder,
-    queue::{multilevel, QueueType},
-};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -78,6 +75,7 @@ pub fn run_tikv(config: TiKvConfig) {
     let _m = Monitor::default();
 
     tikv.init_fs();
+    tikv.init_yatp();
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
     let server_config = tikv.init_servers(&gc_worker);
@@ -278,6 +276,17 @@ impl TiKVServer {
         .unwrap();
     }
 
+    fn init_yatp(&self) {
+        let yatp_enabled = self.config.readpool.unify_read_pool;
+        if !yatp_enabled {
+            return;
+        }
+
+        yatp::metrics::set_namespace(Some("tikv"));
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone())).unwrap();
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
+    }
+
     fn init_engines(&mut self) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
@@ -394,29 +403,10 @@ impl TiKVServer {
         let pd_sender = pd_worker.scheduler();
 
         let unified_read_pool = if self.config.readpool.unify_read_pool {
-            yatp::metrics::set_namespace(Some("tikv"));
-            prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone()))
-                .unwrap();
-            prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone()))
-                .unwrap();
-            let unified_read_pool_cfg = &self.config.readpool.unified;
-            let pool_name = "unified-read-pool";
-            let mut builder = yatp::Builder::new(pool_name);
-            builder
-                .min_thread_count(unified_read_pool_cfg.min_thread_count)
-                .max_thread_count(unified_read_pool_cfg.max_thread_count);
-            let multilevel_builder =
-                multilevel::Builder::new(multilevel::Config::default().name(Some(pool_name)));
-            let read_pool_runner = ReadPoolRunner::new(
-                engines.engine.clone(),
-                Default::default(),
+            Some(build_yatp_read_pool(
+                &self.config.readpool.unified,
                 pd_sender.clone(),
-            );
-            let runner_builder =
-                multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-            Some(builder.build_with_queue_and_runner(
-                QueueType::Multilevel(multilevel_builder),
-                runner_builder,
+                engines.engine.clone(),
             ))
         } else {
             None
