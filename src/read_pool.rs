@@ -117,6 +117,7 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
 
     fn end(&mut self, local: &mut Local<Self::TaskCell>) {
         self.inner.end(local);
+        self.flush_metrics();
         unsafe { destroy_tls_engine::<E>() }
     }
 }
@@ -130,6 +131,7 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
         }
     }
 
+    // Only flush metrics by tick
     fn maybe_flush_metrics(&self) {
         const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -144,9 +146,13 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
                 return;
             }
             tls_last_tick.set(now);
-            crate::storage::metrics::tls_flush(&self.reporter);
-            crate::coprocessor::metrics::tls_flush(&self.reporter);
+            self.flush_metrics();
         })
+    }
+
+    fn flush_metrics(&self) {
+        crate::storage::metrics::tls_flush(&self.reporter);
+        crate::coprocessor::metrics::tls_flush(&self.reporter);
     }
 }
 
