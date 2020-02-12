@@ -284,7 +284,7 @@ const GENERAL_CI_PLANE_FF: [u16; 256] = [
 ];
 
 #[rustfmt::skip]
-const GENERAL_CI_PLANE_TABLE: [Option<&[u16]>; 256] = [
+const GENERAL_CI_PLANE_TABLE: [Option<&[u16; 256]>; 256] = [
     Some(&GENERAL_CI_PLANE_00),
     Some(&GENERAL_CI_PLANE_01),
     Some(&GENERAL_CI_PLANE_02),
