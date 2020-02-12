@@ -49,7 +49,7 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     assert!(args.len() >= 2);
     // base Json argument
     let base: &Option<Json> = args[0].as_ref();
-    let mut base = base
+    let base = base
         .as_ref()
         .map_or(Json::none(), |json| Ok(json.to_owned()))?;
 
@@ -69,9 +69,7 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
             .map_or(Json::none(), |json| Ok(json.to_owned()))?;
         values.push(value);
     }
-    base.modify(&path_expr_list, values, mt)?;
-
-    Ok(Some(base))
+    Ok(Some(base.as_ref().modify(&path_expr_list, values, mt)?))
 }
 
 /// validate the arguments are `(&Option<Json>, &[(Option<Bytes>, Option<Json>)])`
@@ -230,15 +228,14 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
 fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
     let j: &Option<Json> = args[0].as_ref();
-    let mut j = match j.as_ref() {
+    let j = match j.as_ref() {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
 
     let path_expr_list = try_opt!(parse_json_path_list(&args[1..]));
 
-    j.remove(&path_expr_list)?;
-    Ok(Some(j))
+    Ok(Some(j.as_ref().remove(&path_expr_list)?))
 }
 
 fn parse_json_path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpression>>> {

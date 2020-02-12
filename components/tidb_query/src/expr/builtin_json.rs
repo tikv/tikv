@@ -129,11 +129,12 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let mut j = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
+        let j = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
         let parser = JsonFuncArgsParser::new(row);
         let path_exprs: Vec<_> = try_opt!(parser.get_path_exprs(ctx, &self.children[1..]));
-        j.remove(&path_exprs)
-            .map(|_| Some(Cow::Owned(j)))
+        j.as_ref()
+            .remove(&path_exprs)
+            .map(|j| Some(Cow::Owned(j)))
             .map_err(Error::from)
     }
 
@@ -160,7 +161,7 @@ impl ScalarFunc {
         row: &'a [Datum],
         mt: ModifyType,
     ) -> Result<Option<Cow<'a, Json>>> {
-        let mut j = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
+        let j = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
         let parser = JsonFuncArgsParser::new(row);
         let mut path_exprs = Vec::with_capacity(self.children.len() / 2);
         let mut values = Vec::with_capacity(self.children.len() / 2);
@@ -168,8 +169,9 @@ impl ScalarFunc {
             path_exprs.push(try_opt!(parser.get_path_expr(ctx, &chunk[0])));
             values.push(try_opt!(parser.get_json(ctx, &chunk[1])));
         }
-        j.modify(&path_exprs, values, mt)
-            .map(|_| Some(Cow::Owned(j)))
+        j.as_ref()
+            .modify(&path_exprs, values, mt)
+            .map(|j| Some(Cow::Owned(j)))
             .map_err(Error::from)
     }
 }

@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! The binary JSON format from MySQL 5.7 is as follows:
-//! ```
+//! ```text
 //!   JSON doc ::= type value
 //!   type ::=
 //!       0x01 |       // large JSON object

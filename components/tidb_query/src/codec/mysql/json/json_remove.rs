@@ -3,13 +3,13 @@
 use super::super::Result;
 use super::modifier::BinaryModifier;
 use super::path_expr::PathExpression;
-use super::Json;
+use super::{Json, JsonRef};
 
-impl Json {
+impl<'a> JsonRef<'a> {
     /// Removes elements from Json,
     /// All path expressions cannot contain * or ** wildcard.
     /// If any error occurs, the input won't be changed.
-    pub fn remove(&mut self, path_expr_list: &[PathExpression]) -> Result<()> {
+    pub fn remove(&self, path_expr_list: &[PathExpression]) -> Result<Json> {
         if path_expr_list
             .iter()
             .any(|expr| expr.legs.is_empty() || expr.contains_any_asterisk())
@@ -17,11 +17,12 @@ impl Json {
             return Err(box_err!("Invalid path expression"));
         }
 
+        let mut res = self.to_owned();
         for expr in path_expr_list {
-            let modifier = BinaryModifier::new(self.as_ref());
-            *self = modifier.remove(&expr.legs)?;
+            let modifier = BinaryModifier::new(res.as_ref());
+            res = modifier.remove(&expr.legs)?;
         }
-        Ok(())
+        Ok(res)
     }
 }
 
@@ -64,14 +65,15 @@ mod tests {
                 i,
                 e
             );
-            let (mut j, p, e) = (j.unwrap(), p.unwrap(), e.unwrap());
-            let r = j.remove(vec![p].as_slice());
+            let (j, p, e) = (j.unwrap(), p.unwrap(), e.unwrap());
+            let r = j.as_ref().remove(vec![p].as_slice());
             if success {
                 assert!(r.is_ok(), "#{} expect remove ok but got {:?}", i, r);
+                let j = r.unwrap();
+                assert_eq!(e, j, "#{} expect remove json {:?} == {:?}", i, j, e);
             } else {
                 assert!(r.is_err(), "#{} expect remove error but got {:?}", i, r);
             }
-            assert_eq!(e, j, "#{} expect remove json {:?} == {:?}", i, j, e);
         }
     }
 }

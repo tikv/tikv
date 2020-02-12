@@ -3,7 +3,7 @@
 use super::super::Result;
 use super::modifier::BinaryModifier;
 use super::path_expr::PathExpression;
-use super::Json;
+use super::{Json, JsonRef};
 
 /// `ModifyType` is for modify a JSON.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -16,18 +16,18 @@ pub enum ModifyType {
     Set,
 }
 
-impl Json {
+impl<'a> JsonRef<'a> {
     /// Modifies a Json object by insert, replace or set.
     /// All path expressions cannot contain * or ** wildcard.
     /// If any error occurs, the input won't be changed.
     ///
     /// See `Modify()` in TiDB `json/binary_function.go`
     pub fn modify(
-        &mut self,
+        &self,
         path_expr_list: &[PathExpression],
-        mut values: Vec<Json>,
+        values: Vec<Json>,
         mt: ModifyType,
-    ) -> Result<()> {
+    ) -> Result<Json> {
         if path_expr_list.len() != values.len() {
             return Err(box_err!(
                 "Incorrect number of parameters: expected: {:?}, found {:?}",
@@ -43,15 +43,16 @@ impl Json {
                 ));
             }
         }
-        for (expr, value) in path_expr_list.iter().zip(values.drain(..)) {
-            let modifier = BinaryModifier::new(self.as_ref());
-            *self = match mt {
+        let mut res = self.to_owned();
+        for (expr, value) in path_expr_list.iter().zip(values.into_iter()) {
+            let modifier = BinaryModifier::new(res.as_ref());
+            res = match mt {
                 ModifyType::Insert => modifier.insert(&expr, value)?,
                 ModifyType::Replace => modifier.replace(&expr, value)?,
                 ModifyType::Set => modifier.set(&expr, value)?,
             };
         }
-        Ok(())
+        Ok(res)
     }
 }
 
@@ -184,21 +185,22 @@ mod tests {
                 i,
                 e
             );
-            let (mut j, p, v, e) = (j.unwrap(), p.unwrap(), v.unwrap(), e.unwrap());
-            let r = j.modify(vec![p].as_slice(), vec![v], mt);
+            let (j, p, v, e) = (j.unwrap(), p.unwrap(), v.unwrap(), e.unwrap());
+            let r = j.as_ref().modify(vec![p].as_slice(), vec![v], mt);
             if success {
                 assert!(r.is_ok(), "#{} expect modify ok but got {:?}", i, r);
+                let j = r.unwrap();
+                assert_eq!(
+                    e,
+                    j,
+                    "#{} expect modified json {:?} == {:?}",
+                    i,
+                    j.to_string(),
+                    e.to_string()
+                );
             } else {
                 assert!(r.is_err(), "#{} expect modify error but got {:?}", i, r);
             }
-            assert_eq!(
-                e,
-                j,
-                "#{} expect modified json {:?} == {:?}",
-                i,
-                j.to_string(),
-                e.to_string()
-            );
         }
     }
 }
