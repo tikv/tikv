@@ -109,7 +109,7 @@
 //!
 //!   Example:
 //!
-//!   ```
+//!   ```ignore
 //!   // in engine_traits
 //!
 //!   trait IOLimiterExt {
@@ -119,7 +119,7 @@
 //!   trait IOLimiter { }
 //!   ```
 //!
-//!   ```
+//!   ```ignore
 //!   // in engine_rust
 //!
 //!   impl IOLimiterExt for RocksEngine {
