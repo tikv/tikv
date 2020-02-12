@@ -216,7 +216,7 @@ pub fn get_cast_fn_rpn_node(
         func_meta,
         args_len: 1,
         field_type: to_field_type,
-        metadata: Box::new(()),
+        metadata: Box::new(tipb::InUnionMetadata::default()),
     })
 }
 
@@ -911,7 +911,8 @@ macro_rules! cast_as_duration {
             match val {
                 None => Ok(None),
                 Some(val) => {
-                    let result = Duration::parse($extra, extra.ret_field_type.get_decimal() as i8);
+                    let result =
+                        Duration::parse(ctx, $extra, extra.ret_field_type.get_decimal() as i8);
                     match result {
                         Ok(dur) => Ok(Some(dur)),
                         Err(e) => match e.code() {
@@ -2087,7 +2088,7 @@ mod tests {
         for case in cases {
             let mut ctx = EvalContext::default();
 
-            let duration = Duration::parse(case.as_bytes(), MAX_FSP).unwrap();
+            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP).unwrap();
             let now = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .return_field_type(
@@ -2151,12 +2152,25 @@ mod tests {
 
     #[test]
     fn test_duration_as_int() {
+        let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs: Vec<(Duration, i64)> = vec![
-            (Duration::parse(b"17:51:04.78", 2).unwrap(), 175105),
-            (Duration::parse(b"-17:51:04.78", 2).unwrap(), -175105),
-            (Duration::parse(b"17:51:04.78", 0).unwrap(), 175105),
-            (Duration::parse(b"-17:51:04.78", 0).unwrap(), -175105),
+            (
+                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                175105,
+            ),
+            (
+                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                -175105,
+            ),
+            (
+                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                175105,
+            ),
+            (
+                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                -175105,
+            ),
         ];
 
         for (input, expect) in cs {
@@ -2985,13 +2999,26 @@ mod tests {
 
     #[test]
     fn test_duration_as_real() {
+        let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs = vec![
             // (input, expect)
-            (Duration::parse(b"17:51:04.78", 2).unwrap(), 175104.78),
-            (Duration::parse(b"-17:51:04.78", 2).unwrap(), -175104.78),
-            (Duration::parse(b"17:51:04.78", 0).unwrap(), 175105.0),
-            (Duration::parse(b"-17:51:04.78", 0).unwrap(), -175105.0),
+            (
+                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                175104.78,
+            ),
+            (
+                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                -175104.78,
+            ),
+            (
+                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                175105.0,
+            ),
+            (
+                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                -175105.0,
+            ),
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
@@ -3161,7 +3188,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3169,7 +3196,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3177,7 +3204,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3185,7 +3212,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3193,7 +3220,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3201,7 +3228,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3209,7 +3236,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             (
@@ -3217,7 +3244,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 None,
             ),
             // bin_str, so need pad_zero
@@ -3244,7 +3271,7 @@ mod tests {
                 false,
                 CHARSET_ASCII,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3252,7 +3279,7 @@ mod tests {
                 false,
                 CHARSET_LATIN1,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3260,7 +3287,7 @@ mod tests {
                 false,
                 CHARSET_BIN,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Bin,
                 Some(ERR_DATA_TOO_LONG),
             ),
             // branch 3 of ProduceStrWithSpecifiedTp ,
@@ -3558,25 +3585,25 @@ mod tests {
     #[test]
     fn test_duration_as_string() {
         test_none_with_ctx_and_extra(cast_any_as_string::<Duration>);
-
+        let mut ctx = EvalContext::default();
         let cs = vec![
             (
-                Duration::parse(b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
                 "17:51:04.78".to_string().into_bytes(),
                 "17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
                 "-17:51:04.78".to_string().into_bytes(),
                 "-17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
                 "17:51:05".to_string().into_bytes(),
                 "17:51:05".to_string(),
             ),
             (
-                Duration::parse(b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
                 "-17:51:05".to_string().into_bytes(),
                 "-17:51:05".to_string(),
             ),
@@ -4806,30 +4833,30 @@ mod tests {
     #[test]
     fn test_duration_as_decimal() {
         test_none_with_ctx_and_extra(cast_any_as_decimal::<Duration>);
-
+        let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs: Vec<(Duration, bool, bool, Decimal)> = vec![
             // (input, in_union, is_res_unsigned, base_result)
             (
-                Duration::parse(b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(175104.78).unwrap(),
             ),
             (
-                Duration::parse(b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(-175104.78).unwrap(),
             ),
             (
-                Duration::parse(b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(175105),
             ),
             (
-                Duration::parse(b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(-175105),
@@ -4963,68 +4990,70 @@ mod tests {
             assert_eq!(output, None);
         }
 
+        let mut ctx = EvalContext::default();
+
         // This case copy from Duration.rs::tests::test_from_i64
         let cs: Vec<(i64, isize, crate::codec::Result<Option<Duration>>, bool)> = vec![
             // (input, fsp, expect, overflow)
             (
                 101010,
                 0,
-                Ok(Some(Duration::parse(b"10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 0).unwrap())),
                 false,
             ),
             (
                 101010,
                 5,
-                Ok(Some(Duration::parse(b"10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 5).unwrap())),
                 false,
             ),
             (
                 8385959,
                 0,
-                Ok(Some(Duration::parse(b"838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
                 false,
             ),
             (
                 8385959,
                 6,
-                Ok(Some(Duration::parse(b"838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 6).unwrap())),
                 false,
             ),
             (
                 -101010,
                 0,
-                Ok(Some(Duration::parse(b"-10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 0).unwrap())),
                 false,
             ),
             (
                 -101010,
                 5,
-                Ok(Some(Duration::parse(b"-10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 5).unwrap())),
                 false,
             ),
             (
                 -8385959,
                 0,
-                Ok(Some(Duration::parse(b"-838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
                 false,
             ),
             (
                 -8385959,
                 6,
-                Ok(Some(Duration::parse(b"-838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 6).unwrap())),
                 false,
             ),
             // overflow as warning
             (
                 8385960,
                 0,
-                Ok(Some(Duration::parse(b"838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
                 true,
             ),
             (
                 -8385960,
                 0,
-                Ok(Some(Duration::parse(b"-838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
                 true,
             ),
             // will truncated
@@ -5034,19 +5063,19 @@ mod tests {
             (
                 10000000000,
                 0,
-                Ok(Some(Duration::parse(b"0:0:0", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
                 false,
             ),
             (
                 10000235959,
                 0,
-                Ok(Some(Duration::parse(b"23:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"23:59:59", 0).unwrap())),
                 false,
             ),
             (
                 -10000235959,
                 0,
-                Ok(Some(Duration::parse(b"-838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
                 false,
             ),
         ];
@@ -5101,10 +5130,10 @@ mod tests {
     ) where
         FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<T>) -> Result<Option<Duration>>,
     {
-        // cast_real_as_duration call Duration::parse directly,
-        // and Duration::parse is test in duration.rs.
-        // Our test here is to make sure that the result is same as calling Duration::parse
-        // no matter whether call_real_as_duration call Duration::parse directly.
+        // cast_real_as_duration call `Duration::parse`, directly,
+        // and `Duration::parse`, is test in duration.rs.
+        // Our test here is to make sure that the result is same as calling `Duration::parse`,
+        // no matter whether call_real_as_duration call `Duration::parse`, directly.
         for val in base_cs {
             for fsp in MIN_FSP..=MAX_FSP {
                 let mut ctx = CtxConfig {
@@ -5123,7 +5152,7 @@ mod tests {
                 let result = func_cast(&mut ctx, &extra, &Some(val.clone()));
 
                 let val_str = func_to_cast_str(&val);
-                let base_expect = Duration::parse(val_str.as_bytes(), fsp);
+                let base_expect = Duration::parse(&mut ctx, val_str.as_bytes(), fsp);
 
                 // make log
                 let result_str = result.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -5316,7 +5345,8 @@ mod tests {
             let extra = make_extra(&rft);
 
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
-            let expect_time = Duration::parse(expect.as_bytes(), expect_fsp as i8).unwrap();
+            let expect_time =
+                Duration::parse(&mut ctx, expect.as_bytes(), expect_fsp as i8).unwrap();
             let result = cast_time_as_duration(&mut ctx, &extra, &Some(input_time));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
@@ -5349,8 +5379,9 @@ mod tests {
             .into();
             let extra = make_extra(&rft);
 
-            let dur = Duration::parse(input.as_bytes(), input_fsp).unwrap();
-            let expect = Duration::parse(expect.as_bytes(), output_fsp).unwrap();
+            let mut ctx = EvalContext::default();
+            let dur = Duration::parse(&mut ctx, input.as_bytes(), input_fsp).unwrap();
+            let expect = Duration::parse(&mut ctx, expect.as_bytes(), output_fsp).unwrap();
             let r = cast_duration_as_duration(&extra, &Some(dur));
 
             let result_str = r.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -5644,7 +5675,7 @@ mod tests {
                 Json::String("00:00:00.000000".to_string()),
             ),
             (
-                Duration::parse(b"10:10:10", 0).unwrap(),
+                Duration::parse(&mut EvalContext::default(), b"10:10:10", 0).unwrap(),
                 Json::String("10:10:10.000000".to_string()),
             ),
         ];

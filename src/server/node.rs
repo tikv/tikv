@@ -6,16 +6,16 @@ use std::time::Duration;
 
 use super::RaftKv;
 use super::Result;
-use crate::config::ConfigController;
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
 use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use crate::raftstore::store::PdTask;
+use crate::raftstore::store::SplitCheckTask;
 use crate::raftstore::store::{
     self, initial_region, Config as StoreConfig, SnapManager, Transport,
 };
+use crate::raftstore::store::{DynamicConfig, PdTask};
 use crate::read_pool::ReadPool;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
@@ -25,7 +25,9 @@ use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
+use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
+use tikv_util::worker::Worker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -50,7 +52,7 @@ where
 pub struct Node<C: PdClient + ConfigClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
-    store_cfg: StoreConfig,
+    store_cfg: Arc<VersionTrack<StoreConfig>>,
     system: RaftBatchSystem,
     has_started: bool,
 
@@ -65,7 +67,7 @@ where
     pub fn new(
         system: RaftBatchSystem,
         cfg: &ServerConfig,
-        store_cfg: &StoreConfig,
+        store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
     ) -> Node<C> {
         let mut store = metapb::Store::default();
@@ -77,6 +79,7 @@ where
         }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
         store.set_status_address(cfg.status_addr.clone());
+        store.set_start_timestamp(chrono::Local::now().timestamp());
         store.set_git_hash(
             option_env!("TIKV_BUILD_GIT_HASH")
                 .unwrap_or("Unknown git hash")
@@ -95,7 +98,7 @@ where
         Node {
             cluster_id: cfg.cluster_id,
             store,
-            store_cfg: store_cfg.clone(),
+            store_cfg,
             pd_client,
             system,
             has_started: false,
@@ -115,7 +118,8 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-        cfg_controller: ConfigController,
+        split_check_worker: Worker<SplitCheckTask>,
+        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -150,7 +154,8 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            cfg_controller,
+            split_check_worker,
+            dyn_cfg,
         )?;
 
         // Put store only if the cluster is bootstrapped.
@@ -322,7 +327,8 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-        cfg_controller: ConfigController,
+        split_check_worker: Worker<SplitCheckTask>,
+        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -347,7 +353,8 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            cfg_controller,
+            split_check_worker,
+            dyn_cfg,
         )?;
         Ok(())
     }

@@ -1,10 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Result;
-use crate::config::ConfigManager;
 use crate::raftstore::store::SplitCheckTask;
 
-use configuration::{ConfigChange, Configuration};
+use configuration::{ConfigChange, ConfigManager, Configuration};
 use tikv_util::config::ReadableSize;
 use tikv_util::worker::Scheduler;
 
@@ -74,15 +73,23 @@ impl Config {
     }
 }
 
-pub type SplitCheckConfigManager = Scheduler<SplitCheckTask>;
+pub struct SplitCheckConfigManager(pub Scheduler<SplitCheckTask>);
 
 impl ConfigManager for SplitCheckConfigManager {
     fn dispatch(
         &mut self,
         change: ConfigChange,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        self.schedule(SplitCheckTask::ChangeConfig(change))?;
+        self.0.schedule(SplitCheckTask::ChangeConfig(change))?;
         Ok(())
+    }
+}
+
+impl std::ops::Deref for SplitCheckConfigManager {
+    type Target = Scheduler<SplitCheckTask>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

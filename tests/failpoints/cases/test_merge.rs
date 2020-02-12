@@ -238,12 +238,12 @@ fn test_node_merge_catch_up_logs_restart() {
     must_get_none(&cluster.get_engine(3), b"k11");
 
     // after source peer is applied but before set it to tombstone
-    fail::cfg("after_handle_catch_up_logs_for_merge_1000_1003", "return()").unwrap();
+    fail::cfg("after_handle_catch_up_logs_for_merge_1003", "return()").unwrap();
     pd_client.must_merge(left.get_id(), right.get_id());
     thread::sleep(Duration::from_millis(100));
     cluster.shutdown();
 
-    fail::remove("after_handle_catch_up_logs_for_merge_1000_1003");
+    fail::remove("after_handle_catch_up_logs_for_merge_1003");
     cluster.start().unwrap();
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
@@ -274,7 +274,7 @@ fn test_node_merge_catch_up_logs_leader_election() {
 
     let state1 = cluster.truncated_state(1000, 1);
     // let the entries committed but not applied
-    fail::cfg("on_handle_apply_1000_1003", "pause").unwrap();
+    fail::cfg("on_handle_apply_1003", "pause").unwrap();
     for i in 2..20 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v");
     }
@@ -297,13 +297,13 @@ fn test_node_merge_catch_up_logs_leader_election() {
     must_get_none(&cluster.get_engine(3), b"k11");
 
     // let peer not destroyed before election timeout
-    fail::cfg("before_peer_destroy_1000_1003", "pause").unwrap();
-    fail::remove("on_handle_apply_1000_1003");
+    fail::cfg("before_peer_destroy_1003", "pause").unwrap();
+    fail::remove("on_handle_apply_1003");
     pd_client.must_merge(left.get_id(), right.get_id());
 
     // wait election timeout
     thread::sleep(Duration::from_millis(500));
-    fail::remove("before_peer_destroy_1000_1003");
+    fail::remove("before_peer_destroy_1003");
 
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }

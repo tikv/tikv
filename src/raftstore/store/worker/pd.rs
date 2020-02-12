@@ -23,7 +23,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
-use crate::config::{ConfigHandler, TiKvConfig};
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
 use crate::raftstore::store::util::is_epoch_stale;
@@ -31,7 +30,6 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
-use crate::storage::FlowStatistics;
 use pd_client::metrics::*;
 use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -40,6 +38,41 @@ use tikv_util::time::UnixSecs;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
+
+#[derive(Default, Debug, Clone)]
+pub struct FlowStatistics {
+    pub read_keys: usize,
+    pub read_bytes: usize,
+}
+
+impl FlowStatistics {
+    pub fn add(&mut self, other: &Self) {
+        self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
+        self.read_keys = self.read_keys.saturating_add(other.read_keys);
+    }
+}
+
+// Reports flow statistics to outside.
+pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
+    // Reports read flow statistics, the argument `read_stats` is a hash map
+    // saves the flow statistics of different region.
+    // TODO: maybe we need to return a Result later?
+    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
+}
+
+impl FlowStatsReporter for Scheduler<Task> {
+    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
+        if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
+            error!("Failed to send read flow statistics"; "err" => ?e);
+        }
+    }
+}
+
+pub trait DynamicConfig: Send + 'static {
+    fn refresh(&mut self, cfg_client: &dyn ConfigClient);
+    fn refresh_interval(&self) -> Duration;
+    fn get(&self) -> String;
+}
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {
@@ -95,7 +128,7 @@ pub enum Task {
     },
     RefreshConfig,
     GetConfig {
-        cfg_sender: oneshot::Sender<TiKvConfig>,
+        cfg_sender: oneshot::Sender<String>,
     },
 }
 
@@ -295,7 +328,7 @@ impl StatsMonitor {
 pub struct Runner<T: PdClient + ConfigClient> {
     store_id: u64,
     pd_client: Arc<T>,
-    config_handler: ConfigHandler,
+    config_handler: Box<dyn DynamicConfig>,
     router: RaftRouter,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
@@ -317,7 +350,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        config_handler: ConfigHandler,
+        config_handler: Box<dyn DynamicConfig>,
         router: RaftRouter,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
@@ -644,7 +677,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                             return Ok(());
                         }
                         info!(
-                            "peer is still valid a member of region";
+                            "peer is still a valid member of region";
                             "region_id" => local_region.get_id(),
                             "peer_id" => peer.get_id(),
                             "pd_region" => ?pd_region
@@ -783,22 +816,10 @@ impl<T: PdClient + ConfigClient> Runner<T> {
     }
 
     fn handle_refresh_config(&mut self, handle: &Handle) {
-        let config_handler = &mut self.config_handler;
-        debug!(
-            "refresh config";
-            "component id" => config_handler.get_id(),
-            "version" => ?config_handler.get_version()
-        );
-        if let Err(e) = config_handler.refresh_config(self.pd_client.clone()) {
-            warn!(
-                "failed to refresh config";
-                "component id" => config_handler.get_id(),
-                "version" => ?config_handler.get_version(),
-                "err" => ?e
-            )
-        }
+        self.config_handler.refresh(self.pd_client.as_ref() as _);
+
         let scheduler = self.scheduler.clone();
-        let when = Instant::now() + config_handler.get_refresh_interval();
+        let when = Instant::now() + self.config_handler.refresh_interval();
         let f = Delay::new(when)
             .map_err(|e| warn!("timeout timer delay errored"; "err" => ?e))
             .then(move |_| {
@@ -810,8 +831,8 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         handle.spawn(f);
     }
 
-    fn handle_get_config(&self, cfg_sender: oneshot::Sender<TiKvConfig>) {
-        let cfg = self.config_handler.get_config().clone();
+    fn handle_get_config(&self, cfg_sender: oneshot::Sender<String>) {
+        let cfg = self.config_handler.get();
         let _ = cfg_sender
             .send(cfg)
             .map_err(|_| error!("failed to send config"));

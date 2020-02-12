@@ -82,19 +82,20 @@ impl SplitChecker for Checker {
     }
 }
 
+#[derive(Clone)]
 pub struct KeysCheckObserver<C> {
-    router: Mutex<C>,
+    router: Arc<Mutex<C>>,
 }
 
 impl<C: CasualRouter> KeysCheckObserver<C> {
     pub fn new(router: C) -> KeysCheckObserver<C> {
         KeysCheckObserver {
-            router: Mutex::new(router),
+            router: Arc::new(Mutex::new(router)),
         }
     }
 }
 
-impl<C> Coprocessor for KeysCheckObserver<C> {}
+impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
 
 impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
@@ -204,7 +205,6 @@ mod tests {
     };
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::mvcc::{TimeStamp, Write, WriteType};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
@@ -217,7 +217,7 @@ mod tests {
     use std::u64;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
-    use txn_types::Key;
+    use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
 
@@ -286,7 +286,7 @@ mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(tx)),
+            CoprocessorHost::new(tx),
             cfg,
         );
 

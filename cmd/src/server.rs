@@ -30,7 +30,9 @@ use std::{
     time::Duration,
 };
 use tikv::config::ConfigHandler;
+use tikv::raftstore::coprocessor::config::SplitCheckConfigManager;
 use tikv::raftstore::router::ServerRaftStoreRouter;
+use tikv::raftstore::store::config::RaftstoreConfigManager;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
@@ -40,7 +42,7 @@ use tikv::{
         store::{
             fsm,
             fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder,
+            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
         },
     },
     read_pool::{ReadPool, ReadPoolRunner},
@@ -56,6 +58,7 @@ use tikv::{
     },
     storage,
 };
+use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     security::SecurityManager,
@@ -332,11 +335,11 @@ impl TiKVServer {
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
-            "rocksdb",
+            tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
         );
         cfg_controller.register(
-            "raftdb",
+            tikv::config::Module::Raftdb,
             Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
         );
 
@@ -374,14 +377,20 @@ impl TiKVServer {
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
-        cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
+        cfg_controller.register(
+            tikv::config::Module::Gc,
+            Box::new(gc_worker.get_config_manager()),
+        );
 
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
         let lock_mgr = if self.config.pessimistic_txn.enabled {
             let lock_mgr = LockManager::new();
-            cfg_controller.register("pessimistic_txn", Box::new(lock_mgr.config_manager()));
+            cfg_controller.register(
+                tikv::config::Module::PessimisticTxn,
+                Box::new(lock_mgr.config_manager()),
+            );
             lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
             Some(lock_mgr)
         } else {
@@ -476,10 +485,40 @@ impl TiKVServer {
 
         let import_path = self.store_path.join("import");
         let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+
+        let mut split_check_worker = Worker::new("split-check");
+        let split_check_runner = SplitCheckRunner::new(
+            engines.engines.kv.clone(),
+            self.router.clone(),
+            coprocessor_host.clone(),
+            self.config.coprocessor.clone(),
+        );
+        split_check_worker.start(split_check_runner).unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Coprocessor,
+            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+        );
+
+        self.config
+            .raft_store
+            .validate()
+            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
+        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        cfg_controller.register(
+            tikv::config::Module::Raftstore,
+            Box::new(RaftstoreConfigManager(raft_store.clone())),
+        );
+        let config_client = ConfigHandler::start(
+            self.config.server.advertise_addr.clone(),
+            cfg_controller,
+            pd_worker.scheduler(),
+        )
+        .unwrap_or_else(|e| fatal!("failed to start config client: {}", e));
+
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config,
-            &self.config.raft_store,
+            raft_store,
             self.pd_client.clone(),
         );
         node.start(
@@ -490,7 +529,8 @@ impl TiKVServer {
             engines.store_meta.clone(),
             coprocessor_host,
             importer.clone(),
-            cfg_controller,
+            split_check_worker,
+            Box::new(config_client) as _,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
