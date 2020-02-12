@@ -146,42 +146,30 @@ mod parser {
         ctx: &mut EvalContext,
         input: &'a str,
         fsp: u8,
-    ) -> IResult<&'a str, [u32; 4], ()> {
+    ) -> IResult<&'a str, Duration, ()> {
         let (rest, digits) = digit1(input)?;
         if digits.len() == 12 || digits.len() == 14 {
-            let datetime = DateTime::parse_datetime(ctx, digits, fsp as i8, true)
+            let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
                 .map_err(|_| nom::Err::Error(()))?;
-            let (rest, fraction) = fraction(input, fsp)?;
-            return Ok((
-                rest,
-                [
-                    datetime.hour(),
-                    datetime.minute(),
-                    datetime.second(),
-                    fraction,
-                ],
-            ));
+            return Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?));
         }
         let (rest, _) = anysep(rest)?;
         let (rest, _) = digit1(rest)?;
         let (rest, _) = anysep(rest)?;
         let (rest, _) = digit1(rest)?;
 
-        if rest.is_empty() {
+        let has_datetime_sep = match rest.chars().next() {
+            Some(c) if c == 'T' || c == ' ' => true,
+            _ => false,
+        };
+
+        if !has_datetime_sep {
             return Err(nom::Err::Error(()));
         }
 
         let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
             .map_err(|_| nom::Err::Error(()))?;
-        Ok((
-            rest,
-            [
-                datetime.hour(),
-                datetime.minute(),
-                datetime.second(),
-                datetime.micro(),
-            ],
-        ))
+        Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?))
     }
 
     fn anysep(input: &str) -> IResult<&str, char, ()> {
@@ -238,8 +226,9 @@ mod parser {
                 ))
             })
             .or_else(|| {
-                let (_, [h, m, s, f]) = hhmmss_datetime(ctx, rest, fsp).ok()?;
-                Some(Duration::new_from_parts(neg, h, m, s, f, fsp as i8))
+                hhmmss_datetime(ctx, rest, fsp)
+                    .ok()
+                    .map(|(_, duration)| Ok(duration))
             })
             .and_then(|result| {
                 result
@@ -751,6 +740,28 @@ mod tests {
                 EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
             let got = Duration::parse(&mut ctx, input, fsp);
             assert_eq!(expect, &format!("{}", got.unwrap()));
+        }
+    }
+
+    #[test]
+    fn test_parse_datetime() {
+        let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
+            (b"2010-02-12", 0, None),
+            (b"2010-02-12t12:23:34", 0, None),
+            (b"2010-02-12T12:23:34", 0, Some("12:23:34")),
+            (b"2010-02-12 12:23:34", 0, Some("12:23:34")),
+            (b"2010-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
+            (b"10-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
+        ];
+
+        for (input, fsp, expected) in cases {
+            let actual = Duration::parse(&mut EvalContext::default(), input, fsp).ok();
+            assert_eq!(
+                actual.map(|d| d.to_string()),
+                expected.map(|s| s.to_string()),
+                "failed case: {}",
+                std::str::from_utf8(input).unwrap()
+            );
         }
     }
 
