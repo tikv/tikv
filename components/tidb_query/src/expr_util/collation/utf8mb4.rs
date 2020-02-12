@@ -6,7 +6,7 @@ use std::str;
 
 use codec::prelude::*;
 
-use super::{Collator, DecodeError, DecodeOrWriteError};
+use super::{Charset, Collator, DecodeError, DecodeOrWriteError};
 
 const GENERAL_CI_PLANE_00: [u16; 256] = [
     0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B,
@@ -58,6 +58,21 @@ const GENERAL_CI_PLANE_01: [u16; 256] = [
     0x00C6, 0x00C6, 0x00D8, 0x00D8,
 ];
 
+pub struct CharsetUtf8mb4;
+
+impl Charset for CharsetUtf8mb4 {
+    #[inline]
+    fn advance_one(data: &[u8]) -> Option<usize> {
+        let mut it = data.iter();
+        let start = it.as_slice().as_ptr();
+        if let Some(_) = core::str::next_code_point(&mut it) {
+            unsafe { Some(it.as_slice().as_ptr().offset_from(start) as usize) }
+        } else {
+            None
+        }
+    }
+}
+
 pub struct CollatorUtf8Mb4GeneralCi;
 
 #[inline]
@@ -72,6 +87,8 @@ fn general_ci_weight(c: char) -> u16 {
 }
 
 impl Collator for CollatorUtf8Mb4GeneralCi {
+    type Charset = CharsetUtf8mb4;
+
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],
         writer: &mut W,
@@ -113,6 +130,8 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
 pub struct CollatorUtf8Mb4Bin;
 
 impl Collator for CollatorUtf8Mb4Bin {
+    type Charset = CharsetUtf8mb4;
+
     #[inline]
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],

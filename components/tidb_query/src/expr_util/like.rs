@@ -11,8 +11,9 @@
 //!    in non-binary mode.
 
 use crate::expr::Result;
+use crate::expr_util::collation::{Charset, Collator};
 
-pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
+pub fn like<C: Collator>(target: &[u8], pattern: &[u8], escape: u8) -> Result<bool> {
     // current search positions in pattern and target.
     let (mut px, mut tx) = (0, 0);
     // positions for backtrace.
@@ -22,28 +23,35 @@ pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
             let c = pattern[px];
             match c {
                 b'_' => {
-                    if tx < target.len() {
+                    if let Some(off) = C::Charset::advance_one(&target[tx..]) {
                         px += 1;
-                        tx += 1;
+                        tx += off;
                         continue;
                     }
                 }
                 b'%' => {
                     // update the backtrace point.
                     next_px = px;
-                    next_tx = tx + 1;
                     px += 1;
+                    next_tx = tx + C::Charset::advance_one(&target[tx..]).unwrap_or(1);
                     continue;
                 }
-                mut pc => {
-                    if u32::from(pc) == escape && px + 1 < pattern.len() {
+                pc => {
+                    if pc == escape && px + 1 < pattern.len() {
                         px += 1;
-                        pc = pattern[px];
                     }
-                    if tx < target.len() && target[tx] == pc {
-                        tx += 1;
-                        px += 1;
-                        continue;
+                    if let (Some(poff), Some(toff)) = (
+                        C::Charset::advance_one(&pattern[px..]),
+                        C::Charset::advance_one(&target[tx..]),
+                    ) {
+                        match C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff]) {
+                            Ok(std::cmp::Ordering::Equal) => {
+                                tx += toff;
+                                px += poff;
+                                continue;
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }

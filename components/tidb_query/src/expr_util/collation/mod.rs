@@ -55,7 +55,26 @@ impl From<DecodeOrWriteError> for crate::error::EvaluateError {
     }
 }
 
+pub trait Charset {
+    fn advance_one(data: &[u8]) -> Option<usize>;
+}
+
+pub struct CharsetBinary;
+
+impl Charset for CharsetBinary {
+    #[inline]
+    fn advance_one(data: &[u8]) -> Option<usize> {
+        if data.is_empty() {
+            None
+        } else {
+            Some(1)
+        }
+    }
+}
+
 pub trait Collator {
+    type Charset: Charset;
+
     /// Writes the SortKey of `bstr` into `writer`.
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],
@@ -84,6 +103,8 @@ pub trait Collator {
 pub struct CollatorBinary;
 
 impl Collator for CollatorBinary {
+    type Charset = CharsetBinary;
+
     #[inline]
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],
