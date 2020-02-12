@@ -1922,7 +1922,7 @@ impl TiKvConfig {
                 "server.end-point-concurrency",
                 self.server.end_point_concurrency
             );
-            let concurrency = self.server.end_point_concurrency.unwrap();
+            let concurrency = self.server.end_point_concurrency.take().unwrap();
             self.readpool.coprocessor.high_concurrency = concurrency;
             self.readpool.coprocessor.normal_concurrency = concurrency;
             self.readpool.coprocessor.low_concurrency = concurrency;
@@ -1938,7 +1938,7 @@ impl TiKvConfig {
                 "server.end-point-stack-size",
                 self.server.end_point_stack_size
             );
-            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
+            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.take().unwrap();
         }
         if self.server.end_point_max_tasks.is_some() {
             warn!(
@@ -1950,11 +1950,7 @@ impl TiKvConfig {
             // new configuration using old values.
             self.server.end_point_max_tasks = None;
         }
-        if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
-            let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()
-                + self.server.end_point_request_max_handle_duration.as_secs();
-            self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
-        }
+
         // When shared block cache is enabled, if its capacity is set, it overrides individual
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.
@@ -2322,6 +2318,7 @@ impl ConfigHandler {
             StatusCode::Ok | StatusCode::WrongVersion => {
                 let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
                 let mut version = resp.take_version();
+                incoming.compatible_adjust();
                 if let Err(e) = incoming.validate() {
                     warn!(
                         "config from pd is invalid, fallback to local config";
@@ -2703,5 +2700,21 @@ mod tests {
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
         assert_eq!(diff[0].1.as_str(), "kFallback");
+    }
+
+    #[test]
+    fn test_compatible_adjust_validate_equal() {
+        // After calling many time of `compatible_adjust` and `validate` should has
+        // the same effect as calling `compatible_adjust` and `validate` one time
+        let mut c = TiKvConfig::default();
+        let mut cfg = c.clone();
+        c.compatible_adjust();
+        c.validate().unwrap();
+
+        for _ in 0..10 {
+            cfg.compatible_adjust();
+            cfg.validate().unwrap();
+            assert_eq!(c, cfg);
+        }
     }
 }
