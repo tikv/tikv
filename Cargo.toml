@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "4.0.0-alpha"
+version = "4.1.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -38,6 +38,7 @@ protobuf-codec = [
   "sst_importer/protobuf-codec",
   "pd_client/protobuf-codec",
 ]
+testexport = []
 
 [lib]
 name = "tikv"
@@ -46,7 +47,7 @@ name = "tikv"
 async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3.9"
-batch-system = { path = "components/batch-system" }
+batch-system = { path = "components/batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
 bytes = "0.4.12"
@@ -59,6 +60,7 @@ crossbeam = "0.7.2"
 derive-new = "0.5"
 derive_more = "0.15.0"
 engine = { path = "components/engine" }
+engine_panic = { path = "components/engine_panic" }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 external_storage = { path = "components/external_storage" }
@@ -103,7 +105,7 @@ slog-async = { version = "2.3", default-features = false }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 slog-term = "2.4"
 slog_derive = "0.1"
-spin = "0.5"
+parking_lot = "0.10"
 sst_importer = { path = "components/sst_importer" }
 sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tempfile = "3.0"

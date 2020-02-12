@@ -90,7 +90,7 @@ pub enum GcTask {
         max_ts: TimeStamp,
         sender: future_mpsc::Sender<Result<Vec<LockInfo>>>,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),
 }
 
@@ -100,7 +100,7 @@ impl GcTask {
             GcTask::Gc { .. } => "gc",
             GcTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
             GcTask::PhysicalScanLock { .. } => "physical_scan_lock",
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => "validate_config",
         }
     }
@@ -130,7 +130,7 @@ impl Display for GcTask {
                 .debug_struct("PhysicalScanLock")
                 .field("max_ts", max_ts)
                 .finish(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => write!(f, "Validate gc worker config"),
         }
     }
@@ -696,7 +696,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 max_ts,
                 sender,
             } => self.handle_physical_scan_lock(handle, &ctx, max_ts, sender),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(f) => {
                 f(&self.cfg, &self.limiter);
             }
@@ -817,7 +817,7 @@ impl<E: Engine> GcWorker<E> {
             engine,
             local_storage,
             raft_store_router,
-            config_manager: Arc::new(VersionTrack::new(cfg)),
+            config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             region_info_accessor,
             scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
@@ -844,7 +844,7 @@ impl<E: Engine> GcWorker<E> {
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
-            self.config_manager.clone().tracker("gc-woker".to_owned()),
+            self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.region_info_accessor.take(),
             self.config_manager.value().clone(),
         );
@@ -879,7 +879,6 @@ impl<E: Engine> GcWorker<E> {
         Ok(())
     }
 
-    #[cfg(test)]
     pub fn scheduler(&self) -> FutureScheduler<GcTask> {
         self.worker_scheduler.clone()
     }
@@ -939,7 +938,7 @@ impl<E: Engine> GcWorker<E> {
     }
 
     pub fn get_config_manager(&self) -> GcWorkerConfigManager {
-        Arc::clone(&self.config_manager)
+        self.config_manager.clone()
     }
 
     pub fn physical_scan_lock(
