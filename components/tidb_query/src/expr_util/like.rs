@@ -44,13 +44,12 @@ pub fn like<C: Collator>(target: &[u8], pattern: &[u8], escape: u8) -> Result<bo
                         C::Charset::advance_one(&pattern[px..]),
                         C::Charset::advance_one(&target[tx..]),
                     ) {
-                        match C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff]) {
-                            Ok(std::cmp::Ordering::Equal) => {
-                                tx += toff;
-                                px += poff;
-                                continue;
-                            }
-                            _ => {}
+                        if let Ok(std::cmp::Ordering::Equal) =
+                            C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff])
+                        {
+                            tx += toff;
+                            px += poff;
+                            continue;
                         }
                     }
                 }

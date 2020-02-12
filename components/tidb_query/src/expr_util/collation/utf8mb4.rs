@@ -65,7 +65,7 @@ impl Charset for CharsetUtf8mb4 {
     fn advance_one(data: &[u8]) -> Option<usize> {
         let mut it = data.iter();
         let start = it.as_slice().as_ptr();
-        if let Some(_) = core::str::next_code_point(&mut it) {
+        if core::str::next_code_point(&mut it).is_some() {
             unsafe { Some(it.as_slice().as_ptr().offset_from(start) as usize) }
         } else {
             None
