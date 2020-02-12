@@ -320,12 +320,12 @@ pub struct CollatorUtf8Mb4GeneralCi;
 
 #[inline]
 fn general_ci_convert(c: char) -> u16 {
-    let r = c as u32;
+    let r = c as usize;
     if r > 0xFFFF {
         return 0xFFFD;
     }
-    if let Some(plane) = GENERAL_CI_PLANE_TABLE[r as usize >> 8] {
-        plane[r as usize & 0xFF]
+    if let Some(plane) = GENERAL_CI_PLANE_TABLE[r >> 8] {
+        plane[r & 0xFF]
     } else {
         r as u16
     }
