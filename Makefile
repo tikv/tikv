@@ -241,11 +241,11 @@ test:
 	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture
 
 # This is used for CI test
-ci_test: doc_test
+ci_test: ci_doc_test
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --all-targets --no-run --message-format=json
 	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
 
-doc_test:
+ci_doc_test:
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --doc
 
 ## Static analysis
