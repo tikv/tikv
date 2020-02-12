@@ -165,6 +165,7 @@ impl Simulator for ServerCluster {
             &cfg.storage,
             storage_read_pool.into(),
             Some(lock_mgr.clone()),
+            false,
         )?;
         self.storages.insert(node_id, raft_engine);
 
