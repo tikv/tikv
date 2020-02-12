@@ -276,6 +276,9 @@ mod tests {
     fn start_lock_manager() -> LockManager {
         let mut coprocessor_host = CoprocessorHost::default();
         let mut lock_mgr = LockManager::new();
+        let mut cfg = Config::default();
+        cfg.wait_for_lock_timeout = 3000;
+        cfg.wake_up_delay_duration = 100;
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
         lock_mgr
             .start(
@@ -283,7 +286,7 @@ mod tests {
                 Arc::new(MockPdClient {}),
                 MockResolver {},
                 Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()),
-                &Config::default(),
+                &cfg,
             )
             .unwrap();
 
@@ -313,7 +316,7 @@ mod tests {
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
-            3000,
+            2900,
             3200,
         );
         assert!(!lock_mgr.has_waiter());
