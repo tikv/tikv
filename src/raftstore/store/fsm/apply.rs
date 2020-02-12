@@ -2314,7 +2314,7 @@ pub enum Msg {
     LogsUpToDate(u64),
     Destroy(Destroy),
     Snapshot(GenSnapTask),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testexport"))]
     Validate(u64, Box<dyn FnOnce((&ApplyDelegate, bool)) + Send>),
 }
 
@@ -2352,7 +2352,7 @@ impl Debug for Msg {
             Msg::Snapshot(GenSnapTask { region_id, .. }) => {
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
     }
@@ -2701,7 +2701,7 @@ impl ApplyFsm {
                 Some(Msg::CatchUpLogs(cul)) => self.catch_up_logs_for_merge(apply_ctx, cul),
                 Some(Msg::LogsUpToDate(_)) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
-                #[cfg(test)]
+                #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
                 None => break,
             }
@@ -2948,7 +2948,7 @@ impl ApplyRouter {
                     );
                     return;
                 }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(_, _) => return,
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),

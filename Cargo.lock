@@ -1019,6 +1019,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_panic"
+version = "0.0.1"
+dependencies = [
+ "engine_traits",
+ "tikv_alloc",
+]
+
+[[package]]
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
@@ -1590,9 +1598,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.1.18"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "372bcb56f939e449117fb0869c2e8fd8753a8223d92a172c6e808cf123a5b6e4"
+checksum = "d6ccf5ede3a895d8856620237b2f02972c1bbc78d2965ad7fe8838d4a0ed41f0"
 dependencies = [
  "bytes 0.4.12",
  "fnv",
@@ -1825,7 +1833,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#80122c79a6646d84788559c14ea2bfdfde5812ff"
+source = "git+https://github.com/pingcap/kvproto.git#a965739f8162eda4f60ffa4352172ea67e9ec6d1"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -2294,6 +2302,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c8b15b261814f992e33760b1fca9fe8b693d8a65299f20c9901688636cfb746"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "num-format"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2447,6 +2466,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "parking_lot"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92e98c49ab0b7ce5b222f2cc9193fc4efe11c6d0bd4f648e374684a6857b1cfc"
+dependencies = [
+ "lock_api 0.3.3",
+ "parking_lot_core 0.7.0",
+]
+
+[[package]]
 name = "parking_lot_core"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2581,15 +2610,15 @@ checksum = "72d5370d90f49f70bd033c3d75e87fc529fbfff9d6f7cccef07d6170079d91ea"
 
 [[package]]
 name = "pnet_base"
-version = "0.23.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7d818b94d0897cd22f7a18f6c2a94f7ae1dfcedc194bf1665880f6c1155e051"
+checksum = "4df28acf2fcc77436dd2b91a9a0c2bb617f9ca5f2acefee1a4135058b9f9801f"
 
 [[package]]
 name = "pnet_datalink"
-version = "0.23.0"
+version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "557ff7deb5ad2b35ac17a495d629d64dfeacf02e7f4834974dceb5e2cc544d55"
+checksum = "d27361d7578b410d0eb5fe815c2b2105b01ab770a7c738cb9a231457a809fcc7"
 dependencies = [
  "ipnetwork",
  "libc",
@@ -2600,9 +2629,9 @@ dependencies = [
 
 [[package]]
 name = "pnet_sys"
-version = "0.23.0"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab2f8311f738773513fc8192a77e8f77461d97333184c23597a23cb9eb0bd0eb"
+checksum = "82f881a6d75ac98c5541db6144682d1773bb14c6fc50c6ebac7086c8f7f23c29"
 dependencies = [
  "libc",
  "winapi 0.2.8",
@@ -4263,13 +4292,15 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
  "failure",
+ "num-derive",
+ "num-traits",
  "tikv_alloc",
  "tipb",
 ]
 
 [[package]]
 name = "tikv"
-version = "4.0.0-alpha"
+version = "4.1.0-alpha"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4287,6 +4318,7 @@ dependencies = [
  "derive-new",
  "derive_more",
  "engine",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
  "external_storage",
@@ -4315,6 +4347,7 @@ dependencies = [
  "nix 0.11.1",
  "nom 5.1.0",
  "panic_hook",
+ "parking_lot 0.10.0",
  "pd_client",
  "pprof",
  "procinfo",
@@ -4335,7 +4368,6 @@ dependencies = [
  "slog-global",
  "slog-term",
  "slog_derive",
- "spin",
  "sst_importer",
  "sysinfo",
  "tempfile",
