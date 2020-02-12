@@ -462,8 +462,8 @@
 # enabled = false
 
 ## Maximum number of threads of `Titan` background gc jobs.
-# default: 1
-# max-background-gc = 1
+# default: 4
+# max-background-gc = 4
 
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
