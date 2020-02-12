@@ -30,7 +30,6 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
-use crate::storage::FlowStatistics;
 use pd_client::metrics::*;
 use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
