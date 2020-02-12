@@ -633,14 +633,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
 
     fn handle_normal(&mut self, peer: &mut PeerFsm) -> Option<usize> {
         let mut expected_msg_count = None;
-        if peer.have_pending_merge_apply_result() {
-            expected_msg_count = Some(peer.receiver.len());
-            let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
-            if !delegate.resume_handling_pending_apply_result() {
-                return expected_msg_count;
-            }
-            expected_msg_count = None;
-        }
 
         fail_point!(
             "pause_on_peer_collect_message",
@@ -1452,7 +1444,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     id,
                     PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target: target.clone(),
-                        ready_to_merge: None,
+                        stale: true,
                     }),
                 )
                 .unwrap();

@@ -22,8 +22,6 @@ use engine_rocks::CompactedEvent;
 use tikv_util::escape;
 
 use super::RegionSnapshot;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct ReadResponse<E: KvEngine> {
@@ -175,9 +173,9 @@ pub enum SignificantMsg {
     /// Result of the fact that the region is merged.
     MergeResult {
         target: metapb::Peer,
-        // Some(_) means it came from target region.
-        // None means it's a stale merge source.
-        ready_to_merge: Option<Arc<AtomicU64>>,
+        // True means it's a stale merge source.
+        // False means it came from target region.
+        stale: bool,
     },
 }
 

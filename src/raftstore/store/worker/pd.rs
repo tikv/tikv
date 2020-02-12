@@ -1027,11 +1027,11 @@ fn send_admin_request(
 /// Sends merge fail message to gc merge source.
 fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::Peer) {
     let target_id = target.get_id();
-    if let Err(e) = router.send(
+    if let Err(e) = router.force_send(
         source_region_id,
         PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
             target,
-            ready_to_merge: None,
+            stale: true,
         }),
     ) {
         error!(

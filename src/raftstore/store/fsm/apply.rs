@@ -1766,16 +1766,15 @@ impl ApplyDelegate {
     // The target peer should send missing log entries to the source peer.
     //
     // So, the merge process order would be:
-    // 1.   `exec_commit_merge` in target apply fsm
+    // 1.   `exec_commit_merge` in target apply fsm and send `CatchUpLogs` to source peer fsm
     // 2.   `on_catch_up_logs_for_merge` in source peer fsm
     // 3.   if the source peer has already executed the corresponding `on_ready_prepare_merge`, set pending_remove and jump to step 6
     // 4.   ... (raft append and apply logs)
     // 5.   `on_ready_prepare_merge` in source peer fsm and set pending_remove (means source region has finished applying all logs)
     // 6.   `logs_up_to_date_for_merge` in source apply fsm (destroy its apply fsm and send Noop to trigger the target apply fsm)
     // 7.   resume `exec_commit_merge` in target apply fsm
-    // 8.   `on_ready_commit_merge` in target peer fsm
-    // 9.   `on_merge_result` in source peer fsm (destroy its peer fsm and send Noop to trigger the target peer fsm)
-    // 10.  resume `on_ready_commit_merge` in target peer fsm
+    // 8.   `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source peer fsm
+    // 9.   `on_merge_result` in source peer fsm (destroy itself)
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext,
@@ -2577,7 +2576,7 @@ impl ApplyFsm {
         catch_up_logs
             .logs_up_to_date
             .store(region_id, Ordering::SeqCst);
-
+        // To trigger the target apply fsm
         if let Some(mailbox) = ctx.router.mailbox(catch_up_logs.target_region_id) {
             let _ = mailbox.force_send(Msg::Noop);
         } else {

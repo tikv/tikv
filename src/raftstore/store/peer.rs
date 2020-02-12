@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -35,7 +35,7 @@ use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::apply::CatchUpLogs;
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
+    apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
@@ -158,19 +158,6 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
-/// A struct that stores the state to wait for source peer to destroy itself.
-///
-/// Before handling the apply result of a `CommitMerge`, its corresponding source
-/// peer must be destroyed, so the target peer has to abort current handle process
-/// and wait for it asynchronously.
-pub struct WaitSourceDestroyState {
-    /// The following apply results waiting to be handled, including the `CommitMerge`.
-    /// These will be handled once `ready_to_merge` is true.
-    pub results: Vec<ApplyTaskRes>,
-    /// It is used by target peer to check whether source peer has destroyed.
-    pub ready_to_merge: Arc<AtomicU64>,
-}
-
 pub struct Peer {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -197,6 +184,7 @@ pub struct Peer {
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
     /// Whether this peer is destroyed asynchronously.
+    /// If it's true when merging, its data in storeMeta will be removed early by the target peer
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
@@ -244,8 +232,6 @@ pub struct Peer {
     last_committed_prepare_merge_idx: u64,
     /// The merge related state. It indicates this Peer is in merging.
     pub pending_merge_state: Option<MergeState>,
-    /// The state to wait for source peer to destroy itself.
-    pub pending_merge_apply_result: Option<WaitSourceDestroyState>,
     /// source region is catching up logs for merge
     pub catch_up_logs: Option<CatchUpLogs>,
 
@@ -326,7 +312,6 @@ impl Peer {
             raft_log_size_hint: 0,
             leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
             pending_messages: vec![],
-            pending_merge_apply_result: None,
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
         };
@@ -437,6 +422,7 @@ impl Peer {
         } else {
             initialized
         };
+        self.pending_remove = true;
 
         Some(DestroyPeerJob {
             async_remove,
