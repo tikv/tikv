@@ -48,7 +48,6 @@ pub enum Task {
         downstream_id: DownstreamID,
         entries: EntryBatch,
     },
-    #[cfg(not(validate))]
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
@@ -91,7 +90,6 @@ impl fmt::Debug for Task {
                 .field("downstream", &downstream_id)
                 .field("scan_entries", &entries.len())
                 .finish(),
-            #[cfg(not(validate))]
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
         }
     }
@@ -341,7 +339,6 @@ impl Runnable<Task> for Endpoint {
             } => {
                 self.on_incremental_scan(region_id, downstream_id, entries);
             }
-            #[cfg(not(validate))]
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
             }

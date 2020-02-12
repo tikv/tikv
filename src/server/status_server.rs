@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
+use crate::config::TiKvConfig;
 use crate::raftstore::store::PdTask;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
@@ -224,13 +225,15 @@ impl StatusServer {
                 )
             };
             match res {
-                Ok(cfg) => match serde_json::to_string(&cfg) {
-                    Ok(json) => Ok(Response::builder()
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(json))
-                        .unwrap()),
-                    Err(_) => Ok(err_resp()),
-                },
+                Ok(cfg) => {
+                    match serde_json::to_string(&toml::from_str::<TiKvConfig>(&cfg).unwrap()) {
+                        Ok(json) => Ok(Response::builder()
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(json))
+                            .unwrap()),
+                        Err(_) => Ok(err_resp()),
+                    }
+                }
                 Err(_) => Ok(err_resp()),
             }
         });
@@ -564,9 +567,7 @@ mod tests {
         impl FutureRunnable<PdTask> for Runner {
             fn run(&mut self, t: PdTask, _: &Handle) {
                 match t {
-                    PdTask::GetConfig { cfg_sender } => {
-                        cfg_sender.send(TiKvConfig::default()).unwrap()
-                    }
+                    PdTask::GetConfig { cfg_sender } => cfg_sender.send(String::new()).unwrap(),
                     _ => unreachable!(),
                 }
             }
