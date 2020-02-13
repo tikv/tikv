@@ -56,6 +56,7 @@ use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
+const MAX_BATCH_KEY_NUM: usize = 128;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -158,6 +159,36 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
+pub struct BatchRaftCmdRequest {
+    pub request: Option<RaftCmdRequest>,
+    pub batch_size: u32,
+    pub callbacks: Vec<(Callback<RocksEngine>, usize)>,
+}
+
+impl BatchRaftCmdRequest {
+    fn new() -> BatchRaftCmdRequest {
+        BatchRaftCmdRequest {
+            request: None,
+            batch_size: 0,
+            callbacks: vec![],
+        }
+    }
+
+    fn push(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksEngine>) {
+        let req_num = req.get_requests().len();
+        if let Some(batch_req) = self.request.as_mut() {
+            let requests: Vec<_> = req.take_requests().into();
+            for q in requests {
+                batch_req.mut_requests().push(q);
+            }
+        } else {
+            self.request = Some(req);
+        };
+        self.callbacks.push((cb, req_num));
+        self.batch_size += req_size;
+    }
+}
+
 pub struct Peer {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -188,6 +219,9 @@ pub struct Peer {
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
+
+    // Batch raft command which has the same header into an entry
+    batch_cmd: BatchRaftCmdRequest,
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
@@ -310,6 +344,7 @@ impl Peer {
             raft_log_size_hint: 0,
             leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
             pending_messages: vec![],
+            batch_cmd: BatchRaftCmdRequest::new(),
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
         };
@@ -1609,6 +1644,86 @@ impl Peer {
         None
     }
 
+    fn batch_callback(&mut self, cbs: Vec<(Callback<RocksEngine>, usize)>, term: u64, e: Error) {
+        let mut resp = RaftCmdResponse::default();
+        cmd_resp::bind_term(&mut resp, term);
+        cmd_resp::bind_error(&mut resp, e);
+        for (cb, _) in cbs {
+            cb.invoke_with_response(resp.clone());
+        }
+    }
+
+    pub fn propose_batch_request<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
+        if let Some(req) = self.batch_cmd.request.take() {
+            self.batch_cmd.batch_size = 0;
+            let mut cbs = mem::replace(&mut self.batch_cmd.callbacks, vec![]);
+            let term = req.get_header().get_term();
+            if let Err(e) = util::check_term(&req, self.term()) {
+                self.batch_callback(cbs, term, e);
+                return;
+            }
+            match self.propose_normal(ctx, req) {
+                Err(e) => {
+                    self.batch_callback(cbs, term, e);
+                }
+                Ok(idx) => {
+                    let meta = ProposalMeta {
+                        index: idx,
+                        term: self.term(),
+                        renew_lease_time: None,
+                    };
+                    if cbs.len() > 1 {
+                        ctx.raft_metrics.propose.batch += cbs.len() - 1;
+                        self.post_propose(
+                            ctx,
+                            meta,
+                            false,
+                            Callback::Write(Box::new(move |resp| {
+                                let mut last_index = 0;
+                                let has_error = resp.response.get_header().has_error();
+                                for (cb, req_num) in cbs {
+                                    let next_index = last_index + req_num;
+                                    let mut cmd_resp = RaftCmdResponse::default();
+                                    cmd_resp.set_header(resp.response.get_header().clone());
+                                    if !has_error {
+                                        cmd_resp.set_responses(
+                                            resp.response.get_responses()[last_index..next_index]
+                                                .into(),
+                                        );
+                                    }
+                                    cb.invoke_with_response(cmd_resp);
+                                    last_index = next_index;
+                                }
+                            })),
+                        );
+                    } else {
+                        let (cb, _) = cbs.pop().unwrap();
+                        self.post_propose(ctx, meta, false, cb);
+                    }
+                }
+            }
+        }
+    }
+
+    fn should_propose_batch_request<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        req: &RaftCmdRequest,
+    ) -> bool {
+        if let Some(batch_req) = self.batch_cmd.request.as_ref() {
+            if batch_req.get_header() != req.get_header() {
+                return true;
+            }
+            if f64::from(self.batch_cmd.batch_size) > ctx.cfg.raft_entry_max_size.0 as f64 * 0.4 {
+                return true;
+            }
+            if batch_req.get_requests().len() > MAX_BATCH_KEY_NUM {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Propose a request.
     ///
     /// Return true means the request has been proposed successfully.
@@ -1635,11 +1750,32 @@ impl Peer {
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req),
+            Ok(RequestPolicy::ProposeNormal) => {
+                if req.has_admin_request() {
+                    self.propose_batch_request(ctx);
+                    self.propose_normal(ctx, req)
+                } else {
+                    let req_size = req.compute_size();
+                    // No batch request whose size exceed 20% of raft_entry_max_size,
+                    // so total size of request in batch_raft_request would not exceed
+                    // (40% + 20%) of raft_entry_max_size
+                    let max_size = ctx.cfg.raft_entry_max_size.0 as f64 * 0.2;
+                    if self.should_propose_batch_request(ctx, &req) {
+                        self.propose_batch_request(ctx);
+                    }
+                    if f64::from(req_size) < max_size {
+                        self.batch_cmd.push(req, req_size, cb);
+                        return true;
+                    }
+                    self.propose_normal(ctx, req)
+                }
+            }
             Ok(RequestPolicy::ProposeTransferLeader) => {
+                self.propose_batch_request(ctx);
                 return self.propose_transfer_leader(ctx, req, cb);
             }
             Ok(RequestPolicy::ProposeConfChange) => {
+                self.propose_batch_request(ctx);
                 is_conf_change = true;
                 self.propose_conf_change(ctx, &req)
             }

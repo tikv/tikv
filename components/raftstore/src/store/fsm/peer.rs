@@ -303,6 +303,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 PeerMsg::Noop => {}
             }
         }
+        // Propose batch request which may be still waiting for more raft-command
+        self.fsm.peer.propose_batch_request(self.ctx);
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage) {
