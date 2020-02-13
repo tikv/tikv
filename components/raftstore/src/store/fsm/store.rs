@@ -472,6 +472,22 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     cfg_tracker: Tracker<Config>,
 }
 
+#[inline]
+fn flush_write_batch<T, C>(
+    ctx: &PollContext<T, C>,
+    opt: &WriteOptions,
+) -> std::result::Result<(), String> {
+    fail_point!(
+        "handle_raft_ready_node_1_skip_write",
+        ctx.store_id() == 1,
+        |_| {
+            println!("skip write at {}", ctx.store_id());
+            Ok(())
+        }
+    );
+    ctx.engines.raft.write_opt(&ctx.raft_wb, opt)
+}
+
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm>]) {
         // Only enable the fail point when the store id is equal to 3, which is
@@ -530,13 +546,9 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.raft_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
-            self.poll_ctx
-                .engines
-                .raft
-                .write_opt(&self.poll_ctx.raft_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save raft append result: {:?}", self.tag, e);
-                });
+            flush_write_batch(&self.poll_ctx, &write_opts).unwrap_or_else(|e| {
+                panic!("{} failed to save raft append result: {:?}", self.tag, e);
+            });
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
                 self.poll_ctx.raft_wb = WriteBatch::with_capacity(DEFAULT_RAFT_WB_CAPACITY);
