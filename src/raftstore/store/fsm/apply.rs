@@ -237,7 +237,7 @@ impl ExecContext {
 
 struct ApplyCallback {
     region: Region,
-    cbs: Vec<(Option<Callback<RocksEngine>>, u64, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<RocksEngine>>, RaftCmdResponse)>,
 }
 
 impl ApplyCallback {
@@ -247,16 +247,16 @@ impl ApplyCallback {
     }
 
     fn invoke_all(self, host: &CoprocessorHost) {
-        for (cb, index, mut resp) in self.cbs {
-            host.post_apply(&self.region, index, &mut resp);
+        for (cb, mut resp) in self.cbs {
+            host.post_apply(&self.region, &mut resp);
             if let Some(cb) = cb {
                 cb.invoke_with_response(resp)
             };
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<RocksEngine>>, index: u64, resp: RaftCmdResponse) {
-        self.cbs.push((cb, index, resp));
+    fn push(&mut self, cb: Option<Callback<RocksEngine>>, resp: RaftCmdResponse) {
+        self.cbs.push((cb, resp));
     }
 }
 
@@ -367,7 +367,7 @@ impl ApplyContext {
 
         if let Some(enabled) = &delegate.cmd_observer_enabled {
             let region_id = delegate.region_id();
-            if enabled.load(Ordering::Relaxed) {
+            if enabled.load(Ordering::Acquire) {
                 self.cmd_batches.push(CmdBatch::new(region_id));
             } else {
                 info!("region is no longer observerd";
@@ -848,11 +848,11 @@ impl ApplyDelegate {
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
-            apply_ctx.cbs.last_mut().unwrap().push(
-                cmd.cb.take(),
-                cmd.index,
-                cmd_resp::err_resp(Error::StaleCommand, term),
-            );
+            apply_ctx
+                .cbs
+                .last_mut()
+                .unwrap()
+                .push(cmd.cb.take(), cmd_resp::err_resp(Error::StaleCommand, term));
         }
         ApplyResult::None
     }
@@ -941,7 +941,7 @@ impl ApplyDelegate {
         }
 
         let is_conf_change = get_change_peer_cmd(&cmd).is_some();
-        apply_ctx.host.pre_apply(&self.region, index, &cmd);
+        apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, &cmd);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
@@ -963,7 +963,7 @@ impl ApplyDelegate {
             apply_ctx.push_observed_cmd(self.region_id(), cmd);
         }
 
-        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, index, resp);
+        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
 
         exec_result
     }
@@ -3610,12 +3610,7 @@ mod tests {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(
-            &self,
-            _: &mut ObserverContext<'_>,
-            _: &RaftResponseHeader,
-            _: &mut Vec<Response>,
-        ) {
+        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
     }

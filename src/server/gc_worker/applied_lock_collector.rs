@@ -579,7 +579,7 @@ mod tests {
             make_apply_request(b"1".to_vec(), b"1".to_vec(), CF_DEFAULT, CmdType::Put),
             make_apply_request(b"2".to_vec(), b"2".to_vec(), CF_LOCK, CmdType::Delete),
         ];
-        coprocessor_host.pre_apply(&Region::default(), 0, &make_raft_cmd_req(req));
+        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req));
         expected_result.push(locks[0].clone());
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
@@ -597,7 +597,7 @@ mod tests {
                 .filter(|l| l.get_lock_version() <= 100)
                 .cloned(),
         );
-        coprocessor_host.pre_apply(&Region::default(), 0, &make_raft_cmd_req(req.clone()));
+        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req.clone()));
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_result, true)
@@ -607,7 +607,7 @@ mod tests {
         // dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
-        coprocessor_host.pre_apply(&Region::default(), 0, &make_raft_cmd_req(req));
+        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req));
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, true));
     }
 
@@ -703,7 +703,7 @@ mod tests {
         // The value is not a valid lock.
         let (k, v) = (Key::from_raw(b"k1").into_encoded(), b"v1".to_vec());
         let req = make_apply_request(k.clone(), v.clone(), CF_LOCK, CmdType::Put);
-        coprocessor_host.pre_apply(&Region::default(), 0, &make_raft_cmd_req(vec![req]));
+        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(vec![req]));
         assert_eq!(get_collected_locks(&c, 1).unwrap(), (vec![], false));
 
         // `is_clean` should be reset after invoking `start_collecting`.
@@ -730,7 +730,7 @@ mod tests {
             let (k, v) = lock_info_to_kv(lock.clone());
             let req = make_apply_request(k, v, CF_LOCK, CmdType::Put);
             let raft_cmd_req = make_raft_cmd_req(vec![req; count]);
-            coprocessor_host.pre_apply(&Region::default(), 0, &raft_cmd_req);
+            coprocessor_host.pre_apply(&Region::default(), &raft_cmd_req);
         };
 
         batch_generate_locks(MAX_COLLECT_SIZE - 1);

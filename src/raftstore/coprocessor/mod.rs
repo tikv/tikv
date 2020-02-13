@@ -7,8 +7,7 @@ use engine::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
-    AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader, Request,
-    Response,
+    AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
 };
 use raft::StateRole;
 
@@ -73,17 +72,10 @@ pub trait AdminObserver: Coprocessor {
     }
 
     /// Hook to call before applying admin request.
-    fn pre_apply_admin(&self, _: &mut ObserverContext<'_>, _: u64, _: &AdminRequest) {}
+    fn pre_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest) {}
 
     /// Hook to call after applying admin request.
-    fn post_apply_admin(
-        &self,
-        _: &mut ObserverContext<'_>,
-        _: u64,
-        _: &RaftResponseHeader,
-        _: &mut AdminResponse,
-    ) {
-    }
+    fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminResponse) {}
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -98,13 +90,7 @@ pub trait QueryObserver: Coprocessor {
     fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {}
 
     /// Hook to call after applying write request.
-    fn post_apply_query(
-        &self,
-        _: &mut ObserverContext<'_>,
-        _: &RaftResponseHeader,
-        _: &mut Vec<Response>,
-    ) {
-    }
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {}
 }
 
 pub trait ApplySnapshotObserver: Coprocessor {
