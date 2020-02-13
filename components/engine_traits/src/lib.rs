@@ -120,7 +120,7 @@
 //!   ```
 //!
 //!   ```ignore
-//!   // in engine_rust
+//!   // in engine_rocks
 //!
 //!   impl IOLimiterExt for RocksEngine {
 //!       type IOLimiter = RocksIOLimiter;
