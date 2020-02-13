@@ -6,6 +6,7 @@ use std::ptr::NonNull;
 
 use servo_arc::Arc;
 
+use tidb_query_datatype::FieldTypeAccessor;
 use tipb::{Expr, FieldType, TopN};
 
 use crate::batch::executors::util::*;
@@ -46,6 +47,7 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
 
     order_exprs: Box<[RpnExpression]>,
+    order_exprs_field_type: Box<[FieldType]>,
 
     /// Whether or not it is descending order for each order by column.
     order_is_desc: Box<[bool]>,
@@ -88,10 +90,16 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     ) -> Self {
         assert_eq!(order_exprs.len(), order_is_desc.len());
 
+        let order_exprs_field_type: Vec<FieldType> = order_exprs
+            .iter()
+            .map(|expr| expr.ret_field_type(src.schema()).clone())
+            .collect();
+
         Self {
             heap: BinaryHeap::new(),
             eval_columns_buffer_unsafe: Box::new(Vec::new()),
             order_exprs: order_exprs.into_boxed_slice(),
+            order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
             n,
 
@@ -110,7 +118,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     ) -> Result<Self> {
         assert_eq!(order_exprs_def.len(), order_is_desc.len());
 
-        let mut order_exprs = Vec::with_capacity(order_exprs_def.len());
+        let mut order_exprs: Vec<RpnExpression> = Vec::with_capacity(order_exprs_def.len());
         let mut ctx = EvalContext::new(config.clone());
         for def in order_exprs_def {
             order_exprs.push(RpnExpressionBuilder::build_from_expr_tree(
@@ -119,6 +127,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                 src.schema().len(),
             )?);
         }
+        let order_exprs_field_type: Vec<FieldType> = order_exprs
+            .iter()
+            .map(|expr| expr.ret_field_type(src.schema()).clone())
+            .collect();
 
         Ok(Self {
             // Avoid large N causing OOM
@@ -126,6 +138,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             // Simply large enough to avoid repeated allocations
             eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
             order_exprs: order_exprs.into_boxed_slice(),
+            order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
             n,
 
@@ -191,28 +204,35 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         for logical_row_index in 0..pinned_source_data.logical_rows.len() {
             let row = HeapItemUnsafe {
                 order_is_desc_ptr: (&*self.order_is_desc).into(),
+                order_exprs_field_type_ptr: (&*self.order_exprs_field_type).into(),
                 source_data: pinned_source_data.clone(),
                 eval_columns_buffer_ptr: (&*self.eval_columns_buffer_unsafe).into(),
                 eval_columns_offset: eval_offset,
                 logical_row_index,
             };
-            self.heap_add_row(row);
+            self.heap_add_row(row)?;
         }
 
         Ok(())
     }
 
-    fn heap_add_row(&mut self, row: HeapItemUnsafe) {
+    fn heap_add_row(&mut self, row: HeapItemUnsafe) -> Result<()> {
         if self.heap.len() < self.n {
+            // HeapItemUnsafe must be checked valid to compare in advance, or else it may
+            // panic insied BinaryHeap.
+            row.cmp_with_field_type(&row)?;
+
             // Push into heap when heap is not full.
             self.heap.push(row);
         } else {
             // Swap the greatest row in the heap if this row is smaller than that row.
             let mut greatest_row = self.heap.peek_mut().unwrap();
-            if row.cmp(&greatest_row) == Ordering::Less {
+            if row.cmp_with_field_type(&greatest_row)? == Ordering::Less {
                 *greatest_row = row;
             }
         }
+
+        Ok(())
     }
 
     #[allow(clippy::clone_on_copy)]
@@ -342,6 +362,9 @@ struct HeapItemUnsafe {
     /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
     order_is_desc_ptr: NonNull<[bool]>,
 
+    /// A pointer to the `order_exprs_field_type` field in `order_exprs`.
+    order_exprs_field_type_ptr: NonNull<[FieldType]>,
+
     /// The source data that evaluated column in this structure is using.
     source_data: Arc<HeapItemSourceData>,
 
@@ -362,20 +385,23 @@ impl HeapItemUnsafe {
         unsafe { self.order_is_desc_ptr.as_ref() }
     }
 
+    fn get_order_exprs_field_type(&self) -> &[FieldType] {
+        unsafe { self.order_exprs_field_type_ptr.as_ref() }
+    }
+
     fn get_eval_columns(&self, len: usize) -> &[RpnStackNode<'_>] {
         let offset_begin = self.eval_columns_offset;
         let offset_end = offset_begin + len;
         let vec_buf = unsafe { self.eval_columns_buffer_ptr.as_ref() };
         &vec_buf[offset_begin..offset_end]
     }
-}
 
-impl Ord for HeapItemUnsafe {
-    fn cmp(&self, other: &Self) -> Ordering {
+    fn cmp_with_field_type(&self, other: &Self) -> Result<Ordering> {
         // Only debug assert because this function is called pretty frequently.
         debug_assert_eq!(self.get_order_is_desc(), other.get_order_is_desc());
 
         let order_is_desc = self.get_order_is_desc();
+        let order_exprs_field_type = self.get_order_exprs_field_type();
         let columns_len = order_is_desc.len();
         let eval_columns_lhs = self.get_eval_columns(columns_len);
         let eval_columns_rhs = other.get_eval_columns(columns_len);
@@ -388,19 +414,30 @@ impl Ord for HeapItemUnsafe {
 
             // There is panic inside, but will never panic, since the data type of corresponding
             // column should be consistent for each `HeapItemUnsafe`.
-            let ord = lhs.cmp(&rhs);
+            let ord = lhs.cmp_with_collation(
+                &rhs,
+                order_exprs_field_type[column_idx].as_accessor().collation(),
+            )?;
 
             if ord == Ordering::Equal {
                 continue;
             }
             if !order_is_desc[column_idx] {
-                return ord;
+                return Ok(ord);
             } else {
-                return ord.reverse();
+                return Ok(ord.reverse());
             }
         }
 
-        Ordering::Equal
+        Ok(Ordering::Equal)
+    }
+}
+
+/// WARN: HeapItemUnsafe implements partial ordering. It panics when Collator fails to parse.
+/// So make sure to check it before putting it into a heap.
+impl Ord for HeapItemUnsafe {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.cmp_with_field_type(other).unwrap()
     }
 }
 
