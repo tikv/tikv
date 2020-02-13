@@ -226,18 +226,6 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	if [[ "`uname`" == "Linux" ]]; then \
-		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
-	fi
-	bash scripts/check-bins-for-jemalloc.sh
-	bash scripts/check-udeps.sh
-	# TODO: remove the section after https://github.com/rust-lang/cargo/issues/5364 is resolved.
-	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
-	export LOG_LEVEL=DEBUG && \
-	export RUST_BACKTRACE=1 && \
 	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture
 
 # This is used for CI test
