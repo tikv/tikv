@@ -31,12 +31,12 @@ pub fn like<C: Collator>(target: &[u8], pattern: &[u8], escape: u32) -> Result<b
                 // update the backtrace point.
                 next_px = px;
                 px += poff;
-                next_tx = tx
-                    + if let Some((_, toff)) = C::Charset::decode_one(&target[tx..]) {
-                        toff
-                    } else {
-                        1
-                    };
+                next_tx = tx;
+                next_tx += if let Some((_, toff)) = C::Charset::decode_one(&target[tx..]) {
+                    toff
+                } else {
+                    1
+                };
                 continue;
             } else {
                 if code == escape && px + poff < pattern.len() {
