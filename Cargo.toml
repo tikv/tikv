@@ -157,8 +157,6 @@ zipf = "5.0.1"
 "protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "prost:0.5.0" = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
 "protobuf-build:0.10.0" = { git = "https://github.com/tikv/protobuf-build", rev="42e52b9311f7fb31bbbe089fef5a24ec0392f9ce" }
-# TODO: remove this and change the hash when https://github.com/pingcap/kvproto/pull/551 is merged.
-"https://github.com/pingcap/kvproto.git#kvproto:0.0.2" = { git = "https://github.com/mwish-pingcap-company-repos/kvproto.git", branch = "dev-store", default-features = false}
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
