@@ -79,6 +79,14 @@ where
         }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
         store.set_status_address(cfg.status_addr.clone());
+
+        match std::env::current_exe() {
+            Ok(path) => {
+                store.set_binary_path(path.file_name().unwrap().to_string_lossy().into_string());
+            }
+            Err(_) => {}
+        };
+
         store.set_start_timestamp(chrono::Local::now().timestamp());
         store.set_git_hash(
             option_env!("TIKV_BUILD_GIT_HASH")
