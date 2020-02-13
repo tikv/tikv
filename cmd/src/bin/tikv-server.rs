@@ -137,8 +137,8 @@ fn main() {
                 ),
         )
         .arg(
-            Arg::with_name("dynamic-config")
-                .long("dynamic-config")
+            Arg::with_name("enable-dynamic-config")
+                .long("enable-dynamic-config")
                 .help("switch of online config change feature"),
         )
         .get_matches();
