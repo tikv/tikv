@@ -39,7 +39,7 @@ pub fn like<C: Collator>(target: &[u8], pattern: &[u8], escape: u32) -> Result<b
                     };
                 continue;
             } else {
-                if code == escape && px + 1 < pattern.len() {
+                if code == escape && px + poff < pattern.len() {
                     px += poff;
                     poff = if let Some((_, off)) = C::Charset::decode_one(&pattern[px..]) {
                         off
