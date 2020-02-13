@@ -677,8 +677,11 @@ mod tests {
             // strA, strB, [binOrd, ciOrd]
             ("a", "b", [Ordering::Less, Ordering::Less]),
             ("a", "A", [Ordering::Greater, Ordering::Equal]),
+            ("À", "A", [Ordering::Greater, Ordering::Equal]),
+            ("abc", "ab", [Ordering::Greater, Ordering::Greater]),
             ("Abc", "abC", [Ordering::Less, Ordering::Equal]),
             ("filé-110", "file-12", [Ordering::Greater, Ordering::Less]),
+            ("😜", "😃", [Ordering::Greater, Ordering::Equal]),
         ];
         let collations = vec![
             (Collation::Binary, 0),
