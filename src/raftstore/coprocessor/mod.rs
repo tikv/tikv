@@ -1,10 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::vec::IntoIter;
+
 use engine::rocks::DB;
 use engine::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
+use kvproto::raft_cmdpb::{
+    AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader, Request,
+    Response,
+};
 use raft::StateRole;
 
 pub mod config;
@@ -18,8 +23,8 @@ pub mod split_observer;
 
 pub use self::config::Config;
 pub use self::dispatcher::{
-    BoxAdminObserver, BoxApplySnapshotObserver, BoxQueryObserver, BoxRegionChangeObserver,
-    BoxRoleObserver, BoxSplitCheckObserver, CoprocessorHost, Registry,
+    BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxQueryObserver,
+    BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver, CoprocessorHost, Registry,
 };
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{
@@ -68,10 +73,17 @@ pub trait AdminObserver: Coprocessor {
     }
 
     /// Hook to call before applying admin request.
-    fn pre_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest) {}
+    fn pre_apply_admin(&self, _: &mut ObserverContext<'_>, _: u64, _: &AdminRequest) {}
 
     /// Hook to call after applying admin request.
-    fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminResponse) {}
+    fn post_apply_admin(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: u64,
+        _: &RaftResponseHeader,
+        _: &mut AdminResponse,
+    ) {
+    }
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -86,7 +98,13 @@ pub trait QueryObserver: Coprocessor {
     fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {}
 
     /// Hook to call after applying write request.
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {}
+    fn post_apply_query(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &RaftResponseHeader,
+        _: &mut Vec<Response>,
+    ) {
+    }
 }
 
 pub trait ApplySnapshotObserver: Coprocessor {
@@ -158,4 +176,59 @@ pub enum RegionChangeEvent {
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
+}
+
+#[derive(Clone, Debug)]
+pub struct Cmd {
+    pub index: u64,
+    pub request: RaftCmdRequest,
+    pub response: RaftCmdResponse,
+}
+
+impl Cmd {
+    pub fn new(index: u64, request: RaftCmdRequest, response: RaftCmdResponse) -> Cmd {
+        Cmd {
+            index,
+            request,
+            response,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdBatch {
+    pub region_id: u64,
+    cmds: Vec<Cmd>,
+}
+
+impl CmdBatch {
+    pub fn new(region_id: u64) -> CmdBatch {
+        CmdBatch {
+            region_id,
+            cmds: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, region_id: u64, cmd: Cmd) {
+        assert_eq!(region_id, self.region_id);
+        self.cmds.push(cmd)
+    }
+
+    pub fn into_iter(self, region_id: u64) -> IntoIter<Cmd> {
+        assert_eq!(self.region_id, region_id);
+        self.cmds.into_iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.cmds.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cmds.is_empty()
+    }
+}
+
+pub trait CmdObserver: Coprocessor {
+    /// Hook to call after applying write request.
+    fn on_batch_executed(&self, batch: &[CmdBatch]);
 }

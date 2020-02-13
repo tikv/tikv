@@ -15,7 +15,7 @@ use crate::Error as CdcError;
 ///
 /// It observes raftstore internal events, such as:
 ///   1. Raft role change events,
-///   2. TODO Apply command events.
+///   2. Apply command events.
 #[derive(Clone)]
 pub struct CdcObserver {
     sched: Scheduler<Task>,
@@ -55,6 +55,16 @@ impl CdcObserver {
 
 impl Coprocessor for CdcObserver {}
 
+impl CmdObserver for CdcObserver {
+    fn on_batch_executed(&self, batch: &[CmdBatch]) {
+        if let Err(e) = self.sched.schedule(Task::MultiBatch {
+            multi: batch.to_vec(),
+        }) {
+            warn!("schedule cdc task failed"; "error" => ?e);
+        }
+    }
+}
+
 impl RoleObserver for CdcObserver {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
         if role != StateRole::Leader {
@@ -84,6 +94,12 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
+
+        observer.on_batch_executed(&[CmdBatch::new(1)]);
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::MultiBatch { .. } => (),
+            _ => panic!("unexpected task"),
+        };
 
         // Does not send unsubscribed region events.
         let mut region = Region::default();

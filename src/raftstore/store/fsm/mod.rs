@@ -11,7 +11,7 @@ pub mod store;
 
 pub use self::apply::{
     create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,
-    Builder as ApplyPollerBuilder, CatchUpLogs, ChangePeer, ExecResult, GenSnapTask,
+    Builder as ApplyPollerBuilder, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult, GenSnapTask,
     Msg as ApplyTask, Notifier as ApplyNotifier, Proposal, RegionProposal, Registration,
     TaskRes as ApplyTaskRes,
 };
