@@ -2960,7 +2960,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/hicqu/raft-rs?branch=custom-quorum#9c894a2d7306207a6e435a205d9f1e9c7f90de69"
+source = "git+https://github.com/hicqu/raft-rs?branch=custom-quorum#d045e41eb7264d2e6de7dbd4f3d59c7f01467544"
 dependencies = [
  "fxhash",
  "getset",
@@ -2981,7 +2981,7 @@ replace = "raft 0.6.0-alpha (git+https://github.com/hicqu/raft-rs?branch=custom-
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/hicqu/raft-rs?branch=custom-quorum#9c894a2d7306207a6e435a205d9f1e9c7f90de69"
+source = "git+https://github.com/hicqu/raft-rs?branch=custom-quorum#d045e41eb7264d2e6de7dbd4f3d59c7f01467544"
 dependencies = [
  "lazy_static",
  "prost 0.6.1",

@@ -19,58 +19,13 @@ lazy_static! {
 }
 
 /// Custom quorum function for a Raft node.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum QuorumAlgorithm {
     /// Default quorum function described in Raft paper.
     Majority,
     /// Ensure no data lost when ceil(voters_len / 2) voters fail.
     IntegrationOnHalfFail,
-}
-
-mod quorum_algorithm_serde {
-    use super::QuorumAlgorithm;
-    use serde::de::{Error, Unexpected, Visitor};
-    use serde::{Deserializer, Serializer};
-    use std::fmt;
-
-    pub fn serialize<S: Serializer>(
-        quorum_algorithm: &QuorumAlgorithm,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        let name = match *quorum_algorithm {
-            QuorumAlgorithm::Majority => "majority",
-            QuorumAlgorithm::IntegrationOnHalfFail => "integration-on-half-fail",
-        };
-        serializer.serialize_str(name)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<QuorumAlgorithm, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct StrVisitor;
-        impl<'de> Visitor<'de> for StrVisitor {
-            type Value = QuorumAlgorithm;
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(formatter, "quorum algorithm")
-            }
-            fn visit_str<E: Error>(self, v: &str) -> Result<Self::Value, E> {
-                let quorum_algorithm = match v {
-                    "majority" => QuorumAlgorithm::Majority,
-                    "integration-on-half-fail" => QuorumAlgorithm::IntegrationOnHalfFail,
-                    _ => {
-                        return Err(Error::invalid_value(
-                            Unexpected::Str(v),
-                            &"invalid compression type",
-                        ))
-                    }
-                };
-                Ok(quorum_algorithm)
-            }
-        }
-
-        deserializer.deserialize_str(StrVisitor)
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
@@ -222,7 +177,6 @@ pub struct Config {
     #[config(skip)]
     pub region_split_size: ReadableSize,
 
-    #[serde(with = "quorum_algorithm_serde")]
     #[config(skip)]
     pub quorum_algorithm: QuorumAlgorithm,
 }
