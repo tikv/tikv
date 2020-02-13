@@ -82,7 +82,8 @@ where
 
         match std::env::current_exe() {
             Ok(path) => {
-                store.set_binary_path(path.file_name().unwrap().to_string_lossy().into_string());
+                // `file_name` Returns [`None`] if the path terminates in `..`, so it's safe to unwrap.
+                store.set_binary_path(path.file_name().unwrap().to_string_lossy().to_string());
             }
             Err(_) => {}
         };
