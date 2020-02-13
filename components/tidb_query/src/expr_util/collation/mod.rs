@@ -56,15 +56,23 @@ impl From<DecodeOrWriteError> for crate::error::EvaluateError {
 }
 
 pub trait Charset {
-    fn next_char_width(data: &[u8]) -> usize;
+    type Char: Copy + Into<u32>;
+
+    fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)>;
 }
 
 pub struct CharsetBinary;
 
 impl Charset for CharsetBinary {
+    type Char = u8;
+
     #[inline]
-    fn next_char_width(data: &[u8]) -> usize {
-        !data.is_empty() as usize
+    fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)> {
+        if data.is_empty() {
+            None
+        } else {
+            Some((data[0], 1))
+        }
     }
 }
 

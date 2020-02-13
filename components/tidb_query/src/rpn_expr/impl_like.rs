@@ -18,7 +18,7 @@ pub fn like<C: Collator>(
         (Some(target), Some(pattern), Some(escape)) => Ok(Some(expr_util::like::like::<C>(
             target.as_slice(),
             pattern.as_slice(),
-            *escape as u8,
+            *escape as u32,
         )? as i64)),
         _ => Ok(None),
     }
@@ -122,8 +122,8 @@ mod tests {
                 Some(0),
             ),
             (
-                r#"夏威夷吉他"#,
-                r#"_____"#,
+                r#"🐶🍐🍳➕🥜🎗🐜"#,
+                r#"_______"#,
                 '\\',
                 Collation::Utf8Mb4Bin,
                 Some(1),
@@ -139,6 +139,14 @@ mod tests {
                 r#"IpHONE xs mAX"#,
                 r#"iPhone XS Max"#,
                 '\\',
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+            (r#"🕺_"#, r#"🕺🕺🕺_"#, '🕺', Collation::Binary, Some(0)),
+            (
+                r#"🕺_"#,
+                r#"🕺🕺🕺_"#,
+                '🕺',
                 Collation::Utf8Mb4GeneralCi,
                 Some(1),
             ),

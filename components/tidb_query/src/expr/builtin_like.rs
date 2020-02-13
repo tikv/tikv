@@ -12,7 +12,7 @@ impl ScalarFunc {
     pub fn like(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = try_opt!(self.children[0].eval_string(ctx, row));
         let pattern = try_opt!(self.children[1].eval_string(ctx, row));
-        let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u8;
+        let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
         Ok(Some(
             (match self.field_type.as_accessor().collation() {
                 Collation::Utf8GeneralCi | Collation::Utf8Mb4GeneralCi => {
