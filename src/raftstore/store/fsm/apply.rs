@@ -1836,7 +1836,7 @@ impl ApplyDelegate {
                 "peer_id" => self.id(),
                 "source_region_id" => source_region_id
             );
-
+            fail_point!("before_handle_catch_up_logs_for_merge");
             // Sends message to the source peer fsm and pause `exec_commit_merge` process
             let logs_up_to_date = Arc::new(AtomicU64::new(0));
             let msg = SignificantMsg::CatchUpLogs(CatchUpLogs {
@@ -2567,8 +2567,6 @@ impl ApplyFsm {
     }
 
     fn logs_up_to_date_for_merge(&mut self, ctx: &mut ApplyContext, catch_up_logs: CatchUpLogs) {
-        fail_point!("on_handle_catch_up_logs_for_merge");
-
         fail_point!("after_handle_catch_up_logs_for_merge");
         fail_point!(
             "after_handle_catch_up_logs_for_merge_1003",

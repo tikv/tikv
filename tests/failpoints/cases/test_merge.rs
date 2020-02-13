@@ -342,9 +342,9 @@ fn test_node_merge_catch_up_logs_no_need() {
     thread::sleep(Duration::from_millis(100));
 
     // let source region not merged
-    fail::cfg("on_handle_catch_up_logs_for_merge", "pause").unwrap();
+    fail::cfg("before_handle_catch_up_logs_for_merge", "pause").unwrap();
     fail::cfg("after_handle_catch_up_logs_for_merge", "pause").unwrap();
-    // due to `on_handle_catch_up_logs_for_merge` failpoint, we already pass `apply_index < catch_up_logs.merge.get_commit()`
+    // due to `before_handle_catch_up_logs_for_merge` failpoint, we already pass `apply_index < catch_up_logs.merge.get_commit()`
     // so now can let apply index make progress.
     fail::remove("apply_after_prepare_merge");
 
@@ -353,7 +353,7 @@ fn test_node_merge_catch_up_logs_no_need() {
     thread::sleep(Duration::from_millis(50));
 
     // let merge process continue
-    fail::remove("on_handle_catch_up_logs_for_merge");
+    fail::remove("before_handle_catch_up_logs_for_merge");
     fail::remove("after_handle_catch_up_logs_for_merge");
     thread::sleep(Duration::from_millis(50));
 
