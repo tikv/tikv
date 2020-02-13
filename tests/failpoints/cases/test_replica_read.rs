@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crossbeam::channel;
 use engine::{Peekable, CF_RAFT, DB};
 use fail;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -97,7 +97,7 @@ fn test_duplicate_read_index_ctx() {
 
     // Delay all raft messages to peer 1.
     let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let (sx, rx) = mpsc::sync_channel::<()>(2);
+    let (sx, rx) = channel::unbounded();
     let recv_filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 1)
             .direction(Direction::Recv)
@@ -292,19 +292,19 @@ fn test_read_after_cleanup_range_for_snap() {
     assert_eq!(cluster.leader_of_region(region.get_id()).unwrap(), p1);
     cluster.stop_node(3);
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
-    // Ensure logs are compacted.
-    must_truncated_to(cluster.get_engine(3), r1, 8);
+    // Ensure logs are compacted, then node 1 will send a snapshot to node 3 later
+    must_truncated_to(cluster.get_engine(1), r1, 8);
 
     fail::cfg("send_snapshot", "pause").unwrap();
     cluster.run_node(3).unwrap();
     // Sleep for a while to ensure peer 3 receives a HeartBeat
     thread::sleep(Duration::from_millis(500));
 
+    // Add filter for delaying ReadIndexResp and MsgSnapshot
     let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let (read_index_sx, read_index_rx) = mpsc::sync_channel::<RaftMessage>(1);
-    let (snap_sx, snap_rx) = mpsc::sync_channel::<RaftMessage>(1);
-    let (heartbeat_sx, heartbeat_rx) = mpsc::sync_channel::<RaftMessage>(1);
-    let is_recv_heartbeat = AtomicBool::new(false);
+    let (read_index_sx, read_index_rx) = channel::unbounded::<RaftMessage>();
+    let (snap_sx, snap_rx) = channel::unbounded::<RaftMessage>();
+    let (heartbeat_sx, heartbeat_rx) = channel::unbounded::<RaftMessage>();
     let recv_filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 3)
             .direction(Direction::Recv)
@@ -316,9 +316,7 @@ fn test_read_after_cleanup_range_for_snap() {
                 } else if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
                     snap_sx.send(msg.clone()).unwrap();
                 } else if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {
-                    if is_recv_heartbeat.compare_and_swap(false, true, Ordering::SeqCst) {
-                        heartbeat_sx.send(msg.clone()).unwrap();
-                    }
+                    heartbeat_sx.send(msg.clone()).unwrap();
                 }
             })),
     );
@@ -334,7 +332,7 @@ fn test_read_after_cleanup_range_for_snap() {
     );
     request.mut_header().set_peer(p3.clone());
     request.mut_header().set_replica_read(true);
-    // send request to peer 3
+    // Send follower read request to peer 3
     let (cb1, rx1) = make_cb(&request);
     cluster
         .sim
@@ -355,6 +353,7 @@ fn test_read_after_cleanup_range_for_snap() {
     router.send_raft_message(read_index_msg.clone()).unwrap();
     fail::cfg("pause_on_peer_collect_message", "off").unwrap();
     must_get_none(&cluster.get_engine(3), b"k0");
+    // Should not receive resp
     rx1.recv_timeout(Duration::from_millis(500)).unwrap_err();
     fail::cfg("apply_snap_cleanup_range", "off").unwrap();
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
