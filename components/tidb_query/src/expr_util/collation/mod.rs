@@ -10,48 +10,16 @@ use std::str::Utf8Error;
 
 use codec::prelude::*;
 
-#[derive(Fail, Debug)]
-#[fail(display = "Invalid input in charset {}", _0)]
-pub struct DecodeError(&'static str);
-
-impl From<Utf8Error> for DecodeError {
-    fn from(_: Utf8Error) -> Self {
-        DecodeError("UTF8")
-    }
-}
-
-#[derive(Fail, Debug)]
-pub enum DecodeOrWriteError {
-    #[fail(display = "{}", _0)]
-    Decode(DecodeError),
-
-    #[fail(display = "{}", _0)]
-    Write(codec::Error),
-}
-
-impl From<codec::Error> for DecodeOrWriteError {
-    fn from(e: codec::Error) -> Self {
-        DecodeOrWriteError::Write(e)
-    }
-}
-
-impl From<DecodeError> for DecodeOrWriteError {
-    fn from(e: DecodeError) -> Self {
-        DecodeOrWriteError::Decode(e)
-    }
-}
-
-impl From<DecodeError> for crate::error::EvaluateError {
-    fn from(e: DecodeError) -> Self {
-        crate::error::EvaluateError::InvalidCharacterString {
-            charset: e.0.to_string(),
-        }
-    }
-}
-
-impl From<DecodeOrWriteError> for crate::error::EvaluateError {
-    fn from(e: DecodeOrWriteError) -> Self {
-        crate::error::EvaluateError::Other(e.to_string())
+pub macro match_template_collator($t:tt, $($tail:tt)*) {
+    match_template::match_template! {
+        $t = [
+            Utf8Bin => CollatorUtf8Mb4Bin,
+            Utf8Mb4Bin => CollatorUtf8Mb4Bin,
+            Utf8GeneralCi => CollatorUtf8Mb4GeneralCi,
+            Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
+            Binary => CollatorBinary,
+        ],
+        $($tail)*
     }
 }
 
@@ -104,5 +72,50 @@ impl Collator for CollatorBinary {
 
         bstr.hash(state);
         Ok(())
+    }
+}
+
+#[derive(Fail, Debug)]
+#[fail(display = "Invalid input in charset {}", _0)]
+pub struct DecodeError(&'static str);
+
+impl From<Utf8Error> for DecodeError {
+    fn from(_: Utf8Error) -> Self {
+        DecodeError("UTF8")
+    }
+}
+
+#[derive(Fail, Debug)]
+pub enum DecodeOrWriteError {
+    #[fail(display = "{}", _0)]
+    Decode(DecodeError),
+
+    #[fail(display = "{}", _0)]
+    Write(codec::Error),
+}
+
+impl From<codec::Error> for DecodeOrWriteError {
+    fn from(e: codec::Error) -> Self {
+        DecodeOrWriteError::Write(e)
+    }
+}
+
+impl From<DecodeError> for DecodeOrWriteError {
+    fn from(e: DecodeError) -> Self {
+        DecodeOrWriteError::Decode(e)
+    }
+}
+
+impl From<DecodeError> for crate::error::EvaluateError {
+    fn from(e: DecodeError) -> Self {
+        crate::error::EvaluateError::InvalidCharacterString {
+            charset: e.0.to_string(),
+        }
+    }
+}
+
+impl From<DecodeOrWriteError> for crate::error::EvaluateError {
+    fn from(e: DecodeOrWriteError) -> Self {
+        crate::error::EvaluateError::Other(e.to_string())
     }
 }

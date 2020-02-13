@@ -62,6 +62,13 @@ where
     }
 }
 
+pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
+    match_template::match_template! {
+        $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json],
+        $($tail)*
+    }
+}
+
 /// A trait of all types that can be used during evaluation (eval type).
 pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
