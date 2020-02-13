@@ -140,7 +140,8 @@ impl TitanCfConfig {
 fn get_background_job_limit(
     default_background_jobs: i32,
     default_sub_compactions: u32,
-) -> (i32, u32) {
+    default_background_gc: i32,
+) -> (i32, u32, i32) {
     let cpu_num = sysinfo::get_logical_cores();
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
@@ -154,7 +155,10 @@ fn get_background_job_limit(
         1,
         cmp::min(default_sub_compactions, (max_compactions - 1) as u32),
     );
-    (max_background_jobs, max_sub_compactions)
+    // Maximum background GC threads for Titan
+    let max_background_gc: i32 = cmp::min(default_background_gc, cpu_num as i32);
+
+    (max_background_jobs, max_sub_compactions, max_background_gc)
 }
 
 macro_rules! cf_config {
@@ -670,7 +674,7 @@ impl Default for TitanDBConfig {
             enabled: false,
             dirname: "".to_owned(),
             disable_gc: false,
-            max_background_gc: 1,
+            max_background_gc: 4,
             purge_obsolete_files_period: ReadableDuration::secs(10),
         }
     }
@@ -739,7 +743,10 @@ pub struct DbConfig {
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
-        let (max_background_jobs, max_sub_compactions) = get_background_job_limit(8, 3);
+        let (max_background_jobs, max_sub_compactions, max_background_gc) =
+            get_background_job_limit(8, 3, 4);
+        let mut titan_config = TitanDBConfig::default();
+        titan_config.max_background_gc = max_background_gc;
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -771,7 +778,7 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
-            titan: TitanDBConfig::default(),
+            titan: titan_config,
         }
     }
 }
@@ -980,7 +987,10 @@ pub struct RaftDbConfig {
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
-        let (max_background_jobs, max_sub_compactions) = get_background_job_limit(4, 2);
+        let (max_background_jobs, max_sub_compactions, max_background_gc) =
+            get_background_job_limit(4, 2, 4);
+        let mut titan_config = TitanDBConfig::default();
+        titan_config.max_background_gc = max_background_gc;
         RaftDbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -1007,7 +1017,7 @@ impl Default for RaftDbConfig {
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
-            titan: TitanDBConfig::default(),
+            titan: titan_config,
         }
     }
 }

@@ -243,9 +243,13 @@ test:
 	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture
 
 # This is used for CI test
-ci_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc --all-targets --no-run --message-format=json
+ci_test: ci_doc_test
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc --exclude cdc --all-targets --no-run --message-format=json
 	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
+	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
+
+ci_doc_test:
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --doc
 
 ## Static analysis
 ## ---------------

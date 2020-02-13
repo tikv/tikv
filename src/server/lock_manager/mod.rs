@@ -26,8 +26,8 @@ use crate::storage::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 
+use parking_lot::Mutex;
 use pd_client::PdClient;
-use spin::Mutex;
 use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;

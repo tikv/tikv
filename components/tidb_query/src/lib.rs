@@ -10,6 +10,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
+#![feature(iter_order_by)]
 #![feature(test)]
 #![feature(int_error_matching)]
 // FIXME: rustc says there are redundant semicolons here but isn't
@@ -19,6 +20,8 @@
 // FIXME: ditto. probably a result of the above
 #![allow(clippy::no_effect)]
 
+#[macro_use]
+extern crate failure;
 #[macro_use]
 extern crate static_assertions;
 #[macro_use(error, debug, warn)]
