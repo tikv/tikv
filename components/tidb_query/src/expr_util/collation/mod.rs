@@ -56,14 +56,14 @@ impl From<DecodeOrWriteError> for crate::error::EvaluateError {
 }
 
 pub trait Charset {
-    fn advance_one(data: &[u8]) -> usize;
+    fn next_char_width(data: &[u8]) -> usize;
 }
 
 pub struct CharsetBinary;
 
 impl Charset for CharsetBinary {
     #[inline]
-    fn advance_one(data: &[u8]) -> usize {
+    fn next_char_width(data: &[u8]) -> usize {
         !data.is_empty() as usize
     }
 }

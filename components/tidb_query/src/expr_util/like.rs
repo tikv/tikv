@@ -23,7 +23,7 @@ pub fn like<C: Collator>(target: &[u8], pattern: &[u8], escape: u8) -> Result<bo
             let c = pattern[px];
             match c {
                 b'_' => {
-                    let off = C::Charset::advance_one(&target[tx..]);
+                    let off = C::Charset::next_char_width(&target[tx..]);
                     if off > 0 {
                         px += 1;
                         tx += off;
@@ -34,15 +34,15 @@ pub fn like<C: Collator>(target: &[u8], pattern: &[u8], escape: u8) -> Result<bo
                     // update the backtrace point.
                     next_px = px;
                     px += 1;
-                    next_tx = tx + std::cmp::max(C::Charset::advance_one(&target[tx..]), 1);
+                    next_tx = tx + std::cmp::max(C::Charset::next_char_width(&target[tx..]), 1);
                     continue;
                 }
                 pc => {
                     if pc == escape && px + 1 < pattern.len() {
                         px += 1;
                     }
-                    let poff = C::Charset::advance_one(&pattern[px..]);
-                    let toff = C::Charset::advance_one(&target[tx..]);
+                    let poff = C::Charset::next_char_width(&pattern[px..]);
+                    let toff = C::Charset::next_char_width(&target[tx..]);
                     if poff > 0 && toff > 0 {
                         if let Ok(std::cmp::Ordering::Equal) =
                             C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff])
