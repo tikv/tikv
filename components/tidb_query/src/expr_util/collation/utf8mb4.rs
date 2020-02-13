@@ -12,13 +12,13 @@ pub struct CharsetUtf8mb4;
 
 impl Charset for CharsetUtf8mb4 {
     #[inline]
-    fn advance_one(data: &[u8]) -> Option<usize> {
+    fn advance_one(data: &[u8]) -> usize {
         let mut it = data.iter();
         let start = it.as_slice().as_ptr();
         if core::str::next_code_point(&mut it).is_some() {
-            unsafe { Some(it.as_slice().as_ptr().offset_from(start) as usize) }
+            unsafe { it.as_slice().as_ptr().offset_from(start) as usize }
         } else {
-            None
+            0
         }
     }
 }
