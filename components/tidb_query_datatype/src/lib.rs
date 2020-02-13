@@ -9,6 +9,8 @@
 #![cfg_attr(test, feature(test))]
 
 #[macro_use]
+extern crate num_derive;
+#[macro_use]
 extern crate bitflags;
 #[macro_use]
 extern crate failure;

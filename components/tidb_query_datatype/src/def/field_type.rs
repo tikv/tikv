@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use num_traits::FromPrimitive;
+
 use tipb::ColumnInfo;
 use tipb::FieldType;
 
@@ -96,22 +98,15 @@ impl From<FieldTypeTp> for ColumnInfo {
 /// Valid values of `tipb::FieldType::collate` and
 /// `tipb::ColumnInfo::collation`.
 ///
-/// The default value is `UTF8Bin`.
-#[derive(PartialEq, Debug, Clone, Copy)]
+/// The default value is `Utf8Bin`. See `charset.go` in pingcap/parser.
+#[derive(PartialEq, Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
 #[repr(i32)]
 pub enum Collation {
+    Utf8GeneralCi = 33,
+    Utf8Mb4GeneralCi = 45,
+    Utf8Mb4Bin = 46,
     Binary = 63,
-    UTF8Bin = 83, // Default
-}
-
-impl Collation {
-    fn from_i32(i: i32) -> Option<Collation> {
-        match i {
-            63 => Some(Collation::Binary),
-            83 => Some(Collation::UTF8Bin),
-            _ => None,
-        }
-    }
+    Utf8Bin = 83, // Default
 }
 
 impl fmt::Display for Collation {
@@ -299,7 +294,7 @@ impl FieldTypeAccessor for FieldType {
 
     #[inline]
     fn collation(&self) -> Collation {
-        Collation::from_i32(self.get_collate()).unwrap_or(Collation::UTF8Bin)
+        Collation::from_i32(self.get_collate()).unwrap_or(Collation::Utf8Bin)
     }
 
     #[inline]
@@ -356,7 +351,7 @@ impl FieldTypeAccessor for ColumnInfo {
 
     #[inline]
     fn collation(&self) -> Collation {
-        Collation::from_i32(self.get_collation()).unwrap_or(Collation::UTF8Bin)
+        Collation::from_i32(self.get_collation()).unwrap_or(Collation::Utf8Bin)
     }
 
     #[inline]
