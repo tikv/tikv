@@ -2,6 +2,9 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.5-hotfix]
++ Raftstore support yield to schedule apply more fairly, and introduce pre-transfer leader to make transfer leader more stable #[6560](https://github.com/tikv/tikv/pull/6560)
+
 ## [3.0.5]
 + Fix the problem that split check is always scanning caused by updating approximate in pd-worker [#5716](https://github.com/tikv/tikv/pull/5716)
 + Update rust-rocksdb to avoid intra_L0 compaction issue [#5710](https://github.com/tikv/tikv/pull/5710)
