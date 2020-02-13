@@ -147,8 +147,8 @@ impl SstReader {
 mod tests {
     use super::*;
     use crate::rocks::util;
-    use tempdir::TempDir;
     use std::io::Read;
+    use tempdir::TempDir;
 
     #[test]
     fn test_smoke() {

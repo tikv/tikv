@@ -5,14 +5,29 @@ edition = "2018"
 publish = false
 
 [dependencies]
+futures = "0.3"
 futures-io = "0.3"
-futures-util = { version = "0.3", default-features = false, features = ["io"] }
+futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
 futures-executor = "0.3"
+futures01 = { version = "0.1.29", package = "futures" }
+rand = "0.7"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
-tempfile = "3.0"
-rand = "0.6.5"
-url = "2.0"
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
+url = "2.0"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.1", default-features = false }
+rusoto_core = { version = "0.42.0" }
+rusoto_s3 = { version = "0.42.0" }
+rusoto_credential = { version = "0.42.0" }
+tokio = { version = "0.1.22", default-features = false, features = ["codec"] }
+
+[features]
+prost-codec = ["kvproto/prost-codec"]
+protobuf-codec = ["kvproto/protobuf-codec"]
+
+[dev-dependencies]
+rusoto_mock = "0.42.0"
+tempfile = "3.0"
+clap = { version = "2.32", features = ["yaml"] }
+rust-ini = "0.14.0"
