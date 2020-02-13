@@ -312,6 +312,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 PeerMsg::Noop => {}
             }
         }
+        self.fsm.peer.propose_batch_request(self.ctx);
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage) {
