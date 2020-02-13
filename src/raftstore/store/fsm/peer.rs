@@ -1932,7 +1932,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         ) {
             // TODO: need to remove "are we shutting down", it should panic
             // if we are not in shut-down state
-            warn!(
+            info!(
                 "failed to send merge result, are we shutting down?";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),

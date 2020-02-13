@@ -1155,16 +1155,16 @@ impl Peer {
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
-        {
-            let before_handle_raft_ready_1003 = || {
-                fail_point!(
-                    "before_handle_raft_ready_1003",
-                    self.peer.get_id() == 1003 && self.is_leader(),
-                    |_| {}
-                );
-            };
-            before_handle_raft_ready_1003();
-        }
+
+        let before_handle_raft_ready_1003 = || {
+            fail_point!(
+                "before_handle_raft_ready_1003",
+                self.peer.get_id() == 1003 && self.is_leader(),
+                |_| {}
+            );
+        };
+        before_handle_raft_ready_1003();
+
         let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
         self.on_role_changed(ctx, &ready);

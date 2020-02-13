@@ -709,9 +709,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     must_get_equal(&cluster.get_engine(3), b"k123", b"v2");
 }
 
-// Test if the data is complete when the source region executes the previous
-// failed PrepareMerge log after the target region executes the CommitMerge
-// log and sends CatchUpLogs to source region.
+/// Tests whether stale merge is rollback properly if it merge to the same target region again later.
 #[test]
 fn test_node_failed_merge_before_succeed_merge() {
     let _guard = crate::setup();
@@ -756,7 +754,7 @@ fn test_node_failed_merge_before_succeed_merge() {
     cluster.must_split(&right, b"k8");
     fail::remove(schedule_merge_fp);
     // Wait for left region to rollback merge
-    sleep_ms(200);
+    cluster.must_put(b"k12", b"v2");
     // Prevent the `PrepareMerge` and `RollbackMerge` log sending to apply fsm after
     // cleaning send filter. Since this method is just to check `RollbackMerge`,
     // the `PrepareMerge` may escape, but it makes the best effort.
@@ -796,10 +794,10 @@ fn test_node_failed_merge_before_succeed_merge() {
     }
 }
 
-// Test if the source region is destroyed correctly in merging when meeting transfer leader.
-// In previous merge flow, the target region deletes some data from source region in StoreMeta
-// before the source region is truly destroyed. It may meet panic when the source peer fsm handle
-// some msgs at this time.(such as this case)
+/// Tests whether the source peer is destroyed correctly when transferring leader during committing merge.
+///
+/// In the previous merge flow, target peer deletes meta of source peer without marking it as pending remove.
+/// If source peer becomes leader at the same time, it will panic due to corrupted meta.
 #[test]
 fn test_node_merge_transfer_leader() {
     let _guard = crate::setup();
@@ -823,7 +821,6 @@ fn test_node_merge_transfer_leader() {
 
     let left_peer_1 = find_peer(&left, 1).unwrap().to_owned();
     cluster.must_transfer_leader(left.get_id(), left_peer_1.clone());
-    sleep_ms(100);
 
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
