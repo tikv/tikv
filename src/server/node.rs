@@ -80,12 +80,9 @@ where
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
         store.set_status_address(cfg.status_addr.clone());
 
-        match std::env::current_exe() {
-            Ok(path) => {
-                // `file_name` Returns [`None`] if the path terminates in `..`, so it's safe to unwrap.
-                store.set_binary_path(path.file_name().unwrap().to_string_lossy().to_string());
-            }
-            Err(_) => {}
+        if let Ok(path) = std::env::current_exe() {
+            // `file_name` Returns [`None`] if the path terminates in `..`, so it's safe to unwrap.
+            store.set_binary_path(path.file_name().unwrap().to_string_lossy().to_string());
         };
 
         store.set_start_timestamp(chrono::Local::now().timestamp());
