@@ -25,9 +25,9 @@
 //! ```
 //!
 //! In addition, substitution can vary on two sides of the arms.
-//! 
+//!
 //! For example,
-//! 
+//!
 //! ```ignore
 //! match_template! {
 //!     T = [Foo, Bar => Baz],
@@ -45,7 +45,7 @@
 //!     EvalType::Bar => { panic!("{}", EvalType::Baz); },
 //! }
 //! ```
-//! 
+//!
 //! Wildcard match arm is also supported (but there will be no substitution).
 
 #[macro_use]
