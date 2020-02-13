@@ -70,6 +70,7 @@ mod tests {
             (r#"C:\Programs\"#, r#"%\"#, '\\', Collation::Binary, Some(1)),
             (r#"C:"#, r#"%\\"#, '\\', Collation::Binary, Some(0)),
             (r#"C:\"#, r#"%\\"#, '\\', Collation::Binary, Some(1)),
+            (r#"C:\\"#, r#"C:\\"#, '\\', Collation::Binary, Some(0)),
             (r#"C:\Programs"#, r#"%\\"#, '\\', Collation::Binary, Some(0)),
             (
                 r#"C:\Programs\"#,
