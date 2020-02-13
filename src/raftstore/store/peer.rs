@@ -172,9 +172,9 @@ pub struct WaitApplyResultState {
 }
 
 pub struct BatchRaftCmdRequest {
-    request: Option<RaftCmdRequest>,
-    batch_size: u32,
-    batch_callbacks: Vec<(Callback<RocksEngine>, usize)>,
+    pub request: Option<RaftCmdRequest>,
+    pub batch_size: u32,
+    pub callbacks: Vec<(Callback<RocksEngine>, usize)>,
 }
 
 impl BatchRaftCmdRequest {
@@ -182,7 +182,7 @@ impl BatchRaftCmdRequest {
         BatchRaftCmdRequest {
             request: None,
             batch_size: 0,
-            batch_callbacks: vec![],
+            callbacks: vec![],
         }
     }
 
@@ -196,17 +196,8 @@ impl BatchRaftCmdRequest {
         } else {
             self.request = Some(req);
         };
-        self.batch_callbacks.push((cb, req_num));
+        self.callbacks.push((cb, req_num));
         self.batch_size += req_size;
-    }
-
-    fn take(&mut self) -> Option<(RaftCmdRequest, Vec<(Callback<RocksEngine>, usize)>)> {
-        self.batch_size = 0;
-        if let Some(req) = self.request.take() {
-            let cbs = mem::replace(&mut self.batch_callbacks, vec![]);
-            return Some((req, cbs));
-        }
-        None
     }
 }
 
@@ -241,7 +232,7 @@ pub struct Peer {
     pending_messages: Vec<eraftpb::Message>,
 
     // Batch raft command which has the same header into an entry
-    batch_raft_request: BatchRaftCmdRequest,
+    batch_cmd: BatchRaftCmdRequest,
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
@@ -367,7 +358,7 @@ impl Peer {
             leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
             pending_messages: vec![],
             pending_merge_apply_result: None,
-            batch_raft_request: BatchRaftCmdRequest::new(),
+            batch_cmd: BatchRaftCmdRequest::new(),
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
         };
@@ -1655,7 +1646,9 @@ impl Peer {
     }
 
     pub fn propose_batch_request<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
-        if let Some((req, mut cbs)) = self.batch_raft_request.take() {
+        if let Some(req) = self.batch_cmd.request.take() {
+            self.batch_cmd.batch_size = 0;
+            let mut cbs = mem::replace(&mut self.batch_cmd.callbacks, vec![]);
             let term = req.get_header().get_term();
             if let Err(e) = util::check_term(&req, self.term()) {
                 self.batch_callback(cbs, term, e);
@@ -1710,20 +1703,11 @@ impl Peer {
         ctx: &mut PollContext<T, C>,
         req: &RaftCmdRequest,
     ) -> bool {
-        if let Some(batch_req) = self.batch_raft_request.request.as_ref() {
-            let batch_term = batch_req.get_header().get_term();
-            let batch_epoch = batch_req.get_header().get_region_epoch();
-            let epoch = req.get_header().get_region_epoch();
-            let term = req.get_header().get_term();
-            if term != batch_term {
+        if let Some(batch_req) = self.batch_cmd.request.as_ref() {
+            if batch_req.get_header() != req.get_header() {
                 return true;
             }
-            if epoch != batch_epoch {
-                return true;
-            }
-            if f64::from(self.batch_raft_request.batch_size)
-                > ctx.cfg.raft_entry_max_size.0 as f64 * 0.3
-            {
+            if f64::from(self.batch_cmd.batch_size) > ctx.cfg.raft_entry_max_size.0 as f64 * 0.4 {
                 return true;
             }
             if batch_req.get_requests().len() > MAX_BATCH_KEY_NUM {
@@ -1773,7 +1757,7 @@ impl Peer {
                         self.propose_batch_request(ctx);
                     }
                     if f64::from(req_size) < max_size {
-                        self.batch_raft_request.push(req, req_size, cb);
+                        self.batch_cmd.push(req, req_size, cb);
                         return true;
                     }
                     self.propose_normal(ctx, req)
