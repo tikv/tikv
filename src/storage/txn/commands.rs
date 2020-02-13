@@ -6,12 +6,12 @@ use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
 use tikv_util::collections::HashMap;
-use txn_types::{Key, Lock, Mutation, TimeStamp, Value};
+use txn_types::{Key, Lock, Mutation, TimeStamp};
 
 use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
 use crate::storage::txn::latch::{self, Latches};
-use crate::storage::types::{MvccInfo, StorageCallbackType, TxnStatus};
+use crate::storage::types::{MvccInfo, PessimisticLockRes, StorageCallbackType, TxnStatus};
 use crate::storage::Result;
 
 /// Store Transaction scheduler commands.
@@ -85,7 +85,7 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
     }
 }
 
-impl From<PessimisticLockRequest> for TypedCommand<Result<Option<(Option<Value>, TimeStamp)>>> {
+impl From<PessimisticLockRequest> for TypedCommand<Result<PessimisticLockRes>> {
     fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()
@@ -108,6 +108,7 @@ impl From<PessimisticLockRequest> for TypedCommand<Result<Option<(Option<Value>,
             req.get_for_update_ts().into(),
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_force(),
+            req.get_return_values(),
             req.take_context(),
         )
     }
@@ -371,7 +372,7 @@ command! {
     /// Acquire a Pessimistic lock on the keys.
     ///
     /// This can be rolled back with a [`PessimisticRollback`](CommandKind::PessimisticRollback) command.
-    AcquirePessimisticLock -> Result<Option<(Option<Value>, TimeStamp)>> {
+    AcquirePessimisticLock -> Result<PessimisticLockRes> {
         /// The set of keys to lock.
         keys: Vec<(Key, bool)>,
         /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
@@ -386,6 +387,10 @@ command! {
         /// If it is true, TiKV will acquire the pessimistic lock regardless of write conflict
         /// and return the latest value. Now it's only supported for single mutation.
         force: bool,
+        /// If it is true, TiKV will return values of the keys if no error, so TiDB can cache the values for
+        /// later read in the same transaction.
+        /// When 'force' is set to true, this field is ignored.
+        return_values: bool,
     }
 }
 

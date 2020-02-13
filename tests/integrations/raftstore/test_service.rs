@@ -930,24 +930,30 @@ fn test_double_run_node() {
 fn kv_pessimistic_lock(
     client: &TikvClient,
     ctx: Context,
-    key: Vec<u8>,
+    keys: Vec<Vec<u8>>,
     ts: u64,
     for_update_ts: u64,
     force: bool,
+    return_values: bool,
 ) -> PessimisticLockResponse {
     let mut req = PessimisticLockRequest::default();
     req.set_context(ctx);
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::PessimisticLock);
-    mutation.set_key(key.clone());
-    mutation.set_value(key.clone());
-    req.set_mutations(vec![mutation].into_iter().collect());
-    req.primary_lock = key;
+    let primary = keys[0].clone();
+    let mut mutations = vec![];
+    for key in keys {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::PessimisticLock);
+        mutation.set_key(key);
+        mutations.push(mutation);
+    }
+    req.set_mutations(mutations.into());
+    req.primary_lock = primary;
     req.start_version = ts;
     req.for_update_ts = for_update_ts;
     req.lock_ttl = 20;
     req.is_first_lock = false;
     req.force = force;
+    req.return_values = return_values;
     client.kv_pessimistic_lock(&req).unwrap()
 }
 
@@ -963,7 +969,7 @@ fn must_kv_pessimistic_rollback(client: &TikvClient, ctx: Context, key: Vec<u8>,
 }
 
 #[test]
-fn test_force_pessimistic_lock() {
+fn test_pessimistic_lock() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
@@ -974,27 +980,90 @@ fn test_force_pessimistic_lock() {
     mutation.set_value(v.clone());
     must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
 
-    let resp = kv_pessimistic_lock(&client, ctx.clone(), k.clone(), 20, 20, false);
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-    assert_eq!(resp.errors.len(), 1);
-    assert!(resp.errors[0].has_locked());
+    // KeyIsLocked
+    for &force in &[false, true] {
+        for &return_values in &[false, true] {
+            let resp = kv_pessimistic_lock(
+                &client,
+                ctx.clone(),
+                vec![k.clone()],
+                20,
+                20,
+                force,
+                return_values,
+            );
+            assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+            assert_eq!(resp.errors.len(), 1);
+            assert!(resp.errors[0].has_locked());
+            assert_eq!(resp.commit_ts, 0);
+            assert!(resp.value.is_empty());
+            assert!(resp.values.is_empty());
+        }
+    }
 
     must_kv_commit(&client, ctx.clone(), vec![k.clone()], 10, 30, 30);
-    let resp = kv_pessimistic_lock(&client, ctx.clone(), k.clone(), 20, 20, false);
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-    assert_eq!(resp.errors.len(), 1);
-    assert!(resp.errors[0].has_conflict());
 
-    let resp = kv_pessimistic_lock(&client, ctx.clone(), k.clone(), 40, 40, false);
+    // WriteConflict
+    for &force in &[false, true] {
+        for &return_values in &[false, true] {
+            let resp = kv_pessimistic_lock(
+                &client,
+                ctx.clone(),
+                vec![k.clone()],
+                20,
+                20,
+                force,
+                return_values,
+            );
+            assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+            assert_eq!(resp.errors.len(), 1);
+            assert!(resp.errors[0].has_conflict());
+            assert_eq!(resp.commit_ts, 0);
+            assert!(resp.value.is_empty());
+            assert!(resp.values.is_empty());
+        }
+    }
+
+    for &force in &[false, true] {
+        for &return_values in &[false, true] {
+            let resp = kv_pessimistic_lock(
+                &client,
+                ctx.clone(),
+                vec![k.clone()],
+                40,
+                40,
+                force,
+                return_values,
+            );
+            assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+            assert!(resp.errors.is_empty());
+            if force {
+                assert_eq!(resp.commit_ts, 30);
+                assert_eq!(resp.value, v.clone());
+                assert!(resp.values.is_empty());
+            } else if return_values {
+                assert_eq!(resp.get_values().to_vec(), vec![v.clone()]);
+                assert_eq!(resp.commit_ts, 0);
+                assert!(resp.value.is_empty());
+            }
+            must_kv_pessimistic_rollback(&client, ctx.clone(), k.clone(), 40);
+        }
+    }
+
+    // Return multiple values
+    let resp = kv_pessimistic_lock(
+        &client,
+        ctx.clone(),
+        vec![k.clone(), b"nonexsit".to_vec()],
+        40,
+        40,
+        false,
+        true,
+    );
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.errors.is_empty());
     assert_eq!(resp.commit_ts, 0);
     assert!(resp.value.is_empty());
-    must_kv_pessimistic_rollback(&client, ctx.clone(), k.clone(), 40);
-
-    let resp = kv_pessimistic_lock(&client, ctx, k, 50, 50, true);
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-    assert!(resp.errors.is_empty());
-    assert_eq!(resp.commit_ts, 30);
-    assert_eq!(resp.value, v);
+    assert_eq!(resp.get_values().to_vec(), vec![v, vec![]]);
+    must_kv_pessimistic_rollback(&client, ctx, k, 40);
 }

@@ -4,7 +4,7 @@ use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::metrics::*;
 use crate::storage::mvcc::{self, reader::MvccReader};
 use crate::storage::mvcc::{ErrorInner, Result};
-use crate::storage::types::TxnStatus;
+use crate::storage::types::{PessimisticLockRes, TxnStatus};
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
@@ -229,7 +229,8 @@ impl<S: Snapshot> MvccTxn<S> {
         lock_ttl: u64,
         for_update_ts: TimeStamp,
         force: bool,
-    ) -> Result<Option<(Option<Value>, TimeStamp)>> {
+        need_value: bool,
+    ) -> Result<PessimisticLockRes> {
         fn pessimistic_lock(
             primary: &[u8],
             start_ts: TimeStamp,
@@ -261,9 +262,13 @@ impl<S: Snapshot> MvccTxn<S> {
                 .into());
             }
             let res = if force {
-                Ok(Some(self.reader.force_get(&key, TimeStamp::max())?))
+                let (value, commit_ts) = self.reader.force_get(&key, TimeStamp::max())?;
+                Ok(PessimisticLockRes::ForceLock { value, commit_ts })
+            } else if need_value {
+                let (value, _) = self.reader.force_get(&key, TimeStamp::max())?;
+                Ok(PessimisticLockRes::Value(value))
             } else {
-                Ok(None)
+                Ok(PessimisticLockRes::Empty)
             };
             // Overwrite the lock with small for_update_ts
             if for_update_ts > lock.for_update_ts {
@@ -329,11 +334,11 @@ impl<S: Snapshot> MvccTxn<S> {
             self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
 
             // Quick path for force pessimistic lock. If it's a valid Write, no need to read again.
-            if force {
-                match write.write_type {
+            if force || need_value {
+                let (value, commit_ts) = match write.write_type {
                     WriteType::Put => {
                         if write.short_value.is_some() {
-                            Ok(Some((write.short_value.take(), commit_ts)))
+                            (write.short_value.take(), commit_ts)
                         } else {
                             match self.reader.load_data(&key, write.start_ts)? {
                                 None => {
@@ -342,27 +347,37 @@ impl<S: Snapshot> MvccTxn<S> {
                                         "get",
                                     ));
                                 }
-                                Some(v) => Ok(Some((Some(v), commit_ts))),
+                                Some(v) => (Some(v), commit_ts),
                             }
                         }
                     }
-                    WriteType::Delete => Ok(Some((None, commit_ts))),
+                    WriteType::Delete => (None, commit_ts),
                     WriteType::Lock | WriteType::Rollback => {
                         // Try to find a valid Write.
-                        Ok(Some(self.reader.force_get(&key, commit_ts.prev())?))
+                        self.reader.force_get(&key, commit_ts.prev())?
                     }
+                };
+                if force {
+                    Ok(PessimisticLockRes::ForceLock { value, commit_ts })
+                } else {
+                    Ok(PessimisticLockRes::Value(value))
                 }
             } else {
                 // Don't need value
-                Ok(None)
+                Ok(PessimisticLockRes::Empty)
             }
         } else {
             if force {
                 // Write not found
-                Ok(Some((None, TimeStamp::zero())))
+                Ok(PessimisticLockRes::ForceLock {
+                    value: None,
+                    commit_ts: TimeStamp::zero(),
+                })
+            } else if need_value {
+                Ok(PessimisticLockRes::Value(None))
             } else {
                 // Don't need value
-                Ok(None)
+                Ok(PessimisticLockRes::Empty)
             }
         };
 
@@ -2389,7 +2404,7 @@ mod tests {
 
         // Write a pessimistic lock.
         must_rollback(&engine, k, 10);
-        must_acquire_pessimistic_lock_impl(&engine, k, k, 50, lock_ttl, 50.into(), false);
+        must_acquire_pessimistic_lock_impl(&engine, k, k, 50, lock_ttl, 50.into(), false, false);
 
         expected_lock_info.set_lock_version(50);
         expected_lock_info.set_lock_ttl(lock_ttl);
@@ -2464,11 +2479,14 @@ mod tests {
     #[test]
     fn test_force_pessimistic_lock() {
         let engine = TestEngineBuilder::new().build().unwrap();
-
         let (k, v) = (b"k", b"v");
+        let force_lock_res = |value, commit_ts: u64| PessimisticLockRes::ForceLock {
+            value,
+            commit_ts: commit_ts.into(),
+        };
 
         let res = must_force_acquire_pessimistic_lock(&engine, k, k, 10, 10);
-        assert_eq!(res, Some((None, TimeStamp::zero())));
+        assert_eq!(res, force_lock_res(None, 0));
         must_pessimistic_locked(&engine, k, 10, 10);
         must_pessimistic_rollback(&engine, k, 10, 10);
 
@@ -2480,7 +2498,14 @@ mod tests {
         // WriteConflict
         must_force_acquire_pessimistic_lock_err(&engine, k, k, 15, 15);
         let res = must_force_acquire_pessimistic_lock(&engine, k, k, 25, 25);
-        assert_eq!(res, Some((Some(v.to_vec()), 20.into())));
+        assert_eq!(res, force_lock_res(Some(v.to_vec()), 20));
+        must_pessimistic_locked(&engine, k, 25, 25);
+        must_pessimistic_rollback(&engine, k, 25, 25);
+
+        // force overrides need_value.
+        let res =
+            must_acquire_pessimistic_lock_impl(&engine, k, k, 25, 3000, 25.into(), true, true);
+        assert_eq!(res, force_lock_res(Some(v.to_vec()), 20));
         must_pessimistic_locked(&engine, k, 25, 25);
         must_pessimistic_rollback(&engine, k, 25, 25);
 
@@ -2488,14 +2513,14 @@ mod tests {
         must_prewrite_lock(&engine, k, k, 30);
         must_commit(&engine, k, 30, 40);
         let res = must_force_acquire_pessimistic_lock(&engine, k, k, 45, 45);
-        assert_eq!(res, Some((Some(v.to_vec()), 20.into())));
+        assert_eq!(res, force_lock_res(Some(v.to_vec()), 20));
         must_pessimistic_locked(&engine, k, 45, 45);
         must_pessimistic_rollback(&engine, k, 45, 45);
 
         // Skip Write::Rollback
         must_rollback(&engine, k, 50);
         let res = must_force_acquire_pessimistic_lock(&engine, k, k, 55, 55);
-        assert_eq!(res, Some((Some(v.to_vec()), 20.into())));
+        assert_eq!(res, force_lock_res(Some(v.to_vec()), 20));
         must_pessimistic_locked(&engine, k, 55, 55);
         must_pessimistic_rollback(&engine, k, 55, 55);
 
@@ -2503,7 +2528,53 @@ mod tests {
         must_prewrite_delete(&engine, k, k, 60);
         must_commit(&engine, k, 60, 70);
         let res = must_force_acquire_pessimistic_lock(&engine, k, k, 75, 75);
-        assert_eq!(res, Some((None, 70.into())));
+        assert_eq!(res, force_lock_res(None, 70));
+        must_pessimistic_locked(&engine, k, 75, 75);
+        must_pessimistic_rollback(&engine, k, 75, 75);
+    }
+
+    #[test]
+    fn test_pessimistic_lock_return_value() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k, v) = (b"k", b"v");
+
+        let res = must_acquire_pessimistic_lock_return_value(&engine, k, k, 10, 10);
+        assert_eq!(res, PessimisticLockRes::Value(None));
+        must_pessimistic_locked(&engine, k, 10, 10);
+        must_pessimistic_rollback(&engine, k, 10, 10);
+
+        // Put
+        must_prewrite_put(&engine, k, v, k, 10);
+        // KeyIsLocked
+        must_acquire_pessimistic_lock_return_value_err(&engine, k, k, 20, 20);
+        must_commit(&engine, k, 10, 20);
+        // WriteConflict
+        must_acquire_pessimistic_lock_return_value_err(&engine, k, k, 15, 15);
+        let res = must_acquire_pessimistic_lock_return_value(&engine, k, k, 25, 25);
+        assert_eq!(res, PessimisticLockRes::Value(Some(v.to_vec())));
+        must_pessimistic_locked(&engine, k, 25, 25);
+        must_pessimistic_rollback(&engine, k, 25, 25);
+
+        // Skip Write::Lock
+        must_prewrite_lock(&engine, k, k, 30);
+        must_commit(&engine, k, 30, 40);
+        let res = must_acquire_pessimistic_lock_return_value(&engine, k, k, 45, 45);
+        assert_eq!(res, PessimisticLockRes::Value(Some(v.to_vec())));
+        must_pessimistic_locked(&engine, k, 45, 45);
+        must_pessimistic_rollback(&engine, k, 45, 45);
+
+        // Skip Write::Rollback
+        must_rollback(&engine, k, 50);
+        let res = must_acquire_pessimistic_lock_return_value(&engine, k, k, 55, 55);
+        assert_eq!(res, PessimisticLockRes::Value(Some(v.to_vec())));
+        must_pessimistic_locked(&engine, k, 55, 55);
+        must_pessimistic_rollback(&engine, k, 55, 55);
+
+        // Delete
+        must_prewrite_delete(&engine, k, k, 60);
+        must_commit(&engine, k, 60, 70);
+        let res = must_acquire_pessimistic_lock_return_value(&engine, k, k, 75, 75);
+        assert_eq!(res, PessimisticLockRes::Value(None));
         must_pessimistic_locked(&engine, k, 75, 75);
         must_pessimistic_rollback(&engine, k, 75, 75);
     }

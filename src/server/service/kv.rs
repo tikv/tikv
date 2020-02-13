@@ -20,7 +20,7 @@ use crate::storage::{
     },
     kv::Engine,
     lock_manager::LockManager,
-    PointGetCommand, Storage, TxnStatus,
+    PessimisticLockRes, PointGetCommand, Storage, TxnStatus,
 };
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
@@ -1459,13 +1459,20 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
 });
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
     match v {
-        Ok(Ok(Some((val, commit_ts)))) => {
-            if let Some(val) = val {
-                resp.set_value(val);
-            }
-            resp.set_commit_ts(commit_ts.into_inner());
+        Ok(Ok(res)) => match res {
+            PessimisticLockRes::ForceLock { value, commit_ts } => {
+                if let Some(value) = value {
+                    resp.set_value(value);
+                }
+                resp.set_commit_ts(commit_ts.into_inner());
+            },
+            PessimisticLockRes::MultiValue { values } => {
+                let values = values.into_iter().map(Option::unwrap_or_default).collect();
+                resp.set_values(values);
+            },
+            PessimisticLockRes::Empty => (),
+            PessimisticLockRes::Value(..) => panic!("unexpected PessimisticLockRes"),
         }
-        Ok(Ok(None)) => (),
         Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
     }
 });

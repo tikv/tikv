@@ -11,14 +11,14 @@ mod process;
 mod store;
 
 use crate::storage::{
-    types::{MvccInfo, TxnStatus},
+    types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
 use kvproto::kvrpcpb::LockInfo;
 use std::error;
 use std::fmt;
 use std::io::Error as IoError;
-use txn_types::{Key, TimeStamp, Value};
+use txn_types::{Key, TimeStamp};
 
 pub use self::commands::Command;
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
@@ -52,7 +52,7 @@ pub enum ProcessResult {
         err: StorageError,
     },
     PessimisticLockRes {
-        res: StorageResult<Option<(Option<Value>, TimeStamp)>>,
+        res: StorageResult<PessimisticLockRes>,
     },
 }
 
@@ -60,8 +60,10 @@ impl ProcessResult {
     pub fn maybe_clone(&self) -> Option<ProcessResult> {
         match self {
             ProcessResult::PessimisticLockRes { res } => {
-                if let Ok(r) = res {
-                    Some(ProcessResult::PessimisticLockRes { res: Ok(r.clone()) })
+                if let Ok(res) = res {
+                    Some(ProcessResult::PessimisticLockRes {
+                        res: Ok(res.clone()),
+                    })
                 } else {
                     None
                 }

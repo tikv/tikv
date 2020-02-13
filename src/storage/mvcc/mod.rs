@@ -286,7 +286,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot};
-    use crate::storage::types::TxnStatus;
+    use crate::storage::types::{PessimisticLockRes, TxnStatus};
     use engine::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use txn_types::Key;
@@ -678,7 +678,8 @@ pub mod tests {
         lock_ttl: u64,
         for_update_ts: TimeStamp,
         force: bool,
-    ) -> Option<(Option<Value>, TimeStamp)> {
+        need_value: bool,
+    ) -> PessimisticLockRes {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
@@ -690,6 +691,7 @@ pub mod tests {
                 lock_ttl,
                 for_update_ts,
                 force,
+                need_value,
             )
             .unwrap();
         let modifies = txn.into_modifies();
@@ -715,8 +717,36 @@ pub mod tests {
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
-    ) -> Option<(Option<Value>, TimeStamp)> {
-        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, 0, for_update_ts.into(), true)
+    ) -> PessimisticLockRes {
+        must_acquire_pessimistic_lock_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            0,
+            for_update_ts.into(),
+            true,
+            false,
+        )
+    }
+
+    pub fn must_acquire_pessimistic_lock_return_value<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+    ) -> PessimisticLockRes {
+        must_acquire_pessimistic_lock_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            0,
+            for_update_ts.into(),
+            false,
+            true,
+        )
     }
 
     pub fn must_acquire_pessimistic_lock_with_ttl<E: Engine>(
@@ -727,7 +757,7 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
         ttl: u64,
     ) {
-        must_acquire_pessimistic_lock_impl(
+        match must_acquire_pessimistic_lock_impl(
             engine,
             key,
             pk,
@@ -735,7 +765,11 @@ pub mod tests {
             ttl,
             for_update_ts.into(),
             false,
-        );
+            false,
+        ) {
+            PessimisticLockRes::Empty => (),
+            _ => panic!("unexpected PessimisticLockRes"),
+        }
     }
 
     pub fn must_acquire_pessimistic_lock_for_large_txn<E: Engine>(
@@ -756,7 +790,15 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
     ) -> Error {
-        must_acquire_pessimistic_lock_err_impl(engine, key, pk, start_ts, for_update_ts, false)
+        must_acquire_pessimistic_lock_err_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            for_update_ts,
+            false,
+            false,
+        )
     }
 
     pub fn must_force_acquire_pessimistic_lock_err<E: Engine>(
@@ -766,7 +808,33 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
     ) -> Error {
-        must_acquire_pessimistic_lock_err_impl(engine, key, pk, start_ts, for_update_ts, true)
+        must_acquire_pessimistic_lock_err_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            for_update_ts,
+            true,
+            false,
+        )
+    }
+
+    pub fn must_acquire_pessimistic_lock_return_value_err<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+    ) -> Error {
+        must_acquire_pessimistic_lock_err_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            for_update_ts,
+            false,
+            true,
+        )
     }
 
     pub fn must_acquire_pessimistic_lock_err_impl<E: Engine>(
@@ -776,6 +844,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
         force: bool,
+        need_value: bool,
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -787,6 +856,7 @@ pub mod tests {
             0,
             for_update_ts.into(),
             force,
+            need_value,
         )
         .unwrap_err()
     }

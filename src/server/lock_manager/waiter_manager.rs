@@ -616,9 +616,9 @@ impl FutureRunnable<Task> for WaiterManager {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::storage::PessimisticLockRes;
     use tikv_util::future::paired_future_callback;
     use tikv_util::worker::FutureWorker;
-    use txn_types::Value;
 
     use std::sync::mpsc;
 
@@ -707,7 +707,7 @@ pub mod tests {
         Waiter,
         LockInfo,
         tokio_sync::oneshot::Receiver<
-            Result<Result<Option<(Option<Value>, TimeStamp)>, StorageError>, StorageError>,
+            Result<Result<PessimisticLockRes, StorageError>, StorageError>,
         >,
     );
 
