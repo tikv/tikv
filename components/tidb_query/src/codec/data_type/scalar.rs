@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 
+use match_template::match_template;
 use tidb_query_datatype::{Collation, EvalType};
 
 use super::*;
@@ -182,24 +183,22 @@ impl<'a> ScalarValueRef<'a> {
         other: &ScalarValueRef,
         collation: Collation,
     ) -> Result<Ordering> {
-        Ok(match (self, other) {
-            (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => v1.cmp(v2),
-            (ScalarValueRef::Real(v1), ScalarValueRef::Real(v2)) => v1.cmp(v2),
-            (ScalarValueRef::Decimal(v1), ScalarValueRef::Decimal(v2)) => v1.cmp(v2),
-            (ScalarValueRef::DateTime(v1), ScalarValueRef::DateTime(v2)) => v1.cmp(v2),
-            (ScalarValueRef::Duration(v1), ScalarValueRef::Duration(v2)) => v1.cmp(v2),
-            (ScalarValueRef::Json(v1), ScalarValueRef::Json(v2)) => v1.cmp(v2),
-            (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(None)) => Ordering::Equal,
-            (ScalarValueRef::Bytes(Some(_)), ScalarValueRef::Bytes(None)) => Ordering::Greater,
-            (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(Some(_))) => Ordering::Less,
-            (ScalarValueRef::Bytes(Some(v1)), ScalarValueRef::Bytes(Some(v2))) => {
-                match_template_collator! {
-                    TT, match collation {
-                        Collation::TT => TT::sort_compare(v1, v2)?
+        Ok(match_template! {
+            TT = [Int, Real, Decimal, DateTime, Duration, Json],
+            match (self, other) {
+                (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => v1.cmp(v2),
+                (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(None)) => Ordering::Equal,
+                (ScalarValueRef::Bytes(Some(_)), ScalarValueRef::Bytes(None)) => Ordering::Greater,
+                (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(Some(_))) => Ordering::Less,
+                (ScalarValueRef::Bytes(Some(v1)), ScalarValueRef::Bytes(Some(v2))) => {
+                    match_template_collator! {
+                        TT, match collation {
+                            Collation::TT => TT::sort_compare(v1, v2)?
+                        }
                     }
                 }
+                _ => panic!("Cannot compare two ScalarValueRef in different type"),
             }
-            _ => panic!("Cannot compare two ScalarValueRef in different type"),
         })
     }
 }
