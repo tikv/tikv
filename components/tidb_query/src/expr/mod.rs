@@ -454,7 +454,7 @@ mod tests {
             Datum::Json(j) => {
                 expr.set_tp(ExprType::MysqlJson);
                 let mut buf = Vec::new();
-                buf.write_json(&j).unwrap();
+                buf.write_json(j.as_ref()).unwrap();
                 expr.set_val(buf);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
@@ -538,7 +538,7 @@ mod tests {
             (
                 ScalarFuncSig::CastIntAsJson,
                 vec![Datum::I64(12)],
-                Datum::Json(Json::I64(12)),
+                Datum::Json(Json::from_i64(12).unwrap()),
             ),
         ];
         for (sig, cols, exp) in cases {
