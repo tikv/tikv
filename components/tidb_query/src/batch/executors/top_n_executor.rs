@@ -219,7 +219,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     fn heap_add_row(&mut self, row: HeapItemUnsafe) -> Result<()> {
         if self.heap.len() < self.n {
             // HeapItemUnsafe must be checked valid to compare in advance, or else it may
-            // panic insied BinaryHeap.
+            // panic inside BinaryHeap.
             row.cmp_with_field_type(&row)?;
 
             // Push into heap when heap is not full.
@@ -434,7 +434,7 @@ impl HeapItemUnsafe {
 }
 
 /// WARN: HeapItemUnsafe implements partial ordering. It panics when Collator fails to parse.
-/// So make sure to check it before putting it into a heap.
+/// So make sure that it is valid before putting it into a heap.
 impl Ord for HeapItemUnsafe {
     fn cmp(&self, other: &Self) -> Ordering {
         self.cmp_with_field_type(other).unwrap()
@@ -459,7 +459,7 @@ impl Eq for HeapItemUnsafe {}
 mod tests {
     use super::*;
 
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeTp};
 
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::expr::EvalWarnings;
@@ -808,6 +808,230 @@ mod tests {
                 Real::new(-5.0).ok(),
                 None,
                 Real::new(4.0).ok()
+            ]
+        );
+        assert!(r.is_drained.unwrap());
+    }
+
+    /// Builds an executor that will return these data:
+    ///
+    /// == Schema ==
+    /// Col0 (Bytes[utf8_general_ci])      Col1(Bytes[utf8_bin])   Col2(Bytes[binary])
+    /// == Call #1 ==
+    /// "aa"                               "aaa"                      "カ"
+    /// NULL                               NULL                       "Aa"
+    /// "aa"                               "aa"                       NULL
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// "カ"                               "か"                        NULL
+    /// "か"                               "カ"                       "aa"
+    /// "Aa"                               NULL                       "aaa"
+    /// "aaa"                              "Aa"                       "か"
+    /// (drained)
+    fn make_bytes_src_executor() -> MockExecutor {
+        let mut col1: FieldType = FieldTypeTp::VarChar.into();
+        let mut col2: FieldType = FieldTypeTp::VarChar.into();
+        let mut col3: FieldType = FieldTypeTp::VarChar.into();
+        col1.set_collation(Collation::Utf8GeneralCi);
+        col2.set_collation(Collation::Utf8Bin);
+        col3.set_collation(Collation::Binary);
+        MockExecutor::new(
+            vec![col1, col2, col3],
+            vec![
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Bytes(vec![Some(b"aa".to_vec()), None, Some(b"aa".to_vec())]),
+                        VectorValue::Bytes(vec![Some(b"aa".to_vec()), None, Some(b"aaa".to_vec())]),
+                        VectorValue::Bytes(vec![
+                            None,
+                            Some(b"Aa".to_vec()),
+                            Some("カ".as_bytes().to_vec()),
+                        ]),
+                    ]),
+                    logical_rows: vec![2, 1, 0],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Bytes(vec![
+                            Some("カ".as_bytes().to_vec()),
+                            Some("か".as_bytes().to_vec()),
+                            Some(b"Aa".to_vec()),
+                            Some(b"aaa".to_vec()),
+                        ]),
+                        VectorValue::Bytes(vec![
+                            Some("か".as_bytes().to_vec()),
+                            Some("カ".as_bytes().to_vec()),
+                            None,
+                            Some(b"Aa".to_vec()),
+                        ]),
+                        VectorValue::Bytes(vec![
+                            None,
+                            Some(b"aa".to_vec()),
+                            Some(b"aaa".to_vec()),
+                            Some("か".as_bytes().to_vec()),
+                        ]),
+                    ]),
+                    logical_rows: vec![0, 1, 2, 3],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn test_bytes_1() {
+        // Order by multiple expressions with collation, data len > n.
+        //
+        // mysql> select * from t order by col1 desc, col3 desc, col2 limit 5;
+        // +------+--------+--------+
+        // | col1 | col2   | col3   |
+        // +------+--------+--------+
+        // | カ   | か     | <null> |
+        // | か   | カ     | aa     |
+        // | aaa  | Aa     | か     |
+        // | aa   | aaa    | カ     |
+        // | Aa   | <null> | aaa    |
+        // +------+--------+--------+
+
+        let src_exec = make_bytes_src_executor();
+
+        let mut exec = BatchTopNExecutor::new_for_test(
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new().push_column_ref(0).build(),
+                RpnExpressionBuilder::new().push_column_ref(2).build(),
+                RpnExpressionBuilder::new().push_column_ref(1).build(),
+            ],
+            vec![true, true, false],
+            5,
+        );
+
+        let r = exec.next_batch(1);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+        assert_eq!(r.physical_columns.rows_len(), 5);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert_eq!(
+            r.physical_columns[0].decoded().as_bytes_slice(),
+            &[
+                Some("カ".as_bytes().to_vec()),
+                Some("か".as_bytes().to_vec()),
+                Some(b"aaa".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(b"Aa".to_vec()),
+            ]
+        );
+        assert_eq!(
+            r.physical_columns[1].decoded().as_bytes_slice(),
+            &[
+                Some("か".as_bytes().to_vec()),
+                Some("カ".as_bytes().to_vec()),
+                Some(b"Aa".to_vec()),
+                Some(b"aaa".to_vec()),
+                None,
+            ]
+        );
+        assert_eq!(
+            r.physical_columns[2].decoded().as_bytes_slice(),
+            &[
+                None,
+                Some(b"aa".to_vec()),
+                Some("か".as_bytes().to_vec()),
+                Some("カ".as_bytes().to_vec()),
+                Some(b"aaa".to_vec()),
+            ]
+        );
+        assert!(r.is_drained.unwrap());
+    }
+
+    #[test]
+    fn test_bytes_2() {
+        // Order by multiple expressions with collation, data len > n.
+        //
+        // mysql> select * from test order by col1, col2, col3 limit 5;
+        // +--------+--------+--------+
+        // | col1   | col2   | col3   |
+        // +--------+--------+--------+
+        // | <null> | <null> | Aa     |
+        // | Aa     | <null> | aaa    |
+        // | aa     | aa     | <null> |
+        // | aa     | aaa    | カ     |
+        // | aaa    | Aa     | か     |
+        // +--------+--------+--------+
+
+        let src_exec = make_bytes_src_executor();
+
+        let mut exec = BatchTopNExecutor::new_for_test(
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new().push_column_ref(0).build(),
+                RpnExpressionBuilder::new().push_column_ref(1).build(),
+                RpnExpressionBuilder::new().push_column_ref(2).build(),
+            ],
+            vec![false, false, false],
+            5,
+        );
+
+        let r = exec.next_batch(1);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+        assert_eq!(r.physical_columns.rows_len(), 5);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert_eq!(
+            r.physical_columns[0].decoded().as_bytes_slice(),
+            &[
+                None,
+                Some(b"Aa".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(b"aaa".to_vec()),
+            ]
+        );
+        assert_eq!(
+            r.physical_columns[1].decoded().as_bytes_slice(),
+            &[
+                None,
+                None,
+                Some(b"aa".to_vec()),
+                Some(b"aaa".to_vec()),
+                Some(b"Aa".to_vec()),
+            ]
+        );
+        assert_eq!(
+            r.physical_columns[2].decoded().as_bytes_slice(),
+            &[
+                Some(b"Aa".to_vec()),
+                Some(b"aaa".to_vec()),
+                None,
+                Some("カ".as_bytes().to_vec()),
+                Some("か".as_bytes().to_vec()),
             ]
         );
         assert!(r.is_drained.unwrap());
