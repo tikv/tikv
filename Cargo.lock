@@ -1834,7 +1834,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a965739f8162eda4f60ffa4352172ea67e9ec6d1"
+source = "git+https://github.com/pingcap/kvproto.git#7f1b9fd3a03f9269d8915d304bfe23b84def11a1"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -4244,6 +4244,7 @@ dependencies = [
  "match_template",
  "nom 5.1.0",
  "num",
+ "num-derive",
  "num-traits",
  "openssl",
  "ordered-float",
