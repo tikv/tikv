@@ -309,9 +309,14 @@ mod tests {
     }
 
     fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
-        *msg == SignificantMsg::Unreachable {
-            region_id,
-            to_peer_id,
+        if let SignificantMsg::Unreachable {
+            region_id: r_id,
+            to_peer_id: p_id,
+        } = *msg
+        {
+            region_id == r_id && to_peer_id == p_id
+        } else {
+            false
         }
     }
 

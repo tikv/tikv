@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -31,9 +30,10 @@ use uuid::Uuid;
 
 use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::raftstore::store::fsm::apply::CatchUpLogs;
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
+    apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
@@ -106,9 +106,9 @@ bitflags! {
     // TODO: maybe declare it as protobuf struct is better.
     /// A bitmap contains some useful flags when dealing with `eraftpb::Entry`.
     pub struct ProposalContext: u8 {
-        const SYNC_LOG       = 0b00000001;
-        const SPLIT          = 0b00000010;
-        const PREPARE_MERGE  = 0b00000100;
+        const SYNC_LOG       = 0b0000_0001;
+        const SPLIT          = 0b0000_0010;
+        const PREPARE_MERGE  = 0b0000_0100;
     }
 }
 
@@ -155,19 +155,6 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
-/// A struct that stores the state to wait for `PrepareMerge` apply result.
-///
-/// When handling the apply result of a `CommitMerge`, the source peer may have
-/// not handle the apply result of the `PrepareMerge`, so the target peer has
-/// to abort current handle process and wait for it asynchronously.
-pub struct WaitApplyResultState {
-    /// The following apply results waiting to be handled, including the `CommitMerge`.
-    /// These will be handled once `ready_to_merge` is true.
-    pub results: Vec<ApplyTaskRes>,
-    /// It is used by target peer to check whether the apply result of `PrepareMerge` is handled.
-    pub ready_to_merge: Arc<AtomicBool>,
-}
-
 pub struct Peer {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -194,6 +181,7 @@ pub struct Peer {
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
     /// Whether this peer is destroyed asynchronously.
+    /// If it's true when merging, its data in storeMeta will be removed early by the target peer
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
@@ -236,10 +224,8 @@ pub struct Peer {
     last_committed_prepare_merge_idx: u64,
     /// The merge related state. It indicates this Peer is in merging.
     pub pending_merge_state: Option<MergeState>,
-    /// The state to wait for `PrepareMerge` apply result.
-    pub pending_merge_apply_result: Option<WaitApplyResultState>,
     /// source region is catching up logs for merge
-    pub catch_up_logs: Option<Arc<AtomicU64>>,
+    pub catch_up_logs: Option<CatchUpLogs>,
 
     /// Write Statistics for PD to schedule hot spot.
     pub peer_stat: PeerStat,
@@ -316,7 +302,6 @@ impl Peer {
             raft_log_size_hint: 0,
             leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
             pending_messages: vec![],
-            pending_merge_apply_result: None,
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
         };
@@ -362,13 +347,13 @@ impl Peer {
             // Though the entries is empty, it is possible that one source peer has caught up the logs
             // but commit index is not updated. If Other source peers are already destroyed, so the raft
             // group will not make any progress, namely the source peer can not get the latest commit index anymore.
-            // Here update the commit index to let source apply rest uncommitted entires.
-            if merge.get_commit() > self.raft_group.raft.raft_log.committed {
+            // Here update the commit index to let source apply rest uncommitted entries.
+            return if merge.get_commit() > self.raft_group.raft.raft_log.committed {
                 self.raft_group.raft.raft_log.commit_to(merge.get_commit());
-                return Some(merge.get_commit());
+                Some(merge.get_commit())
             } else {
-                return None;
-            }
+                None
+            };
         }
         let first = entries.first().unwrap();
         // make sure message should be with index not smaller than committed
@@ -407,12 +392,12 @@ impl Peer {
             );
             return None;
         }
-        // If initialized is false, it implicitly means applyfsm does not exist now.
+        // If initialized is false, it implicitly means apply fsm does not exist now.
         let initialized = self.get_store().is_initialized();
-        // If async_remove is true, it means peerfsm needs to be removed after its
-        // corresponding applyfsm was removed.
-        // If it is false, it means either applyfsm does not exist or there is no task
-        // in applyfsm so it's ok to remove peerfsm immediately.
+        // If async_remove is true, it means peer fsm needs to be removed after its
+        // corresponding apply fsm was removed.
+        // If it is false, it means either apply fsm does not exist or there is no task
+        // in apply fsm so it's ok to remove peer fsm immediately.
         let async_remove = if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
@@ -1113,6 +1098,15 @@ impl Peer {
             "peer_id" => self.peer.get_id(),
         );
 
+        let before_handle_raft_ready_1003 = || {
+            fail_point!(
+                "before_handle_raft_ready_1003",
+                self.peer.get_id() == 1003 && self.is_leader(),
+                |_| {}
+            );
+        };
+        before_handle_raft_ready_1003();
+
         let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
         self.on_role_changed(ctx, &ready);
@@ -1272,6 +1266,25 @@ impl Peer {
                         merge_to_be_update = false;
                     }
                 }
+
+                fail_point!(
+                    "before_send_rollback_merge_1003",
+                    if self.peer_id() != 1003 {
+                        false
+                    } else {
+                        let index = entry.get_index();
+                        let data = entry.get_data();
+                        if data.is_empty() || entry.get_entry_type() != EntryType::EntryNormal {
+                            false
+                        } else {
+                            let cmd: RaftCmdRequest = util::parse_data_at(data, index, &self.tag);
+                            cmd.has_admin_request()
+                                && cmd.get_admin_request().get_cmd_type()
+                                    == AdminCmdType::RollbackMerge
+                        }
+                    },
+                    |_| {}
+                );
             }
             if !committed_entries.is_empty() {
                 self.last_applying_idx = committed_entries.last().unwrap().get_index();
@@ -1284,6 +1297,7 @@ impl Peer {
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
+            fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
         }
 
         self.apply_reads(ctx, &ready);
