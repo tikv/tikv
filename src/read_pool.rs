@@ -2,14 +2,18 @@ use futures::sync::oneshot;
 use futures::{future, Future};
 use futures03::prelude::*;
 use kvproto::kvrpcpb::CommandPri;
+use std::cell::Cell;
 use std::future::Future as StdFuture;
+use std::time::Duration;
 use tikv_util::future_pool::{self, FuturePool};
-use yatp::pool::{Local, Runner};
-use yatp::queue::Extras;
+use tikv_util::time::Instant;
+use yatp::pool::{CloneRunnerBuilder, Local, Runner};
+use yatp::queue::{multilevel, Extras, QueueType};
 use yatp::task::future::{Runner as FutureRunner, TaskCell};
 use yatp::Remote;
 
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine};
+use crate::config::UnifiedReadPoolConfig;
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 
 #[derive(Clone)]
 pub enum ReadPool {
@@ -81,12 +85,13 @@ impl ReadPool {
 }
 
 #[derive(Clone)]
-pub struct ReadPoolRunner<E: Engine> {
+pub struct ReadPoolRunner<E: Engine, R: FlowStatsReporter> {
     engine: Option<E>,
+    reporter: R,
     inner: FutureRunner,
 }
 
-impl<E: Engine> Runner for ReadPoolRunner<E> {
+impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
     type TaskCell = TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
@@ -95,7 +100,11 @@ impl<E: Engine> Runner for ReadPoolRunner<E> {
     }
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
-        self.inner.handle(local, task_cell)
+        let finished = self.inner.handle(local, task_cell);
+        if finished {
+            self.flush_metrics_on_tick();
+        }
+        finished
     }
 
     fn pause(&mut self, local: &mut Local<Self::TaskCell>) -> bool {
@@ -108,17 +117,60 @@ impl<E: Engine> Runner for ReadPoolRunner<E> {
 
     fn end(&mut self, local: &mut Local<Self::TaskCell>) {
         self.inner.end(local);
+        self.flush_metrics();
         unsafe { destroy_tls_engine::<E>() }
     }
 }
 
-impl<E: Engine> ReadPoolRunner<E> {
-    pub fn new(engine: E, inner: FutureRunner) -> Self {
+impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
+    pub fn new(engine: E, inner: FutureRunner, reporter: R) -> Self {
         ReadPoolRunner {
             engine: Some(engine),
+            reporter,
             inner,
         }
     }
+
+    // Do nothing if no tick passed
+    fn flush_metrics_on_tick(&self) {
+        const TICK_INTERVAL: Duration = Duration::from_secs(1);
+
+        thread_local! {
+            static THREAD_LAST_TICK_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
+        }
+
+        THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
+            let now = Instant::now_coarse();
+            let last_tick = tls_last_tick.get();
+            if now.duration_since(last_tick) < TICK_INTERVAL {
+                return;
+            }
+            tls_last_tick.set(now);
+            self.flush_metrics();
+        })
+    }
+
+    fn flush_metrics(&self) {
+        crate::storage::metrics::tls_flush(&self.reporter);
+        crate::coprocessor::metrics::tls_flush(&self.reporter);
+    }
+}
+
+pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
+    config: &UnifiedReadPoolConfig,
+    reporter: R,
+    engine: E,
+) -> yatp::ThreadPool<TaskCell> {
+    let pool_name = "unified-read-pool";
+    let mut builder = yatp::Builder::new(pool_name);
+    builder
+        .min_thread_count(config.min_thread_count)
+        .max_thread_count(config.max_thread_count);
+    let multilevel_builder =
+        multilevel::Builder::new(multilevel::Config::default().name(Some(pool_name)));
+    let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter);
+    let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+    builder.build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder)
 }
 
 impl From<Vec<FuturePool>> for ReadPool {
