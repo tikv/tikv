@@ -747,13 +747,13 @@
 
 ## The default and maximum delay in milliseconds before responding to TiDB when pessimistic
 ## transactions encounter locks
-# wait-for-lock-timeout = 3000
+# wait-for-lock-timeout = 1000
 
 ## If more than one transaction is waiting for the same lock, only the one with smallest
 ## start timestamp will be waked up immediately when the lock is released. Others will
 ## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
 ## one more likely acquires the lock.
-# wake-up-delay-duration = 100
+# wake-up-delay-duration = 20
 
 [gc]
 ## The number of keys to GC in one batch.
