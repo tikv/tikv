@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::*;
 
 use futures::Future;
 
@@ -896,4 +896,23 @@ where
     let epoch = cluster.pd_client.get_region_epoch(region_id);
     let admin_req = new_admin_request(region_id, &epoch, conf_change);
     cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
+}
+
+/// Tests if conf change relies on heartbeat.
+#[test]
+fn test_conf_change_fast() {
+    let mut cluster = new_server_cluster(0, 3);
+    // Sets heartbeat timeout to more than 5 seconds. It also changes the election timeout,
+    // but it's OK as the cluster starts with only one peer, it will campaigns immediately.
+    configure_for_lease_read(&mut cluster, Some(5000), None);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    let timer = Instant::now();
+    // If conf change relies on heartbeat, it will take more than 5 seconds to finish,
+    // hence it must timeout.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    assert!(timer.elapsed() < Duration::from_secs(5));
 }
