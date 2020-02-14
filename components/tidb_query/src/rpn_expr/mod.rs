@@ -49,6 +49,16 @@ fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> RpnFnMeta {
     }
 }
 
+fn map_like_sig(ret_field_type: &FieldType) -> RpnFnMeta {
+    match ret_field_type.as_accessor().collation() {
+        Collation::Utf8GeneralCi | Collation::Utf8Mb4GeneralCi => {
+            like_fn_meta::<CollatorUtf8Mb4GeneralCi>()
+        }
+        Collation::Utf8Bin | Collation::Utf8Mb4Bin => like_fn_meta::<CollatorUtf8Mb4Bin>(),
+        Collation::Binary => like_fn_meta::<CollatorBinary>(),
+    }
+}
+
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
     F: Fn(bool, bool) -> RpnFnMeta,
@@ -329,7 +339,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonLengthSig => json_length_fn_meta(),
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
         // impl_like
-        ScalarFuncSig::LikeSig => like_fn_meta(),
+        ScalarFuncSig::LikeSig => map_like_sig(ft),
         // impl_math
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),

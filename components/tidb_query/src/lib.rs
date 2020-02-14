@@ -14,6 +14,8 @@
 #![feature(test)]
 #![feature(int_error_matching)]
 #![feature(decl_macro)]
+#![feature(str_internals)]
+#![feature(ptr_offset_from)]
 // FIXME: rustc says there are redundant semicolons here but isn't
 // saying where as of nightly-2019-09-05
 // See https://github.com/rust-lang/rust/issues/63967
