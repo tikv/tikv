@@ -6,7 +6,29 @@ use std::str;
 
 use codec::prelude::*;
 
-use super::{Collator, DecodeError, DecodeOrWriteError};
+use super::{Charset, Collator, DecodeError, DecodeOrWriteError};
+
+pub struct CharsetUtf8mb4;
+
+impl Charset for CharsetUtf8mb4 {
+    type Char = char;
+
+    #[inline]
+    fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)> {
+        let mut it = data.iter();
+        let start = it.as_slice().as_ptr();
+        if let Some(c) = core::str::next_code_point(&mut it) {
+            unsafe {
+                Some((
+                    std::char::from_u32_unchecked(c),
+                    it.as_slice().as_ptr().offset_from(start) as usize,
+                ))
+            }
+        } else {
+            None
+        }
+    }
+}
 
 static GENERAL_CI_PLANE_00: [u16; 256] = [
     0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B,
@@ -332,6 +354,8 @@ fn general_ci_convert(c: char) -> u16 {
 }
 
 impl Collator for CollatorUtf8Mb4GeneralCi {
+    type Charset = CharsetUtf8mb4;
+
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],
         writer: &mut W,
@@ -373,6 +397,8 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
 pub struct CollatorUtf8Mb4Bin;
 
 impl Collator for CollatorUtf8Mb4Bin {
+    type Charset = CharsetUtf8mb4;
+
     #[inline]
     fn write_sort_key<W: BufferWriter>(
         bstr: &[u8],
