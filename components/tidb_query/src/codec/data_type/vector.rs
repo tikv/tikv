@@ -206,7 +206,7 @@ impl VectorValue {
                     let el = &vec[*idx];
                     match el {
                         Some(v) => {
-                            size += 1 /* FLAG */ + v.binary_len();
+                            size += 1 /* FLAG */ + v.as_ref().binary_len();
                         }
                         None => {
                             size += 1;
@@ -247,7 +247,7 @@ impl VectorValue {
                     let el = &vec[*idx];
                     match el {
                         Some(v) => {
-                            size += 8 /* Offset */ + v.binary_len();
+                            size += 8 /* Offset */ + v.as_ref().binary_len();
                         }
                         None => {
                             size += 8 /* Offset */;
