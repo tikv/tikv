@@ -2051,8 +2051,6 @@ mod tests {
 
     use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::storage::kv::CompactedEvent;
-    use protobuf::RepeatedField;
-    use tikv_util::collections::HashMap;
 
     use super::*;
 

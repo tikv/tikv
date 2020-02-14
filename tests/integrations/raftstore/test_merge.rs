@@ -3,7 +3,7 @@
 use std::iter::*;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::*;
 
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
