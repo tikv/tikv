@@ -1095,8 +1095,9 @@ impl RaftBatchSystem {
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
             cfg.clean_stale_peer_delay.0,
+            self.router(),
         );
-        let timer = RegionRunner::new_timer();
+        let timer = region_runner.new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
@@ -1111,6 +1112,7 @@ impl RaftBatchSystem {
             self.router.clone(),
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
+            cfg.pd_store_heartbeat_tick_interval.as_secs(),
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
@@ -2064,11 +2066,11 @@ fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::collections::HashMap;
 
     use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::storage::kv::CompactedEvent;
     use protobuf::RepeatedField;
+    use tikv_util::collections::HashMap;
 
     use super::*;
 
@@ -2119,7 +2121,7 @@ mod tests {
     fn test_is_range_covered() {
         let meta = vec![(b"b", b"d"), (b"d", b"e"), (b"e", b"f"), (b"f", b"h")];
         let mut region_ranges = BTreeMap::new();
-        let mut region_peers = HashMap::new();
+        let mut region_peers = HashMap::default();
 
         {
             for (i, (start, end)) in meta.into_iter().enumerate() {
