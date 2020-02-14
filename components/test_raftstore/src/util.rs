@@ -157,8 +157,9 @@ pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
         unify_read_pool: false,
         unified: UnifiedReadPoolConfig {
-            min_thread_count: 0,
-            max_thread_count: 0,
+            min_thread_count: 1,
+            max_thread_count: 1,
+            ..UnifiedReadPoolConfig::default()
         },
         storage: StorageReadPoolConfig {
             high_concurrency: 1,

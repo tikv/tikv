@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use futures::sync::oneshot;
 use futures::{future, Future};
 use futures03::prelude::*;
@@ -12,26 +14,70 @@ use yatp::queue::{multilevel, Extras, QueueType};
 use yatp::task::future::{Runner as FutureRunner, TaskCell};
 use yatp::Remote;
 
+use self::metrics::*;
 use crate::config::UnifiedReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
+use prometheus::IntGauge;
 
-#[derive(Clone)]
 pub enum ReadPool {
     FuturePools {
         read_pool_high: FuturePool,
         read_pool_normal: FuturePool,
         read_pool_low: FuturePool,
     },
-    Yatp(Remote<TaskCell>),
+    Yatp {
+        pool: yatp::ThreadPool<TaskCell>,
+        running_tasks: IntGauge,
+        max_tasks: usize,
+    },
 }
 
 impl ReadPool {
+    pub fn handle(&self) -> ReadPoolHandle {
+        match self {
+            ReadPool::FuturePools {
+                read_pool_high,
+                read_pool_normal,
+                read_pool_low,
+            } => ReadPoolHandle::FuturePools {
+                read_pool_high: read_pool_high.clone(),
+                read_pool_normal: read_pool_normal.clone(),
+                read_pool_low: read_pool_low.clone(),
+            },
+            ReadPool::Yatp {
+                pool,
+                running_tasks,
+                max_tasks,
+            } => ReadPoolHandle::Yatp {
+                remote: pool.remote().clone(),
+                running_tasks: running_tasks.clone(),
+                max_tasks: *max_tasks,
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ReadPoolHandle {
+    FuturePools {
+        read_pool_high: FuturePool,
+        read_pool_normal: FuturePool,
+        read_pool_low: FuturePool,
+    },
+    Yatp {
+        remote: Remote<TaskCell>,
+        running_tasks: IntGauge,
+        max_tasks: usize,
+    },
+}
+
+impl ReadPoolHandle {
     pub fn spawn<F>(&self, f: F, priority: CommandPri, task_id: u64) -> Result<(), ReadPoolError>
     where
         F: StdFuture<Output = ()> + Send + 'static,
     {
         match self {
-            ReadPool::FuturePools {
+            ReadPoolHandle::FuturePools {
                 read_pool_high,
                 read_pool_normal,
                 read_pool_low,
@@ -44,14 +90,30 @@ impl ReadPool {
 
                 pool.spawn(move || Box::pin(f.never_error()).compat())?;
             }
-            ReadPool::Yatp(remote) => {
+            ReadPoolHandle::Yatp {
+                remote,
+                running_tasks,
+                max_tasks,
+            } => {
+                let running_tasks = running_tasks.clone();
+                if running_tasks.get() as usize >= *max_tasks {
+                    return Err(ReadPoolError::UnifiedReadPoolFull);
+                }
+
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
                     CommandPri::Low => Some(2),
                 };
                 let extras = Extras::new_multilevel(task_id, fixed_level);
-                let task_cell = TaskCell::new(f, extras);
+                let task_cell = TaskCell::new(
+                    async move {
+                        running_tasks.inc();
+                        f.await;
+                        running_tasks.dec();
+                    },
+                    extras,
+                );
                 remote.spawn(task_cell);
             }
         }
@@ -156,21 +218,48 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
     }
 }
 
+#[cfg(test)]
+fn get_unified_read_pool_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "unified-read-pool-test-{}",
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+#[cfg(not(test))]
+fn get_unified_read_pool_name() -> String {
+    "unified-read-pool".to_string()
+}
+
 pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
     engine: E,
-) -> yatp::ThreadPool<TaskCell> {
-    let pool_name = "unified-read-pool";
-    let mut builder = yatp::Builder::new(pool_name);
+) -> ReadPool {
+    let unified_read_pool_name = get_unified_read_pool_name();
+
+    let mut builder = yatp::Builder::new(&unified_read_pool_name);
     builder
+        .stack_size(config.stack_size.0 as usize)
         .min_thread_count(config.min_thread_count)
         .max_thread_count(config.max_thread_count);
     let multilevel_builder =
-        multilevel::Builder::new(multilevel::Config::default().name(Some(pool_name)));
+        multilevel::Builder::new(multilevel::Config::default().name(Some(&unified_read_pool_name)));
     let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter);
     let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-    builder.build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder)
+    let pool = builder
+        .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
+    ReadPool::Yatp {
+        pool,
+        running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
+            .with_label_values(&[&unified_read_pool_name]),
+        max_tasks: config
+            .max_tasks_per_worker
+            .saturating_mul(config.max_thread_count),
+    }
 }
 
 impl From<Vec<FuturePool>> for ReadPool {
@@ -187,12 +276,6 @@ impl From<Vec<FuturePool>> for ReadPool {
     }
 }
 
-impl From<Remote<TaskCell>> for ReadPool {
-    fn from(yatp_remote: Remote<TaskCell>) -> Self {
-        ReadPool::Yatp(yatp_remote)
-    }
-}
-
 quick_error! {
     #[derive(Debug)]
     pub enum ReadPoolError {
@@ -201,10 +284,84 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        UnifiedReadPoolFull {
+            description("Unified read pool is full")
+        }
         Canceled(err: oneshot::Canceled) {
             from()
             cause(err)
             description(err.description())
         }
+    }
+}
+
+mod metrics {
+    use prometheus::*;
+
+    lazy_static! {
+        pub static ref UNIFIED_READ_POOL_RUNNING_TASKS: IntGaugeVec = register_int_gauge_vec!(
+            "tikv_unified_read_pool_running_tasks",
+            "The number of running tasks in the unified read pool",
+            &["name"]
+        )
+        .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raftstore::store::FlowStatistics;
+    use crate::storage::TestEngineBuilder;
+    use futures03::channel::oneshot;
+    use std::thread;
+    use tikv_util::collections::HashMap;
+
+    #[derive(Clone)]
+    struct DummyReporter;
+
+    impl FlowStatsReporter for DummyReporter {
+        fn report_read_stats(&self, _read_stats: HashMap<u64, FlowStatistics>) {}
+    }
+
+    #[test]
+    fn test_yatp_full() {
+        let config = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 2,
+            max_tasks_per_worker: 1,
+            ..Default::default()
+        };
+        // max running tasks number should be 2*1 = 2
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine);
+
+        let gen_task = || {
+            let (tx, rx) = oneshot::channel::<()>();
+            let task = async move {
+                let _ = rx.await;
+            };
+            (task, tx)
+        };
+
+        let handle = pool.handle();
+        let (task1, tx1) = gen_task();
+        let (task2, _tx2) = gen_task();
+        let (task3, _tx3) = gen_task();
+        let (task4, _tx4) = gen_task();
+
+        assert!(handle.spawn(task1, CommandPri::Normal, 1).is_ok());
+        assert!(handle.spawn(task2, CommandPri::Normal, 2).is_ok());
+
+        thread::sleep(Duration::from_millis(300));
+        match handle.spawn(task3, CommandPri::Normal, 3) {
+            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            _ => panic!("should return full error"),
+        }
+        tx1.send(()).unwrap();
+
+        thread::sleep(Duration::from_millis(300));
+        assert!(handle.spawn(task4, CommandPri::Normal, 4).is_ok());
     }
 }

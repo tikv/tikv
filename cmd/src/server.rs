@@ -418,21 +418,21 @@ impl TiKVServer {
             None
         };
 
-        let storage_read_pool = if self.config.readpool.unify_read_pool {
-            ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
+        let storage_read_pool_handle = if self.config.readpool.unify_read_pool {
+            unified_read_pool.as_ref().unwrap().handle()
         } else {
-            let storage_read_pools = storage::build_read_pool(
+            let storage_read_pools = ReadPool::from(storage::build_read_pool(
                 &self.config.readpool.storage,
                 pd_sender.clone(),
                 engines.engine.clone(),
-            );
-            ReadPool::from(storage_read_pools)
+            ));
+            storage_read_pools.handle()
         };
 
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
-            storage_read_pool,
+            storage_read_pool_handle,
             lock_mgr.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
@@ -454,15 +454,15 @@ impl TiKVServer {
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.
-        let cop_read_pool = if self.config.readpool.unify_read_pool {
-            ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
+        let cop_read_pool_handle = if self.config.readpool.unify_read_pool {
+            unified_read_pool.as_ref().unwrap().handle()
         } else {
-            let cop_read_pools = coprocessor::readpool_impl::build_read_pool(
+            let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.coprocessor,
                 pd_sender.clone(),
                 engines.engine.clone(),
-            );
-            ReadPool::from(cop_read_pools)
+            ));
+            cop_read_pools.handle()
         };
 
         let server_config = Arc::new(self.config.server.clone());
@@ -472,7 +472,7 @@ impl TiKVServer {
             &server_config,
             &self.security_mgr,
             storage,
-            coprocessor::Endpoint::new(&server_config, cop_read_pool),
+            coprocessor::Endpoint::new(&server_config, cop_read_pool_handle),
             engines.raft_router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),

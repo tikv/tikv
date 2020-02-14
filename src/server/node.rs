@@ -16,7 +16,7 @@ use crate::raftstore::store::{
     self, initial_region, Config as StoreConfig, SnapManager, Transport,
 };
 use crate::raftstore::store::{DynamicConfig, PdTask};
-use crate::read_pool::ReadPool;
+use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
@@ -37,7 +37,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
-    read_pool: ReadPool,
+    read_pool: ReadPoolHandle,
     lock_mgr: Option<LockManager>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
