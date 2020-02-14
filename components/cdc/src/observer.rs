@@ -5,8 +5,8 @@ use std::mem;
 use std::sync::{Arc, RwLock};
 
 use raft::StateRole;
-use tikv::raftstore::coprocessor::*;
-use tikv::raftstore::Error as RaftStoreError;
+use raftstore::coprocessor::*;
+use raftstore::Error as RaftStoreError;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::worker::Scheduler;
 

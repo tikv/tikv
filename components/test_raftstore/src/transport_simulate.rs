@@ -14,9 +14,9 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
-use tikv::raftstore::router::RaftStoreRouter;
-use tikv::raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
-use tikv::raftstore::{DiscardReason, Error, Result};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
+use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{Either, HandyRwLock};
 

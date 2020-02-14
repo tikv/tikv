@@ -28,10 +28,6 @@ use engine::rocks::{
 use slog;
 
 use crate::import::Config as ImportConfig;
-use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-use crate::raftstore::coprocessor::Config as CopConfig;
-use crate::raftstore::store::Config as RaftstoreConfig;
-use crate::raftstore::store::PdTask;
 use crate::server::gc_worker::GcConfig;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
@@ -49,6 +45,10 @@ use engine_rocks::{
 };
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient};
+use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
+use raftstore::coprocessor::Config as CopConfig;
+use raftstore::store::Config as RaftstoreConfig;
+use raftstore::store::PdTask;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
@@ -167,22 +167,33 @@ macro_rules! cf_config {
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
+            #[config(skip)]
             pub block_size: ReadableSize,
             pub block_cache_size: ReadableSize,
+            #[config(skip)]
             pub disable_block_cache: bool,
+            #[config(skip)]
             pub cache_index_and_filter_blocks: bool,
+            #[config(skip)]
             pub pin_l0_filter_and_index_blocks: bool,
+            #[config(skip)]
             pub use_bloom_filter: bool,
+            #[config(skip)]
             pub optimize_filters_for_hits: bool,
+            #[config(skip)]
             pub whole_key_filtering: bool,
+            #[config(skip)]
             pub bloom_filter_bits_per_key: i32,
+            #[config(skip)]
             pub block_based_bloom_filter: bool,
+            #[config(skip)]
             pub read_amp_bytes_per_bit: u32,
             #[serde(with = "rocks_config::compression_type_level_serde")]
             #[config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
             pub write_buffer_size: ReadableSize,
             pub max_write_buffer_number: i32,
+            #[config(skip)]
             pub min_write_buffer_number_to_merge: i32,
             pub max_bytes_for_level_base: ReadableSize,
             pub target_file_size_base: ReadableSize,
@@ -193,7 +204,9 @@ macro_rules! cf_config {
             #[serde(with = "rocks_config::compaction_pri_serde")]
             #[config(skip)]
             pub compaction_pri: CompactionPriority,
+            #[config(skip)]
             pub dynamic_level_bytes: bool,
+            #[config(skip)]
             pub num_levels: i32,
             pub max_bytes_for_level_multiplier: i32,
             #[serde(with = "rocks_config::compaction_style_serde")]
@@ -202,9 +215,13 @@ macro_rules! cf_config {
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
+            #[config(skip)]
             pub force_consistency_checks: bool,
+            #[config(skip)]
             pub prop_size_index_distance: u64,
+            #[config(skip)]
             pub prop_keys_index_distance: u64,
+            #[config(skip)]
             pub enable_doubly_skiplist: bool,
             #[config(submodule)]
             pub titan: TitanCfConfig,
@@ -702,32 +719,49 @@ pub struct DbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
+    #[config(skip)]
     pub wal_dir: String,
+    #[config(skip)]
     pub wal_ttl_seconds: u64,
+    #[config(skip)]
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
+    #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
+    #[config(skip)]
     pub create_if_missing: bool,
     pub max_open_files: i32,
+    #[config(skip)]
     pub enable_statistics: bool,
+    #[config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
+    #[config(skip)]
     pub info_log_max_size: ReadableSize,
+    #[config(skip)]
     pub info_log_roll_time: ReadableDuration,
+    #[config(skip)]
     pub info_log_keep_log_file_num: u64,
+    #[config(skip)]
     pub info_log_dir: String,
+    #[config(skip)]
     pub rate_bytes_per_sec: ReadableSize,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
+    #[config(skip)]
     pub auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
+    #[config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
+    #[config(skip)]
     pub use_direct_io_for_flush_and_compaction: bool,
+    #[config(skip)]
     pub enable_pipelined_write: bool,
+    #[config(skip)]
     pub enable_unordered_write: bool,
     #[config(submodule)]
     pub defaultcf: DefaultCfConfig,
@@ -956,26 +990,42 @@ pub struct RaftDbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
+    #[config(skip)]
     pub wal_dir: String,
+    #[config(skip)]
     pub wal_ttl_seconds: u64,
+    #[config(skip)]
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
+    #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
+    #[config(skip)]
     pub create_if_missing: bool,
     pub max_open_files: i32,
+    #[config(skip)]
     pub enable_statistics: bool,
+    #[config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
+    #[config(skip)]
     pub info_log_max_size: ReadableSize,
+    #[config(skip)]
     pub info_log_roll_time: ReadableDuration,
+    #[config(skip)]
     pub info_log_keep_log_file_num: u64,
+    #[config(skip)]
     pub info_log_dir: String,
+    #[config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
+    #[config(skip)]
     pub use_direct_io_for_flush_and_compaction: bool,
+    #[config(skip)]
     pub enable_pipelined_write: bool,
+    #[config(skip)]
     pub enable_unordered_write: bool,
+    #[config(skip)]
     pub allow_concurrent_memtable_write: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
@@ -1761,6 +1811,7 @@ impl Default for TiKvConfig {
 }
 
 impl TiKvConfig {
+    // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
@@ -2170,6 +2221,7 @@ impl ConfigController {
         // Config from PD have not been checked, call `compatible_adjust()`
         // and `validate()` before use it
         incoming.compatible_adjust();
+        // TODO: return the invalid config instead
         if incoming.validate().is_err() {
             let diff = incoming.diff(&self.current);
             return Ok(Either::Left(diff));
@@ -2346,7 +2398,7 @@ impl ConfigHandler {
     }
 }
 
-use crate::raftstore::store::DynamicConfig;
+use raftstore::store::DynamicConfig;
 impl DynamicConfig for ConfigHandler {
     fn refresh(&mut self, cfg_client: &dyn ConfigClient) {
         debug!(

@@ -6,7 +6,7 @@ use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
 
 use tikv_util::time::{self, Duration, Instant};
 
-use crate::coprocessor::readpool_impl::*;
+use super::metrics::*;
 use crate::coprocessor::*;
 use crate::storage::Statistics;
 
