@@ -122,16 +122,17 @@ impl ReadIndexQueue {
         self.handled_cnt = 0;
     }
 
-    pub fn clear_uncommitted(&mut self, term: u64) {
+    pub fn clear_uncommitted_on_role_change(&mut self, term: u64) {
         let mut removed = 0;
         for mut read in self.reads.drain(self.ready_cnt..) {
-            self.contexts.remove(&read.id);
             removed += read.cmds.len();
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
         }
         RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
+        // For a follower changes to leader, and then changes to followr again.
+        self.contexts.clear();
     }
 
     pub fn push_back(&mut self, read: ReadIndexRequest, is_leader: bool) {
@@ -308,5 +309,45 @@ mod tests {
         }
 
         queue.clear_all(None);
+    }
+
+    #[test]
+    fn test_role_change() {
+        let mut queue = ReadIndexQueue::default();
+        queue.handled_cnt = 100;
+
+        // Push a pending comand when the peer is follower.
+        let id = Uuid::new_v4();
+        let req = ReadIndexRequest::with_command(
+            id,
+            RaftCmdRequest::default(),
+            Callback::None,
+            Timespec::new(0, 0),
+        );
+        queue.push_back(req, false);
+
+        // After the peer becomes leader, `advance` could be called before
+        // `clear_uncommitted_on_role_change`.
+        let mut read = queue.advance_leader_read_and_pop(id, 10);
+        read.cmds.clear();
+
+        queue.clear_uncommitted_on_role_change(10);
+
+        let req = ReadIndexRequest::with_command(
+            Uuid::new_v4(),
+            RaftCmdRequest::default(),
+            Callback::None,
+            Timespec::new(0, 0),
+        );
+        queue.push_back(req, true);
+        let last_id = queue.reads.back().map(|t| t.id).unwrap();
+        queue.advance_leader_reads(vec![(last_id, 10)]);
+        assert_eq!(queue.ready_cnt, 1);
+        while let Some(mut read) = queue.pop_front() {
+            read.cmds.clear();
+        }
+
+        // Shouldn't panic when call `advance_replica_reads` with `id` again.
+        queue.advance_replica_reads(vec![(id, 10)]);
     }
 }

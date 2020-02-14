@@ -1353,7 +1353,8 @@ impl Peer {
         // `ready`.
         if !self.is_leader() {
             // NOTE: there could still be some pending reads proposed by the peer when it was
-            // leader. They will be cleared in `clear_uncommitted` later in the function.
+            // leader. They will be cleared in `clear_uncommitted_on_role_change` later in
+            // the function.
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else if self.ready_to_handle_read() {
@@ -1371,7 +1372,7 @@ impl Peer {
         if ready.ss.is_some() {
             let term = self.term();
             // all uncommitted reads will be dropped silently in raft.
-            self.pending_reads.clear_uncommitted(term);
+            self.pending_reads.clear_uncommitted_on_role_change(term);
         }
 
         if let Some(propose_time) = propose_time {
