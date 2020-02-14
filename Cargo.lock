@@ -4244,6 +4244,7 @@ dependencies = [
  "match_template",
  "nom 5.1.0",
  "num",
+ "num-derive",
  "num-traits",
  "openssl",
  "ordered-float",

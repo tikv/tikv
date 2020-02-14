@@ -1,46 +1,34 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::super::Result;
 use super::path_expr::PathExpression;
-use super::Json;
+use super::{JsonRef, JsonType};
 
-impl Json {
-    pub fn len(&self) -> Option<i64> {
-        match self {
-            Json::Array(array) => Some(array.len() as i64),
-            Json::Object(obj) => Some(obj.len() as i64),
-            Json::None
-            | Json::String(_)
-            | Json::Boolean(_)
-            | Json::U64(_)
-            | Json::I64(_)
-            | Json::Double(_) => Some(1),
+impl<'a> JsonRef<'a> {
+    fn len(&self) -> Option<i64> {
+        match self.get_type() {
+            JsonType::Array | JsonType::Object => Some(self.get_elem_count() as i64),
+            _ => Some(1),
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len().or_else(|| Some(0)).unwrap() == 0
-    }
-
-    // `json_length` is the implementation for JSON_LENGTH in mysql
-    // https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length
-    pub fn json_length(&self, path_expr_list: &[PathExpression]) -> Option<i64> {
+    /// `json_length` is the implementation for JSON_LENGTH in mysql
+    /// https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length
+    pub fn json_length(&self, path_expr_list: &[PathExpression]) -> Result<Option<i64>> {
         if path_expr_list.is_empty() {
-            return self.len();
+            return Ok(self.len());
         }
         if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
-            return None;
+            return Ok(None);
         }
-        if let Some(json) = self.extract(path_expr_list) {
-            return json.len();
-        }
-        None
+        Ok(self.extract(path_expr_list)?.and_then(|j| j.as_ref().len()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::path_expr::parse_json_path_expr;
-    use super::*;
+    use super::super::Json;
     #[test]
     fn test_json_length() {
         let mut test_cases = vec![
@@ -88,7 +76,7 @@ mod tests {
                 Some(p) => vec![parse_json_path_expr(p).unwrap()],
                 None => vec![],
             };
-            let got = j.json_length(&exprs[..]);
+            let got = j.as_ref().json_length(&exprs[..]).unwrap();
             assert_eq!(
                 got, expected,
                 "#{} expect {:?}, but got {:?}",
