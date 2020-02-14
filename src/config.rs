@@ -19,7 +19,9 @@ use std::usize;
 
 use kvproto::configpb::{self, StatusCode};
 
-use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
+use configuration::{
+    rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult,
+};
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -1811,8 +1813,28 @@ impl Default for TiKvConfig {
 }
 
 impl TiKvConfig {
-    // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.validate_or_rollback(None)
+    }
+
+    /// Validate the config, if encounter invalid config try to fallback to
+    /// the valid config
+    pub fn validate_with_rollback(
+        &mut self,
+        valid_cfg: &TiKvConfig,
+    ) -> Result<ConfigChange, Box<dyn Error>> {
+        let mut c = HashMap::new();
+        self.validate_or_rollback(Some((valid_cfg, &mut c)))?;
+        Ok(c)
+    }
+
+    // If `rb_collector` is `Some`, when encounter some invalid config, instead of
+    // return an Error, a fallback from these invalid configs to the valid config
+    // will be collected and insert into `rb_collector`
+    fn validate_or_rollback(
+        &mut self,
+        mut rb_collector: Option<(&TiKvConfig, &mut ConfigChange)>,
+    ) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
 
@@ -1867,16 +1889,36 @@ impl TiKvConfig {
             .into());
         }
 
+        rollback_or!(
+            rb_collector,
+            raft_store,
+            |r| { self.raft_store.validate_or_rollback(r) },
+            self.raft_store.validate()?
+        );
+        rollback_or!(
+            rb_collector,
+            coprocessor,
+            |r| { self.coprocessor.validate_or_rollback(r) },
+            self.coprocessor.validate()?
+        );
+        rollback_or!(
+            rb_collector,
+            pessimistic_txn,
+            |r| { self.pessimistic_txn.validate_or_rollback(r) },
+            self.pessimistic_txn.validate()?
+        );
+        rollback_or!(
+            rb_collector,
+            gc,
+            |r| { self.gc.validate_or_rollback(r) },
+            self.gc.validate()?
+        );
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
         self.server.validate()?;
-        self.raft_store.validate()?;
         self.pd.validate()?;
-        self.coprocessor.validate()?;
         self.security.validate()?;
         self.import.validate()?;
-        self.pessimistic_txn.validate()?;
-        self.gc.validate()?;
         Ok(())
     }
 
@@ -2105,7 +2147,9 @@ fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>
                 name = p;
             }
             if let ConfigValue::Module(change) = value {
-                entries.append(&mut helper(name, change)?);
+                if !change.is_empty() {
+                    entries.append(&mut helper(name, change)?);
+                }
             } else {
                 let mut e = configpb::ConfigEntry::default();
                 e.set_name(name);
@@ -2217,14 +2261,19 @@ impl ConfigController {
         // Config from PD have not been checked, call `compatible_adjust()`
         // and `validate()` before use it
         incoming.compatible_adjust();
-        // TODO: return the invalid config instead
-        if incoming.validate().is_err() {
-            let diff = incoming.diff(&self.current);
-            return Ok(Either::Left(diff));
-        }
         let diff = self.current.diff(&incoming);
         if diff.is_empty() {
             return Ok(Either::Right(false));
+        } else {
+            // validate current config after apply diff, we can't just validate the
+            // incoming config because some configs are skip and incoming config not
+            // equal to current config + diff
+            let mut current = self.current.clone();
+            current.update(diff.clone());
+            let rollback = current.validate_with_rollback(&self.current)?;
+            if !rollback.is_empty() {
+                return Ok(Either::Left(rollback));
+            }
         }
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {
@@ -2716,5 +2765,53 @@ mod tests {
             cfg.validate().unwrap();
             assert_eq!(c, cfg);
         }
+    }
+
+    #[test]
+    fn test_invalid_config_rollback() {
+        let mut valid_cfg = TiKvConfig::default();
+        assert!(valid_cfg.validate().is_ok());
+        // Valid config do not have rollback
+        assert!(valid_cfg
+            .validate_with_rollback(&TiKvConfig::default())
+            .unwrap()
+            .is_empty());
+
+        // Call validate_with_rollback with an invalid config will
+        // return a rollback of the cause of invalid
+        let mut c = valid_cfg.clone();
+        // invalid config
+        c.gc.batch_keys = 0;
+        // valid config
+        c.raft_store.raft_log_gc_threshold = 200;
+        assert!(c.validate().is_err());
+        let rollback = to_config_entry(c.validate_with_rollback(&valid_cfg).unwrap()).unwrap();
+        assert_eq!(rollback.len(), 1);
+        assert_eq!(rollback[0].name, "gc.batch-keys");
+        assert_eq!(
+            rollback[0].value,
+            toml::to_string(&valid_cfg.gc.batch_keys).unwrap()
+        );
+
+        // Some check in `validate` may relative to many configs and if
+        // the config can not pass the check, a rollback of all config
+        // relative to the check will return
+        let mut c = valid_cfg.clone();
+        // config check: region_max_keys >= region_split_keys
+        c.coprocessor.region_max_keys = 0;
+        assert!(c.validate().is_err());
+        let mut rollback = to_config_entry(c.validate_with_rollback(&valid_cfg).unwrap()).unwrap();
+        rollback.sort_unstable_by(|a, b| a.name.partial_cmp(&b.name).unwrap());
+        assert_eq!(rollback.len(), 2);
+        assert_eq!(rollback[0].name, "coprocessor.region-max-keys");
+        assert_eq!(
+            rollback[0].value,
+            toml::to_string(&valid_cfg.coprocessor.region_max_keys).unwrap()
+        );
+        assert_eq!(rollback[1].name, "coprocessor.region-split-keys");
+        assert_eq!(
+            rollback[1].value,
+            toml::to_string(&valid_cfg.coprocessor.region_split_keys).unwrap()
+        );
     }
 }

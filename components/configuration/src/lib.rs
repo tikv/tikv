@@ -93,6 +93,32 @@ impl_into!(bool, Bool);
 impl_into!(String, String);
 impl_into!(ConfigChange, Module);
 
+#[macro_export]
+macro_rules! rollback_or {
+    ($rollback: ident, $($name: ident),+ , $else_branch: block) => {
+        if let Some((valid_cfg, change)) = &mut $rollback {
+            $(
+                change.insert(
+                    stringify!($name).to_owned(),
+                    ConfigValue::from(valid_cfg.$name.clone()),
+                );
+            )*
+        } else $else_branch
+    };
+    ($rollback: ident, $name: ident, $valid_or_rb: expr, $else_branch: expr) => {
+        if let Some((valid_cfg, change)) = &mut $rollback {
+            let mut r = std::collections::HashMap::new();
+            let _ = $valid_or_rb(Some((&valid_cfg.$name, &mut r)));
+            if !r.is_empty() {
+                change.insert(
+                    stringify!($name).to_owned(),
+                    ConfigValue::from(r),
+                );
+            }
+        } else {$else_branch;}
+    };
+}
+
 /// The Configuration trait
 ///
 /// There are four type of fields inside derived Configuration struct:
