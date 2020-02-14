@@ -2491,7 +2491,7 @@ impl ApplyFsm {
             self.delegate.ready_source_region_id = source_region_id;
         }
         self.delegate.wait_merge_state = None;
-        
+
         let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {

@@ -651,7 +651,7 @@ fn test_merge_cascade_merge_with_apply_yield() {
     assert_eq!(r1.get_id(), 1000);
     let apply_yield_1000_fp = "apply_yield_1000";
     fail::cfg(apply_yield_1000_fp, "80%3*return()").unwrap();
-    
+
     for i in 0..10 {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v2");
     }
