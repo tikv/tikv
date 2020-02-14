@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
@@ -14,6 +15,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -33,10 +35,9 @@ use crate::raftstore::store::fsm::peer::{
 #[cfg(not(feature = "no-fail"))]
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
-    batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
 };
-use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
+use crate::raftstore::store::fsm::{ApplyNotifier, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
@@ -134,7 +135,18 @@ impl StoreMeta {
     }
 }
 
-pub type RaftRouter = BatchRouter<PeerFsm, StoreFsm>;
+#[derive(Clone)]
+pub struct RaftRouter {
+    pub router: BatchRouter<PeerFsm, StoreFsm>,
+}
+
+impl Deref for RaftRouter {
+    type Target = BatchRouter<PeerFsm, StoreFsm>;
+
+    fn deref(&self) -> &BatchRouter<PeerFsm, StoreFsm> {
+        &self.router
+    }
+}
 
 impl RaftRouter {
     pub fn send_raft_message(
@@ -1153,20 +1165,21 @@ impl RaftBatchSystem {
 pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
-    let (router, system) = batch::create_system(
+    let (router, system) = batch_system::create_system(
         cfg.store_pool_size,
         cfg.store_max_batch_size,
         store_tx,
         store_fsm,
     );
+    let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
         system,
         workers: None,
         apply_router,
         apply_system,
-        router: router.clone(),
+        router: raft_router.clone(),
     };
-    (router, system)
+    (raft_router, system)
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {

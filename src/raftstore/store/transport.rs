@@ -35,7 +35,7 @@ pub trait StoreRouter {
 impl CasualRouter for RaftRouter {
     #[inline]
     fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
-        match RaftRouter::send(self, region_id, PeerMsg::CasualMessage(msg)) {
+        match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
             Err(TrySendError::Disconnected(_)) => Err(Error::RegionNotFound(region_id)),
