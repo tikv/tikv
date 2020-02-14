@@ -851,3 +851,42 @@ fn test_node_merge_transfer_leader() {
     cluster.must_put(b"k4", b"v4");
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
+
+#[test]
+fn test_merge_cascade_merge_with_apply_yield() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k5");
+    let region = pd_client.get_region(b"k5").unwrap();
+    cluster.must_split(&region, b"k9");
+
+    for i in 0..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    let r1 = pd_client.get_region(b"k1").unwrap();
+    let r2 = pd_client.get_region(b"k5").unwrap();
+    let r3 = pd_client.get_region(b"k9").unwrap();
+
+    pd_client.must_merge(r2.get_id(), r1.get_id());
+    assert_eq!(r1.get_id(), 1000);
+    let apply_yield_1000_fp = "apply_yield_1000";
+    fail::cfg(apply_yield_1000_fp, "80%3*return()").unwrap();
+
+    for i in 0..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v2");
+    }
+
+    pd_client.must_merge(r3.get_id(), r1.get_id());
+
+    for i in 0..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v3");
+    }
+}
