@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
-use engine::{name_to_cf, CF_DEFAULT};
+use engine::CF_DEFAULT;
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -15,7 +15,6 @@ use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
-use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use sst_importer::send_rpc_response;
@@ -164,21 +163,16 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let engine = Arc::clone(&self.engine);
-        let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
-            .set_db(RocksEngine::from_ref(&engine))
-            .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
-            .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
-            .unwrap();
+        let engine = self.engine.clone();
 
         ctx.spawn(self.threads.spawn_fn(move || {
-            let res = importer.download::<RocksEngine>(
+            let res = importer.download(
                 req.get_sst(),
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
-                sst_writer,
+                RocksEngine::from_ref(&engine),
             );
 
             future::result(res)
