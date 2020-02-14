@@ -3,7 +3,7 @@
 use std::iter::*;
 use std::sync::*;
 use std::thread;
-use std::time::Duration;
+use std::time::*;
 
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
@@ -110,6 +110,9 @@ fn test_node_base_merge() {
 fn test_node_merge_with_slow_learner() {
     let mut cluster = new_node_cluster(0, 2);
     configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 40;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 40;
+    cluster.cfg.raft_store.merge_max_log_gap = 15;
     cluster.pd_client.disable_default_operator();
 
     // Create a cluster with peer 1 as leader and peer 2 as learner.
@@ -134,7 +137,7 @@ fn test_node_merge_with_slow_learner() {
     must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
 
     cluster.add_send_filter(IsolationFilterFactory::new(2));
-    (0..100).for_each(|i| cluster.must_put(b"k1", format!("v{}", i).as_bytes()));
+    (0..20).for_each(|i| cluster.must_put(b"k1", format!("v{}", i).as_bytes()));
 
     // Merge 2 regions under isolation should fail.
     let merge = new_prepare_merge(right.clone());
@@ -152,7 +155,38 @@ fn test_node_merge_with_slow_learner() {
     cluster.must_put(b"k11", b"v100");
     must_get_equal(&cluster.get_engine(1), b"k11", b"v100");
     must_get_equal(&cluster.get_engine(2), b"k11", b"v100");
+
     pd_client.must_merge(left.get_id(), right.get_id());
+
+    // Test slow learner will be cleaned up when merge can't be continued.
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k5");
+    cluster.must_put(b"k4", b"v4");
+    cluster.must_put(b"k5", b"v5");
+    must_get_equal(&cluster.get_engine(2), b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(2), b"k5", b"v5");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k5").unwrap();
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    pd_client.must_merge(left.get_id(), right.get_id());
+    let state1 = cluster.truncated_state(right.get_id(), 1);
+    (0..50).for_each(|i| cluster.must_put(b"k2", format!("v{}", i).as_bytes()));
+
+    // wait to trigger compact raft log
+    let timer = Instant::now();
+    loop {
+        let state2 = cluster.truncated_state(right.get_id(), 1);
+        if state1.get_index() != state2.get_index() {
+            break;
+        }
+        if timer.elapsed() > Duration::from_secs(3) {
+            panic!("log compaction not finish after 3 seconds.");
+        }
+        sleep_ms(10);
+    }
+    cluster.clear_send_filters();
+    cluster.must_put(b"k6", b"v6");
+    must_get_equal(&cluster.get_engine(2), b"k6", b"v6");
 }
 
 /// Test whether merge will be aborted if prerequisites is not met.
