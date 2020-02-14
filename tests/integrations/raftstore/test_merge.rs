@@ -847,3 +847,63 @@ fn test_request_snapshot_after_propose_merge() {
     // Leader should reject request snapshot if there is any proposed merge.
     rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
 }
+
+/// Test whether a isolated store recover properly if there is no target peer
+/// on this store before isolated.
+/// A (-∞, k2), B [k2, +∞) on store 1,2,4
+/// store 4 is isolated
+/// B merge to A (target peer A is not created on store 4. It‘s just exist logically)
+/// A split => C (-∞, k3), A [k3, +∞)
+/// Then network recovery
+#[test]
+fn test_merge_isolated_store_with_no_target_peer() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    for i in 0..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    // (-∞, k2), [k2, +∞)
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    let left_on_store1 = find_peer(&left, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(left.get_id(), left_on_store1);
+    let right_on_store1 = find_peer(&right, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(right.get_id(), right_on_store1);
+
+    pd_client.must_add_peer(right.get_id(), new_peer(4, 4));
+    let right_on_store3 = find_peer(&right, 3).unwrap().to_owned();
+    pd_client.must_remove_peer(right.get_id(), right_on_store3);
+
+    cluster.must_put(b"k22", b"v22");
+    must_get_equal(&cluster.get_engine(4), b"k22", b"v22");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+
+    pd_client.must_add_peer(left.get_id(), new_peer(4, 5));
+    let left_on_store3 = find_peer(&left, 3).unwrap().to_owned();
+    pd_client.must_remove_peer(left.get_id(), left_on_store3);
+
+    pd_client.must_merge(right.get_id(), left.get_id());
+
+    let new_left = pd_client.get_region(b"k1").unwrap();
+    // (-∞, k3), [k3, +∞)
+    cluster.must_split(&new_left, b"k3");
+    // Now new_left region range is [k3, +∞)
+    cluster.must_put(b"k345", b"v345");
+    cluster.clear_send_filters();
+
+    must_get_equal(&cluster.get_engine(4), b"k345", b"v345");
+}
