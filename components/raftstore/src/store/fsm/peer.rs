@@ -350,7 +350,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
 
-                if self.fsm.peer.raft_group.raft.is_learner {
+                if self.fsm.peer.peer.get_is_learner() {
                     self.fsm.peer.send_wake_up_message(&mut self.ctx.trans);
                 }
             }
