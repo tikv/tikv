@@ -360,8 +360,7 @@ impl ApplyContext {
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
-        if self.last_applied_index < delegate.apply_state.get_applied_index() && self.sync_log_hint
-        {
+        if self.last_applied_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
         }
         // last_applied_index doesn't need to be updated, set persistent to true will
@@ -412,7 +411,7 @@ impl ApplyContext {
 
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult>) {
-        if !delegate.pending_remove && self.sync_log_hint {
+        if !delegate.pending_remove {
             delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
         }
         self.commit_opt(delegate, false);
@@ -1110,7 +1109,7 @@ impl ApplyDelegate {
 
     fn exec_write_cmd(
         &mut self,
-        ctx: &ApplyContext,
+        ctx: &mut ApplyContext,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         fail_point!(
@@ -1349,11 +1348,14 @@ impl ApplyDelegate {
 
     fn handle_ingest_sst(
         &mut self,
-        ctx: &ApplyContext,
+        ctx: &mut ApplyContext,
         req: &Request,
         ssts: &mut Vec<SstMeta>,
     ) -> Result<Response> {
         let sst = req.get_ingest_sst().get_sst();
+        // We should sync WAL because the sst may be deleted by gc-thread, so this entry can not be
+        //  appled twice.
+        ctx.sync_log_hint = true;
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
             error!(
