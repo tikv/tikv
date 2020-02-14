@@ -2047,11 +2047,9 @@ fn calc_region_declined_bytes(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::collections::HashMap;
 
     use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::storage::kv::CompactedEvent;
-    use protobuf::RepeatedField;
 
     use super::*;
 
