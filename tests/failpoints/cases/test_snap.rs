@@ -11,8 +11,8 @@ use std::time::*;
 use fail;
 use raft::eraftpb::MessageType;
 
+use raftstore::store::*;
 use test_raftstore::*;
-use tikv::raftstore::store::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 

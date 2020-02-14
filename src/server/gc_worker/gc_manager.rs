@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 use tikv_util::worker::FutureScheduler;
 use txn_types::{Key, TimeStamp};
 
-use crate::raftstore::coprocessor::RegionInfoProvider;
-use crate::raftstore::store::util::find_peer;
 use crate::server::metrics::*;
+use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::store::util::find_peer;
 
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
 use super::Result;
@@ -606,11 +606,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raftstore::coprocessor::Result as CopResult;
-    use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
-    use crate::raftstore::store::util::new_peer;
     use crate::storage::Callback;
     use kvproto::metapb;
+    use raftstore::coprocessor::Result as CopResult;
+    use raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
+    use raftstore::store::util::new_peer;
     use std::collections::BTreeMap;
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
