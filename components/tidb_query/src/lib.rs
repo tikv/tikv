@@ -13,6 +13,7 @@
 #![feature(iter_order_by)]
 #![feature(test)]
 #![feature(int_error_matching)]
+#![feature(decl_macro)]
 #![feature(str_internals)]
 #![feature(ptr_offset_from)]
 // FIXME: rustc says there are redundant semicolons here but isn't

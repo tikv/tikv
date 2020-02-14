@@ -3,8 +3,8 @@
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::FieldType;
 
+use super::scalar::ScalarValueRef;
 use super::*;
-use crate::codec::data_type::scalar::ScalarValueRef;
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::Result;
 

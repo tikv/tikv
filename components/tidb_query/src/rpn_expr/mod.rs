@@ -42,16 +42,10 @@ use self::impl_string::*;
 use self::impl_time::*;
 
 fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> RpnFnMeta {
-    match ret_field_type.as_accessor().collation() {
-        Collation::Utf8GeneralCi => {
-            compare_fn_meta::<StringComparer<CollatorUtf8Mb4GeneralCi, Cmp>>()
+    match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation() {
+            Collation::TT => compare_fn_meta::<StringComparer<TT, Cmp>>()
         }
-        Collation::Utf8Mb4GeneralCi => {
-            compare_fn_meta::<StringComparer<CollatorUtf8Mb4GeneralCi, Cmp>>()
-        }
-        Collation::Utf8Mb4Bin => compare_fn_meta::<StringComparer<CollatorUtf8Mb4Bin, Cmp>>(),
-        Collation::Binary => compare_fn_meta::<StringComparer<CollatorBinary, Cmp>>(),
-        Collation::Utf8Bin => compare_fn_meta::<StringComparer<CollatorUtf8Mb4Bin, Cmp>>(),
     }
 }
 
