@@ -351,7 +351,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.register_raft_base_tick();
 
                 if self.fsm.peer.peer.get_is_learner() {
-                    self.fsm.peer.send_wake_up_message(&mut self.ctx.trans);
+                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx.trans);
                 }
             }
             CasualMessage::SnapshotGenerated => {

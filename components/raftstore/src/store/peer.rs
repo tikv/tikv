@@ -2538,7 +2538,7 @@ impl Peer {
         }
     }
 
-    pub fn send_wake_up_message<T: Transport>(&self, trans: &mut T) {
+    pub fn bcast_wake_up_message<T: Transport>(&self, trans: &mut T) {
         let region = self.raft_group.get_store().region();
         for peer in region.get_peers() {
             if peer.get_id() == self.peer_id() {
