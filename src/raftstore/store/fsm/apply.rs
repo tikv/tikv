@@ -34,7 +34,7 @@ use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as Ra
 use uuid::Builder as UuidBuilder;
 
 use crate::import::SSTImporter;
-use crate::raftstore::coprocessor::{Cmd, CmdBatch, CoprocessorHost};
+use crate::raftstore::coprocessor::{Cmd, CoprocessorHost};
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::{Callback, PeerMsg, ReadResponse};
@@ -305,8 +305,6 @@ struct ApplyContext {
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
-
-    cmd_batches: Vec<CmdBatch>,
 }
 
 impl ApplyContext {
@@ -340,15 +338,7 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-            cmd_batches: Vec::new(),
         }
-    }
-
-    fn push_observed_cmd(&mut self, region_id: u64, cmd: Cmd) {
-        self.cmd_batches
-            .last_mut()
-            .expect("should exist some cmd batch")
-            .push(region_id, cmd);
     }
 
     /// Prepares for applying entries for `delegate`.
@@ -365,14 +355,14 @@ impl ApplyContext {
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
 
-        if let Some(enabled) = &delegate.cmd_observer_enabled {
+        if let Some(enabled) = &delegate.observe_cmd {
             let region_id = delegate.region_id();
             if enabled.load(Ordering::Acquire) {
-                self.cmd_batches.push(CmdBatch::new(region_id));
+                self.host.prepare_for_apply(region_id);
             } else {
                 info!("region is no longer observerd";
                     "region_id" => region_id);
-                delegate.cmd_observer_enabled.take();
+                delegate.observe_cmd.take();
             }
         }
     }
@@ -491,11 +481,7 @@ impl ApplyContext {
             }
         }
 
-        if !self.cmd_batches.is_empty() {
-            self.host.on_cmd_executed(&self.cmd_batches);
-            self.cmd_batches.clear();
-            // TODO(cdc): reclaim large memory.
-        }
+        self.host.on_flush();
 
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
 
@@ -680,7 +666,8 @@ pub struct ApplyDelegate {
     /// The latest synced apply index.
     last_sync_apply_index: u64,
 
-    cmd_observer_enabled: Option<Arc<AtomicBool>>,
+    /// Indicates whether to observe executed cmds.
+    observe_cmd: Option<Arc<AtomicBool>>,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -707,7 +694,7 @@ impl ApplyDelegate {
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
-            cmd_observer_enabled: None,
+            observe_cmd: None,
         }
     }
 
@@ -958,9 +945,9 @@ impl ApplyDelegate {
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_cb(index, term, is_conf_change);
-        if self.cmd_observer_enabled.is_some() {
+        if self.observe_cmd.is_some() {
             let cmd = Cmd::new(index, cmd, resp.clone());
-            apply_ctx.push_observed_cmd(self.region_id(), cmd);
+            apply_ctx.host.on_observe_cmd(self.region_id(), cmd);
         }
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
@@ -2748,11 +2735,11 @@ impl ApplyFsm {
             } => {
                 assert!(!self
                     .delegate
-                    .cmd_observer_enabled
+                    .observe_cmd
                     .as_ref()
                     .map_or(false, |e| e.load(Ordering::Relaxed)));
                 // TODO(cdc): take cmd_observer_enabled when enabled is false.
-                self.delegate.cmd_observer_enabled = Some(enabled);
+                self.delegate.observe_cmd = Some(enabled);
                 (region_id, region_epoch, cb)
             }
             ChangeCmd::Snapshot {
@@ -3124,6 +3111,7 @@ pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::mem;
     use std::rc::Rc;
     use std::sync::atomic::*;
     use std::sync::*;
@@ -3600,6 +3588,7 @@ mod tests {
         pre_query_count: Arc<AtomicUsize>,
         post_admin_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
+        cmd_batches: RefCell<Vec<CmdBatch>>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
     }
 
@@ -3616,10 +3605,25 @@ mod tests {
     }
 
     impl CmdObserver for ApplyObserver {
-        fn on_batch_executed(&self, batch: &[CmdBatch]) {
-            for b in batch {
-                if let Some(sink) = self.cmd_sink.as_ref() {
-                    sink.lock().unwrap().send(b.clone()).unwrap();
+        fn on_prepare_for_apply(&self, region_id: u64) {
+            self.cmd_batches.borrow_mut().push(CmdBatch::new(region_id));
+        }
+
+        fn on_observe_cmd(&self, region_id: u64, cmd: Cmd) {
+            self.cmd_batches
+                .borrow_mut()
+                .last_mut()
+                .expect("should exist some cmd batch")
+                .push(region_id, cmd);
+        }
+
+        fn on_flush(&self) {
+            if !self.cmd_batches.borrow().is_empty() {
+                let batches = mem::replace(&mut *self.cmd_batches.borrow_mut(), Vec::default());
+                for b in batches {
+                    if let Some(sink) = self.cmd_sink.as_ref() {
+                        sink.lock().unwrap().send(b).unwrap();
+                    }
                 }
             }
         }

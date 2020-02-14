@@ -1,11 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
+use std::mem;
 use std::sync::{Arc, RwLock};
 
 use raft::StateRole;
 use tikv::raftstore::coprocessor::*;
 use tikv::raftstore::Error as RaftStoreError;
-use tikv_util::collections::HashSet;
+use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::worker::Scheduler;
 
 use crate::endpoint::Task;
@@ -22,6 +24,7 @@ pub struct CdcObserver {
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashSet<u64>>>,
+    cmd_batches: RefCell<Vec<CmdBatch>>,
 }
 
 impl CdcObserver {
@@ -33,6 +36,7 @@ impl CdcObserver {
         CdcObserver {
             sched,
             observe_regions: Arc::default(),
+            cmd_batches: RefCell::default(),
         }
     }
 
@@ -56,11 +60,24 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl CmdObserver for CdcObserver {
-    fn on_batch_executed(&self, batch: &[CmdBatch]) {
-        if let Err(e) = self.sched.schedule(Task::MultiBatch {
-            multi: batch.to_vec(),
-        }) {
-            warn!("schedule cdc task failed"; "error" => ?e);
+    fn on_prepare_for_apply(&self, region_id: u64) {
+        self.cmd_batches.borrow_mut().push(CmdBatch::new(region_id));
+    }
+
+    fn on_observe_cmd(&self, region_id: u64, cmd: Cmd) {
+        self.cmd_batches
+            .borrow_mut()
+            .last_mut()
+            .expect("should exist some cmd batch")
+            .push(region_id, cmd);
+    }
+
+    fn on_flush(&self) {
+        if !self.cmd_batches.borrow().is_empty() {
+            let batches = mem::replace(&mut *self.cmd_batches.borrow_mut(), Vec::default());
+            if let Err(e) = self.sched.schedule(Task::MultiBatch { multi: batches }) {
+                warn!("schedule cdc task failed"; "error" => ?e);
+            }
         }
     }
 }
@@ -88,6 +105,7 @@ impl RoleObserver for CdcObserver {
 mod tests {
     use super::*;
     use kvproto::metapb::Region;
+    use kvproto::raft_cmdpb::*;
     use std::time::Duration;
 
     #[test]
@@ -95,9 +113,18 @@ mod tests {
         let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
 
-        observer.on_batch_executed(&[CmdBatch::new(1)]);
+        observer.on_prepare_for_apply(0);
+        observer.on_observe_cmd(
+            0,
+            Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
+        );
+        observer.on_flush();
+
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::MultiBatch { .. } => (),
+            Task::MultiBatch { multi } => {
+                assert_eq!(multi.len(), 1);
+                assert_eq!(multi[0].len(), 1);
+            }
             _ => panic!("unexpected task"),
         };
 

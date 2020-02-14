@@ -353,9 +353,24 @@ impl CoprocessorHost {
         );
     }
 
-    pub fn on_cmd_executed(&self, batch: &[CmdBatch]) {
+    pub fn prepare_for_apply(&self, region_id: u64) {
         for cmd_ob in &self.registry.cmd_observers {
-            cmd_ob.observer.inner().on_batch_executed(batch)
+            cmd_ob.observer.inner().on_prepare_for_apply(region_id)
+        }
+    }
+
+    pub fn on_observe_cmd(&self, region_id: u64, cmd: Cmd) {
+        for cmd_ob in &self.registry.cmd_observers {
+            cmd_ob
+                .observer
+                .inner()
+                .on_observe_cmd(region_id, cmd.clone())
+        }
+    }
+
+    pub fn on_flush(&self) {
+        for cmd_ob in &self.registry.cmd_observers {
+            cmd_ob.observer.inner().on_flush()
         }
     }
 
@@ -482,8 +497,14 @@ mod tests {
     }
 
     impl CmdObserver for TestCoprocessor {
-        fn on_batch_executed(&self, _: &[CmdBatch]) {
+        fn on_prepare_for_apply(&self, _: u64) {
             self.called.fetch_add(11, Ordering::SeqCst);
+        }
+        fn on_observe_cmd(&self, _: u64, _: Cmd) {
+            self.called.fetch_add(12, Ordering::SeqCst);
+        }
+        fn on_flush(&self) {
+            self.called.fetch_add(13, Ordering::SeqCst);
         }
     }
 
@@ -537,7 +558,7 @@ mod tests {
         assert_all!(&[&ob.called], &[10]);
         host.pre_apply(&region, &query_req);
         assert_all!(&[&ob.called], &[15]);
-        let mut query_resp = admin_resp;
+        let mut query_resp = admin_resp.clone();
         query_resp.clear_admin_response();
         host.post_apply(&region, &mut query_resp);
         assert_all!(&[&ob.called], &[21]);
@@ -552,8 +573,12 @@ mod tests {
         assert_all!(&[&ob.called], &[45]);
         host.pre_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
-        host.on_cmd_executed(&[]);
+        host.prepare_for_apply(0);
         assert_all!(&[&ob.called], &[66]);
+        host.on_observe_cmd(0, Cmd::new(0, RaftCmdRequest::default(), query_resp));
+        assert_all!(&[&ob.called], &[78]);
+        host.on_flush();
+        assert_all!(&[&ob.called], &[91]);
     }
 
     #[test]
