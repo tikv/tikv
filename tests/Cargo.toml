@@ -12,7 +12,7 @@ required-features = ["failpoints"]
 [[test]]
 name = "integrations"
 path = "integrations/mod.rs"
-required-features = ["raftstore/testexport", "tikv/testexport"]
+required-features = ["testexport"]
 
 [[bench]]
 name = "raftstore"
@@ -43,9 +43,9 @@ name = "channel"
 path = "benches/channel/mod.rs"
 
 [features]
-default = ["testexport", "failpoints"]
-testexport = ["raftstore/testexport", "tikv/testexport"]
+default = ["failpoints", "testexport"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
+testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
 protobuf-codec = ["tikv/protobuf-codec", "external_storage/protobuf-codec", "raftstore/protobuf-codec"]
 prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec", "external_storage/prost-codec", "raftstore/prost-codec"]
