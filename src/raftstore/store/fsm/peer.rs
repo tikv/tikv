@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use crate::pd::{PdClient, PdTask};
-use crate::raftstore::{Error, Result};
+use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Peekable, Snapshot as EngineSnapshot};
@@ -38,8 +38,8 @@ use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
 use crate::raftstore::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, CatchUpLogs, ChangePeer,
-    ExecResult, Fsm, RegionProposal,
+    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangePeer, ExecResult,
+    RegionProposal,
 };
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::metrics::*;
@@ -55,6 +55,7 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use crate::raftstore::{Error, Result};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -906,7 +907,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
-        self.fsm.peer.step(msg.take_message())?;
+        self.fsm.peer.step(self.ctx, msg.take_message())?;
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -1450,7 +1451,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.has_ready = true;
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
-                self.fsm.peer.recent_conf_change_time = now;
                 self.fsm.peer.insert_peer_cache(peer);
             }
             ConfChangeType::RemoveNode => {
@@ -1463,7 +1463,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .retain(|&(p, _)| p != peer_id);
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
-                self.fsm.peer.recent_conf_change_time = now;
             }
         }
 
