@@ -7,8 +7,8 @@ use std::time::Duration;
 use fail;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use tikv::raftstore::store::util::is_vote_msg;
-use tikv::raftstore::Result;
+use raftstore::store::util::is_vote_msg;
+use raftstore::Result;
 use tikv_util::HandyRwLock;
 
 use test_raftstore::*;

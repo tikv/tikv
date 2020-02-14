@@ -16,15 +16,16 @@ use raft::eraftpb;
 use engine::rocks::Writable;
 use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::SnapManager;
 use tempfile::Builder;
 use test_raftstore::*;
+use tikv::config::ConfigHandler;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv_util::worker::FutureWorker;
+use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
@@ -910,6 +911,8 @@ fn test_double_run_node() {
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
     let cfg_controller = Default::default();
+    let config_client =
+        ConfigHandler::start(String::new(), cfg_controller, pd_worker.scheduler()).unwrap();
     let e = node
         .start(
             engines,
@@ -919,7 +922,8 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
-            cfg_controller,
+            Worker::new("split"),
+            Box::new(config_client),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

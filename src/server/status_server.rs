@@ -7,11 +7,8 @@ use futures::Stream;
 use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
-#[cfg(target_os = "linux")]
 use pprof;
-#[cfg(target_os = "linux")]
-use prost::Message;
-#[cfg(target_os = "linux")]
+use pprof::protos::Message;
 use regex::Regex;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -22,7 +19,8 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
-use crate::raftstore::store::PdTask;
+use crate::config::TiKvConfig;
+use raftstore::store::PdTask;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
@@ -227,20 +225,21 @@ impl StatusServer {
                 )
             };
             match res {
-                Ok(cfg) => match serde_json::to_string(&cfg) {
-                    Ok(json) => Ok(Response::builder()
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(json))
-                        .unwrap()),
-                    Err(_) => Ok(err_resp()),
-                },
+                Ok(cfg) => {
+                    match serde_json::to_string(&toml::from_str::<TiKvConfig>(&cfg).unwrap()) {
+                        Ok(json) => Ok(Response::builder()
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(json))
+                            .unwrap()),
+                        Err(_) => Ok(err_resp()),
+                    }
+                }
                 Err(_) => Ok(err_resp()),
             }
         });
         Box::new(res)
     }
 
-    #[cfg(target_os = "linux")]
     fn extract_thread_name(thread_name: &str) -> String {
         lazy_static! {
             static ref THREAD_NAME_RE: Regex =
@@ -260,7 +259,6 @@ impl StatusServer {
             .unwrap_or_else(|| thread_name.to_owned())
     }
 
-    #[cfg(target_os = "linux")]
     fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
         move |frames| {
             let name = Self::extract_thread_name(&frames.thread_name);
@@ -268,7 +266,6 @@ impl StatusServer {
         }
     }
 
-    #[cfg(target_os = "linux")]
     pub fn dump_rsprof(
         seconds: u64,
         frequency: i32,
@@ -307,7 +304,6 @@ impl StatusServer {
         }
     }
 
-    #[cfg(target_os = "linux")]
     pub fn dump_rsperf_to_resp(
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
@@ -419,12 +415,7 @@ impl StatusServer {
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/config") => Self::config_handler(&pd_sender),
-                            (Method::GET, "/debug/pprof/profile") => {
-                                #[cfg(target_os = "linux")]
-                                { Self::dump_rsperf_to_resp(req) }
-                                #[cfg(not(target_os = "linux"))]
-                                { Box::new(ok(Response::default())) }
-                            }
+                            (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
                             _ => Box::new(ok(StatusServer::err_response(
                                 StatusCode::NOT_FOUND,
                                 "path not found",
@@ -536,11 +527,11 @@ fn handle_fail_points_request(
 #[cfg(test)]
 mod tests {
     use crate::config::TiKvConfig;
-    use crate::raftstore::store::PdTask;
     use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
     use futures::Stream;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
+    use raftstore::store::PdTask;
     use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
     use tokio_core::reactor::Handle;
 
@@ -576,9 +567,7 @@ mod tests {
         impl FutureRunnable<PdTask> for Runner {
             fn run(&mut self, t: PdTask, _: &Handle) {
                 match t {
-                    PdTask::GetConfig { cfg_sender } => {
-                        cfg_sender.send(TiKvConfig::default()).unwrap()
-                    }
+                    PdTask::GetConfig { cfg_sender } => cfg_sender.send(String::new()).unwrap(),
                     _ => unreachable!(),
                 }
             }
@@ -827,7 +816,6 @@ mod tests {
         status_server.stop();
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn test_extract_thread_name() {
         assert_eq!(

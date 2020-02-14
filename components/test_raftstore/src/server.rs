@@ -13,16 +13,22 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
+use super::*;
 use engine::Engines;
 use engine_rocks::RocksEngine;
-use tikv::config::{ConfigController, TiKvConfig};
+use raftstore::coprocessor::config::SplitCheckConfigManager;
+use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
+use raftstore::store::config::RaftstoreConfigManager;
+use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use raftstore::store::SplitCheckRunner;
+use raftstore::store::{Callback, LocalReader, SnapManager};
+use raftstore::Result;
+use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
-use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use tikv::raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
-use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
-use tikv::raftstore::Result;
+use tikv::server::gc_worker::GcWorker;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, Task as ResolveTask};
@@ -32,15 +38,11 @@ use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
     ServerTransport,
 };
-
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::config::VersionTrack;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
-
-use super::*;
-use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use tikv::server::gc_worker::GcWorker;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -245,10 +247,12 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
 
         // Create node.
+        let mut raft_store = cfg.raft_store.clone();
+        raft_store.validate().unwrap();
         let mut node = Node::new(
             system,
             &cfg.server,
-            &cfg.raft_store,
+            Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
         );
 
@@ -256,7 +260,35 @@ impl Simulator for ServerCluster {
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
         let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
-        let cfg_controller = ConfigController::new(cfg, Default::default());
+        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default());
+
+        let mut split_check_worker = Worker::new("split-check");
+        let split_check_runner = SplitCheckRunner::new(
+            Arc::clone(&engines.kv),
+            router.clone(),
+            coprocessor_host.clone(),
+            cfg.coprocessor.clone(),
+        );
+        split_check_worker.start(split_check_runner).unwrap();
+        cfg_controller.register(
+            Module::Coprocessor,
+            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+        );
+
+        let mut raftstore_cfg = cfg.raft_store.clone();
+        raftstore_cfg.validate().unwrap();
+        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
+        cfg_controller.register(
+            Module::Raftstore,
+            Box::new(RaftstoreConfigManager(raft_store)),
+        );
+        let config_client = ConfigHandler::start(
+            cfg.server.advertise_addr,
+            cfg_controller,
+            pd_worker.scheduler(),
+        )
+        .unwrap();
+
         node.start(
             engines,
             simulate_trans.clone(),
@@ -265,7 +297,8 @@ impl Simulator for ServerCluster {
             store_meta,
             coprocessor_host,
             importer.clone(),
-            cfg_controller,
+            split_check_worker,
+            Box::new(config_client) as _,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
