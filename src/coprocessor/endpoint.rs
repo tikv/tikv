@@ -578,9 +578,8 @@ mod tests {
     use tipb::Executor;
     use tipb::Expr;
 
-    use crate::config::CoprReadPoolConfig;
-    use crate::coprocessor::readpool_impl::build_read_pool_for_test;
-    use crate::read_pool::ReadPool;
+    use crate::config::{CoprReadPoolConfig, UnifiedReadPoolConfig};
+    use crate::read_pool::{build_yatp_read_pool, tests::DummyReporter, ReadPool};
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use protobuf::Message;
@@ -707,10 +706,11 @@ mod tests {
     #[test]
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             engine,
-        ));
+        );
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         // a normal request
@@ -744,10 +744,11 @@ mod tests {
     #[test]
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             engine,
-        ));
+        );
         let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
         cop.recursion_limit = 100;
 
@@ -780,10 +781,11 @@ mod tests {
     #[test]
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             engine,
-        ));
+        );
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let mut req = coppb::Request::default();
@@ -799,10 +801,11 @@ mod tests {
     #[test]
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             engine,
-        ));
+        );
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let mut req = coppb::Request::default();
@@ -881,10 +884,11 @@ mod tests {
     #[test]
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             engine,
-        ));
+        );
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let handler_builder =
@@ -900,10 +904,11 @@ mod tests {
     #[test]
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             engine,
-        ));
+        );
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         // Fail immediately
@@ -946,10 +951,11 @@ mod tests {
     #[test]
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             engine,
-        ));
+        );
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -967,10 +973,11 @@ mod tests {
     #[test]
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             engine,
-        ));
+        );
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         // handler returns `finished == true` should not be called again.
@@ -1056,10 +1063,11 @@ mod tests {
     #[test]
     fn test_channel_size() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             engine,
-        ));
+        );
         let cop = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_stream_channel_size: 3,
@@ -1110,15 +1118,14 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig {
-                low_concurrency: 1,
-                normal_concurrency: 1,
-                high_concurrency: 1,
-                ..CoprReadPoolConfig::default_for_test()
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig {
+                max_thread_count: 1,
+                ..UnifiedReadPoolConfig::default_for_test()
             },
+            DummyReporter,
             engine,
-        ));
+        );
 
         let mut config = Config::default();
         config.end_point_request_max_handle_duration =

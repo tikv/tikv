@@ -31,7 +31,7 @@ pub use self::{
     types::{StorageCallback, TxnStatus},
 };
 
-use crate::read_pool::{ReadPool, ReadPoolHandle};
+use crate::read_pool::{build_yatp_read_pool, tests::DummyReporter, ReadPool, ReadPoolHandle};
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
@@ -1150,17 +1150,14 @@ impl<E: Engine> TestStorageBuilder<E> {
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, DummyLockManager>> {
-        let read_pool = build_read_pool_for_test(
-            &crate::config::StorageReadPoolConfig::default_for_test(),
+    pub fn build(self) -> Result<(Storage<E, DummyLockManager>, ReadPool)> {
+        let read_pool = build_yatp_read_pool(
+            &crate::config::UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             self.engine.clone(),
         );
-        Storage::from_engine(
-            self.engine,
-            &self.config,
-            ReadPool::from(read_pool).handle(),
-            None,
-        )
+        Storage::from_engine(self.engine, &self.config, read_pool.handle(), None)
+            .map(move |storage| (storage, read_pool))
     }
 }
 
@@ -1245,7 +1242,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -1303,7 +1300,7 @@ mod tests {
     fn test_cf_error() {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let storage = TestStorageBuilder::from_engine(engine).build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::from_engine(engine).build().unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -1396,7 +1393,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -1635,7 +1632,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -1701,7 +1698,7 @@ mod tests {
 
     #[test]
     fn test_batch_get_command() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -1776,7 +1773,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -1858,7 +1855,7 @@ mod tests {
     fn test_sched_too_busy() {
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let storage = TestStorageBuilder::new().config(config).build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().config(config).build().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -1898,7 +1895,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -1932,7 +1929,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_check_ttl() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let ts = TimeStamp::compose;
@@ -1988,7 +1985,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
@@ -2031,7 +2028,7 @@ mod tests {
     fn test_high_priority_no_block() {
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
-        let storage = TestStorageBuilder::new().config(config).build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().config(config).build().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -2080,7 +2077,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         // Write x and y.
         storage
@@ -2180,7 +2177,7 @@ mod tests {
 
     #[test]
     fn test_raw_delete_range() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = [
@@ -2294,7 +2291,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_put() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2329,7 +2326,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_get() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2367,7 +2364,7 @@ mod tests {
 
     #[test]
     fn test_batch_raw_get() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2414,7 +2411,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_delete() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2513,7 +2510,7 @@ mod tests {
 
     #[test]
     fn test_raw_scan() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2895,7 +2892,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_scan() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -3139,7 +3136,7 @@ mod tests {
 
     #[test]
     fn test_scan_lock() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -3343,7 +3340,7 @@ mod tests {
     fn test_resolve_lock() {
         use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         // These locks (transaction ts=99) are not going to be resolved.
@@ -3460,7 +3457,7 @@ mod tests {
 
     #[test]
     fn test_resolve_lock_lite() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         storage
@@ -3574,7 +3571,7 @@ mod tests {
 
     #[test]
     fn test_txn_heart_beat() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let k = Key::from_raw(b"k");
@@ -3645,7 +3642,7 @@ mod tests {
 
     #[test]
     fn test_check_txn_status() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, _read_pool) = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let k = Key::from_raw(b"k");

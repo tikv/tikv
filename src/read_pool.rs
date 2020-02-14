@@ -308,17 +308,13 @@ mod metrics {
     }
 }
 
-#[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::raftstore::store::FlowStatistics;
-    use crate::storage::TestEngineBuilder;
-    use futures03::channel::oneshot;
-    use std::thread;
     use tikv_util::collections::HashMap;
 
     #[derive(Clone)]
-    struct DummyReporter;
+    pub struct DummyReporter;
 
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: HashMap<u64, FlowStatistics>) {}
@@ -334,11 +330,11 @@ mod tests {
         };
         // max running tasks number should be 2*1 = 2
 
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(&config, DummyReporter, engine);
 
         let gen_task = || {
-            let (tx, rx) = oneshot::channel::<()>();
+            let (tx, rx) = futures03::channel::oneshot::channel::<()>();
             let task = async move {
                 let _ = rx.await;
             };
@@ -354,14 +350,14 @@ mod tests {
         assert!(handle.spawn(task1, CommandPri::Normal, 1).is_ok());
         assert!(handle.spawn(task2, CommandPri::Normal, 2).is_ok());
 
-        thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3) {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
         tx1.send(()).unwrap();
 
-        thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(300));
         assert!(handle.spawn(task4, CommandPri::Normal, 4).is_ok());
     }
 }

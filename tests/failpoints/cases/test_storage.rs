@@ -28,7 +28,7 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilder::from_engine(engine0.clone())
+    let (storage0, _read_pool) = TestStorageBuilder::from_engine(engine0.clone())
         .build()
         .unwrap();
 

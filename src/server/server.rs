@@ -278,8 +278,7 @@ mod tests {
 
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
     use super::super::{Config, Result};
-    use crate::config::CoprReadPoolConfig;
-    use crate::coprocessor::{self, readpool_impl};
+    use crate::coprocessor;
     use crate::raftstore::store::transport::Transport;
     use crate::raftstore::store::*;
     use crate::raftstore::Result as RaftStoreResult;
@@ -360,7 +359,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let (storage, read_pool) = TestStorageBuilder::new().build().unwrap();
         let mut gc_worker =
             GcWorker::new(storage.get_engine(), None, None, None, Default::default());
         gc_worker.start().unwrap();
@@ -376,11 +375,7 @@ mod tests {
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
-        let cop_read_pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
-            storage.get_engine(),
-        ));
-        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool.handle());
+        let cop = coprocessor::Endpoint::new(&cfg, read_pool.handle());
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(

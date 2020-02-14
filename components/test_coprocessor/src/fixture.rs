@@ -5,9 +5,8 @@ use super::*;
 use kvproto::kvrpcpb::Context;
 
 use tidb_query::codec::Datum;
-use tikv::config::CoprReadPoolConfig;
-use tikv::coprocessor::{readpool_impl, Endpoint};
-use tikv::read_pool::ReadPool;
+use tikv::coprocessor::Endpoint;
+use tikv::read_pool::{build_yatp_read_pool, tests::DummyReporter};
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
@@ -65,7 +64,7 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
 ) -> (Store<E>, Endpoint<E>) {
-    let mut store = Store::from_engine(engine);
+    let mut store = Store::from_engine(engine.clone());
 
     store.begin();
     for &(id, name, count) in vals {
@@ -80,10 +79,11 @@ pub fn init_data_with_details<E: Engine>(
         store.commit_with_ctx(ctx);
     }
 
-    let pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
-        &CoprReadPoolConfig::default_for_test(),
-        store.get_engine(),
-    ));
+    let pool = build_yatp_read_pool(
+        &tikv::config::UnifiedReadPoolConfig::default_for_test(),
+        DummyReporter,
+        engine,
+    );
     let cop = Endpoint::new(cfg, pool.handle());
     (store, cop)
 }

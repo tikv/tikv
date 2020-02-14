@@ -1357,6 +1357,15 @@ impl UnifiedReadPoolConfig {
         }
         Ok(())
     }
+
+    pub fn default_for_test() -> Self {
+        Self {
+            min_thread_count: 1,
+            max_thread_count: 2,
+            stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
+            max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+        }
+    }
 }
 
 const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;

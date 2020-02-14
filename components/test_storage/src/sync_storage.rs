@@ -1,9 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::Future;
+use std::sync::Arc;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::raftstore::coprocessor::RegionInfoProvider;
+use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
@@ -66,8 +68,11 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         );
         gc_worker.start()?;
 
+        let (store, read_pool) = builder.build()?;
+
         Ok(SyncTestStorage {
-            store: builder.build()?,
+            read_pool: Arc::new(read_pool),
+            store,
             gc_worker,
         })
     }
@@ -78,6 +83,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
+    read_pool: Arc<ReadPool>,
     gc_worker: GcWorker<E>,
     store: Storage<E, DummyLockManager>,
 }

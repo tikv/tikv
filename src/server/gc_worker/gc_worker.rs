@@ -1115,7 +1115,7 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine(engine.clone())
+        let (storage, _read_pool) = TestStorageBuilder::from_engine(engine.clone())
             .build()
             .unwrap();
         let db = engine.get_rocksdb();
@@ -1274,7 +1274,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
+        let (storage, _read_pool) = TestStorageBuilder::from_engine(prefixed_engine.clone())
             .build()
             .unwrap();
         let mut gc_worker =

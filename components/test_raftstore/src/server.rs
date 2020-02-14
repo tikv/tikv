@@ -28,7 +28,7 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::SplitCheckRunner;
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
-use tikv::read_pool::ReadPool;
+use tikv::read_pool::{build_yatp_read_pool, tests::DummyReporter};
 use tikv::server::gc_worker::GcWorker;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::lock_manager::LockManager;
@@ -39,7 +39,6 @@ use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
     ServerTransport,
 };
-use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::security::SecurityManager;
@@ -146,10 +145,11 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let storage_read_pool = ReadPool::from(storage::build_read_pool_for_test(
-            &tikv::config::StorageReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &tikv::config::UnifiedReadPoolConfig::default_for_test(),
+            DummyReporter,
             raft_engine.clone(),
-        ));
+        );
 
         let engine = RaftKv::new(sim_router.clone());
 
@@ -166,7 +166,7 @@ impl Simulator for ServerCluster {
         let store = create_raft_storage(
             engine,
             &cfg.storage,
-            storage_read_pool.handle(),
+            read_pool.handle(),
             Some(lock_mgr.clone()),
         )?;
         self.storages.insert(node_id, raft_engine);
@@ -204,11 +204,7 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
-            &tikv::config::CoprReadPoolConfig::default_for_test(),
-            store.get_engine(),
-        ));
-        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle());
+        let cop = coprocessor::Endpoint::new(&server_cfg, read_pool.handle());
         let mut server = None;
         for _ in 0..100 {
             let mut svr = Server::new(
