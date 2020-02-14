@@ -126,7 +126,6 @@ impl ReadIndexQueue {
     pub fn clear_uncommitted_on_role_change(&mut self, term: u64) {
         let mut removed = 0;
         for mut read in self.reads.drain(self.ready_cnt..) {
-            self.contexts.remove(&read.id);
             removed += read.cmds.len();
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
