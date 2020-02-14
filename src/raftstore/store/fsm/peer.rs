@@ -358,6 +358,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // Maybe do some safe check first?
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
+
+                if self.fsm.peer.peer.get_is_learner() {
+                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx.trans);
+                }
             }
             CasualMessage::SnapshotGenerated => {
                 // Resume snapshot handling again to avoid waiting another heartbeat.
@@ -880,6 +884,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return Ok(());
         }
 
+        if msg.has_extra_msg() {
+            // now noop
+            return Ok(());
+        }
+
         if self.check_msg(&msg) {
             return Ok(());
         }
@@ -1248,6 +1257,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
         }
 
+        let mut is_overlapped = false;
         let mut regions_to_destroy = vec![];
         // In some extreme cases, it may cause source peer destroyed improperly so that a later
         // CommitMerge may panic because source is already destroyed, so just drop the message:
@@ -1286,12 +1296,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // check but the peer is already destroyed.
                 regions_to_destroy.push(exist_region.get_id());
                 continue;
-            } else {
+            }
+            is_overlapped = true;
+            if snap_region.get_region_epoch().get_version()
+                > exist_region.get_region_epoch().get_version()
+            {
+                // If snapshot's epoch version is greater than exist region's, the exist region
+                // may has been merged already.
                 let _ = self.ctx.router.force_send(
                     exist_region.get_id(),
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
                 );
             }
+        }
+        if is_overlapped {
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(Some(key));
         }
