@@ -12,6 +12,7 @@ use std::result::Result as StdResult;
 /// `SplitObserver` adjusts the split key so that it won't separate
 /// the data of a row into two region. It adjusts the key according
 /// to the key format of `TiDB`.
+#[derive(Clone)]
 pub struct SplitObserver;
 
 type Result<T> = StdResult<T, String>;

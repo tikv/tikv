@@ -13,18 +13,18 @@ pub mod config;
 pub mod errors;
 pub mod kv;
 pub mod lock_manager;
+pub(crate) mod metrics;
 pub mod mvcc;
 pub mod txn;
 
-mod metrics;
 mod read_pool;
 mod types;
 
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
-        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
+        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator, RocksEngine,
+        ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},

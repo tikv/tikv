@@ -17,11 +17,14 @@ mod split_check;
 pub mod split_observer;
 
 pub use self::config::Config;
-pub use self::dispatcher::{CoprocessorHost, Registry};
+pub use self::dispatcher::{
+    BoxAdminObserver, BoxApplySnapshotObserver, BoxQueryObserver, BoxRegionChangeObserver,
+    BoxRoleObserver, BoxSplitCheckObserver, CoprocessorHost, Registry,
+};
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{
     Callback as RegionInfoCallback, RegionCollector, RegionInfo, RegionInfoAccessor,
-    SeekRegionCallback,
+    RegionInfoProvider, SeekRegionCallback,
 };
 pub use self::split_check::{
     get_region_approximate_keys, get_region_approximate_keys_cf, get_region_approximate_middle,
@@ -33,7 +36,7 @@ pub use crate::raftstore::store::KeyEntry;
 
 /// Coprocessor is used to provide a convenient way to inject code to
 /// KV processing.
-pub trait Coprocessor {
+pub trait Coprocessor: Send {
     fn start(&self) {}
     fn stop(&self) {}
 }

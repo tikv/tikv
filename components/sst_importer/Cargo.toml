@@ -28,7 +28,7 @@ tokio-sync = "0.1.7"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus.git"
+git = "https://github.com/tikv/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 default-features = false
 

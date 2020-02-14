@@ -261,9 +261,8 @@ mod tests {
 
     use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-    use crate::storage::mvcc::{TimeStamp, Write, WriteType};
     use keys::data_key;
-    use txn_types::Key;
+    use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
 

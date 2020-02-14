@@ -3,7 +3,7 @@
 use std::convert::TryFrom;
 
 use tidb_query_datatype::builder::FieldTypeBuilder;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
 use tipb::{Expr, FieldType};
 
 use crate::rpn_expr::impl_cast::get_cast_fn_rpn_node;
@@ -62,10 +62,7 @@ pub fn rewrite_exp_for_bit_op(schema: &[FieldType], exp: &mut RpnExpression) -> 
         EvalType::Int => {
             return Ok(());
         }
-        _ => FieldTypeBuilder::new()
-            .tp(FieldTypeTp::LongLong)
-            .flag(FieldTypeFlag::UNSIGNED)
-            .build(),
+        _ => FieldTypeBuilder::new().tp(FieldTypeTp::LongLong).build(),
     };
     let node = get_cast_fn_rpn_node(exp.is_last_constant(), ret_field_type, new_ret_field_type)?;
     exp.push(node);

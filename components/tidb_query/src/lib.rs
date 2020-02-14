@@ -10,8 +10,11 @@
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
+#![feature(iter_order_by)]
 #![feature(test)]
 #![feature(int_error_matching)]
+#![feature(str_internals)]
+#![feature(ptr_offset_from)]
 // FIXME: rustc says there are redundant semicolons here but isn't
 // saying where as of nightly-2019-09-05
 // See https://github.com/rust-lang/rust/issues/63967
@@ -19,6 +22,8 @@
 // FIXME: ditto. probably a result of the above
 #![allow(clippy::no_effect)]
 
+#[macro_use]
+extern crate failure;
 #[macro_use]
 extern crate static_assertions;
 #[macro_use(error, debug, warn)]

@@ -803,24 +803,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         self.fsm.peer.mut_store().flush_cache_metrics();
-        let res = match res {
-            // hibernate_region is false.
-            None => {
-                self.register_raft_base_tick();
-                return;
-            }
-            Some(res) => res,
-        };
-        if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
+
+        // Keep ticking if there are still pending read requests.
+        if res.is_none() /* hibernate_region is false */ ||
+            !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap())
+        {
             self.register_raft_base_tick();
-        } else {
-            debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
-            self.fsm.group_state = GroupState::Idle;
-            // Followers will stop ticking at L760. Keep ticking for followers
-            // to allow it to campaign quickly when abnormal situation is detected.
-            if !self.fsm.peer.is_leader() {
-                self.register_raft_base_tick();
-            }
+            return;
+        }
+
+        debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+        self.fsm.group_state = GroupState::Idle;
+        // Followers will stop ticking at L789. Keep ticking for followers
+        // to allow it to campaign quickly when abnormal situation is detected.
+        if !self.fsm.peer.is_leader() {
+            self.register_raft_base_tick();
         }
     }
 
@@ -921,7 +918,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
-        self.fsm.peer.step(msg.take_message())?;
+        self.fsm.peer.step(self.ctx, msg.take_message())?;
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -1491,7 +1488,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.has_ready = true;
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
-                self.fsm.peer.recent_conf_change_time = now;
                 self.fsm.peer.insert_peer_cache(peer);
             }
             ConfChangeType::RemoveNode => {
@@ -1504,7 +1500,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .retain(|&(p, _)| p != peer_id);
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
-                self.fsm.peer.recent_conf_change_time = now;
             }
             ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
                 unimplemented!()

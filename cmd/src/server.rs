@@ -29,21 +29,21 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
-use tikv::config::ConfigHandler;
-use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::{
-    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
+    config::{ConfigController, ConfigHandler, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
     raftstore::{
-        coprocessor::{CoprocessorHost, RegionInfoAccessor},
+        coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
+        router::ServerRaftStoreRouter,
         store::{
+            config::RaftstoreConfigManager,
             fsm,
             fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder,
+            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
         },
     },
-    read_pool::{ReadPool, ReadPoolRunner},
+    read_pool::{build_yatp_read_pool, ReadPool},
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -56,15 +56,12 @@ use tikv::{
     },
     storage,
 };
+use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     security::SecurityManager,
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
-};
-use yatp::{
-    pool::CloneRunnerBuilder,
-    queue::{multilevel, QueueType},
 };
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -78,6 +75,7 @@ pub fn run_tikv(config: TiKvConfig) {
     let _m = Monitor::default();
 
     tikv.init_fs();
+    tikv.init_yatp();
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
     let server_config = tikv.init_servers(&gc_worker);
@@ -278,6 +276,17 @@ impl TiKVServer {
         .unwrap();
     }
 
+    fn init_yatp(&self) {
+        let yatp_enabled = self.config.readpool.unify_read_pool;
+        if !yatp_enabled {
+            return;
+        }
+
+        yatp::metrics::set_namespace(Some("tikv"));
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone())).unwrap();
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
+    }
+
     fn init_engines(&mut self) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
@@ -332,11 +341,11 @@ impl TiKVServer {
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
-            "rocksdb",
+            tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
         );
         cfg_controller.register(
-            "raftdb",
+            tikv::config::Module::Raftdb,
             Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
         );
 
@@ -374,14 +383,20 @@ impl TiKVServer {
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
-        cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
+        cfg_controller.register(
+            tikv::config::Module::Gc,
+            Box::new(gc_worker.get_config_manager()),
+        );
 
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
         let lock_mgr = if self.config.pessimistic_txn.enabled {
             let lock_mgr = LockManager::new();
-            cfg_controller.register("pessimistic_txn", Box::new(lock_mgr.config_manager()));
+            cfg_controller.register(
+                tikv::config::Module::PessimisticTxn,
+                Box::new(lock_mgr.config_manager()),
+            );
             lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
             Some(lock_mgr)
         } else {
@@ -394,18 +409,10 @@ impl TiKVServer {
         let pd_sender = pd_worker.scheduler();
 
         let unified_read_pool = if self.config.readpool.unify_read_pool {
-            let unified_read_pool_cfg = &self.config.readpool.unified;
-            let mut builder = yatp::Builder::new("unified-read-pool");
-            builder
-                .min_thread_count(unified_read_pool_cfg.min_thread_count)
-                .max_thread_count(unified_read_pool_cfg.max_thread_count);
-            let multilevel_builder = multilevel::Builder::new(Default::default());
-            let read_pool_runner = ReadPoolRunner::new(engines.engine.clone(), Default::default());
-            let runner_builder =
-                multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-            Some(builder.build_with_queue_and_runner(
-                QueueType::Multilevel(multilevel_builder),
-                runner_builder,
+            Some(build_yatp_read_pool(
+                &self.config.readpool.unified,
+                pd_sender.clone(),
+                engines.engine.clone(),
             ))
         } else {
             None
@@ -414,12 +421,12 @@ impl TiKVServer {
         let storage_read_pool = if self.config.readpool.unify_read_pool {
             ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
         } else {
-            let cop_read_pools = storage::build_read_pool(
+            let storage_read_pools = storage::build_read_pool(
                 &self.config.readpool.storage,
                 pd_sender.clone(),
                 engines.engine.clone(),
             );
-            ReadPool::from(cop_read_pools)
+            ReadPool::from(storage_read_pools)
         };
 
         let storage = create_raft_storage(
@@ -476,10 +483,40 @@ impl TiKVServer {
 
         let import_path = self.store_path.join("import");
         let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+
+        let mut split_check_worker = Worker::new("split-check");
+        let split_check_runner = SplitCheckRunner::new(
+            engines.engines.kv.clone(),
+            self.router.clone(),
+            coprocessor_host.clone(),
+            self.config.coprocessor.clone(),
+        );
+        split_check_worker.start(split_check_runner).unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Coprocessor,
+            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+        );
+
+        self.config
+            .raft_store
+            .validate()
+            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
+        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        cfg_controller.register(
+            tikv::config::Module::Raftstore,
+            Box::new(RaftstoreConfigManager(raft_store.clone())),
+        );
+        let config_client = ConfigHandler::start(
+            self.config.server.advertise_addr.clone(),
+            cfg_controller,
+            pd_worker.scheduler(),
+        )
+        .unwrap_or_else(|e| fatal!("failed to start config client: {}", e));
+
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config,
-            &self.config.raft_store,
+            raft_store,
             self.pd_client.clone(),
         );
         node.start(
@@ -490,7 +527,8 @@ impl TiKVServer {
             engines.store_meta.clone(),
             coprocessor_host,
             importer.clone(),
-            cfg_controller,
+            split_check_worker,
+            Box::new(config_client) as _,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
