@@ -58,9 +58,13 @@ toml = "0.4"
 url = "2"
 vlog = "0.1.4"
 
+[dependencies.prometheus]
+git = "https://github.com/tikv/rust-prometheus.git"
+rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+features = ["nightly", "push", "process"]
+
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
-rev = "4e3ac06b948f1c2dffe92986a760ef561d0bdbb9"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

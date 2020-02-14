@@ -29,7 +29,7 @@ use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::Callback;
 use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
 use pd_client::metrics::*;
 use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -1048,9 +1048,9 @@ fn send_admin_request(
 /// Sends merge fail message to gc merge source.
 fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::Peer) {
     let target_id = target.get_id();
-    if let Err(e) = router.send(
+    if let Err(e) = router.force_send(
         source_region_id,
-        PeerMsg::CasualMessage(CasualMessage::MergeResult {
+        PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
             target,
             stale: true,
         }),
