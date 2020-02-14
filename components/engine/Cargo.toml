@@ -14,7 +14,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.
 protobuf = "~2.0"
 raft = "0.4"
 quick-error = "1.2.2"
-lazy_static = "0.2.1"
+lazy_static = "1.4"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 time = "0.1"
@@ -32,9 +32,9 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
-branch = "tikv-3.0"
+branch = "tikv-3.x"
 
 [dev-dependencies]
 tempdir = "0.3"

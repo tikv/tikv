@@ -2,12 +2,12 @@
 
 use std::cell::RefCell;
 use std::cmp;
+use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::DB;
 use external_storage::*;
 use futures::lazy;
@@ -17,11 +17,11 @@ use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
-use tikv::coprocessor::codec::table::decode_table_id;
 use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::{Key, Statistics};
+use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -64,7 +64,7 @@ impl fmt::Debug for Task {
 
 #[derive(Clone)]
 struct LimitedStorage {
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Limiter,
     storage: Arc<dyn ExternalStorage>,
 }
 
@@ -76,13 +76,14 @@ impl Task {
     ) -> Result<(Task, Arc<AtomicBool>)> {
         let cancel = Arc::new(AtomicBool::new(false));
 
-        let limiter = if req.get_rate_limit() != 0 {
-            Some(Arc::new(IOLimiter::new(req.get_rate_limit() as _)))
+        let speed_limit = req.get_rate_limit();
+        let limiter = Limiter::new(if speed_limit > 0 {
+            speed_limit as f64
         } else {
-            None
-        };
+            INFINITY
+        });
         let storage = LimitedStorage {
-            storage: create_storage(req.get_path())?,
+            storage: create_storage(req.get_storage_backend())?,
             limiter,
         };
 
@@ -122,6 +123,7 @@ impl BackupRange {
         writer: &mut BackupWriter,
         engine: &E,
         backup_ts: u64,
+        begin_ts: u64,
     ) -> Result<Statistics> {
         let mut ctx = Context::new();
         ctx.set_region_id(self.region.get_id());
@@ -142,7 +144,11 @@ impl BackupRange {
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
-        let mut scanner = snap_store.entry_scanner(start_key, end_key).unwrap();
+        // Incremental backup needs to output delete records.
+        let incremental = begin_ts > 0;
+        let mut scanner = snap_store
+            .entry_scanner(start_key, end_key, begin_ts, incremental)
+            .unwrap();
 
         let start = Instant::now();
         let mut batch = EntryBatch::with_capacity(1024);
@@ -357,9 +363,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
         cancel: Arc<AtomicBool>,
     ) {
-        // TODO: support incremental backup
-        let _ = start_ts;
-
         let backup_ts = end_ts;
         let engine = self.engine.clone();
         let db = self.db.clone();
@@ -375,11 +378,15 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     warn!("backup task has canceled"; "range" => ?brange);
                     return Ok(());
                 }
-                let table_id = brange
-                    .start_key
-                    .clone()
-                    .and_then(|k| decode_table_id(&k.into_raw().unwrap()).ok());
-                let name = backup_file_name(store_id, &brange.region, table_id);
+                // TODO: make file_name unique and short
+                let key = brange.start_key.clone().and_then(|k| {
+                    // use start_key sha256 instead of start_key to avoid file name too long os error
+                    tikv_util::file::sha256(&k.into_raw().unwrap())
+                        .ok()
+                        .map(|b| hex::encode(b))
+                });
+
+                let name = backup_file_name(store_id, &brange.region, key);
                 let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
                 {
                     Ok(w) => w,
@@ -388,7 +395,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         return tx.send((brange, Err(e))).map_err(|_| ());
                     }
                 };
-                let stat = match brange.backup(&mut writer, &engine, backup_ts) {
+                let stat = match brange.backup(&mut writer, &engine, backup_ts, start_ts) {
                     Ok(s) => s,
                     Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
                 };
@@ -498,16 +505,8 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
             return;
         }
         info!("run backup task"; "task" => %task);
-        if task.start_ts == task.end_ts {
-            self.handle_backup_task(task);
-            self.pool.borrow_mut().heartbeat();
-        } else {
-            // TODO: support incremental backup
-            BACKUP_RANGE_ERROR_VEC
-                .with_label_values(&["incremental"])
-                .inc();
-            error!("incremental backup is not supported yet");
-        }
+        self.handle_backup_task(task);
+        self.pool.borrow_mut().heartbeat();
     }
 }
 
@@ -561,14 +560,14 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 
 /// Construct an backup file name based on the given store id and region.
 /// A name consists with three parts: store id, region_id and a epoch version.
-fn backup_file_name(store_id: u64, region: &Region, table_id: Option<i64>) -> String {
-    match table_id {
-        Some(t_id) => format!(
+fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+    match key {
+        Some(k) => format!(
             "{}_{}_{}_{}",
             store_id,
             region.get_id(),
             region.get_region_epoch().get_version(),
-            t_id
+            k
         ),
         None => format!(
             "{}_{}_{}",
@@ -582,7 +581,7 @@ fn backup_file_name(store_id: u64, region: &Region, table_id: Option<i64>) -> St
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use external_storage::LocalStorage;
+    use external_storage::{make_local_backend, make_noop_backend, LocalStorage};
     use futures::{self, Future, Stream};
     use kvproto::metapb;
     use rand;
@@ -737,7 +736,7 @@ pub mod tests {
                 let ls = LocalStorage::new(tmp.path()).unwrap();
                 let storage = LimitedStorage {
                     storage: Arc::new(ls) as _,
-                    limiter: None,
+                    limiter: Limiter::new(INFINITY),
                 };
                 let (tx, rx) = unbounded();
                 let task = Task {
@@ -836,12 +835,12 @@ pub mod tests {
         }
 
         // TODO: check key number for each snapshot.
-        let limiter = Arc::new(IOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
+        let limiter = Limiter::new(10.0 * 1024.0 * 1024.0 /* 10 MB/s */);
         for (ts, len) in backup_tss {
             let mut req = BackupRequest::new();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
-            req.set_start_version(ts);
+            req.set_start_version(0);
             req.set_end_version(ts);
             req.set_concurrency(4);
             let (tx, rx) = unbounded();
@@ -849,19 +848,16 @@ pub mod tests {
             Task::new(req.clone(), tx.clone()).unwrap_err();
 
             // Set an unique path to avoid AlreadyExists error.
-            req.set_path(format!(
-                "local://{}",
-                tmp.path().join(format!("{}", ts)).display()
-            ));
+            req.set_storage_backend(make_local_backend(&tmp.path().join(ts.to_string())));
             if len % 2 == 0 {
                 req.set_rate_limit(10 * 1024 * 1024);
             }
             let (mut task, _) = Task::new(req, tx).unwrap();
             if len % 2 == 0 {
                 // Make sure the rate limiter is set.
-                assert!(task.storage.limiter.is_some());
+                assert!(task.storage.limiter.speed_limit().is_finite());
                 // Share the same rate limiter.
-                task.storage.limiter = Some(limiter.clone());
+                task.storage.limiter = limiter.clone();
             }
             endpoint.handle_backup_task(task);
             let (resp, rx) = rx.into_future().wait().unwrap();
@@ -911,10 +907,7 @@ pub mod tests {
         req.set_end_version(now);
         req.set_concurrency(4);
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
         endpoint.handle_backup_task(task);
@@ -935,10 +928,7 @@ pub mod tests {
         req.set_start_version(now);
         req.set_end_version(now);
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
         endpoint.handle_backup_task(task);
@@ -987,7 +977,7 @@ pub mod tests {
         req.set_start_version(now);
         req.set_end_version(now);
         req.set_concurrency(4);
-        req.set_path(format!("local://{}", temp.path().display()));
+        req.set_storage_backend(make_local_backend(temp.path()));
 
         // Cancel the task before starting the task.
         let (tx, rx) = unbounded();
@@ -1024,7 +1014,7 @@ pub mod tests {
         req.set_start_version(1);
         req.set_end_version(1);
         req.set_concurrency(4);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
@@ -1055,7 +1045,7 @@ pub mod tests {
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, _) = unbounded();
 
@@ -1116,7 +1106,7 @@ pub mod tests {
         req.set_start_version(1);
         req.set_end_version(1);
         req.set_concurrency(10);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, _) = futures::sync::mpsc::unbounded();
         let (task, _) = Task::new(req, tx).unwrap();

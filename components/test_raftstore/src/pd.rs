@@ -15,7 +15,7 @@ use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 
-use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
+use tikv::pd::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
@@ -92,8 +92,10 @@ enum Operator {
         target_region_id: u64,
         policy: Arc<RwLock<SchedulePolicy>>,
     },
-    HalfSplitRegion {
+    SplitRegion {
         region_epoch: metapb::RegionEpoch,
+        policy: pdpb::CheckPolicy,
+        keys: Vec<Vec<u8>>,
     },
 }
 
@@ -134,7 +136,9 @@ impl Operator {
                     new_pd_merge_region(region)
                 }
             }
-            Operator::HalfSplitRegion { .. } => new_half_split_region(),
+            Operator::SplitRegion {
+                policy, ref keys, ..
+            } => new_split_region(policy, keys.clone()),
         }
     }
 
@@ -169,9 +173,9 @@ impl Operator {
                 }
                 unreachable!()
             }
-            Operator::HalfSplitRegion { ref region_epoch } => {
-                region.get_region_epoch() != region_epoch
-            }
+            Operator::SplitRegion {
+                ref region_epoch, ..
+            } => region.get_region_epoch() != region_epoch,
             Operator::RemovePeer {
                 ref peer,
                 ref mut policy,
@@ -261,8 +265,7 @@ impl Cluster {
         // assert_eq!(region.get_peers().len(), 1);
         let store_id = store.get_id();
         let mut s = Store::default();
-        s.store = store;;
-
+        s.store = store;
 
         s.region_ids.insert(region.get_id());
 
@@ -798,38 +801,39 @@ impl TestPdClient {
         self.schedule_operator(region_id, op);
     }
 
-    pub fn half_split_region(&self, mut region: metapb::Region) {
-        let op = Operator::HalfSplitRegion {
+    pub fn split_region(
+        &self,
+        mut region: metapb::Region,
+        policy: pdpb::CheckPolicy,
+        keys: Vec<Vec<u8>>,
+    ) {
+        let op = Operator::SplitRegion {
             region_epoch: region.take_region_epoch(),
+            policy,
+            keys,
         };
         self.schedule_operator(region.get_id(), op);
     }
 
-    pub fn must_half_split_region(&self, region: metapb::Region) {
-        self.half_split_region(region.clone());
+    pub fn must_split_region(
+        &self,
+        region: metapb::Region,
+        policy: pdpb::CheckPolicy,
+        keys: Vec<Vec<u8>>,
+    ) {
+        let expect_region_count = self.get_regions_number()
+            + if policy == pdpb::CheckPolicy::USEKEY {
+                keys.len()
+            } else {
+                1
+            };
+        self.split_region(region.clone(), policy, keys);
         for _ in 1..500 {
             sleep_ms(10);
-
-            let now = self
-                .get_region_by_id(region.get_id())
-                .wait()
-                .unwrap()
-                .unwrap();
-            if (now.get_start_key() != region.get_start_key()
-                && self.get_region(region.get_start_key()).is_ok())
-                || (now.get_end_key() != region.get_end_key()
-                    && self.get_region(now.get_end_key()).is_ok())
-            {
-                if now.get_end_key() != region.get_end_key() {
-                    assert!(now.get_end_key().is_empty());
-                }
-                assert!(
-                    now.get_region_epoch().get_version() > region.get_region_epoch().get_version()
-                );
+            if self.get_regions_number() == expect_region_count {
                 return;
             }
         }
-
         panic!("region {:?} is still not split.", region);
     }
 
@@ -998,6 +1002,12 @@ impl PdClient for TestPdClient {
             "no region contains key {}",
             hex::encode_upper(key)
         ))
+    }
+
+    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
+        let region = self.get_region(key)?;
+        let leader = self.cluster.rl().leaders.get(&region.get_id()).cloned();
+        Ok(RegionInfo::new(region, leader))
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {

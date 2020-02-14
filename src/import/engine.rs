@@ -4,7 +4,7 @@ use std::cmp;
 use std::fmt;
 use std::i32;
 use std::io::Read;
-use std::mem::uninitialized;
+use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::Arc;
@@ -170,7 +170,7 @@ impl LazySSTInfo {
 
     pub(crate) fn into_sst_file(self) -> Result<SSTFile> {
         let mut seq_file = self.open()?;
-        let mut buf: [u8; 65536] = unsafe { uninitialized() };
+        let mut buf: [u8; 65536] = unsafe { MaybeUninit::uninit().assume_init() };
 
         // TODO: If we can compute the CRC simultaneously with upload, we don't
         // need to open() and read() the file twice.

@@ -304,7 +304,7 @@ impl<S: Snapshot> MvccReader<S> {
         self.create_write_cursor()?;
 
         let cursor = self.write_cursor.as_mut().unwrap();
-        let mut ok = cursor.seek_to_first(&mut self.statistics.write);
+        let mut ok = cursor.seek_to_first(&mut self.statistics.write)?;
 
         while ok {
             if Write::parse(cursor.value(&mut self.statistics.write))?.start_ts == ts {
@@ -313,7 +313,7 @@ impl<S: Snapshot> MvccReader<S> {
                         .truncate_ts()?,
                 ));
             }
-            ok = cursor.next(&mut self.statistics.write);
+            ok = cursor.next(&mut self.statistics.write)?;
         }
         Ok(None)
     }
@@ -333,7 +333,7 @@ impl<S: Snapshot> MvccReader<S> {
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
             Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
-            None => cursor.seek_to_first(&mut self.statistics.lock),
+            None => cursor.seek_to_first(&mut self.statistics.lock)?,
         };
         if !ok {
             return Ok((vec![], false));
@@ -348,7 +348,7 @@ impl<S: Snapshot> MvccReader<S> {
                     return Ok((locks, true));
                 }
             }
-            cursor.next(&mut self.statistics.lock);
+            cursor.next(&mut self.statistics.lock)?;
         }
         self.statistics.lock.processed += locks.len();
         // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
@@ -367,7 +367,7 @@ impl<S: Snapshot> MvccReader<S> {
         loop {
             let ok = match start {
                 Some(ref x) => cursor.near_seek(x, &mut self.statistics.write)?,
-                None => cursor.seek_to_first(&mut self.statistics.write),
+                None => cursor.seek_to_first(&mut self.statistics.write)?,
             };
             if !ok {
                 return Ok((keys, None));
@@ -400,7 +400,7 @@ impl<S: Snapshot> MvccReader<S> {
             } else {
                 break;
             }
-            ok = cursor.next(&mut self.statistics.data);
+            ok = cursor.next(&mut self.statistics.data)?;
         }
         Ok(v)
     }
@@ -478,9 +478,10 @@ mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
-    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine::{IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
+    use std::ops::Bound;
     use std::sync::Arc;
     use std::u64;
     use tempdir::TempDir;
@@ -680,6 +681,69 @@ mod tests {
         // After this flush, we have a SST file without properties.
         // Without properties, we always need GC.
         assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
+    }
+
+    #[test]
+    fn test_ts_filter() {
+        let path = TempDir::new("_test_ts_filter").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![0], vec![13]);
+
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        engine.put(&[2], 1, 2);
+        engine.put(&[4], 3, 4);
+        engine.flush();
+        engine.put(&[6], 5, 6);
+        engine.put(&[8], 7, 8);
+        engine.flush();
+        engine.put(&[10], 9, 10);
+        engine.put(&[12], 11, 12);
+        engine.flush();
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+
+        let tests = vec![
+            // set nothing.
+            (
+                Bound::Unbounded,
+                Bound::Unbounded,
+                vec![2u64, 4, 6, 8, 10, 12],
+            ),
+            // test set both hint_min_ts and hint_max_ts.
+            (Bound::Included(6), Bound::Included(8), vec![6u64, 8]),
+            (Bound::Excluded(5), Bound::Included(8), vec![6u64, 8]),
+            (Bound::Included(6), Bound::Excluded(9), vec![6u64, 8]),
+            (Bound::Excluded(5), Bound::Excluded(9), vec![6u64, 8]),
+            // test set only hint_min_ts.
+            (Bound::Included(10), Bound::Unbounded, vec![10u64, 12]),
+            (Bound::Excluded(9), Bound::Unbounded, vec![10u64, 12]),
+            // test set only hint_max_ts.
+            (Bound::Unbounded, Bound::Included(7), vec![2u64, 4, 6, 8]),
+            (Bound::Unbounded, Bound::Excluded(8), vec![2u64, 4, 6, 8]),
+        ];
+
+        for (_, &(min, max, ref res)) in tests.iter().enumerate() {
+            let mut iopt = IterOption::default();
+            iopt.set_hint_min_ts(min);
+            iopt.set_hint_max_ts(max);
+
+            let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+
+            for (i, expect_ts) in res.iter().enumerate() {
+                if i == 0 {
+                    assert_eq!(iter.seek_to_first().unwrap(), true);
+                } else {
+                    assert_eq!(iter.next().unwrap(), true);
+                }
+
+                let ts = Key::decode_ts_from(iter.key()).unwrap();
+                assert_eq!(ts, *expect_ts);
+            }
+
+            assert_eq!(iter.next().unwrap(), false);
+        }
     }
 
     fn test_with_properties(path: &str, region: &Region) {

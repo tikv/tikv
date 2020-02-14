@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
@@ -9,7 +10,6 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -29,7 +29,7 @@ use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
 use tikv_util::config::ReadableSize;
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
@@ -166,7 +166,7 @@ struct GCRunner<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     /// Used to limit the write flow of GC.
-    limiter: Arc<Mutex<Option<IOLimiter>>>,
+    limiter: Limiter,
 
     cfg: GCConfig,
 
@@ -178,7 +178,7 @@ impl<E: Engine> GCRunner<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        limiter: Arc<Mutex<Option<IOLimiter>>>,
+        limiter: Limiter,
         cfg: GCConfig,
     ) -> Self {
         Self {
@@ -292,9 +292,7 @@ impl<E: Engine> GCRunner<E> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
-            if let Some(limiter) = &*self.limiter.lock().unwrap() {
-                limiter.request(write_size as i64);
-            }
+            self.limiter.blocking_consume(write_size);
             self.engine.write(ctx, modifies)?;
         }
         Ok(next_scan_key)
@@ -1101,7 +1099,7 @@ pub struct GCWorker<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     cfg: Option<GCConfig>,
-    limiter: Arc<Mutex<Option<IOLimiter>>>,
+    limiter: Limiter,
 
     worker: Arc<Mutex<Worker<GCTask>>>,
     worker_scheduler: worker::Scheduler<GCTask>,
@@ -1122,17 +1120,17 @@ impl<E: Engine> GCWorker<E> {
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
-        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
+        let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
+            cfg.max_write_bytes_per_sec.0 as f64
         } else {
-            None
-        };
+            INFINITY
+        });
         GCWorker {
             engine,
             local_storage,
             raft_store_router,
             cfg: Some(cfg),
-            limiter: Arc::new(Mutex::new(limiter)),
+            limiter,
             worker,
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
@@ -1212,14 +1210,8 @@ impl<E: Engine> GCWorker<E> {
     }
 
     pub fn change_io_limit(&self, limit: u64) -> Result<()> {
-        let mut limiter = self.limiter.lock().unwrap();
-        if limit == 0 {
-            limiter.take();
-        } else {
-            limiter
-                .get_or_insert_with(|| IOLimiter::new(limit))
-                .set_bytes_per_second(limit as i64);
-        }
+        self.limiter
+            .set_speed_limit(if limit > 0 { limit as f64 } else { INFINITY });
         info!("GC io limit changed"; "max_write_bytes_per_sec" => limit);
         Ok(())
     }
@@ -1757,36 +1749,18 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut gc_worker = GCWorker::new(engine, None, None, GCConfig::default());
         gc_worker.start().unwrap();
-        assert!(gc_worker.limiter.lock().unwrap().is_none());
+        assert_eq!(gc_worker.limiter.speed_limit(), INFINITY);
 
         // Enable io iolimit
         gc_worker.change_io_limit(1024).unwrap();
-        assert_eq!(
-            gc_worker
-                .limiter
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .get_bytes_per_second(),
-            1024
-        );
+        assert_eq!(gc_worker.limiter.speed_limit(), 1024.0);
 
         // Change io limit
         gc_worker.change_io_limit(2048).unwrap();
-        assert_eq!(
-            gc_worker
-                .limiter
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .get_bytes_per_second(),
-            2048,
-        );
+        assert_eq!(gc_worker.limiter.speed_limit(), 2048.0,);
 
         // Disable io limit
         gc_worker.change_io_limit(0).unwrap();
-        assert!(gc_worker.limiter.lock().unwrap().is_none());
+        assert_eq!(gc_worker.limiter.speed_limit(), INFINITY);
     }
 }

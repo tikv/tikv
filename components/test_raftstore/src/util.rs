@@ -9,7 +9,9 @@ use rand::RngCore;
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
+use kvproto::pdpb::{
+    ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
+};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
@@ -22,11 +24,11 @@ use tikv::config::*;
 use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::server::Config as ServerConfig;
+use tikv::server::{lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig};
 use tikv::storage::kv::CompactionListener;
 use tikv::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::config::*;
-use tikv_util::escape;
+use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
@@ -168,6 +170,15 @@ pub fn new_readpool_cfg() -> ReadPoolConfig {
     }
 }
 
+pub fn new_pessimistic_txn_cfg() -> PessimisticTxnConfig {
+    PessimisticTxnConfig {
+        // Use a large value here since tests run slowly in CI.
+        wait_for_lock_timeout: 3000,
+        wake_up_delay_duration: 100,
+        ..PessimisticTxnConfig::default()
+    }
+}
+
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     TiKvConfig {
         storage: StorageConfig {
@@ -178,6 +189,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
         server: new_server_config(cluster_id),
         raft_store: new_store_cfg(),
         readpool: new_readpool_cfg(),
+        pessimistic_txn: new_pessimistic_txn_cfg(),
         ..TiKvConfig::default()
     }
 }
@@ -350,9 +362,11 @@ pub fn new_pd_change_peer(
     resp
 }
 
-pub fn new_half_split_region() -> RegionHeartbeatResponse {
-    let split_region = SplitRegion::new();
-    let mut resp = RegionHeartbeatResponse::new();
+pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartbeatResponse {
+    let mut split_region = SplitRegion::default();
+    split_region.set_policy(policy);
+    split_region.set_keys(keys.into());
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_split_region(split_region);
     resp
 }
@@ -423,6 +437,33 @@ pub fn read_on_peer<T: Simulator>(
     );
     request.mut_header().set_peer(peer);
     cluster.call_command(request, timeout)
+}
+
+pub fn async_read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+    replica_read: bool,
+) -> mpsc::Receiver<RaftCmdResponse> {
+    let node_id = peer.get_id();
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    request.mut_header().set_replica_read(replica_read);
+    let (tx, rx) = mpsc::sync_channel(1);
+    let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
+    cluster
+        .sim
+        .wl()
+        .async_command_on_node(node_id, request, cb)
+        .unwrap();
+    rx
 }
 
 pub fn read_index_on_peer<T: Simulator>(

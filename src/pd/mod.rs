@@ -133,9 +133,8 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Gets Region info which the key belongs to.
-    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
-        self.get_region(key)
-            .map(|region| RegionInfo::new(region, None))
+    fn get_region_info(&self, _key: &[u8]) -> Result<RegionInfo> {
+        unimplemented!();
     }
 
     /// Gets Region by Region id.
@@ -213,3 +212,12 @@ pub trait PdClient: Send + Sync {
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
+
+/// Takes the peer address (for sending raft messages) from a store.
+pub fn take_peer_address(store: &mut metapb::Store) -> String {
+    if !store.get_peer_address().is_empty() {
+        store.take_peer_address()
+    } else {
+        store.take_address()
+    }
+}
