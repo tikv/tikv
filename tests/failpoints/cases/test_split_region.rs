@@ -47,7 +47,7 @@ fn test_follower_slow_split() {
     let (tx, rx) = mpsc::channel();
     let prevote_resp_notifier = Box::new(MessageTypeNotifier::new(
         MessageType::MsgRequestPreVoteResponse,
-        tx.clone(),
+        tx,
         Arc::from(AtomicBool::new(true)),
     ));
     cluster.sim.wl().add_send_filter(3, prevote_resp_notifier);
