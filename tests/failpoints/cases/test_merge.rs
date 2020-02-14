@@ -732,7 +732,7 @@ fn test_node_failed_merge_before_succeed_merge() {
     let left = pd_client.get_region(b"k1").unwrap();
     let mut right = pd_client.get_region(b"k5").unwrap();
     let left_peer_1 = find_peer(&left, 1).cloned().unwrap();
-    cluster.must_transfer_leader(left.get_id(), left_peer_1.clone());
+    cluster.must_transfer_leader(left.get_id(), left_peer_1);
 
     let left_peer_3 = find_peer(&left, 3).cloned().unwrap();
     assert_eq!(left_peer_3.get_id(), 1003);

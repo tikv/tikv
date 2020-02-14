@@ -37,7 +37,7 @@ fn test_gcworker_busy() {
     // `GC_MAX_EXECUTING_TASKS` requests in queue.
     gc_worker
         .gc(
-            ctx.clone(),
+            ctx,
             1.into(),
             Box::new(move |res: storage::Result<()>| {
                 assert!(res.is_ok());
