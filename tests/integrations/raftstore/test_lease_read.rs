@@ -11,8 +11,8 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine::Peekable;
+use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 

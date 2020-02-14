@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
+use raftstore::Result;
 use test_raftstore::*;
-use tikv::raftstore::Result;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 

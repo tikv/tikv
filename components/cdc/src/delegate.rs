@@ -18,9 +18,9 @@ use kvproto::cdcpb::{
 use futures::sync::mpsc::*;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
+use raftstore::store::util::compare_region_epoch;
+use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::raftstore::store::util::compare_region_epoch;
-use tikv::raftstore::Error as RaftStoreError;
 use tikv::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 use tikv::storage::txn::TxnEntry;
 use tikv_util::collections::HashMap;
@@ -536,13 +536,11 @@ mod tests {
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
     use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::router::RaftStoreRouter;
+    use raftstore::store::{Callback, CasualMessage, ReadResponse, RegionSnapshot, SignificantMsg};
+    use raftstore::Result as RaftStoreResult;
     use std::cell::Cell;
     use std::sync::Arc;
-    use tikv::raftstore::router::RaftStoreRouter;
-    use tikv::raftstore::store::{
-        Callback, CasualMessage, ReadResponse, RegionSnapshot, SignificantMsg,
-    };
-    use tikv::raftstore::Result as RaftStoreResult;
     use tikv::server::RaftKv;
     use tikv::storage::mvcc::test_util::*;
     use tikv::storage::mvcc::tests::*;
