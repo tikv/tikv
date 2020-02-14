@@ -102,7 +102,7 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
         let finished = self.inner.handle(local, task_cell);
         if finished {
-            self.maybe_flush_metrics();
+            self.flush_metrics_on_tick();
         }
         finished
     }
@@ -131,8 +131,8 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
         }
     }
 
-    // Only flush metrics by tick
-    fn maybe_flush_metrics(&self) {
+    // Do nothing if no tick passed
+    fn flush_metrics_on_tick(&self) {
         const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
         thread_local! {
