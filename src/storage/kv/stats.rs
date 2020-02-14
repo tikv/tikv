@@ -3,7 +3,7 @@
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanInfo};
 
-pub use crate::raftstore::store::{FlowStatistics, FlowStatsReporter};
+pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
 
 const STAT_TOTAL: &str = "total";
 const STAT_PROCESSED: &str = "processed";

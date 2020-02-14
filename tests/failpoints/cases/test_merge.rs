@@ -13,8 +13,8 @@ use raft::eraftpb::MessageType;
 
 use engine::*;
 use pd_client::PdClient;
+use raftstore::store::*;
 use test_raftstore::*;
-use tikv::raftstore::store::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 

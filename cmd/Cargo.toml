@@ -14,8 +14,8 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-prost-codec = ["tikv/prost-codec", "backup/prost-codec"]
-protobuf-codec = ["tikv/protobuf-codec", "backup/protobuf-codec"]
+prost-codec = ["tikv/prost-codec", "backup/prost-codec", "raftstore/prost-codec"]
+protobuf-codec = ["tikv/protobuf-codec", "backup/protobuf-codec", "raftstore/protobuf-codec"]
 
 [lib]
 name = "cmd"
@@ -46,6 +46,7 @@ nix = "0.11"
 pd_client = { path = "../components/pd_client" }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha" , default-features = false }
+raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.7"
 serde = "1.0"
 serde_json = "1.0"
