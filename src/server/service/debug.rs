@@ -51,7 +51,6 @@ pub struct Service<T: RaftStoreRouter> {
     dynamic_config: bool,
 }
 
-// TODO: disable modify_tikv_config when dynamic-config feature is enable
 impl<T: RaftStoreRouter> Service<T> {
     /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
     pub fn new(
