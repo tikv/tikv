@@ -226,7 +226,9 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude \
+		cdc --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		${EXTRA_CARGO_ARGS} -- --nocapture && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" -p cdc ${EXTRA_CARGO_ARGS} -- --nocapture && cd ../.. && \
 	if [[ "`uname`" == "Linux" ]]; then \
@@ -244,12 +246,15 @@ test:
 
 # This is used for CI test
 ci_test: ci_doc_test
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc --exclude cdc --all-targets --no-run --message-format=json
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--all-targets --no-run --message-format=json
 	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
 	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
 
 ci_doc_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --doc
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer --doc
 
 ## Static analysis
 ## ---------------
@@ -280,6 +285,7 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 clippy: pre-clippy
 	@cargo clippy --all --exclude cdc --exclude backup \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--all-targets --no-default-features \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
 	@for pkg in "cdc" "backup"; do \
@@ -287,6 +293,11 @@ clippy: pre-clippy
 		cargo clippy -p $$pkg --all-targets --no-default-features \
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd ../.. ;\
+	done
+	@for pkg in "fuzz" "fuzz/fuzzer-afl" "fuzz/fuzzer-honggfuzz" "fuzz/fuzzer-libfuzzer"; do \
+		cd $$pkg && \
+		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
+		cd -; \
 	done
 
 # TODO fix tests warnings
@@ -306,6 +317,12 @@ pre-audit:
 audit: pre-audit
 	cargo audit
 
+FUZZER ?= Honggfuzz
+
+.PHONY: fuzz
+fuzz:
+	@cargo run --package fuzz --no-default-features --features "${ENABLE_FEATURES}" -- run ${FUZZER} ${FUZZ_TARGET} \
+	|| echo "" && echo "Set the target for fuzzing using FUZZ_TARGET and the fuzzer using FUZZER (default is Honggfuzz)"
 
 ## Special targets
 ## ---------------

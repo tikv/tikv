@@ -1386,8 +1386,12 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "failure",
+ "grpcio",
+ "kvproto",
+ "protobuf-build 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tidb_query",
  "tikv_util",
+ "tipb",
 ]
 
 [[package]]
