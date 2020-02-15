@@ -11,6 +11,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
 
+use crate::raftstore::store::fsm::apply::CatchUpLogs;
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
@@ -142,7 +143,7 @@ impl StoreTick {
 
 /// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
 /// groups to update some important internal status.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum SignificantMsg {
     /// Reports whether the snapshot sending is successful or not.
     SnapshotStatus {
@@ -157,6 +158,15 @@ pub enum SignificantMsg {
     Unreachable {
         region_id: u64,
         to_peer_id: u64,
+    },
+    /// Source region catch up logs for merging
+    CatchUpLogs(CatchUpLogs),
+    /// Result of the fact that the region is merged.
+    MergeResult {
+        target: metapb::Peer,
+        // True means it's a stale merge source.
+        // False means it came from target region.
+        stale: bool,
     },
 }
 
@@ -196,11 +206,6 @@ pub enum CasualMessage {
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
     },
-    /// Result of querying pd whether a region is merged.
-    MergeResult {
-        target: metapb::Peer,
-        stale: bool,
-    },
     /// Remove snapshot files in `snaps`.
     GcSnap {
         snaps: Vec<(SnapKey, bool)>,
@@ -237,11 +242,6 @@ impl fmt::Debug for CasualMessage {
                 write!(fmt, "compaction declined bytes {}", bytes)
             }
             CasualMessage::HalfSplitRegion { .. } => write!(fmt, "Half Split"),
-            CasualMessage::MergeResult { target, stale } => write! {
-                fmt,
-                "target: {:?}, successful: {}",
-                target, stale
-            },
             CasualMessage::GcSnap { ref snaps } => write! {
                 fmt,
                 "gc snaps {:?}",
