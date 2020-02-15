@@ -9,7 +9,7 @@ use futures::future::{lazy, Future};
 use kvproto::cdcpb::*;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
-use raftstore::coprocessor::{Cmd, CmdBatch, CmdObserver, RoleObserver, ObserverContext};
+use raftstore::coprocessor::{Cmd, CmdBatch, CmdObserver, ObserverContext, RoleObserver};
 use raftstore::store::fsm::{ApplyRouter, ApplyTask, ChangeCmd};
 use raftstore::store::msg::{Callback, ReadResponse};
 use resolved_ts::Resolver;
