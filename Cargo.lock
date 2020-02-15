@@ -1751,7 +1751,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-3.1#d78a12cb72b4c1e6d585335ba852f91ca3896166"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-3.1#7ccc45d0063f5d09766aa71225b4b1c6d1a3ac3b"
 dependencies = [
  "bytes",
  "futures 0.1.29",
@@ -2717,7 +2717,7 @@ version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb1a649b870f7fe03c965bf2fa6728361f6abbb6f3b72079515af8cb56d769cf"
 dependencies = [
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2807,7 +2807,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43648985159f2c4c25f934182a63b0dd4c5cc06a5ae96e5d40e12c3a3785abde"
 dependencies = [
  "fxhash",
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf",
  "quick-error 1.2.2",
  "rand 0.5.5",
