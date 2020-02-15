@@ -20,7 +20,7 @@ use kvproto::raft_cmdpb::{
     TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
+    ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -1434,7 +1434,8 @@ impl Peer {
         // `ready`.
         if !self.is_leader() {
             // NOTE: there could still be some pending reads proposed by the peer when it was
-            // leader. They will be cleared in `clear_uncommitted` later in the function.
+            // leader. They will be cleared in `clear_uncommitted_on_role_change` later in
+            // the function.
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else if self.ready_to_handle_read() {
@@ -1452,7 +1453,7 @@ impl Peer {
         if ready.ss().is_some() {
             let term = self.term();
             // all uncommitted reads will be dropped silently in raft.
-            self.pending_reads.clear_uncommitted(term);
+            self.pending_reads.clear_uncommitted_on_role_change(term);
         }
 
         if let Some(propose_time) = propose_time {
@@ -2533,6 +2534,32 @@ impl Peer {
             if msg_type == eraftpb::MessageType::MsgSnapshot {
                 self.raft_group
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
+            }
+        }
+    }
+
+    pub fn bcast_wake_up_message<T: Transport>(&self, trans: &mut T) {
+        let region = self.raft_group.get_store().region();
+        for peer in region.get_peers() {
+            if peer.get_id() == self.peer_id() {
+                continue;
+            }
+            let mut send_msg = RaftMessage::default();
+            send_msg.set_region_id(self.region_id);
+            send_msg.set_from_peer(self.peer.clone());
+            send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+            send_msg.set_to_peer(peer.clone());
+            let extra_msg = send_msg.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
+            if let Err(e) = trans.send(send_msg) {
+                error!(
+                    "failed to send wake up message";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "target_peer_id" => peer.get_id(),
+                    "target_store_id" => peer.get_store_id(),
+                    "err" => ?e,
+                );
             }
         }
     }
