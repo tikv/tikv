@@ -17,7 +17,7 @@ use kvproto::raft_cmdpb::{
     TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
+    ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -2439,6 +2439,32 @@ impl Peer {
             if msg_type == eraftpb::MessageType::MsgSnapshot {
                 self.raft_group
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
+            }
+        }
+    }
+
+    pub fn bcast_wake_up_message<T: Transport>(&self, trans: &mut T) {
+        let region = self.raft_group.get_store().region();
+        for peer in region.get_peers() {
+            if peer.get_id() == self.peer_id() {
+                continue;
+            }
+            let mut send_msg = RaftMessage::default();
+            send_msg.set_region_id(self.region_id);
+            send_msg.set_from_peer(self.peer.clone());
+            send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+            send_msg.set_to_peer(peer.clone());
+            let extra_msg = send_msg.mut_extra_msg();
+            extra_msg.set_field_type(ExtraMessageType::MsgRegionWakeUp);
+            if let Err(e) = trans.send(send_msg) {
+                error!(
+                    "failed to send wake up message";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "target_peer_id" => peer.get_id(),
+                    "target_store_id" => peer.get_store_id(),
+                    "err" => ?e,
+                );
             }
         }
     }
