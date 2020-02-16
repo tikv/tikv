@@ -11,10 +11,10 @@ use protobuf::ProtobufError;
 use tokio_sync::oneshot::error::RecvError;
 
 use super::snap::Task as SnapTask;
-use crate::raftstore::Error as RaftServerError;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::Error as StorageError;
 use pd_client::Error as PdError;
+use raftstore::Error as RaftServerError;
 use tikv_util::codec::Error as CodecError;
 use tikv_util::worker::ScheduleError;
 

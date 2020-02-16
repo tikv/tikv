@@ -314,8 +314,8 @@ mod tests {
             (
                 ScalarFuncSig::IfNullJson,
                 Datum::Null,
-                Datum::Json(Json::String("hello".to_owned())),
-                Datum::Json(Json::String("hello".to_owned())),
+                Datum::Json(Json::from_string("hello".to_owned()).unwrap()),
+                Datum::Json(Json::from_string("hello".to_owned()).unwrap()),
             ),
         ];
         for (operator, branch1, branch2, exp) in tests {
@@ -453,9 +453,9 @@ mod tests {
             (
                 ScalarFuncSig::IfJson,
                 Datum::I64(0),
-                Datum::Json(Json::I64(300)),
-                Datum::Json(Json::String("hello".to_owned())),
-                Datum::Json(Json::String("hello".to_owned())),
+                Datum::Json(Json::from_i64(300).unwrap()),
+                Datum::Json(Json::from_string("hello".to_owned()).unwrap()),
+                Datum::Json(Json::from_string("hello".to_owned()).unwrap()),
             ),
         ];
         for (operator, cond, branch1, branch2, exp) in tests {
@@ -524,9 +524,9 @@ mod tests {
                     Datum::Null,
                     Datum::Null,
                     Datum::Null,
-                    Datum::Json(Json::I64(23)),
+                    Datum::Json(Json::from_i64(23).unwrap()),
                 ],
-                Datum::Json(Json::I64(23)),
+                Datum::Json(Json::from_i64(23).unwrap()),
             ),
         ];
 

@@ -11,10 +11,10 @@ use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
 use pd_client::Config as PdConfig;
+use raftstore::coprocessor::Config as CopConfig;
+use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
-use tikv::raftstore::coprocessor::Config as CopConfig;
-use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
 use tikv::server::Config as ServerConfig;

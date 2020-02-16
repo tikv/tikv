@@ -20,7 +20,7 @@ use std::str::FromStr;
 
 use super::Result;
 use crate::config::TiKvConfig;
-use crate::raftstore::store::PdTask;
+use raftstore::store::PdTask;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
@@ -527,11 +527,11 @@ fn handle_fail_points_request(
 #[cfg(test)]
 mod tests {
     use crate::config::TiKvConfig;
-    use crate::raftstore::store::PdTask;
     use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
     use futures::Stream;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
+    use raftstore::store::PdTask;
     use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
     use tokio_core::reactor::Handle;
 

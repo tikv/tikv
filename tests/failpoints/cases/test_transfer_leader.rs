@@ -26,7 +26,7 @@ fn test_transfer_leader_slow_apply() {
 
     let fp = "on_handle_apply_1003";
     fail::cfg(fp, "pause").unwrap();
-    for i in 0..cluster.cfg.raft_store.leader_transfer_max_log_lag + 1 {
+    for i in 0..=cluster.cfg.raft_store.leader_transfer_max_log_lag {
         let bytes = format!("k{:03}", i).into_bytes();
         cluster.must_put(&bytes, &bytes);
     }

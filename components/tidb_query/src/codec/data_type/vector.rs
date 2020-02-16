@@ -3,8 +3,8 @@
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::FieldType;
 
+use super::scalar::ScalarValueRef;
 use super::*;
-use crate::codec::data_type::scalar::ScalarValueRef;
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::Result;
 
@@ -206,7 +206,7 @@ impl VectorValue {
                     let el = &vec[*idx];
                     match el {
                         Some(v) => {
-                            size += 1 /* FLAG */ + v.binary_len();
+                            size += 1 /* FLAG */ + v.as_ref().binary_len();
                         }
                         None => {
                             size += 1;
@@ -247,7 +247,7 @@ impl VectorValue {
                     let el = &vec[*idx];
                     match el {
                         Some(v) => {
-                            size += 8 /* Offset */ + v.binary_len();
+                            size += 8 /* Offset */ + v.as_ref().binary_len();
                         }
                         None => {
                             size += 8 /* Offset */;

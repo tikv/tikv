@@ -16,11 +16,11 @@ use tokio_timer::timer::Handle;
 use yatp::task::future::TaskCell;
 
 use crate::coprocessor::Endpoint;
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::SnapManager;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::SnapManager;
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
@@ -280,10 +280,10 @@ mod tests {
     use super::super::{Config, Result};
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
-    use crate::raftstore::store::transport::Transport;
-    use crate::raftstore::store::*;
-    use crate::raftstore::Result as RaftStoreResult;
     use crate::storage::TestStorageBuilder;
+    use raftstore::store::transport::Transport;
+    use raftstore::store::*;
+    use raftstore::Result as RaftStoreResult;
 
     use engine_rocks::RocksEngine;
     use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -343,9 +343,14 @@ mod tests {
     }
 
     fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
-        *msg == SignificantMsg::Unreachable {
-            region_id,
-            to_peer_id,
+        if let SignificantMsg::Unreachable {
+            region_id: r_id,
+            to_peer_id: p_id,
+        } = *msg
+        {
+            region_id == r_id && to_peer_id == p_id
+        } else {
+            false
         }
     }
 
