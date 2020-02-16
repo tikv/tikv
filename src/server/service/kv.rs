@@ -396,29 +396,31 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         &mut self,
         ctx: RpcContext<'_>,
         mut req: PhysicalScanLockRequest,
-        sink: ServerStreamingSink<PhysicalScanLockResponse>,
+        sink: UnarySink<PhysicalScanLockResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .physical_scan_lock
             .start_coarse_timer();
 
-        let stream = self
-            .gc_worker
-            .physical_scan_lock(req.take_context(), req.get_max_ts().into())
-            .then(|result| {
-                let mut resp = PhysicalScanLockResponse::default();
-                match result {
-                    Ok(locks) => resp.set_locks(locks.into()),
-                    Err(e) => resp.set_error(format!("{:?}", e)),
-                }
-                Ok::<_, GrpcError>(resp)
-            })
-            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)));
+        let (cb, f) = paired_future_callback();
+        let res = self.gc_worker.physical_scan_lock(
+            req.take_context(),
+            req.get_max_ts().into(),
+            Key::from_raw(req.get_start_key()),
+            req.get_limit() as _,
+            cb,
+        );
 
-        let future = sink
-            .send_all(stream)
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = PhysicalScanLockResponse::default();
+                match v {
+                    Ok(locks) => resp.set_locks(locks.into()),
+                    Err(e) => resp.set_error(format!("{}", e)),
+                }
+                sink.success(resp).map_err(Error::from)
+            })
             .map(|_| timer.observe_duration())
-            .map_err(Error::from)
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "physical_scan_lock",
