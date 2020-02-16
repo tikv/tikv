@@ -352,11 +352,11 @@ impl<T: Executor + ?Sized> Executor for Box<T> {
 #[cfg(test)]
 pub mod tests {
     use super::{Executor, TableScanExecutor};
-    use crate::expr::EvalContext;
-    use crate::storage::fixture::FixtureStorage;
     use codec::prelude::NumberEncoder;
     use kvproto::coprocessor::KeyRange;
     use tidb_query_datatype::codec::{datum, table, Datum};
+    use tidb_query_datatype::expr::EvalContext;
+    use tidb_query_datatype::storage::fixture::FixtureStorage;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tikv_util::collections::HashMap;
     use tikv_util::map;
@@ -403,7 +403,7 @@ pub mod tests {
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
         let start_key = table::encode_row_key(table_id, handle);
         let mut end = start_key.clone();
-        crate::util::convert_to_prefix_next(&mut end);
+        tidb_query_datatype::util::convert_to_prefix_next(&mut end);
         let mut key_range = KeyRange::default();
         key_range.set_start(start_key);
         key_range.set_end(end);

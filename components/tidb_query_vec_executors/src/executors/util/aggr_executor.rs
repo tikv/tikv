@@ -326,6 +326,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
 #[cfg(test)]
 pub mod tests {
     use tidb_query_codegen::AggrFunction;
+    //    use tidb_query_vec_aggr::aggr_fn::AggrFunction;
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{Collation, FieldTypeTp};
 

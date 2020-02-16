@@ -648,6 +648,8 @@ mod tests {
 
     #[test]
     fn test_basic() {
+        println!(">>> REMOVE ME !!!");
+        assert_eq!(1, 2);
         let helper = TableScanTestHelper::new();
         // ranges to scan in each test case
         let test_ranges = vec![
@@ -903,7 +905,7 @@ mod tests {
             let key = table::encode_row_key(TABLE_ID, 1);
             let value: std::result::Result<
                 _,
-                Box<dyn Send + Sync + Fn() -> crate::error::StorageError>,
+                Box<dyn Send + Sync + Fn() -> tidb_query_datatype::error::StorageError>,
             > = Err(Box::new(|| failure::format_err!("locked").into()));
             kv.push((key, value));
         }

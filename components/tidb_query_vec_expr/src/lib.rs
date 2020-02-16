@@ -33,3 +33,6 @@ extern crate tikv_util;
 extern crate tidb_query_datatype;
 
 pub mod rpn_expr;
+
+#[cfg(test)]
+extern crate test;

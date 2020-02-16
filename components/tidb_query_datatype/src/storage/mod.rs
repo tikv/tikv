@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[cfg(test)]
+//#[cfg(test)] // FIXME: this will not visible to tidb_query_vec_expr, need help
 pub mod fixture;
 mod range;
 pub mod ranges_iter;

@@ -129,9 +129,10 @@ pub mod tests {
     use super::super::tests::*;
     use super::super::Executor;
     use super::*;
-    use crate::execute_stats::ExecuteStats;
-    use crate::storage::fixture::FixtureStorage;
+    use tidb_query_datatype::execute_stats::ExecuteStats;
+
     use tidb_query_datatype::codec::datum::{self, Datum};
+    use tidb_query_datatype::storage::fixture::FixtureStorage;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;

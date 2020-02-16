@@ -32,10 +32,15 @@ extern crate slog_global;
 #[macro_use(box_try)]
 extern crate tikv_util;
 
-// TODO: duplicated macro
-#[macro_use]
-mod macros;
+#[macro_use(other_err)]
+extern crate tidb_query_datatype;
 
 pub mod executors;
 pub mod interface;
 pub mod runner;
+
+// when test, rpn_fn need `crate::rpn_expr::XXX`,
+#[cfg(test)]
+mod aggr_fn;
+#[cfg(test)]
+mod rpn_expr;

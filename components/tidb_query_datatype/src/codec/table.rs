@@ -502,7 +502,7 @@ mod tests {
     use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
-    use crate::executor::tests::generate_index_data;
+    use crate::util::generate_index_data;
     use tikv_util::collections::{HashMap, HashSet};
     use tikv_util::map;
 

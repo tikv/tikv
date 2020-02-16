@@ -420,6 +420,8 @@ mod tests {
         // And group by:
         // - col_0 + col_1
 
+        println!(">>> REMOVE ME !!!");
+        assert_eq!(1, 2);
         let group_by_exp = || {
             RpnExpressionBuilder::new()
                 .push_column_ref(0)

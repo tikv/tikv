@@ -7,7 +7,8 @@ use tidb_query_datatype::codec::mysql::Decimal;
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::Result;
 
-use tidb_query_datatype::expr::{eval_arith, EvalContext};
+use tidb_query_datatype::expr::EvalContext;
+use tidb_query_normal_expr::expr::eval_arith;
 
 pub fn build_aggr_func(tp: ExprType) -> Result<Box<dyn AggrFunc>> {
     match tp {
@@ -289,10 +290,10 @@ impl AggrFunc for Extremum {
 
 #[cfg(test)]
 mod tests {
-    use crate::expr::{EvalConfig, EvalContext};
     use std::ops::Add;
     use std::sync::Arc;
     use std::{i64, u64};
+    use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
     use super::*;
 

@@ -1992,7 +1992,7 @@ mod tests {
     fn test_truncate_binary() {
         let s = b"123456789".to_vec();
         let mut s1 = s.clone();
-        truncate_binary(&mut s1, tidb_query_datatype::UNSPECIFIED_LENGTH);
+        truncate_binary(&mut s1, crate::def::UNSPECIFIED_LENGTH);
         assert_eq!(s1, s);
         let mut s2 = s.clone();
         truncate_binary(&mut s2, isize::MAX);

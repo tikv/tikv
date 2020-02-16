@@ -222,9 +222,10 @@ mod tests {
     use tipb::{Expr, ExprType, ScalarFuncSig};
 
     use crate::expr::tests::{col_expr, datum_expr, scalar_func_expr, str2dec};
+    use crate::expr::Expression;
     use tidb_query_datatype::codec::mysql::{Duration, Json, Time};
     use tidb_query_datatype::codec::Datum;
-    use tidb_query_datatype::expr::{EvalContext, Expression};
+    use tidb_query_datatype::expr::EvalContext;
 
     #[test]
     fn test_if_null() {

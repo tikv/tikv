@@ -479,15 +479,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::expr::builtin_compare::cmp_i64_with_unsigned_flag;
     use crate::expr::tests::{col_expr, datum_expr, str2dec};
     use crate::expr::Expression;
+    use std::cmp::Ordering;
     use std::sync::Arc;
-    use std::{i64, u64};
+    use std::{f64, i64, u64};
     use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use tidb_query_datatype::codec::mysql::{Decimal, Duration, Json, Time};
     use tidb_query_datatype::codec::Datum;
     use tidb_query_datatype::expr::EvalConfig;
-    use tidb_query_datatype::expr::*;
     use tidb_query_datatype::expr::{EvalContext, Flag, SqlMode};
     use tipb::{Expr, ExprType, ScalarFuncSig};
 

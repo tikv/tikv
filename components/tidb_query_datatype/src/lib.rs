@@ -64,7 +64,7 @@ pub mod execute_stats;
 pub mod expr;
 pub mod expr_util;
 pub mod metrics;
-// pub mod rpn_expr;
+//pub mod rpn_expr;
 pub mod storage;
 pub mod util;
 pub use self::error::{Error, Result};

@@ -149,6 +149,7 @@ impl<Src: Executor> Executor for TopNExecutor<Src> {
     }
 }
 
+//#[cfg(test)]
 #[cfg(test)]
 pub mod tests {
     use std::cell::RefCell;
@@ -178,6 +179,8 @@ pub mod tests {
 
     #[test]
     pub fn test_topn_heap() {
+        println!(">>>> REMOVE ME !!!");
+        assert_eq!(1, 2);
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));

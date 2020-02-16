@@ -164,9 +164,10 @@ fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use crate::expr::tests::{check_overflow, datum_expr, eval_func, scalar_func_expr};
+    use crate::expr::Expression;
     use hex;
     use tidb_query_datatype::codec::Datum;
-    use tidb_query_datatype::expr::{EvalContext, Expression};
+    use tidb_query_datatype::expr::EvalContext;
     use tipb::ScalarFuncSig;
 
     #[test]

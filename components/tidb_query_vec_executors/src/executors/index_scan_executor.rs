@@ -297,11 +297,11 @@ mod tests {
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tipb::ColumnInfo;
 
-    use crate::util::convert_to_prefix_next;
     use tidb_query_datatype::codec::data_type::*;
     use tidb_query_datatype::codec::{datum, table, Datum};
     use tidb_query_datatype::expr::EvalConfig;
     use tidb_query_datatype::storage::fixture::FixtureStorage;
+    use tidb_query_datatype::util::convert_to_prefix_next;
 
     #[test]
     fn test_basic() {

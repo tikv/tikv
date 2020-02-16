@@ -305,6 +305,7 @@ mod tests {
     use tidb_query_datatype::codec::error::ERR_DIVISION_BY_ZERO;
     use tidb_query_datatype::codec::mysql::Decimal;
     use tidb_query_datatype::codec::Datum;
+    use tidb_query_datatype::expr::{EvalConfig, Flag, SqlMode};
 
     #[test]
     fn test_arithmetic_int() {

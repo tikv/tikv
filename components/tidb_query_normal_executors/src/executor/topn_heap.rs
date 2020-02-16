@@ -176,10 +176,10 @@ mod tests {
     use tipb::{ByItem, Expr, ExprType};
 
     use crate::executor::OriginCols;
-    use crate::expr::EvalContext;
     use codec::prelude::NumberEncoder;
     use tidb_query_datatype::codec::table::RowColsDict;
     use tidb_query_datatype::codec::Datum;
+    use tidb_query_datatype::expr::EvalContext;
     use tikv_util::collections::HashMap;
 
     use super::*;

@@ -52,6 +52,10 @@ protobuf-codec = [
 ]
 testexport = ["raftstore/testexport"]
 
+# for testing configure propegate to other crates
+# https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
+testing = []
+
 [lib]
 name = "tikv"
 

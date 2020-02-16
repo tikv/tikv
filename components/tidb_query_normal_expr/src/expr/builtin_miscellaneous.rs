@@ -204,12 +204,13 @@ impl ScalarFunc {
 #[cfg(test)]
 mod tests {
     use crate::expr::tests::{datum_expr, scalar_func_expr};
+    use crate::expr::Expression;
     use tidb_query_datatype::codec::data_type::Duration;
     use tidb_query_datatype::codec::mysql::json::Json;
     use tidb_query_datatype::codec::mysql::Decimal;
     use tidb_query_datatype::codec::mysql::Time;
     use tidb_query_datatype::codec::Datum;
-    use tidb_query_datatype::expr::{EvalContext, Expression};
+    use tidb_query_datatype::expr::EvalContext;
     use tipb::ScalarFuncSig;
 
     macro_rules! test_any_value {

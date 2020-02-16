@@ -4,11 +4,11 @@ use tipb::FieldType;
 
 use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
-use tidb_query_datatype::def::BATCH_MAX_SIZE;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
+use crate::codec::batch::LazyBatchColumnVec;
+use crate::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
+use crate::def::BATCH_MAX_SIZE;
+use crate::expr::EvalContext;
+use crate::Result;
 
 /// Identical logical row is a special case in expression evaluation that
 /// the rows in physical_value are continuous and in order.
@@ -277,7 +277,6 @@ impl RpnExpression {
     }
 }
 
-//#[cfg(test)]
 #[cfg(test)]
 mod tests {
     #![allow(clippy::float_cmp)]
@@ -285,7 +284,7 @@ mod tests {
     use super::*;
 
     use tidb_query_codegen::rpn_fn;
-    use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+    use crate::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb::FieldType;
     use tipb_helper::ExprDefBuilder;
 
@@ -293,11 +292,11 @@ mod tests {
     use crate::rpn_expr::impl_compare::*;
     use crate::rpn_expr::{RpnExpressionBuilder, RpnFnMeta};
     use test::{black_box, Bencher};
-    use tidb_query_datatype::codec::batch::LazyBatchColumn;
-    use tidb_query_datatype::codec::data_type::{Int, Real};
-    use tidb_query_datatype::codec::datum::{Datum, DatumEncoder};
-    use tidb_query_datatype::expr::EvalContext;
-    use tidb_query_datatype::Result;
+    use crate::codec::batch::LazyBatchColumn;
+    use crate::codec::data_type::{Int, Real};
+    use crate::codec::datum::{Datum, DatumEncoder};
+    use crate::expr::EvalContext;
+    use crate::Result;
 
     /// Single constant node
     #[test]
@@ -1064,7 +1063,7 @@ mod tests {
 
     #[test]
     fn test_rpn_fn_data() {
-        use tidb_query_datatype::codec::data_type::Evaluable;
+        use crate::codec::data_type::Evaluable;
         use tipb::{Expr, ScalarFuncSig};
 
         #[allow(clippy::trivially_copy_pass_by_ref)]

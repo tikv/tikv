@@ -563,7 +563,7 @@ mod tests {
     use crate::expr::*;
     use tidb_query_datatype::codec::mysql::{Duration, Time};
     use tidb_query_datatype::codec::Datum;
-    use tidb_query_datatype::expr::EvalContext;
+    use tidb_query_datatype::expr::{EvalConfig, EvalContext, Flag, SqlMode};
 
     fn expr_build(ctx: &mut EvalContext, sig: ScalarFuncSig, children: &[Expr]) -> Result<Datum> {
         let f = scalar_func_expr(sig, children);

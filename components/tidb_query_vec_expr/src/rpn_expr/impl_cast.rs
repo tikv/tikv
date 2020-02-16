@@ -1157,6 +1157,7 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     }
 }
 
+//#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::Result;
@@ -1410,12 +1411,6 @@ mod tests {
         } else {
             let res = res.as_ref().unwrap();
             assert_eq!(res, expect.unwrap(), "{}", log);
-        }
-    }
-
-    impl Display for Json {
-        fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-            write!(f, "{}", self.to_string())
         }
     }
 
@@ -5218,7 +5213,7 @@ mod tests {
                             check_result(None, &result, log.as_str());
                         }
                         _ => {
-                            let expect_err: crate::error::Error = e.into();
+                            let expect_err: tidb_query_datatype::error::Error = e.into();
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
                                 func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, expect_err
@@ -5766,6 +5761,8 @@ mod tests {
 
     #[test]
     fn test_json_as_json() {
+        println!(">>> REMOVE ME!!!");
+        assert_eq!(1, 2);
         test_none_with_nothing(cast_json_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
