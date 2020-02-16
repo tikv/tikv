@@ -56,9 +56,9 @@ use super::metrics::*;
 
 use super::super::RegionTask;
 
-const WRITE_BATCH_MAX_KEYS: usize = 128;
-const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
+const WRITE_BATCH_MAX_KEYS: usize = 512;
+const DEFAULT_APPLY_WB_SIZE: usize = 128 * 1024;
+const APPLY_WB_SHRINK_SIZE: usize = 8 * 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
