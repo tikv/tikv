@@ -1,14 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Deref;
 use crate::engine::PanicEngine;
 use engine_traits::{
-    Range, Result, TablePropertiesCollection, TablePropertiesExt,
-    TablePropertiesCollectionIter,
-    TablePropertiesKey,
-    TableProperties,
-    UserCollectedProperties,
+    Range, Result, TableProperties, TablePropertiesCollection, TablePropertiesCollectionIter,
+    TablePropertiesExt, TablePropertiesKey, UserCollectedProperties,
 };
+use std::ops::Deref;
 
 impl TablePropertiesExt for PanicEngine {
     type TablePropertiesCollection = PanicTablePropertiesCollection;
@@ -45,7 +42,7 @@ impl TablePropertiesCollection<IA, PKeyA, PA, UCPA> for PanicTablePropertiesColl
 
 pub struct PanicTablePropertiesCollectionIter;
 
-impl TablePropertiesCollectionIter<PKeyA, PA, UCPA> for PanicTablePropertiesCollectionIter { }
+impl TablePropertiesCollectionIter<PKeyA, PA, UCPA> for PanicTablePropertiesCollectionIter {}
 
 impl Iterator for PanicTablePropertiesCollectionIter {
     type Item = (PanicTablePropertiesKey, PanicTableProperties);
@@ -57,7 +54,7 @@ impl Iterator for PanicTablePropertiesCollectionIter {
 
 pub struct PanicTablePropertiesKey;
 
-impl TablePropertiesKey for PanicTablePropertiesKey { }
+impl TablePropertiesKey for PanicTablePropertiesKey {}
 
 impl Deref for PanicTablePropertiesKey {
     type Target = str;
