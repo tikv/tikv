@@ -772,6 +772,10 @@ impl ApplyDelegate {
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
     ) -> ApplyResult {
+        fail_point!("apply_yield_1000", self.region_id() == 1000, |_| {
+            ApplyResult::Yield
+        });
+
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
@@ -2478,6 +2482,8 @@ impl ApplyFsm {
             }
             self.delegate.ready_source_region_id = source_region_id;
         }
+        self.delegate.wait_merge_state = None;
+
         let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {
