@@ -11,7 +11,8 @@ use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, Compat};
+use engine_traits::TablePropertiesExt;
 use futures::sink::Sink;
 use futures::sync::mpsc as future_mpsc;
 use futures::{future, Async, Future, Poll, Stream};
@@ -339,7 +340,7 @@ impl<E: Engine> GcRunner<E> {
         let end_key = keys::data_end_key(region_info.region.get_end_key());
 
         let collection =
-            match engine::util::get_range_properties_cf(&db, CF_WRITE, &start_key, &end_key) {
+            match db.c().get_range_properties_cf(CF_WRITE, &start_key, &end_key) {
                 Ok(c) => c,
                 Err(e) => {
                     error!(

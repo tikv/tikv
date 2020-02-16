@@ -35,6 +35,11 @@ impl TablePropertiesExt for RocksEngine {
     }
 }
 
+type IA = RocksTablePropertiesCollectionIter;
+type PKeyA = RocksTablePropertiesKey;
+type PA = RocksTableProperties;
+type UCPA = RocksUserCollectedProperties;
+
 pub struct RocksTablePropertiesCollection(raw::TablePropertiesCollection);
 
 impl RocksTablePropertiesCollection {
@@ -42,11 +47,6 @@ impl RocksTablePropertiesCollection {
         RocksTablePropertiesCollection(raw)
     }
 }
-
-type IA = RocksTablePropertiesCollectionIter;
-type PKeyA = RocksTablePropertiesKey;
-type PA = RocksTableProperties;
-type UCPA = RocksUserCollectedProperties;
 
 impl TablePropertiesCollection<IA, PKeyA, PA, UCPA> for RocksTablePropertiesCollection {
     fn iter(&self) -> RocksTablePropertiesCollectionIter {
@@ -105,5 +105,19 @@ impl UserCollectedProperties for RocksUserCollectedProperties {
 
     fn len(&self) -> usize {
         self.0.len()
+    }
+}
+
+// FIXME: DecodeProperties doesn't belong in this crate,
+// and it looks like the properties module has functional overlap
+// with this module.
+use crate::properties::DecodeProperties;
+
+impl DecodeProperties for RocksUserCollectedProperties {
+    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
+        match self.get(k.as_bytes()) {
+            Some(v) => Ok(v),
+            None => Err(tikv_util::codec::Error::KeyNotFound),
+        }
     }
 }
