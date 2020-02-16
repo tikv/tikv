@@ -654,6 +654,7 @@ pub struct ApplyDelegate {
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
+    poll_keys: usize,
 }
 
 impl ApplyDelegate {
@@ -676,6 +677,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            poll_keys: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
         }
     }
@@ -1125,6 +1127,7 @@ impl ApplyDelegate {
 
         let mut ranges = vec![];
         let mut ssts = vec![];
+        self.poll_keys += requests.len();
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
@@ -2686,6 +2689,7 @@ impl ApplyFsm {
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
+        self.delegate.poll_keys = 0;
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
@@ -2713,6 +2717,7 @@ impl ApplyFsm {
             let elapsed = duration_to_sec(timer.elapsed());
             APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
         }
+        POLL_KEY_COUNT_HISTOGRAM.observe(self.delegate.poll_keys as f64);
     }
 }
 
