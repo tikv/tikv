@@ -18,13 +18,13 @@ use std::thread::JoinHandle;
 
 use self::deadlock::{Detector, RoleChangeNotifier};
 use self::waiter_manager::WaiterManager;
-use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{
     lock_manager::{Lock, LockManager as LockManagerTrait, WaitTimeout},
     ProcessResult, StorageCallback,
 };
+use raftstore::coprocessor::CoprocessorHost;
 
 use parking_lot::Mutex;
 use pd_client::PdClient;
@@ -277,7 +277,7 @@ mod tests {
     use self::metrics::*;
     use self::waiter_manager::tests::*;
     use super::*;
-    use crate::raftstore::coprocessor::RegionChangeEvent;
+    use raftstore::coprocessor::RegionChangeEvent;
     use tikv_util::security::SecurityConfig;
 
     use std::thread;

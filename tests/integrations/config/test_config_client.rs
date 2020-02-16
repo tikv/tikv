@@ -9,8 +9,8 @@ use kvproto::configpb::*;
 use configuration::{ConfigChange, Configuration};
 use pd_client::errors::Result;
 use pd_client::ConfigClient;
+use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
-use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::FutureWorker;
 

@@ -13,10 +13,10 @@ pub mod config;
 pub mod errors;
 pub mod kv;
 pub mod lock_manager;
+pub(crate) mod metrics;
 pub mod mvcc;
 pub mod txn;
 
-mod metrics;
 mod read_pool;
 mod types;
 

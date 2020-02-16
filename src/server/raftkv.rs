@@ -19,15 +19,15 @@ use kvproto::raft_cmdpb::{
 use txn_types::{Key, Value};
 
 use super::metrics::*;
-use crate::raftstore::errors::Error as RaftServerError;
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
-use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
     Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
 use crate::storage::{self, kv};
+use raftstore::errors::Error as RaftServerError;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
+use raftstore::store::{RegionIterator, RegionSnapshot};
 
 quick_error! {
     #[derive(Debug)]

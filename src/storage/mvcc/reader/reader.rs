@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
 use engine::{IterOption, CF_LOCK, CF_WRITE};
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{TableProperties, TablePropertiesCollection};
 use kvproto::kvrpcpb::IsolationLevel;
+use raftstore::coprocessor::properties::MvccProperties;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -442,8 +442,6 @@ fn get_mvcc_properties(
 mod tests {
     use super::*;
 
-    use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-    use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use engine::rocks::util::CFOptions;
@@ -453,6 +451,8 @@ mod tests {
     use engine_rocks::RocksEngine;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
+    use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
+    use raftstore::store::RegionSnapshot;
     use std::ops::Bound;
     use std::sync::Arc;
     use std::u64;
