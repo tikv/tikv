@@ -496,9 +496,6 @@ fn test_cdc_stale_epoch_after_region_ready() {
 }
 
 #[test]
-fn test_region_ready_after_deregistering() {}
-
-#[test]
 fn test_cdc_scan() {
     let mut suite = TestSuite::new(1);
 
