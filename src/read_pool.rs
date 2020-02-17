@@ -96,6 +96,10 @@ impl ReadPoolHandle {
                 max_tasks,
             } => {
                 let running_tasks = running_tasks.clone();
+                // Note that the running task number limit is not strict.
+                // If several tasks are spawned at the same time while the running task number
+                // is close to the limit, they may all pass this check and the number of running
+                // tasks may exceed the limit.
                 if running_tasks.get() as usize >= *max_tasks {
                     return Err(ReadPoolError::UnifiedReadPoolFull);
                 }
