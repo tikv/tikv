@@ -1656,7 +1656,7 @@ impl ReadPoolConfig {
 impl Default for ReadPoolConfig {
     fn default() -> ReadPoolConfig {
         ReadPoolConfig {
-            unify_read_pool: false,
+            unify_read_pool: true,
             unified: Default::default(),
             storage: Default::default(),
             coprocessor: Default::default(),
