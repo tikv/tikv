@@ -25,7 +25,7 @@ pub mod dag;
 mod endpoint;
 mod error;
 pub mod local_metrics;
-mod metrics;
+pub(crate) mod metrics;
 pub mod readpool_impl;
 mod statistics;
 mod tracker;

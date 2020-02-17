@@ -13,6 +13,9 @@
 #![feature(iter_order_by)]
 #![feature(test)]
 #![feature(int_error_matching)]
+#![feature(decl_macro)]
+#![feature(str_internals)]
+#![feature(ptr_offset_from)]
 // FIXME: rustc says there are redundant semicolons here but isn't
 // saying where as of nightly-2019-09-05
 // See https://github.com/rust-lang/rust/issues/63967
@@ -23,6 +26,8 @@
 
 #[macro_use]
 extern crate failure;
+#[macro_use]
+extern crate num_derive;
 #[macro_use]
 extern crate static_assertions;
 #[macro_use(error, debug, warn)]
