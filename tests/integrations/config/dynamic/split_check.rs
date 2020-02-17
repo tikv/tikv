@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use engine::{rocks, DB};
-use tikv::config::{ConfigController, Module, TiKvConfig};
-use tikv::raftstore::coprocessor::{
+use raftstore::coprocessor::{
     config::{Config, SplitCheckConfigManager},
     CoprocessorHost,
 };
-use tikv::raftstore::store::{SplitCheckRunner as Runner, SplitCheckTask as Task};
+use raftstore::store::{SplitCheckRunner as Runner, SplitCheckTask as Task};
+use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv_util::worker::{Scheduler, Worker};
 
 use tempfile::Builder;

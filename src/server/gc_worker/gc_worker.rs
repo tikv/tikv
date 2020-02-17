@@ -17,16 +17,16 @@ use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use kvproto::metapb;
 use tokio_core::reactor::Handle;
 
-use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
-use crate::raftstore::router::ServerRaftStoreRouter;
-use crate::raftstore::store::msg::StoreMsg;
-use crate::raftstore::store::RegionSnapshot;
 use crate::server::metrics::*;
 use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
 };
 use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
 use pd_client::PdClient;
+use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
+use raftstore::router::ServerRaftStoreRouter;
+use raftstore::store::msg::StoreMsg;
+use raftstore::store::RegionSnapshot;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
 use tikv_util::worker::{
