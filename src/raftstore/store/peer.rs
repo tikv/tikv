@@ -1665,8 +1665,7 @@ impl Peer {
                         renew_lease_time: None,
                     };
                     if cbs.len() > 1 {
-                        ctx.raft_metrics.propose.batch += cbs.len();
-                        ctx.raft_metrics.propose.normal -= 1;
+                        ctx.raft_metrics.propose.batch += cbs.len() - 1;
                         self.post_propose(
                             ctx,
                             meta,
@@ -1707,7 +1706,7 @@ impl Peer {
             if batch_req.get_header() != req.get_header() {
                 return true;
             }
-            if f64::from(self.batch_cmd.batch_size) > ctx.cfg.raft_entry_max_size.0 as f64 * 0.4 {
+            if f64::from(self.batch_cmd.batch_size) > ctx.cfg.raft_entry_max_size.0 as f64 * 0.6 {
                 return true;
             }
             if batch_req.get_requests().len() > MAX_BATCH_KEY_NUM {
@@ -1749,7 +1748,7 @@ impl Peer {
                     self.propose_normal(ctx, req)
                 } else {
                     let req_size = req.compute_size();
-                    // No batch request whose size exceed 40% of raft_entry_max_size,
+                    // No batch request whose size exceed 20% of raft_entry_max_size,
                     // so total size of request in batch_raft_request would not exceed 80% of
                     // raft_entry_max_size
                     let max_size = ctx.cfg.raft_entry_max_size.0 as f64 * 0.2;

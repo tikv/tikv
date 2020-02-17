@@ -183,6 +183,15 @@ lazy_static! {
             exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
+    pub static ref POLL_KEY_COUNT_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_write_poll_key_count",
+            "Count of key each time when ApplPoller calls handle_normal",
+             vec![8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 384.0, 512.0,
+                  640.0, 768.0, 896.0, 1024.0, 1280.0, 1536.0, 2048.0]
+        ).unwrap();
+
+
     pub static ref RAFT_ENTRY_FETCHES: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_entry_fetches",

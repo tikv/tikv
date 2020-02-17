@@ -151,6 +151,7 @@ make_static_metric! {
         pause,
         key_mvcc,
         start_ts_mvcc,
+        batch_get_command,
         raw_get,
         raw_batch_get,
         raw_scan,

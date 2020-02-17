@@ -287,6 +287,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let ctx = gets[0].ctx.clone();
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        KV_COMMAND_COUNTER_VEC_STATIC
+            .batch_get_command
+            .inc_by(gets.len() as i64);
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
