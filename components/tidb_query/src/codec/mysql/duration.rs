@@ -247,7 +247,7 @@ mod parser {
 } /* parser */
 
 #[inline]
-fn round(nanos: i64, fsp: u8) -> Result<i64> {
+fn checked_round(nanos: i64, fsp: u8) -> Result<i64> {
     check_nanos(nanos)?;
     let min_step = TEN_POW[NANO_WIDTH - fsp as usize] as i64;
     let rem = nanos % min_step;
@@ -375,7 +375,7 @@ impl Duration {
         let nanos = millis
             .checked_mul(NANOS_PER_MILLI)
             .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
-        let nanos = round(nanos, fsp)?;
+        let nanos = checked_round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -384,13 +384,13 @@ impl Duration {
         let nanos = micros
             .checked_mul(NANOS_PER_MICRO)
             .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
-        let nanos = round(nanos, fsp)?;
+        let nanos = checked_round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
     pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        let nanos = round(nanos, fsp)?;
+        let nanos = checked_round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -412,7 +412,7 @@ impl Duration {
         let second = second as i64 + minute * SECS_PER_MINUTE;
         let nanos = nanos as i64 + second * NANOS_PER_SEC;
         let nanos = signum * nanos;
-        let nanos = round(nanos, fsp)?;
+        let nanos = checked_round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -436,7 +436,7 @@ impl Duration {
             return Ok(Duration { fsp, ..self });
         }
 
-        let nanos = round(self.nanos, fsp)?;
+        let nanos = checked_round(self.nanos, fsp)?;
 
         Ok(Duration { nanos, fsp })
     }
