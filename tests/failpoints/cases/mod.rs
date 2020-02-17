@@ -4,7 +4,6 @@ mod test_bootstrap;
 mod test_cdc;
 mod test_conf_change;
 mod test_coprocessor;
-mod test_early_apply;
 mod test_gc_worker;
 mod test_merge;
 mod test_pending_peers;
