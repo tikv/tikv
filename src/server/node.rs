@@ -7,16 +7,7 @@ use std::time::Duration;
 use super::RaftKv;
 use super::Result;
 use crate::import::SSTImporter;
-use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::fsm::store::StoreMeta;
-use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use crate::raftstore::store::SplitCheckTask;
-use crate::raftstore::store::{
-    self, initial_region, Config as StoreConfig, SnapManager, Transport,
-};
-use crate::raftstore::store::{DynamicConfig, PdTask};
-use crate::read_pool::ReadPool;
+use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
@@ -25,6 +16,13 @@ use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
+use raftstore::coprocessor::dispatcher::CoprocessorHost;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use raftstore::store::SplitCheckTask;
+use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
+use raftstore::store::{DynamicConfig, PdTask};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
 use tikv_util::worker::Worker;
@@ -37,7 +35,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
-    read_pool: ReadPool,
+    read_pool: ReadPoolHandle,
     lock_mgr: Option<LockManager>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
@@ -79,6 +77,11 @@ where
         }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
         store.set_status_address(cfg.status_addr.clone());
+
+        if let Ok(path) = std::env::current_exe() {
+            store.set_binary_path(path.to_string_lossy().to_string());
+        };
+
         store.set_start_timestamp(chrono::Local::now().timestamp());
         store.set_git_hash(
             option_env!("TIKV_BUILD_GIT_HASH")

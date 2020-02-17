@@ -20,6 +20,16 @@ use kvproto::{
     diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
 use pd_client::{PdClient, RpcClient};
+use raftstore::{
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
+    router::ServerRaftStoreRouter,
+    store::{
+        config::RaftstoreConfigManager,
+        fsm,
+        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+        new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
+    },
+};
 use std::{
     convert::TryFrom,
     fmt,
@@ -29,23 +39,11 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
-use tikv::config::ConfigHandler;
-use tikv::raftstore::coprocessor::config::SplitCheckConfigManager;
-use tikv::raftstore::router::ServerRaftStoreRouter;
-use tikv::raftstore::store::config::RaftstoreConfigManager;
 use tikv::{
-    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
+    config::{ConfigController, ConfigHandler, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
-    raftstore::{
-        coprocessor::{CoprocessorHost, RegionInfoAccessor},
-        store::{
-            fsm,
-            fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
-        },
-    },
-    read_pool::{ReadPool, ReadPoolRunner},
+    read_pool::{build_yatp_read_pool, ReadPool},
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -65,10 +63,6 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
 };
-use yatp::{
-    pool::CloneRunnerBuilder,
-    queue::{multilevel, QueueType},
-};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -81,6 +75,7 @@ pub fn run_tikv(config: TiKvConfig) {
     let _m = Monitor::default();
 
     tikv.init_fs();
+    tikv.init_yatp();
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
     let server_config = tikv.init_servers(&gc_worker);
@@ -281,6 +276,17 @@ impl TiKVServer {
         .unwrap();
     }
 
+    fn init_yatp(&self) {
+        let yatp_enabled = self.config.readpool.unify_read_pool;
+        if !yatp_enabled {
+            return;
+        }
+
+        yatp::metrics::set_namespace(Some("tikv"));
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone())).unwrap();
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
+    }
+
     fn init_engines(&mut self) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
@@ -403,38 +409,30 @@ impl TiKVServer {
         let pd_sender = pd_worker.scheduler();
 
         let unified_read_pool = if self.config.readpool.unify_read_pool {
-            let unified_read_pool_cfg = &self.config.readpool.unified;
-            let mut builder = yatp::Builder::new("unified-read-pool");
-            builder
-                .min_thread_count(unified_read_pool_cfg.min_thread_count)
-                .max_thread_count(unified_read_pool_cfg.max_thread_count);
-            let multilevel_builder = multilevel::Builder::new(Default::default());
-            let read_pool_runner = ReadPoolRunner::new(engines.engine.clone(), Default::default());
-            let runner_builder =
-                multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
-            Some(builder.build_with_queue_and_runner(
-                QueueType::Multilevel(multilevel_builder),
-                runner_builder,
+            Some(build_yatp_read_pool(
+                &self.config.readpool.unified,
+                pd_sender.clone(),
+                engines.engine.clone(),
             ))
         } else {
             None
         };
 
-        let storage_read_pool = if self.config.readpool.unify_read_pool {
-            ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
+        let storage_read_pool_handle = if self.config.readpool.unify_read_pool {
+            unified_read_pool.as_ref().unwrap().handle()
         } else {
-            let cop_read_pools = storage::build_read_pool(
+            let storage_read_pools = ReadPool::from(storage::build_read_pool(
                 &self.config.readpool.storage,
                 pd_sender.clone(),
                 engines.engine.clone(),
-            );
-            ReadPool::from(cop_read_pools)
+            ));
+            storage_read_pools.handle()
         };
 
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
-            storage_read_pool,
+            storage_read_pool_handle,
             lock_mgr.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
@@ -456,15 +454,15 @@ impl TiKVServer {
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.
-        let cop_read_pool = if self.config.readpool.unify_read_pool {
-            ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
+        let cop_read_pool_handle = if self.config.readpool.unify_read_pool {
+            unified_read_pool.as_ref().unwrap().handle()
         } else {
-            let cop_read_pools = coprocessor::readpool_impl::build_read_pool(
+            let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.coprocessor,
                 pd_sender.clone(),
                 engines.engine.clone(),
-            );
-            ReadPool::from(cop_read_pools)
+            ));
+            cop_read_pools.handle()
         };
 
         let server_config = Arc::new(self.config.server.clone());
@@ -474,7 +472,7 @@ impl TiKVServer {
             &server_config,
             &self.security_mgr,
             storage,
-            coprocessor::Endpoint::new(&server_config, cop_read_pool),
+            coprocessor::Endpoint::new(&server_config, cop_read_pool_handle),
             engines.raft_router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),

@@ -5,10 +5,6 @@ use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
-use crate::raftstore::coprocessor::{
-    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionChangeEvent, RegionChangeObserver, RoleObserver,
-};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
 use futures::{Future, Sink, Stream};
@@ -20,6 +16,10 @@ use kvproto::deadlock::*;
 use kvproto::metapb::Region;
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
+use raftstore::coprocessor::{
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, RoleObserver,
+};
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
