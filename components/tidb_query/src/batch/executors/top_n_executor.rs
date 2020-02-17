@@ -818,15 +818,15 @@ mod tests {
     /// == Schema ==
     /// Col0 (Bytes[utf8_general_ci])      Col1(Bytes[utf8_bin])   Col2(Bytes[binary])
     /// == Call #1 ==
-    /// "aa"                               "aaa"                      "カ"
+    /// "aa"                               "aaa"                      "áaA"
     /// NULL                               NULL                       "Aa"
     /// "aa"                               "aa"                       NULL
     /// == Call #2 ==
     /// == Call #3 ==
-    /// "カ"                               "か"                        NULL
-    /// "か"                               "カ"                       "aa"
+    /// "áaA"                              "áa"                       NULL
+    /// "áa"                               "áaA"                      "aa"
     /// "Aa"                               NULL                       "aaa"
-    /// "aaa"                              "Aa"                       "か"
+    /// "aaa"                              "Aa"                       "áa"
     /// (drained)
     fn make_bytes_src_executor() -> MockExecutor {
         let mut col1: FieldType = FieldTypeTp::VarChar.into();
@@ -845,7 +845,7 @@ mod tests {
                         VectorValue::Bytes(vec![
                             None,
                             Some(b"Aa".to_vec()),
-                            Some("カ".as_bytes().to_vec()),
+                            Some("áaA".as_bytes().to_vec()),
                         ]),
                     ]),
                     logical_rows: vec![2, 1, 0],
@@ -861,14 +861,14 @@ mod tests {
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
                         VectorValue::Bytes(vec![
-                            Some("カ".as_bytes().to_vec()),
-                            Some("か".as_bytes().to_vec()),
+                            Some("áaA".as_bytes().to_vec()),
+                            Some("áa".as_bytes().to_vec()),
                             Some(b"Aa".to_vec()),
                             Some(b"aaa".to_vec()),
                         ]),
                         VectorValue::Bytes(vec![
-                            Some("か".as_bytes().to_vec()),
-                            Some("カ".as_bytes().to_vec()),
+                            Some("áa".as_bytes().to_vec()),
+                            Some("áaA".as_bytes().to_vec()),
                             None,
                             Some(b"Aa".to_vec()),
                         ]),
@@ -876,7 +876,7 @@ mod tests {
                             None,
                             Some(b"aa".to_vec()),
                             Some(b"aaa".to_vec()),
-                            Some("か".as_bytes().to_vec()),
+                            Some("áa".as_bytes().to_vec()),
                         ]),
                     ]),
                     logical_rows: vec![0, 1, 2, 3],
@@ -895,11 +895,11 @@ mod tests {
         // +------+--------+--------+
         // | col1 | col2   | col3   |
         // +------+--------+--------+
-        // | カ   | か     | <null> |
-        // | か   | カ     | aa     |
-        // | aaa  | Aa     | か     |
-        // | aa   | aaa    | カ     |
+        // | aaa  | Aa     | áa     |
+        // | áaA  | áa     | <null> |
+        // | aa   | aaa    | áaA    |
         // | Aa   | <null> | aaa    |
+        // | áa   | áaA    | aa     |
         // +------+--------+--------+
 
         let src_exec = make_bytes_src_executor();
@@ -932,31 +932,31 @@ mod tests {
         assert_eq!(
             r.physical_columns[0].decoded().as_bytes_slice(),
             &[
-                Some("カ".as_bytes().to_vec()),
-                Some("か".as_bytes().to_vec()),
-                Some(b"aaa".to_vec()),
+                Some("aaa".as_bytes().to_vec()),
+                Some("áaA".as_bytes().to_vec()),
                 Some(b"aa".to_vec()),
                 Some(b"Aa".to_vec()),
+                Some("áa".as_bytes().to_vec()),
             ]
         );
         assert_eq!(
             r.physical_columns[1].decoded().as_bytes_slice(),
             &[
-                Some("か".as_bytes().to_vec()),
-                Some("カ".as_bytes().to_vec()),
-                Some(b"Aa".to_vec()),
+                Some("Aa".as_bytes().to_vec()),
+                Some("áa".as_bytes().to_vec()),
                 Some(b"aaa".to_vec()),
                 None,
+                Some("áaA".as_bytes().to_vec()),
             ]
         );
         assert_eq!(
             r.physical_columns[2].decoded().as_bytes_slice(),
             &[
+                Some("áa".as_bytes().to_vec()),
                 None,
-                Some(b"aa".to_vec()),
-                Some("か".as_bytes().to_vec()),
-                Some("カ".as_bytes().to_vec()),
+                Some("áaA".as_bytes().to_vec()),
                 Some(b"aaa".to_vec()),
+                Some(b"aa".to_vec()),
             ]
         );
         assert!(r.is_drained.unwrap());
@@ -973,8 +973,8 @@ mod tests {
         // | <null> | <null> | Aa     |
         // | Aa     | <null> | aaa    |
         // | aa     | aa     | <null> |
-        // | aa     | aaa    | カ     |
-        // | aaa    | Aa     | か     |
+        // | aa     | aaa    | áaA    |
+        // | áa     | áaA    | aa     |
         // +--------+--------+--------+
 
         let src_exec = make_bytes_src_executor();
@@ -1011,7 +1011,7 @@ mod tests {
                 Some(b"Aa".to_vec()),
                 Some(b"aa".to_vec()),
                 Some(b"aa".to_vec()),
-                Some(b"aaa".to_vec()),
+                Some("áa".as_bytes().to_vec()),
             ]
         );
         assert_eq!(
@@ -1021,7 +1021,7 @@ mod tests {
                 None,
                 Some(b"aa".to_vec()),
                 Some(b"aaa".to_vec()),
-                Some(b"Aa".to_vec()),
+                Some("áaA".as_bytes().to_vec()),
             ]
         );
         assert_eq!(
@@ -1030,8 +1030,8 @@ mod tests {
                 Some(b"Aa".to_vec()),
                 Some(b"aaa".to_vec()),
                 None,
-                Some("カ".as_bytes().to_vec()),
-                Some("か".as_bytes().to_vec()),
+                Some("áaA".as_bytes().to_vec()),
+                Some("aa".as_bytes().to_vec()),
             ]
         );
         assert!(r.is_drained.unwrap());
