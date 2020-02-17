@@ -111,7 +111,7 @@ slog-term = "2.4"
 slog_derive = "0.1"
 parking_lot = "0.10"
 sst_importer = { path = "components/sst_importer" }
-sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
+sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv2"}
 tempfile = "3.0"
 tidb_query = { path = "components/tidb_query", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc", default-features = false }

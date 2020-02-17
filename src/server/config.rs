@@ -114,6 +114,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = sysinfo::get_logical_cores();
+
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),

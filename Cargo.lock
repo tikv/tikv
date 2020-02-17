@@ -391,9 +391,9 @@ dependencies = [
 
 [[package]]
 name = "cache-size"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9c0e5b187b377be086db3ee0de5cbf7bfb4a8c590b639af4d3facbdd07586ae"
+checksum = "81d993443a01668ca909379dac9de6e858121d7fb2bc16de939dc166164cac1c"
 dependencies = [
  "raw-cpuid",
 ]
@@ -2294,6 +2294,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ntapi"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f26e041cd983acbc087e30fcba770380cfa352d0e392e175b2344ebaf7ea0602"
+dependencies = [
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "num"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2387,6 +2396,12 @@ dependencies = [
  "hermit-abi",
  "libc",
 ]
+
+[[package]]
+name = "once_cell"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1c601810575c99596d4afc46f78a678c80105117c379eb3650cf99b8a21ce5b"
 
 [[package]]
 name = "opaque-debug"
@@ -4055,14 +4070,16 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.9.6"
-source = "git+https://github.com/tikv/sysinfo.git?branch=tikv#aa98faff1c586984857506c8add248ee304a7f81"
+version = "0.11.2"
+source = "git+https://github.com/tikv/sysinfo.git?branch=tikv2#6970da18c7f03c1fdb93af08fbe42f6dba3340fd"
 dependencies = [
  "cache-size",
  "cfg-if",
  "doc-comment",
  "libc",
+ "ntapi",
  "num_cpus",
+ "once_cell",
  "pnet_datalink",
  "rayon",
  "walkdir",

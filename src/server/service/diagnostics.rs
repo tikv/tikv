@@ -123,12 +123,14 @@ mod sys {
     use std::string::ToString;
 
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-    use sysinfo::{DiskExt, ProcessExt, SystemExt};
+    use sysinfo::{DiskExt, ProcessExt, ProcessorExt, SystemExt};
 
     fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
+        let mut system = sysinfo::System::new();
+        system.refresh_system();
         // CPU load
         {
-            let load = sysinfo::get_avg_load();
+            let load = system.get_load_average();
             let infos = vec![
                 ("load1", load.one),
                 ("load5", load.five),
@@ -191,7 +193,7 @@ mod sys {
 
     fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
-        system.refresh_all();
+        system.refresh_system();
         let total_memory = system.get_total_memory();
         let used_memory = system.get_used_memory();
         let free_memory = system.get_free_memory();
@@ -340,7 +342,11 @@ mod sys {
 
     fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
-        system.refresh_all();
+        system.refresh_system();
+        let proc = match system.get_processors().iter().next() {
+            Some(p) => p,
+            None => return,
+        };
         let mut infos = vec![
             (
                 "cpu-logical-cores",
@@ -350,10 +356,8 @@ mod sys {
                 "cpu-physical-cores",
                 sysinfo::get_physical_cores().to_string(),
             ),
-            (
-                "cpu-frequency",
-                format!("{}MHz", sysinfo::get_cpu_frequency()),
-            ),
+            ("cpu-frequency", format!("{}MHz", proc.get_frequency())),
+            ("cpu-vendor-id", proc.get_vendor_id().to_string()),
         ];
         // cache
         use sysinfo::cache_size;
@@ -386,7 +390,7 @@ mod sys {
 
     fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
-        system.refresh_all();
+        system.refresh_system();
         let mut pair = ServerInfoPair::default();
         pair.set_key("capacity".to_string());
         pair.set_value(system.get_total_memory().to_string());
@@ -399,7 +403,7 @@ mod sys {
 
     fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
-        system.refresh_all();
+        system.refresh_disks_list();
         let disks = system.get_disks();
         for disk in disks {
             let total = disk.get_total_space();
@@ -512,8 +516,8 @@ mod sys {
     #[allow(dead_code)]
     pub fn process_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
-        system.refresh_all();
-        let processes = system.get_process_list();
+        system.refresh_processes();
+        let processes = system.get_processes();
         for (pid, p) in processes.iter() {
             if p.cmd().is_empty() {
                 continue;
@@ -686,24 +690,33 @@ mod sys {
             }
             // cpu
             let cpu_info = collector.iter().find(|x| x.get_tp() == "cpu").unwrap();
-            assert_eq!(
-                cpu_info
-                    .get_pairs()
-                    .iter()
-                    .map(|x| x.get_key())
-                    .collect::<Vec<&str>>(),
-                vec![
-                    "cpu-logical-cores",
-                    "cpu-physical-cores",
-                    "cpu-frequency",
-                    "l1-cache-size",
-                    "l1-cache-line-size",
-                    "l2-cache-size",
-                    "l2-cache-line-size",
-                    "l3-cache-size",
-                    "l3-cache-line-size",
-                ]
-            );
+            let vendor_id = cpu_info
+                .get_pairs()
+                .iter()
+                .find(|x| x.get_key() == "cpu-vendor-id")
+                .unwrap()
+                .get_value();
+            if vendor_id != "AuthenticAMD" {
+                assert_eq!(
+                    cpu_info
+                        .get_pairs()
+                        .iter()
+                        .map(|x| x.get_key())
+                        .collect::<Vec<&str>>(),
+                    vec![
+                        "cpu-logical-cores",
+                        "cpu-physical-cores",
+                        "cpu-frequency",
+                        "cpu-vendor-id",
+                        "l1-cache-size",
+                        "l1-cache-line-size",
+                        "l2-cache-size",
+                        "l2-cache-line-size",
+                        "l3-cache-size",
+                        "l3-cache-line-size",
+                    ]
+                );
+            }
             let mem_info = collector.iter().find(|x| x.get_tp() == "memory").unwrap();
             assert_eq!(
                 mem_info
