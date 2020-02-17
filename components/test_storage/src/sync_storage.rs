@@ -4,7 +4,7 @@ use futures::Future;
 use std::sync::Arc;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::raftstore::coprocessor::RegionInfoProvider;
+use raftstore::coprocessor::RegionInfoProvider;
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;

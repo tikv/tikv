@@ -20,6 +20,16 @@ use kvproto::{
     diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
 use pd_client::{PdClient, RpcClient};
+use raftstore::{
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
+    router::ServerRaftStoreRouter,
+    store::{
+        config::RaftstoreConfigManager,
+        fsm,
+        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+        new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
+    },
+};
 use std::{
     convert::TryFrom,
     fmt,
@@ -33,16 +43,6 @@ use tikv::{
     config::{ConfigController, ConfigHandler, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
-    raftstore::{
-        coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
-        router::ServerRaftStoreRouter,
-        store::{
-            config::RaftstoreConfigManager,
-            fsm,
-            fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-            new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
-        },
-    },
     read_pool::{build_yatp_read_pool, ReadPool},
     server::{
         config::Config as ServerConfig,

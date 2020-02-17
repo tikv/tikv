@@ -9,13 +9,13 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
 use engine::*;
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::{bootstrap_store, fsm, SnapManager};
 use test_raftstore::*;
 use tikv::config::ConfigController;
 use tikv::config::ConfigHandler;
 use tikv::import::SSTImporter;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::{bootstrap_store, fsm, SnapManager};
 use tikv::server::Node;
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};

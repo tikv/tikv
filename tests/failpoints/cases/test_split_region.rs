@@ -7,8 +7,8 @@ use std::time::Duration;
 use fail;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use tikv::raftstore::store::util::is_vote_msg;
-use tikv::raftstore::Result;
+use raftstore::store::util::is_vote_msg;
+use raftstore::Result;
 use tikv_util::HandyRwLock;
 
 use test_raftstore::*;
@@ -47,7 +47,7 @@ fn test_follower_slow_split() {
     let (tx, rx) = mpsc::channel();
     let prevote_resp_notifier = Box::new(MessageTypeNotifier::new(
         MessageType::MsgRequestPreVoteResponse,
-        tx.clone(),
+        tx,
         Arc::from(AtomicBool::new(true)),
     ));
     cluster.sim.wl().add_send_filter(3, prevote_resp_notifier);

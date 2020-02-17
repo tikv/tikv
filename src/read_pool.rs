@@ -310,7 +310,7 @@ mod metrics {
 
 pub mod tests {
     use super::*;
-    use crate::raftstore::store::FlowStatistics;
+    use raftstore::store::FlowStatistics;
     use tikv_util::collections::HashMap;
 
     #[derive(Clone)]
