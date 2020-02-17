@@ -21,10 +21,10 @@ use engine::rocks::{CompactionJobInfo, DB};
 use engine::*;
 use engine_rocks::CompactionListener;
 use engine_rocks::RocksEngine;
+use raftstore::store::fsm::RaftRouter;
+use raftstore::store::*;
+use raftstore::Result;
 use tikv::config::*;
-use tikv::raftstore::store::fsm::RaftRouter;
-use tikv::raftstore::store::*;
-use tikv::raftstore::Result;
 use tikv::server::{lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig};
 use tikv::storage::config::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::config::*;
@@ -32,7 +32,7 @@ use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
-pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
+pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -157,8 +157,9 @@ pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
         unify_read_pool: false,
         unified: UnifiedReadPoolConfig {
-            min_thread_count: 0,
-            max_thread_count: 0,
+            min_thread_count: 1,
+            max_thread_count: 1,
+            ..UnifiedReadPoolConfig::default()
         },
         storage: StorageReadPoolConfig {
             high_concurrency: 1,
