@@ -76,7 +76,7 @@ fn check_nanos_part(nanos: u32) -> Result<u32> {
 
 #[inline]
 fn check_nanos(nanos: i64) -> Result<i64> {
-    if nanos.abs() > MAX_NANOS {
+    if nanos < -MAX_NANOS || nanos > MAX_NANOS {
         Err(Error::truncated_wrong_val("NANOS", nanos))
     } else {
         Ok(nanos)
@@ -209,7 +209,7 @@ mod parser {
         day_hhmmss(rest)
             .ok()
             .and_then(|(rest, (day, [hh, mm, ss]))| {
-                Some((rest, [day.checked_mul(24)? + hh, mm, ss]))
+                Some((rest, [day.checked_mul(24)?.checked_add(hh)?, mm, ss]))
             })
             .or_else(|| hhmmss_delimited(rest, true).ok())
             .or_else(|| hhmmss_compact(rest).ok())
@@ -247,14 +247,16 @@ mod parser {
 } /* parser */
 
 #[inline]
-fn round(nanos: i64, fsp: u8) -> i64 {
+fn round(nanos: i64, fsp: u8) -> Result<i64> {
+    check_nanos(nanos)?;
     let min_step = TEN_POW[NANO_WIDTH - fsp as usize] as i64;
     let rem = nanos % min_step;
-    if rem.abs() < min_step / 2 {
+    let nanos = if rem.abs() < min_step / 2 {
         nanos - rem
     } else {
         nanos - rem + min_step * nanos.signum()
-    }
+    };
+    check_nanos(nanos)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -373,8 +375,7 @@ impl Duration {
         let nanos = millis
             .checked_mul(NANOS_PER_MILLI)
             .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
-        let nanos = round(nanos, fsp);
-        check_nanos(nanos)?;
+        let nanos = round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -383,14 +384,13 @@ impl Duration {
         let nanos = micros
             .checked_mul(NANOS_PER_MICRO)
             .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
-        let nanos = round(nanos, fsp);
-        check_nanos(nanos)?;
+        let nanos = round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
     pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        check_nanos(nanos)?;
+        let nanos = round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -412,8 +412,7 @@ impl Duration {
         let second = second as i64 + minute * SECS_PER_MINUTE;
         let nanos = nanos as i64 + second * NANOS_PER_SEC;
         let nanos = signum * nanos;
-        let nanos = round(nanos, fsp);
-        check_nanos(nanos)?;
+        let nanos = round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -437,7 +436,7 @@ impl Duration {
             return Ok(Duration { fsp, ..self });
         }
 
-        let nanos = round(self.nanos, fsp);
+        let nanos = round(self.nanos, fsp)?;
 
         Ok(Duration { nanos, fsp })
     }
@@ -833,6 +832,8 @@ mod tests {
             (b"- 1 .1", 1, Some("-00:00:01.1")),
             (b"18446744073709551615:59:59", 0, None),
             (b"4294967295 0:59:59", 0, None),
+            (b"4294967295 232:59:59", 0, None),
+            (b"-4294967295 232:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
             (b"1:62:3", 0, None),
