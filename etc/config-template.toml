@@ -40,7 +40,7 @@
 # min-thread-count = 1
 
 ## The maximum working thread count of the thread pool.
-## The default value is the max(4, LOGICAL_CPU_NUM * 0.8).
+## The default value is max(4, LOGICAL_CPU_NUM * 0.8).
 # max-thread-count = 8
 
 ## Size of the stack for each thread in the thread pool.
