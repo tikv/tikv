@@ -315,9 +315,9 @@ mod metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raftstore::store::FlowStatistics;
     use crate::storage::TestEngineBuilder;
     use futures03::channel::oneshot;
+    use raftstore::store::FlowStatistics;
     use std::thread;
     use tikv_util::collections::HashMap;
 

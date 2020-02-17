@@ -3,8 +3,8 @@
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
 use engine::*;
+use raftstore::store::*;
 use test_raftstore::*;
-use tikv::raftstore::store::*;
 use tikv_util::collections::HashMap;
 use tikv_util::config::*;
 

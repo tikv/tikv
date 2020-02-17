@@ -8,8 +8,8 @@ use grpcio::CompressionAlgorithms;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
 
-pub use crate::raftstore::store::Config as RaftStoreConfig;
 pub use crate::storage::config::Config as StorageConfig;
+pub use raftstore::store::Config as RaftStoreConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";

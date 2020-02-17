@@ -9,7 +9,6 @@ use std::time::Instant;
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
-use crate::raftstore::router::RaftStoreRouter;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
@@ -17,6 +16,7 @@ use grpcio::{
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
+use raftstore::router::RaftStoreRouter;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
