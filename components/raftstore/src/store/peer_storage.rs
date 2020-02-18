@@ -361,7 +361,7 @@ pub fn recover_from_applying_state(
     Ok(())
 }
 
-pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalState> {
+fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
     Ok(match engines.raft.get_msg(&state_key)? {
         Some(s) => s,
@@ -379,7 +379,7 @@ pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalSt
     })
 }
 
-pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyState> {
+fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyState> {
     Ok(
         match engines
             .kv
@@ -398,6 +398,38 @@ pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyS
             }
         },
     )
+}
+
+fn validate_states(raft_state: &RaftLocalState, apply_state: &RaftApplyState) -> Result<()> {
+    let last_index = raft_state.get_last_index();
+    let commit_index = raft_state.get_hard_state().get_commit();
+    let apply_index = apply_state.get_applied_index();
+    if last_index < commit_index {
+        return Err(box_err!("raft_state {:?} corrupted", raft_state));
+    }
+
+    if commit_index >= apply_index {
+        if commit_index >= apply_state.get_last_commit_index() {
+            return Ok(());
+        }
+        return Err(box_err!(
+            "raft log lost detected: {:?} {:?}",
+            raft_state,
+            apply_state
+        ));
+    }
+    if commit_index < apply_state.get_last_commit_index() {
+        return Err(box_err!(
+            "raft state {:?} not match apply state {:?} and can't be recovered,",
+            raft_state,
+            apply_state
+        ));
+    }
+
+    // Logs may be lost because of early apply, skip it.
+    // We should not try to recover it here, because you can't get a correct term and vote state.
+    // It's better to be stale rather than wrong.
+    Ok(())
 }
 
 fn init_last_term(
@@ -496,13 +528,8 @@ impl PeerStorage {
         );
         let raft_state = init_raft_state(&engines, region)?;
         let apply_state = init_apply_state(&engines, region)?;
-        if raft_state.get_last_index() < apply_state.get_applied_index() {
-            panic!(
-                "{} unexpected raft log index: last_index {} < applied_index {}",
-                tag,
-                raft_state.get_last_index(),
-                apply_state.get_applied_index()
-            );
+        if let Err(e) = validate_states(&raft_state, &apply_state) {
+            return Err(box_err!("{} validate state fail: {:?}", tag, e));
         }
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
 
