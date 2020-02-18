@@ -491,13 +491,9 @@ impl<E: Engine> GcRunner<E> {
         start_key: &Key,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
-        let db = match &self.local_storage {
-            Some(db) => Arc::clone(&db),
-            None => {
-                let e = box_err!("local storage not set, physical scan lock not supported");
-                return Err(e);
-            }
-        };
+        let db = self.local_storage.clone().ok_or_else::<Error, _>(|| {
+            box_err!("local storage not set, physical scan lock not supported")
+        })?;
 
         // Create a `RegionSnapshot`, which can converts the 'z'-prefixed keys into normal keys
         // internally. A fake region meta is given to make the snapshot's range unbounded.
@@ -513,26 +509,9 @@ impl<E: Engine> GcRunner<E> {
         let mut lock_infos = Vec::with_capacity(locks.len());
         for (key, lock) in locks {
             let raw_key = key.into_raw().map_err(MvccError::from)?;
-            //     Ok(k) => k,
-            //     Err(e) => {
-            //         self.is_finished = true;
-            //         let e = Error::from(MvccError::from(e));
-            //         return Err(e);
-            //     }
-            // };
             lock_infos.push(lock.into_lock_info(raw_key));
         }
         Ok(lock_infos)
-        // let lock_scanner = LockScanner::new(snap, max_ts);
-
-        // let future = sender
-        //     .send_all(lock_scanner.then(|res| Ok(res)))
-        //     .map_err(|e| {
-        //         error!("send physical scan lock result from GCRunner failed"; "err" => ?e);
-        //     })
-        //     .map(move |_| {
-        //         info!("physical scan lock finished"; "max_ts" => %max_ts);
-        //     });
     }
 
     fn update_statistics_metrics(&mut self) {
@@ -1223,7 +1202,7 @@ mod tests {
 
             let lock_ts = 10 + i % 3;
 
-            // Collect all locks with ts < 11 to check the result of physical_scan_lock.
+            // Collect all locks with ts <= 11 to check the result of physical_scan_lock.
             if lock_ts <= 11 {
                 let mut info = LockInfo::default();
                 info.set_primary_lock(k.clone());
