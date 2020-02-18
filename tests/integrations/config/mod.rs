@@ -91,6 +91,8 @@ fn test_serde_custom_tikv_config() {
         unified: UnifiedReadPoolConfig {
             min_thread_count: 5,
             max_thread_count: 10,
+            stack_size: ReadableSize::mb(20),
+            max_tasks_per_worker: 2200,
         },
         storage: StorageReadPoolConfig {
             high_concurrency: 1,

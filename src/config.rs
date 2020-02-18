@@ -26,6 +26,7 @@ use engine::rocks::{
     TitanDBOptions,
 };
 use slog;
+use sysinfo::SystemExt;
 
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
@@ -64,7 +65,6 @@ const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
-    use sysinfo::SystemExt;
     let total_mem = sysinfo::System::new().get_total_memory() * KB;
     let (ratio, min, max) = match (is_raft_db, cf) {
         (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
@@ -142,7 +142,8 @@ fn get_background_job_limit(
     default_sub_compactions: u32,
     default_background_gc: i32,
 ) -> (i32, u32, i32) {
-    let cpu_num = sysinfo::get_logical_cores();
+    let cpu_num = sysinfo::System::new().get_processors().len();
+
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
@@ -1326,6 +1327,8 @@ pub mod log_level_serde {
 pub struct UnifiedReadPoolConfig {
     pub min_thread_count: usize,
     pub max_thread_count: usize,
+    pub stack_size: ReadableSize,
+    pub max_tasks_per_worker: usize,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -1343,6 +1346,16 @@ impl UnifiedReadPoolConfig {
                     .into(),
             );
         }
+        if self.stack_size.0 < ReadableSize::mb(2).0 {
+            return Err("readpool.unified.stack-size should be >= 2mb"
+                .to_string()
+                .into());
+        }
+        if self.max_tasks_per_worker <= 1 {
+            return Err("readpool.unified.max-tasks-per-worker should be > 1"
+                .to_string()
+                .into());
+        }
         Ok(())
     }
 }
@@ -1352,12 +1365,15 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 // FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
-        let cpu_num = sysinfo::get_logical_cores();
+        let cpu_num = sysinfo::System::new().get_processors().len();
+
         let mut concurrency = (cpu_num as f64 * 0.8) as usize;
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
             max_thread_count: concurrency,
+            stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
+            max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
         }
     }
 }
@@ -1371,6 +1387,8 @@ mod unified_read_pool_tests {
         let cfg = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,
+            stack_size: ReadableSize::mb(2),
+            max_tasks_per_worker: 2000,
         };
         assert!(cfg.validate().is_ok());
 
@@ -1383,6 +1401,19 @@ mod unified_read_pool_tests {
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 2,
             max_thread_count: 1,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+
+        let invalid_cfg = UnifiedReadPoolConfig {
+            stack_size: ReadableSize::mb(1),
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+
+        let invalid_cfg = UnifiedReadPoolConfig {
+            max_tasks_per_worker: 1,
+            ..cfg
         };
         assert!(invalid_cfg.validate().is_err());
     }
@@ -1459,10 +1490,12 @@ macro_rules! readpool_config {
                     )
                     .into());
                 }
-                if self.stack_size.0 < ReadableSize::mb(2).0 {
-                    return Err(
-                        format!("readpool.{}.stack-size should be >= 2mb", $display_name).into(),
-                    );
+                if self.stack_size.0 < ReadableSize::mb(MIN_READPOOL_STACK_SIZE_MB).0 {
+                    return Err(format!(
+                        "readpool.{}.stack-size should be >= {}mb",
+                        $display_name, MIN_READPOOL_STACK_SIZE_MB
+                    )
+                    .into());
                 }
                 if self.max_tasks_per_worker_high <= 1 {
                     return Err(format!(
@@ -1550,15 +1583,17 @@ const DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY: usize = 8;
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
 // backoff. So when it needs to wait for more than 2 seconds, return error won't causse
 // larger latency.
-const DEFAULT_READPOOL_MAX_TASKS_PER_WORKER: usize = 2 as usize * 1000;
+const DEFAULT_READPOOL_MAX_TASKS_PER_WORKER: usize = 2 * 1000;
 
+const MIN_READPOOL_STACK_SIZE_MB: u64 = 2;
 const DEFAULT_READPOOL_STACK_SIZE_MB: u64 = 10;
 
 readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
-        let cpu_num = sysinfo::get_logical_cores();
+        let cpu_num = sysinfo::System::new().get_processors().len();
+
         let mut concurrency = (cpu_num as f64 * 0.5) as usize;
         concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
         concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
@@ -1584,7 +1619,8 @@ readpool_config!(
 
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
-        let cpu_num = sysinfo::get_logical_cores();
+        let cpu_num = sysinfo::System::new().get_processors().len();
+
         let mut concurrency = (cpu_num as f64 * 0.8) as usize;
         concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
@@ -1624,7 +1660,7 @@ impl ReadPoolConfig {
 impl Default for ReadPoolConfig {
     fn default() -> ReadPoolConfig {
         ReadPoolConfig {
-            unify_read_pool: false,
+            unify_read_pool: true,
             unified: Default::default(),
             storage: Default::default(),
             coprocessor: Default::default(),
@@ -1642,6 +1678,8 @@ mod readpool_tests {
         let unified = UnifiedReadPoolConfig {
             min_thread_count: 0,
             max_thread_count: 0,
+            stack_size: ReadableSize::mb(0),
+            max_tasks_per_worker: 0,
         };
         assert!(unified.validate().is_err());
         let storage = StorageReadPoolConfig::default();
@@ -1701,6 +1739,7 @@ mod readpool_tests {
         let unified = UnifiedReadPoolConfig {
             min_thread_count: 0,
             max_thread_count: 0,
+            ..Default::default()
         };
         assert!(unified.validate().is_err());
         let storage = StorageReadPoolConfig::default();
