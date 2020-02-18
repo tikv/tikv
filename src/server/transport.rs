@@ -4,15 +4,15 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use std::sync::{Arc, RwLock};
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::Transport;
-use crate::raftstore::Result as RaftStoreResult;
 use crate::server::metrics::*;
 use crate::server::raft_client::RaftClient;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Result;
 use raft::SnapshotStatus;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::Transport;
+use raftstore::Result as RaftStoreResult;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
 use tikv_util::HandyRwLock;
