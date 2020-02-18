@@ -578,7 +578,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into(), false)
+            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into(), false, false)
                 .unwrap();
             self.write(txn.into_modifies());
         }

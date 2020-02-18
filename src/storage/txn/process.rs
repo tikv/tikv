@@ -30,7 +30,7 @@ use crate::storage::txn::{
 };
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    types::{MvccInfo, TxnStatus},
+    types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
 use engine::CF_WRITE;
@@ -267,6 +267,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 } else {
                     let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
+                    // TODO: reduce clone
                     let (write_finished_pr, pipelined_write_pr) = if pipelined {
                         // If it's pipelined write and there are some modifications to write,
                         // the ProcessResult must be cloneable.
@@ -634,11 +635,16 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for_update_ts,
             wait_timeout,
             force,
+            return_values,
             ..
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let rows = keys.len();
-            let mut res = Ok(None);
+            let mut res = if !return_values {
+                Ok(PessimisticLockRes::Empty)
+            } else {
+                Ok(PessimisticLockRes::MultiValue { values: vec![] })
+            };
             for (k, should_not_exist) in keys {
                 match txn.acquire_pessimistic_lock(
                     k,
@@ -647,19 +653,24 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     lock_ttl,
                     for_update_ts,
                     force,
+                    return_values,
                 ) {
-                    Ok(r) => {
-                        if force {
-                            assert_eq!(rows, 1);
-                            res = Ok(r);
-                            break;
-                        }
+                    force_res @ Ok(PessimisticLockRes::ForceLock { .. }) => {
+                        assert!(force);
+                        assert_eq!(rows, 1);
+                        res = force_res.map_err(Error::from).map_err(StorageError::from);
+                        break;
                     }
+                    Ok(PessimisticLockRes::Value(value)) => {
+                        res.as_mut().unwrap().push(value);
+                    }
+                    Ok(PessimisticLockRes::Empty) => (),
                     e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                         res = e.map_err(Error::from).map_err(StorageError::from);
                         break;
                     }
                     Err(e) => return Err(Error::from(e)),
+                    _ => panic!("unexpected PessimisticLockRes"),
                 }
             }
 
