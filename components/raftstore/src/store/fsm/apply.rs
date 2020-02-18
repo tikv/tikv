@@ -3096,7 +3096,6 @@ pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::mem;
     use std::rc::Rc;
     use std::sync::atomic::*;
     use std::sync::*;
