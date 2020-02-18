@@ -64,7 +64,7 @@ impl CmdObserver for CdcObserver {
         self.cmd_batches.borrow_mut().push(CmdBatch::new(region_id));
     }
 
-    fn on_observe_cmd(&self, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, region_id: u64, cmd: Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
@@ -72,7 +72,7 @@ impl CmdObserver for CdcObserver {
             .push(region_id, cmd);
     }
 
-    fn on_flush(&self) {
+    fn on_flush_apply(&self) {
         if !self.cmd_batches.borrow().is_empty() {
             let batches = mem::replace(&mut *self.cmd_batches.borrow_mut(), Vec::default());
             if let Err(e) = self.sched.schedule(Task::MultiBatch { multi: batches }) {
@@ -114,11 +114,11 @@ mod tests {
         let observer = CdcObserver::new(scheduler);
 
         observer.on_prepare_for_apply(0);
-        observer.on_observe_cmd(
+        observer.on_apply_cmd(
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        observer.on_flush();
+        observer.on_flush_apply();
 
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi } => {

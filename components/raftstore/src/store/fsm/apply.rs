@@ -479,7 +479,7 @@ impl ApplyContext {
             }
         }
 
-        self.host.on_flush();
+        self.host.on_flush_apply();
 
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
 
@@ -949,7 +949,7 @@ impl ApplyDelegate {
         let cmd_cb = self.find_cb(index, term, is_conf_change);
         if self.observe_cmd.is_some() {
             let cmd = Cmd::new(index, cmd, resp.clone());
-            apply_ctx.host.on_observe_cmd(self.region_id(), cmd);
+            apply_ctx.host.on_apply_cmd(self.region_id(), cmd);
         }
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
@@ -3586,7 +3586,7 @@ mod tests {
             self.cmd_batches.borrow_mut().push(CmdBatch::new(region_id));
         }
 
-        fn on_observe_cmd(&self, region_id: u64, cmd: Cmd) {
+        fn on_apply_cmd(&self, region_id: u64, cmd: Cmd) {
             self.cmd_batches
                 .borrow_mut()
                 .last_mut()
@@ -3594,7 +3594,7 @@ mod tests {
                 .push(region_id, cmd);
         }
 
-        fn on_flush(&self) {
+        fn on_flush_apply(&self) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = mem::replace(&mut *self.cmd_batches.borrow_mut(), Vec::default());
                 for b in batches {

@@ -359,18 +359,28 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn on_observe_cmd(&self, region_id: u64, cmd: Cmd) {
-        for cmd_ob in &self.registry.cmd_observers {
-            cmd_ob
+    pub fn on_apply_cmd(&self, region_id: u64, cmd: Cmd) {
+        for i in 0..self.registry.cmd_observers.len() - 1 {
+            self.registry
+                .cmd_observers
+                .get(i)
+                .unwrap()
                 .observer
                 .inner()
-                .on_observe_cmd(region_id, cmd.clone())
+                .on_apply_cmd(region_id, cmd.clone())
         }
+        self.registry
+            .cmd_observers
+            .last()
+            .unwrap()
+            .observer
+            .inner()
+            .on_apply_cmd(region_id, cmd)
     }
 
-    pub fn on_flush(&self) {
+    pub fn on_flush_apply(&self) {
         for cmd_ob in &self.registry.cmd_observers {
-            cmd_ob.observer.inner().on_flush()
+            cmd_ob.observer.inner().on_flush_apply()
         }
     }
 
@@ -500,10 +510,10 @@ mod tests {
         fn on_prepare_for_apply(&self, _: u64) {
             self.called.fetch_add(11, Ordering::SeqCst);
         }
-        fn on_observe_cmd(&self, _: u64, _: Cmd) {
+        fn on_apply_cmd(&self, _: u64, _: Cmd) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
-        fn on_flush(&self) {
+        fn on_flush_apply(&self) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
     }
@@ -575,9 +585,9 @@ mod tests {
         assert_all!(&[&ob.called], &[55]);
         host.prepare_for_apply(0);
         assert_all!(&[&ob.called], &[66]);
-        host.on_observe_cmd(0, Cmd::new(0, RaftCmdRequest::default(), query_resp));
+        host.on_apply_cmd(0, Cmd::new(0, RaftCmdRequest::default(), query_resp));
         assert_all!(&[&ob.called], &[78]);
-        host.on_flush();
+        host.on_flush_apply();
         assert_all!(&[&ob.called], &[91]);
     }
 

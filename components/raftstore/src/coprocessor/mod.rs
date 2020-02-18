@@ -217,7 +217,6 @@ impl CmdBatch {
 pub trait CmdObserver: Coprocessor {
     /// Hook to call after applying write request.
     fn on_prepare_for_apply(&self, region_id: u64);
-    fn on_observe_cmd(&self, region_id: u64, cmd: Cmd);
-    fn on_flush(&self);
-    // fn on_batch_executed(&self, batch: &[CmdBatch]);
+    fn on_apply_cmd(&self, region_id: u64, cmd: Cmd);
+    fn on_flush_apply(&self);
 }
