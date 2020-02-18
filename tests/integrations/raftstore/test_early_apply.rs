@@ -58,6 +58,12 @@ where
         snaps.push((3, RocksSnapshot::new(cluster.get_raft_engine(3))));
     }
     cluster.clear_send_filters();
+    if mode == DataLost::FollowerAppend {
+        let filter = RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .msg_type(MessageType::MsgAppendResponse);
+        cluster.add_send_filter(CloneFilterFactory(filter));
+    }
     check(cluster);
     for (id, _) in &snaps {
         cluster.stop_node(*id);
@@ -66,6 +72,7 @@ where
     for (id, snap) in &snaps {
         cluster.restore_raft(1, *id, snap);
     }
+    cluster.clear_send_filters();
     for (id, _) in &snaps {
         cluster.run_node(*id).unwrap();
     }
@@ -116,15 +123,7 @@ fn test_early_apply(mode: DataLost) {
             |c| {
                 c.async_remove_peer(1, new_peer(1, 1)).unwrap();
             },
-            |c| must_get_none(&c.get_engine(1), b"k1"),
-            mode,
-        );
-        test(
-            &mut cluster,
-            |c| {
-                c.async_add_peer(1, new_peer(1, 1)).unwrap();
-            },
-            |c| must_get_equal(&c.get_engine(1), b"k1", b"v2"),
+            |c| must_get_none(&c.get_engine(1), b"k2"),
             mode,
         );
     }

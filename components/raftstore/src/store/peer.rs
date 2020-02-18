@@ -1380,7 +1380,13 @@ impl Peer {
                     self.raft_group.skip_bcast_commit(true);
                     self.last_urgent_proposal_idx = u64::MAX;
                 }
-                let apply = Apply::new(self.region_id, self.term(), committed_entries);
+                let last_commit_index = self.get_store().committed_index();
+                let apply = Apply::new(
+                    self.region_id,
+                    self.term(),
+                    committed_entries,
+                    last_commit_index,
+                );
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
