@@ -70,7 +70,7 @@ where
         cluster.run_node(*id).unwrap();
     }
 
-    if mode == DataLost::LeaderCommit {
+    if mode == DataLost::LeaderCommit || mode == DataLost::AllLost {
         cluster.must_transfer_leader(1, new_peer(1, 1));
     }
 }
@@ -85,7 +85,7 @@ fn test_early_apply(mode: DataLost) {
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster);
     cluster.run();
-    if mode == DataLost::LeaderCommit {
+    if mode == DataLost::LeaderCommit || mode == DataLost::AllLost {
         cluster.must_transfer_leader(1, new_peer(1, 1));
     } else {
         cluster.must_transfer_leader(1, new_peer(3, 3));

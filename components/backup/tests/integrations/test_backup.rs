@@ -134,7 +134,7 @@ impl TestSuite {
         let mut response = self.tikv_cli.raw_put(&request).unwrap();
         retry_req!(
             self.tikv_cli.raw_put(&request).unwrap(),
-            !response.has_region_error() && !response.error.is_empty(),
+            !response.has_region_error() && response.error.is_empty(),
             response,
             10,   // retry 10 times
             1000  // 1s timeout
