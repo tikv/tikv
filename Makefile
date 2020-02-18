@@ -266,7 +266,7 @@ pre-clippy: unset-override
 	@rustup component add clippy
 
 clippy: pre-clippy
-	@cargo clippy --all --all-targets --no-default-features --features "${ENABLE_FEATURES}" -- \
+	@cargo clippy --all --exclude cdc --exclude backup --all-targets --no-default-features --features "${ENABLE_FEATURES}" -- \
 		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
 		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
 		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \

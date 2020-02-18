@@ -178,6 +178,7 @@ impl TiKVServer {
     /// - If the config can't pass `validate()`
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
+    #[allow(clippy::useless_let_if_seq)]
     fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
         let mut version = Default::default();
         if config.dynamic_config {
