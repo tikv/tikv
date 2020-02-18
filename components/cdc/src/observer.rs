@@ -74,7 +74,7 @@ impl CmdObserver for CdcObserver {
 
     fn on_flush_apply(&self) {
         if !self.cmd_batches.borrow().is_empty() {
-            let batches = mem::replace(&mut *self.cmd_batches.borrow_mut(), Vec::default());
+            let batches = self.cmd_batches.replace(Vec::default());
             if let Err(e) = self.sched.schedule(Task::MultiBatch { multi: batches }) {
                 warn!("schedule cdc task failed"; "error" => ?e);
             }

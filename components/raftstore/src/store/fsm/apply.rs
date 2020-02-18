@@ -3604,7 +3604,7 @@ mod tests {
 
         fn on_flush_apply(&self) {
             if !self.cmd_batches.borrow().is_empty() {
-                let batches = mem::replace(&mut *self.cmd_batches.borrow_mut(), Vec::default());
+                let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {
                     if let Some(sink) = self.cmd_sink.as_ref() {
                         sink.lock().unwrap().send(b).unwrap();
