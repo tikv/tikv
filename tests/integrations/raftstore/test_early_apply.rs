@@ -21,6 +21,10 @@ enum DataLost {
     FollowerAppend,
     /// A follower loses commit index.
     FollowerCommit,
+    /// All the nodes loses data.
+    ///
+    /// Typically, both leader and followers lose commit index.
+    AllLost,
 }
 
 fn test<A, C>(cluster: &mut Cluster<NodeCluster>, action: A, check: C, mode: DataLost)
@@ -29,7 +33,7 @@ where
     C: FnOnce(&mut Cluster<NodeCluster>),
 {
     let filter = match mode {
-        DataLost::LeaderCommit => RegionPacketFilter::new(1, 1)
+        DataLost::AllLost | DataLost::LeaderCommit => RegionPacketFilter::new(1, 1)
             .msg_type(MessageType::MsgAppendResponse)
             .direction(Direction::Recv),
         DataLost::FollowerCommit => RegionPacketFilter::new(1, 3)
@@ -47,14 +51,25 @@ where
     } else {
         cluster.wait_last_index(1, 2, last_index + 1, Duration::from_secs(3));
     }
-    let snap = RocksSnapshot::new(cluster.get_raft_engine(1));
+    let mut snaps = vec![];
+    snaps.push((1, RocksSnapshot::new(cluster.get_raft_engine(1))));
+    if mode == DataLost::AllLost {
+        snaps.push((2, RocksSnapshot::new(cluster.get_raft_engine(2))));
+        snaps.push((3, RocksSnapshot::new(cluster.get_raft_engine(3))));
+    }
     cluster.clear_send_filters();
     check(cluster);
-    cluster.stop_node(1);
+    for (id, _) in &snaps {
+        cluster.stop_node(*id);
+    }
     // Simulate data lost in raft cf.
-    cluster.restore_raft(1, 1, &snap);
+    for (id, snap) in &snaps {
+        cluster.restore_raft(1, *id, snap);
+    }
+    for (id, _) in &snaps {
+        cluster.run_node(*id).unwrap();
+    }
 
-    cluster.run_node(1).unwrap();
     if mode == DataLost::LeaderCommit {
         cluster.must_transfer_leader(1, new_peer(1, 1));
     }
@@ -78,14 +93,14 @@ fn test_early_apply(mode: DataLost) {
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
 
-    /*test(
+    test(
         &mut cluster,
         |c| {
             c.async_put(b"k2", b"v2").unwrap();
         },
         |c| must_get_equal(&c.get_engine(1), b"k2", b"v2"),
         mode,
-    );*/
+    );
     let region = cluster.get_region(b"");
     test(
         &mut cluster,
@@ -95,7 +110,7 @@ fn test_early_apply(mode: DataLost) {
         |c| c.wait_region_split(&region),
         mode,
     );
-    if mode != DataLost::LeaderCommit {
+    if mode != DataLost::LeaderCommit && mode != DataLost::AllLost {
         test(
             &mut cluster,
             |c| {
@@ -128,4 +143,9 @@ fn test_follower_commit_early_apply() {
 #[test]
 fn test_follower_append_early_apply() {
     test_early_apply(DataLost::FollowerAppend)
+}
+
+#[test]
+fn test_all_node_crash() {
+    test_early_apply(DataLost::AllLost)
 }
