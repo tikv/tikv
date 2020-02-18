@@ -2163,14 +2163,16 @@ pub struct Apply {
     pub region_id: u64,
     pub term: u64,
     pub entries: Vec<Entry>,
+    pub last_commit_index: u64,
 }
 
 impl Apply {
-    pub fn new(region_id: u64, term: u64, entries: Vec<Entry>) -> Apply {
+    pub fn new(region_id: u64, term: u64, entries: Vec<Entry>, last_commit_index: u64) -> Apply {
         Apply {
             region_id,
             term,
             entries,
+            last_commit_index,
         }
     }
 }
@@ -2448,6 +2450,17 @@ impl ApplyFsm {
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
+        let prev_lci = self.delegate.apply_state.get_last_commit_index();
+        let curr_lci = apply.last_commit_index;
+        if prev_lci > curr_lci {
+            panic!(
+                "{} last commit index jump backward {} > {}",
+                self.delegate.tag, prev_lci, curr_lci
+            );
+        }
+        // The apply state may not be written to disk if entries is empty,
+        // which seems OK.
+        self.delegate.apply_state.set_last_commit_index(curr_lci);
 
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries);
@@ -3230,11 +3243,14 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![new_entry(2, 3, None)])));
+        router.schedule_task(
+            1,
+            Msg::apply(Apply::new(1, 1, vec![new_entry(2, 3, None)], 2)),
+        );
         // non registered region should be ignored.
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
 
-        router.schedule_task(2, Msg::apply(Apply::new(2, 11, vec![])));
+        router.schedule_task(2, Msg::apply(Apply::new(2, 11, vec![], 3)));
         // empty entries should be ignored.
         let reg_term = reg.term;
         validate(&router, 2, move |delegate| {
@@ -3254,7 +3270,7 @@ mod tests {
             &router,
             2,
             vec![
-                Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
+                Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)], 3)),
                 Msg::Snapshot(GenSnapTask::new(2, 0, tx)),
             ],
         );
@@ -3518,7 +3534,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![put_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![put_entry], 0)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses().len(), 3);
@@ -3538,7 +3554,7 @@ mod tests {
             .put_cf(CF_LOCK, b"k1", b"v1")
             .epoch(1, 3)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 1)));
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.region_id, 1);
         assert_eq!(apply_res.apply_state.get_applied_index(), 2);
@@ -3559,7 +3575,7 @@ mod tests {
             .epoch(1, 1)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 2)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_epoch_not_match());
         let apply_res = fetch_apply_res(&rx);
@@ -3572,7 +3588,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 3)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         let apply_res = fetch_apply_res(&rx);
@@ -3591,7 +3607,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![put_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![put_entry], 4)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         // stale command should be cleared.
         assert!(resp.get_header().get_error().has_stale_command());
@@ -3608,7 +3624,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_entry], 5)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         fetch_apply_res(&rx);
@@ -3618,7 +3634,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry], 6)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
@@ -3631,7 +3647,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry], 7)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert!(engines.kv.get(&dk_k1).unwrap().is_none());
@@ -3677,7 +3693,7 @@ mod tests {
             .epoch(0, 3)
             .build();
         let entries = vec![put_ok, ingest_ok, ingest_epoch_not_match];
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries)));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries, 8)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -3702,7 +3718,7 @@ mod tests {
                 .build();
             entries.push(put_entry);
         }
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries)));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries, 11)));
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
@@ -3858,7 +3874,7 @@ mod tests {
                 .epoch(epoch.get_conf_ver(), epoch.get_version())
                 .capture_resp(router, 3, 1, capture_tx.clone())
                 .build();
-            router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![split])));
+            router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![split], index_id - 1)));
             index_id += 1;
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap()
         };
