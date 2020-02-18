@@ -214,7 +214,7 @@ fn json_keys(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(!args.is_empty() && args.len() <= 2);
     if let Some(j) = args[0].as_json() {
         if let Some(list) = parse_json_path_list(&args[1..])? {
-            return Ok(j.keys(&list)?);
+            return Ok(j.as_ref().keys(&list)?);
         }
     }
     Ok(None)

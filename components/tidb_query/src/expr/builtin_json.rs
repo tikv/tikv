@@ -17,7 +17,7 @@ impl ScalarFunc {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
         let parser = JsonFuncArgsParser::new(row);
         if let Some(path_exprs) = parser.get_path_exprs(ctx, &self.children[1..])? {
-            return Ok(j.keys(&path_exprs)?.map(Cow::Owned));
+            return Ok(j.as_ref().as_ref().keys(&path_exprs)?.map(Cow::Owned));
         }
         Ok(None)
     }
