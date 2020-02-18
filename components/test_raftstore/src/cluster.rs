@@ -11,6 +11,7 @@ use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedState};
+use raft::eraftpb::ConfChangeType;
 use tempfile::{Builder, TempDir};
 
 //use engine::rocks;
@@ -692,6 +693,20 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn async_request(
+        &mut self,
+        mut req: RaftCmdRequest,
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        let region_id = req.get_header().get_region_id();
+        let leader = self.leader_of_region(region_id).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        let (cb, rx) = make_cb(&req);
+        self.sim
+            .rl()
+            .async_command_on_node(leader.get_store_id(), req, cb)?;
+        Ok(rx)
+    }
+
     pub fn async_put(
         &mut self,
         key: &[u8],
@@ -699,15 +714,40 @@ impl<T: Simulator> Cluster<T> {
     ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
         let mut region = self.get_region(key);
         let reqs = vec![new_put_cmd(key, value)];
-        let mut put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
-        let leader = self.leader_of_region(region.get_id()).unwrap();
-        put.mut_header().set_peer(leader.clone());
-        let (cb, rx) = make_cb(&put);
+        let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
+        self.async_request(put)
+    }
 
-        self.sim
-            .rl()
-            .async_command_on_node(leader.get_store_id(), put, cb)?;
-        Ok(rx)
+    pub fn async_remove_peer(
+        &mut self,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        let region = self
+            .pd_client
+            .get_region_by_id(region_id)
+            .wait()
+            .unwrap()
+            .unwrap();
+        let remove_peer = new_change_peer_request(ConfChangeType::RemoveNode, peer);
+        let req = new_admin_request(region_id, region.get_region_epoch(), remove_peer);
+        self.async_request(req)
+    }
+
+    pub fn async_add_peer(
+        &mut self,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        let region = self
+            .pd_client
+            .get_region_by_id(region_id)
+            .wait()
+            .unwrap()
+            .unwrap();
+        let add_peer = new_change_peer_request(ConfChangeType::AddNode, peer);
+        let req = new_admin_request(region_id, region.get_region_epoch(), add_peer);
+        self.async_request(req)
     }
 
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
@@ -831,7 +871,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> raft_serverpb::RaftLocalState {
         let key = keys::raft_state_key(region_id);
         self.get_raft_engine(store_id)
-            .get_msg_cf::<raft_serverpb::RaftLocalState>(CF_DEFAULT, &key)
+            .get_msg::<raft_serverpb::RaftLocalState>(&key)
             .unwrap()
             .unwrap()
     }
