@@ -124,9 +124,7 @@ use crate::properties::DecodeProperties;
 
 impl DecodeProperties for RocksUserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
-        match self.get(k.as_bytes()) {
-            Some(v) => Ok(v),
-            None => Err(tikv_util::codec::Error::KeyNotFound),
-        }
+        self.get(k.as_bytes())
+            .ok_or(tikv_util::codec::Error::KeyNotFound)
     }
 }

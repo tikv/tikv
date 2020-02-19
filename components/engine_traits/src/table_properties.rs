@@ -55,20 +55,15 @@ where
     }
 }
 
-pub trait TablePropertiesCollectionIter<PKey, P, UCP>
+pub trait TablePropertiesCollectionIter<PKey, P, UCP>: Iterator<Item = (PKey, P)>
 where
-    Self: Iterator<Item = (PKey, P)>,
     PKey: TablePropertiesKey,
     P: TableProperties<UCP>,
     UCP: UserCollectedProperties,
 {
 }
 
-pub trait TablePropertiesKey
-where
-    Self: Deref<Target = str>,
-{
-}
+pub trait TablePropertiesKey: Deref<Target = str> {}
 
 pub trait TableProperties<UCP>
 where
