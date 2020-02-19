@@ -2517,11 +2517,6 @@ impl ApplyFsm {
             return false;
         }
 
-        info!(
-            "all pending logs are applied";
-            "region_id" => self.delegate.region_id(),
-            "peer_id" => self.delegate.id(),
-        );
         true
     }
 
