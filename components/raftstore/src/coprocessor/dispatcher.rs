@@ -95,6 +95,7 @@ impl_box_observer!(
     RegionChangeObserver,
     WrappedRegionChangeObserver
 );
+impl_box_observer!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 
 /// Registry contains all registered coprocessors.
 #[derive(Default, Clone)]
@@ -105,6 +106,7 @@ pub struct Registry {
     split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
+    cmd_observers: Vec<Entry<BoxCmdObserver>>,
     // TODO: add endpoint
 }
 
@@ -148,6 +150,10 @@ impl Registry {
 
     pub fn register_region_change_observer(&mut self, priority: u32, rlo: BoxRegionChangeObserver) {
         push!(priority, rlo, self.region_change_observers);
+    }
+
+    pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver) {
+        push!(priority, rlo, self.cmd_observers);
     }
 }
 
@@ -347,6 +353,37 @@ impl CoprocessorHost {
         );
     }
 
+    pub fn prepare_for_apply(&self, region_id: u64) {
+        for cmd_ob in &self.registry.cmd_observers {
+            cmd_ob.observer.inner().on_prepare_for_apply(region_id)
+        }
+    }
+
+    pub fn on_apply_cmd(&self, region_id: u64, cmd: Cmd) {
+        for i in 0..self.registry.cmd_observers.len() - 1 {
+            self.registry
+                .cmd_observers
+                .get(i)
+                .unwrap()
+                .observer
+                .inner()
+                .on_apply_cmd(region_id, cmd.clone())
+        }
+        self.registry
+            .cmd_observers
+            .last()
+            .unwrap()
+            .observer
+            .inner()
+            .on_apply_cmd(region_id, cmd)
+    }
+
+    pub fn on_flush_apply(&self) {
+        for cmd_ob in &self.registry.cmd_observers {
+            cmd_ob.observer.inner().on_flush_apply()
+        }
+    }
+
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
             entry.observer.inner().stop();
@@ -355,6 +392,9 @@ impl CoprocessorHost {
             entry.observer.inner().stop();
         }
         for entry in &self.registry.split_check_observers {
+            entry.observer.inner().stop();
+        }
+        for entry in &self.registry.cmd_observers {
             entry.observer.inner().stop();
         }
     }
@@ -466,6 +506,18 @@ mod tests {
         }
     }
 
+    impl CmdObserver for TestCoprocessor {
+        fn on_prepare_for_apply(&self, _: u64) {
+            self.called.fetch_add(11, Ordering::SeqCst);
+        }
+        fn on_apply_cmd(&self, _: u64, _: Cmd) {
+            self.called.fetch_add(12, Ordering::SeqCst);
+        }
+        fn on_flush_apply(&self) {
+            self.called.fetch_add(13, Ordering::SeqCst);
+        }
+    }
+
     macro_rules! assert_all {
         ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
@@ -496,6 +548,8 @@ mod tests {
             .register_role_observer(1, BoxRoleObserver::new(ob.clone()));
         host.registry
             .register_region_change_observer(1, BoxRegionChangeObserver::new(ob.clone()));
+        host.registry
+            .register_cmd_observer(1, BoxCmdObserver::new(ob.clone()));
         let region = Region::default();
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
@@ -514,7 +568,9 @@ mod tests {
         assert_all!(&[&ob.called], &[10]);
         host.pre_apply(&region, &query_req);
         assert_all!(&[&ob.called], &[15]);
-        host.post_apply(&region, &mut RaftCmdResponse::default());
+        let mut query_resp = admin_resp;
+        query_resp.clear_admin_response();
+        host.post_apply(&region, &mut query_resp);
         assert_all!(&[&ob.called], &[21]);
 
         host.on_role_change(&region, StateRole::Leader);
@@ -527,6 +583,12 @@ mod tests {
         assert_all!(&[&ob.called], &[45]);
         host.pre_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
+        host.prepare_for_apply(0);
+        assert_all!(&[&ob.called], &[66]);
+        host.on_apply_cmd(0, Cmd::new(0, RaftCmdRequest::default(), query_resp));
+        assert_all!(&[&ob.called], &[78]);
+        host.on_flush_apply();
+        assert_all!(&[&ob.called], &[91]);
     }
 
     #[test]
