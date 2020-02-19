@@ -9,9 +9,10 @@ use futures::future::{lazy, Future};
 use kvproto::cdcpb::*;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
+use raftstore::coprocessor::{Cmd, CmdBatch, CmdObserver, ObserverContext, RoleObserver};
+use raftstore::store::fsm::{ApplyRouter, ApplyTask, ChangeCmd};
+use raftstore::store::msg::{Callback, ReadResponse};
 use resolved_ts::Resolver;
-use tikv::raftstore::store::fsm::{ApplyRouter, ApplyTask};
-use tikv::raftstore::store::msg::{Callback, ReadResponse};
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntryScanner;
@@ -35,6 +36,9 @@ pub enum Task {
         downstream_id: Option<DownstreamID>,
         err: Option<Error>,
     },
+    MultiBatch {
+        multi: Vec<CmdBatch>,
+    },
     MinTS {
         min_ts: TimeStamp,
     },
@@ -48,7 +52,6 @@ pub enum Task {
         downstream_id: DownstreamID,
         entries: EntryBatch,
     },
-    #[cfg(not(validate))]
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
@@ -80,6 +83,7 @@ impl fmt::Debug for Task {
                 .field("err", err)
                 .field("downstream_id", downstream_id)
                 .finish(),
+            Task::MultiBatch { multi } => de.field("multibatch", &multi.len()).finish(),
             Task::MinTS { ref min_ts } => de.field("min_ts", min_ts).finish(),
             Task::ResolverReady { ref region_id, .. } => de.field("region_id", region_id).finish(),
             Task::IncrementalScan {
@@ -91,7 +95,6 @@ impl fmt::Debug for Task {
                 .field("downstream", &downstream_id)
                 .field("scan_entries", &entries.len())
                 .finish(),
-            #[cfg(not(validate))]
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
         }
     }
@@ -101,6 +104,7 @@ pub struct Endpoint {
     capture_regions: HashMap<u64, Delegate>,
     scheduler: Scheduler<Task>,
     apply_router: ApplyRouter,
+    observer: CdcObserver,
 
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
@@ -115,6 +119,7 @@ impl Endpoint {
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         apply_router: ApplyRouter,
+        observer: CdcObserver,
     ) -> Endpoint {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         Endpoint {
@@ -124,6 +129,7 @@ impl Endpoint {
             timer: SteadyTimer::default(),
             workers,
             apply_router,
+            observer,
             scan_batch_size: 1024,
             min_ts_interval: Duration::from_secs(10),
         }
@@ -140,6 +146,10 @@ impl Endpoint {
     pub fn on_register(&mut self, request: ChangeDataRequest, _downstream: Downstream) {
         let region_id = request.region_id;
         info!("cdc register region"; "region_id" => region_id);
+        unimplemented!()
+    }
+
+    pub fn on_multi_batch(&mut self, _multi: Vec<CmdBatch>) {
         unimplemented!()
     }
 
@@ -341,7 +351,7 @@ impl Runnable<Task> for Endpoint {
             } => {
                 self.on_incremental_scan(region_id, downstream_id, entries);
             }
-            #[cfg(not(validate))]
+            Task::MultiBatch { multi } => self.on_multi_batch(multi),
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
             }

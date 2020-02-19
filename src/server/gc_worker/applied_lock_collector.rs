@@ -11,11 +11,11 @@ use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
-use crate::raftstore::coprocessor::{
+use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
+use raftstore::coprocessor::{
     ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Coprocessor,
     CoprocessorHost, ObserverContext, QueryObserver,
 };
-use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
 
 // TODO: Use new error type for GCWorker instead of storage::Error.
 use super::{Error, ErrorInner, Result};

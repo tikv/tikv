@@ -47,7 +47,7 @@ where
         if !disabled_targets.is_empty() {
             // The format of the returned value from module() would like this:
             // ```
-            //  tikv::raftstore::store::fsm::store
+            //  raftstore::store::fsm::store
             //  tikv_util
             //  tikv_util::config::check_data_dir
             //  raft::raft

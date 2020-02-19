@@ -14,10 +14,10 @@ use kvproto::raft_cmdpb::{
 };
 use tokio_sync::oneshot;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
 use crate::server::gc_worker::GcWorkerConfigManager;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::msg::Callback;
 use tikv_util::metrics;
 
 use tikv_alloc;
@@ -51,7 +51,6 @@ pub struct Service<T: RaftStoreRouter> {
     dynamic_config: bool,
 }
 
-// TODO: disable modify_tikv_config when dynamic-config feature is enable
 impl<T: RaftStoreRouter> Service<T> {
     /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
     pub fn new(
