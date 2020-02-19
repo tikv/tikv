@@ -23,14 +23,16 @@ impl TablePropertiesExt for PanicEngine {
     }
 }
 
-type IA = PanicTablePropertiesCollectionIter;
-type PKeyA = PanicTablePropertiesKey;
-type PA = PanicTableProperties;
-type UCPA = PanicUserCollectedProperties;
-
 pub struct PanicTablePropertiesCollection;
 
-impl TablePropertiesCollection<IA, PKeyA, PA, UCPA> for PanicTablePropertiesCollection {
+impl
+    TablePropertiesCollection<
+        PanicTablePropertiesCollectionIter,
+        PanicTablePropertiesKey,
+        PanicTableProperties,
+        UCPanicTableProperties,
+    > for PanicTablePropertiesCollection
+{
     fn iter(&self) -> PanicTablePropertiesCollectionIter {
         panic!()
     }
@@ -42,7 +44,14 @@ impl TablePropertiesCollection<IA, PKeyA, PA, UCPA> for PanicTablePropertiesColl
 
 pub struct PanicTablePropertiesCollectionIter;
 
-impl TablePropertiesCollectionIter<PKeyA, PA, UCPA> for PanicTablePropertiesCollectionIter {}
+impl
+    TablePropertiesCollectionIter<
+        PanicTablePropertiesKey,
+        PanicTableProperties,
+        UCPanicTableProperties,
+    > for PanicTablePropertiesCollectionIter
+{
+}
 
 impl Iterator for PanicTablePropertiesCollectionIter {
     type Item = (PanicTablePropertiesKey, PanicTableProperties);
@@ -66,7 +75,7 @@ impl Deref for PanicTablePropertiesKey {
 
 pub struct PanicTableProperties;
 
-impl TableProperties<UCPA> for PanicTableProperties {
+impl TableProperties<UCPanicTableProperties> for PanicTableProperties {
     fn num_entries(&self) -> u64 {
         panic!()
     }

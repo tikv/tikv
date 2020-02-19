@@ -35,11 +35,6 @@ impl TablePropertiesExt for RocksEngine {
     }
 }
 
-type IA = RocksTablePropertiesCollectionIter;
-type PKeyA = RocksTablePropertiesKey;
-type PA = RocksTableProperties;
-type UCPA = RocksUserCollectedProperties;
-
 pub struct RocksTablePropertiesCollection(raw::TablePropertiesCollection);
 
 impl RocksTablePropertiesCollection {
@@ -48,7 +43,14 @@ impl RocksTablePropertiesCollection {
     }
 }
 
-impl TablePropertiesCollection<IA, PKeyA, PA, UCPA> for RocksTablePropertiesCollection {
+impl
+    TablePropertiesCollection<
+        RocksTablePropertiesCollectionIter,
+        RocksTablePropertiesKey,
+        RocksTableProperties,
+        RocksTableProperties,
+    > for RocksTablePropertiesCollection
+{
     fn iter(&self) -> RocksTablePropertiesCollectionIter {
         RocksTablePropertiesCollectionIter(self.0.iter())
     }
@@ -60,7 +62,14 @@ impl TablePropertiesCollection<IA, PKeyA, PA, UCPA> for RocksTablePropertiesColl
 
 pub struct RocksTablePropertiesCollectionIter(raw::TablePropertiesCollectionIter);
 
-impl TablePropertiesCollectionIter<PKeyA, PA, UCPA> for RocksTablePropertiesCollectionIter {}
+impl
+    TablePropertiesCollectionIter<
+        RocksTablePropertiesKey,
+        RocksTableProperties,
+        RocksTableProperties,
+    > for RocksTablePropertiesCollectionIter
+{
+}
 
 impl Iterator for RocksTablePropertiesCollectionIter {
     type Item = (RocksTablePropertiesKey, RocksTableProperties);
@@ -86,7 +95,7 @@ impl Deref for RocksTablePropertiesKey {
 
 pub struct RocksTableProperties(raw::TableProperties);
 
-impl TableProperties<UCPA> for RocksTableProperties {
+impl TableProperties<RocksTableProperties> for RocksTableProperties {
     fn num_entries(&self) -> u64 {
         self.0.num_entries()
     }
