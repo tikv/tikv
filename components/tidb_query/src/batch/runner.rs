@@ -1,12 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use kvproto::coprocessor::KeyRange;
-use tipb::{self, ExecType, ExecutorExecutionSummary};
-use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
-
+use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::deadline::Deadline;
+use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
+use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
+use yatp::task::future::reschedule;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
@@ -25,6 +28,8 @@ pub const BATCH_MAX_SIZE: usize = 1024;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
+
+const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
     /// The deadline of this handler. For each check point (e.g. each iteration) we need to check
@@ -107,6 +112,13 @@ impl BatchExecutorsRunner<()> {
 
         Ok(())
     }
+}
+
+#[inline]
+fn is_arrow_encodable(schema: &[FieldType]) -> bool {
+    schema
+        .iter()
+        .all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
 pub fn build_executors<S: Storage + 'static>(
@@ -292,10 +304,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
-        let encode_type = req.get_encode_type();
 
         let out_most_executor =
             build_executors(req.take_executors().into(), storage, ranges, config.clone())?;
+
+        let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
+            EncodeType::TypeDefault
+        } else {
+            req.get_encode_type()
+        };
 
         // Check output offsets
         let output_offsets = req.take_output_offsets();
@@ -329,7 +346,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
 
+        let mut time_slice_start = Instant::now();
         loop {
+            if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                reschedule().await;
+                time_slice_start = Instant::now();
+            }
             self.deadline.check()?;
 
             let mut result = self.out_most_executor.next_batch(batch_size);
@@ -364,7 +386,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                             data.reserve(result.physical_columns.maximum_encoded_size_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
-                            )?);
+                            ));
                             result.physical_columns.encode_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -376,10 +398,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         _ => {
                             // For the default or unsupported encode type, use datum format.
                             self.encode_type = EncodeType::TypeDefault;
-                            data.reserve(result.physical_columns.maximum_encoded_size(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                            )?);
+                            data.reserve(
+                                result.physical_columns.maximum_encoded_size(
+                                    &result.logical_rows,
+                                    &self.output_offsets,
+                                ),
+                            );
                             result.physical_columns.encode(
                                 &result.logical_rows,
                                 &self.output_offsets,
