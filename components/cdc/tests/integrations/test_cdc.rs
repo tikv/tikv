@@ -57,9 +57,9 @@ impl TestSuite {
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost| {
                     host.registry
-                        .register_cmd_observer(100, BoxCmdObserver::new(cdc_ob.clone()) as _);
+                        .register_cmd_observer(100, BoxCmdObserver::new(cdc_ob.clone()));
                     host.registry
-                        .register_role_observer(100, BoxRoleObserver::new(cdc_ob.clone()) as _);
+                        .register_role_observer(100, BoxRoleObserver::new(cdc_ob.clone()));
                 },
             ));
             endpoints.insert(id, worker);

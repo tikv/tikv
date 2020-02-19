@@ -475,10 +475,10 @@ impl TiKVServer {
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         coprocessor_host
             .registry
-            .register_cmd_observer(100, BoxCmdObserver::new(cdc_ob.clone()) as _);
+            .register_cmd_observer(100, BoxCmdObserver::new(cdc_ob.clone()));
         coprocessor_host
             .registry
-            .register_role_observer(100, BoxRoleObserver::new(cdc_ob.clone()) as _);
+            .register_role_observer(100, BoxRoleObserver::new(cdc_ob.clone()));
 
         let server_config = Arc::new(self.config.server.clone());
 

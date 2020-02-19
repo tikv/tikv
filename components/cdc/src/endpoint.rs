@@ -241,10 +241,6 @@ impl Endpoint {
         }
     }
 
-    pub fn on_multi_batch(&mut self, _multi: Vec<CmdBatch>) {
-        unimplemented!()
-    }
-
     pub fn on_incremental_scan(
         &mut self,
         region_id: u64,
