@@ -93,27 +93,40 @@ impl_into!(bool, Bool);
 impl_into!(String, String);
 impl_into!(ConfigChange, Module);
 
+pub struct RollbackCollector<'a, 'b, T> {
+    pub cfg: &'a T,
+    change: &'b mut ConfigChange,
+}
+
+impl<'a, 'b, T> RollbackCollector<'a, 'b, T> {
+    pub fn new(cfg: &'a T, change: &'b mut ConfigChange) -> Self {
+        RollbackCollector { cfg, change }
+    }
+
+    pub fn push(&mut self, name: String, val: impl Into<ConfigValue>) {
+        self.change.insert(name, val.into());
+    }
+}
+
 #[macro_export]
 macro_rules! rollback_or {
     ($rollback: ident, $($name: ident),+ , $else_branch: block) => {
-        if let Some((valid_cfg, change)) = &mut $rollback {
+        if let Some(rb_collector) = &mut $rollback {
             $(
-                change.insert(
+                rb_collector.push(
                     stringify!($name).to_owned(),
-                    ConfigValue::from(valid_cfg.$name.clone()),
+                    rb_collector.cfg.$name.clone()
                 );
             )*
         } else $else_branch
     };
     ($rollback: ident, $name: ident, $valid_or_rb: expr, $else_branch: expr) => {
-        if let Some((valid_cfg, change)) = &mut $rollback {
+        if let Some(rb_collector) = &mut $rollback {
             let mut r = std::collections::HashMap::new();
-            let _ = $valid_or_rb(Some((&valid_cfg.$name, &mut r)));
+            let sub_rb_collector = RollbackCollector::new(&rb_collector.cfg.$name, &mut r);
+            let _ = $valid_or_rb(Some(sub_rb_collector));
             if !r.is_empty() {
-                change.insert(
-                    stringify!($name).to_owned(),
-                    ConfigValue::from(r),
-                );
+                rb_collector.push(stringify!($name).to_owned(), r);
             }
         } else {$else_branch;}
     };

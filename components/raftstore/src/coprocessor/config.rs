@@ -3,7 +3,7 @@
 use super::Result;
 use crate::store::SplitCheckTask;
 
-use configuration::{rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration};
+use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
 use tikv_util::config::ReadableSize;
 use tikv_util::worker::Scheduler;
 
@@ -60,7 +60,7 @@ impl Config {
 
     pub fn validate_or_rollback(
         &self,
-        mut rb_collector: Option<(&Config, &mut ConfigChange)>,
+        mut rb_collector: Option<RollbackCollector<Config>>,
     ) -> Result<()> {
         if self.region_max_size.0 < self.region_split_size.0 {
             rollback_or!(rb_collector, region_max_size, region_split_size, {

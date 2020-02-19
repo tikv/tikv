@@ -6,7 +6,9 @@ use std::u64;
 use time::Duration as TimeDuration;
 
 use crate::{coprocessor, Result};
-use configuration::{rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration};
+use configuration::{
+    rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, RollbackCollector,
+};
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 lazy_static! {
@@ -257,7 +259,7 @@ impl Config {
 
     pub fn validate_or_rollback(
         &mut self,
-        mut rb_collector: Option<(&Config, &mut ConfigChange)>,
+        mut rb_collector: Option<RollbackCollector<Config>>,
     ) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             rollback_or!(rb_collector, raft_heartbeat_ticks, {

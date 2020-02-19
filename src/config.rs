@@ -21,6 +21,7 @@ use kvproto::configpb::{self, StatusCode};
 
 use configuration::{
     rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult,
+    RollbackCollector,
 };
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
@@ -1822,10 +1823,11 @@ impl TiKvConfig {
     /// the valid config
     pub fn validate_with_rollback(
         &mut self,
-        valid_cfg: &TiKvConfig,
+        cfg: &TiKvConfig,
     ) -> Result<ConfigChange, Box<dyn Error>> {
         let mut c = HashMap::new();
-        self.validate_or_rollback(Some((valid_cfg, &mut c)))?;
+        let rb_collector = RollbackCollector::new(cfg, &mut c);
+        self.validate_or_rollback(Some(rb_collector))?;
         Ok(c)
     }
 
@@ -1834,7 +1836,7 @@ impl TiKvConfig {
     // will be collected and insert into `rb_collector`
     fn validate_or_rollback(
         &mut self,
-        mut rb_collector: Option<(&TiKvConfig, &mut ConfigChange)>,
+        mut rb_collector: Option<RollbackCollector<TiKvConfig>>,
     ) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
