@@ -2153,11 +2153,9 @@ dependencies = [
 
 [[package]]
 name = "murmur3"
-version = "0.4.0"
-source = "git+https://github.com/pingcap/murmur3.git?rev=4af9e1a8f2d4206d90d81f11e513fb03c87208bf#4af9e1a8f2d4206d90d81f11e513fb03c87208bf"
-dependencies = [
- "byteorder",
-]
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ead5388e485d38e622630c6b05afd3761a6701ff15c55b279ea5b31dcb62cff"
 
 [[package]]
 name = "native-tls"

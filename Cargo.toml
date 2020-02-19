@@ -91,6 +91,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "components/log_wrappers" }
 mime = "0.3.13"
 more-asserts = "0.1"
+murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 pd_client = { path = "components/pd_client", default-features = false }
 prost = "0.5.0"
@@ -129,10 +130,6 @@ txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
 vlog = "0.1.4"
-
-[dependencies.murmur3]
-git = "https://github.com/pingcap/murmur3.git"
-rev = "4af9e1a8f2d4206d90d81f11e513fb03c87208bf"
 
 [dependencies.prometheus]
 git = "https://github.com/tikv/rust-prometheus.git"
