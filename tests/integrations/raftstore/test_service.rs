@@ -16,15 +16,16 @@ use raft::eraftpb;
 use engine::rocks::Writable;
 use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::SnapManager;
 use tempfile::Builder;
 use test_raftstore::*;
+use tikv::config::ConfigHandler;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv_util::worker::FutureWorker;
+use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
@@ -144,22 +145,20 @@ fn must_kv_commit(
     assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
 }
 
-fn must_physical_scan_lock(client: &TikvClient, ctx: Context, max_ts: u64) -> Vec<LockInfo> {
+fn must_physical_scan_lock(
+    client: &TikvClient,
+    ctx: Context,
+    max_ts: u64,
+    start_key: &[u8],
+    limit: usize,
+) -> Vec<LockInfo> {
     let mut req = PhysicalScanLockRequest::default();
     req.set_context(ctx);
     req.set_max_ts(max_ts);
-    let rx = client.physical_scan_lock(&req).unwrap();
-    rx.map(|mut resp| {
-        assert!(resp.get_error().is_empty());
-        resp.take_locks()
-    })
-    .collect()
-    .wait()
-    .unwrap()
-    .into_iter()
-    .map(|v| v.into_iter())
-    .flatten()
-    .collect()
+    req.set_start_key(start_key.to_owned());
+    req.set_limit(limit as _);
+    let mut resp = client.physical_scan_lock(&req).unwrap();
+    resp.take_locks().into()
 }
 
 #[test]
@@ -499,6 +498,7 @@ fn test_coprocessor() {
 fn test_physical_scan_lock() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
 
+    // Generate kvs like k10, v10, ts=10; k11, v11, ts=11; ...
     let kv: Vec<_> = (10..20)
         .map(|i| (i, vec![b'k', i as u8], vec![b'v', i as u8]))
         .collect();
@@ -532,18 +532,25 @@ fn test_physical_scan_lock() {
     };
 
     check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 30),
+        &must_physical_scan_lock(&client, ctx.clone(), 30, b"", 100),
         &all_locks,
     );
     check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 15),
+        &must_physical_scan_lock(&client, ctx.clone(), 15, b"", 100),
         &all_locks[0..=5],
     );
     check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 10),
+        &must_physical_scan_lock(&client, ctx.clone(), 10, b"", 100),
         &all_locks[0..1],
     );
-    check_result(&must_physical_scan_lock(&client, ctx, 9), &[]);
+    check_result(
+        &must_physical_scan_lock(&client, ctx.clone(), 9, b"", 100),
+        &[],
+    );
+    check_result(
+        &must_physical_scan_lock(&client, ctx, 30, &[b'k', 3], 5),
+        &all_locks[3..8],
+    );
 }
 
 #[test]
@@ -910,6 +917,8 @@ fn test_double_run_node() {
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
     let cfg_controller = Default::default();
+    let config_client =
+        ConfigHandler::start(String::new(), cfg_controller, pd_worker.scheduler()).unwrap();
     let e = node
         .start(
             engines,
@@ -919,7 +928,8 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
-            cfg_controller,
+            Worker::new("split"),
+            Box::new(config_client),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

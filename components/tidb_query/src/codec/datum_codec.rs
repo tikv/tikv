@@ -178,7 +178,7 @@ pub trait DatumPayloadEncoder:
 
     #[inline]
     fn write_datum_payload_json(&mut self, v: &Json) -> Result<()> {
-        self.write_json(v).map_err(|_| {
+        self.write_json(v.as_ref()).map_err(|_| {
             Error::InvalidDataType("Failed to encode datum payload from json".to_owned())
         })
     }
