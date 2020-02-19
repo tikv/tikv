@@ -56,6 +56,7 @@ use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
+const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -236,6 +237,9 @@ pub struct Peer {
 
     /// Write Statistics for PD to schedule hot spot.
     pub peer_stat: PeerStat,
+
+    /// Time of the last attempt to wake up inactive leader.
+    pub bcast_wake_up_time: Option<Instant>,
 }
 
 impl Peer {
@@ -312,6 +316,7 @@ impl Peer {
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
+            bcast_wake_up_time: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1612,7 +1617,7 @@ impl Peer {
     /// Propose a request.
     ///
     /// Return true means the request has been proposed successfully.
-    pub fn propose<T, C>(
+    pub fn propose<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         cb: Callback<RocksEngine>,
@@ -1953,7 +1958,7 @@ impl Peer {
     // 1. The region is in merging or splitting;
     // 2. The message is stale and dropped by the Raft group internally;
     // 3. There is already a read request proposed in the current lease;
-    fn read_index<T, C>(
+    fn read_index<T: Transport, C>(
         &mut self,
         poll_ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
@@ -2006,6 +2011,14 @@ impl Peer {
                 box_err!("{} can not read index due to no leader", self.tag),
             );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
+            if poll_ctx.cfg.hibernate_regions
+                && (self.bcast_wake_up_time.is_none()
+                    || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                        >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL))
+            {
+                self.bcast_wake_up_message(&mut poll_ctx.trans);
+                self.bcast_wake_up_time = Some(Instant::now());
+            }
             cb.invoke_with_response(err_resp);
             return false;
         }
@@ -2016,6 +2029,7 @@ impl Peer {
 
         poll_ctx.raft_metrics.propose.read_index += 1;
 
+        self.bcast_wake_up_time = None;
         let id = Uuid::new_v4();
         self.raft_group.read_index(id.as_bytes().to_vec());
 

@@ -22,7 +22,8 @@ use kvproto::raft_cmdpb::{
     StatusResponse,
 };
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+    ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
+    RegionLocalState,
 };
 use pd_client::PdClient;
 use protobuf::Message;
@@ -809,7 +810,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_extra_msg() {
-            // now noop
+            self.on_extra_message(&msg);
             return Ok(());
         }
 
@@ -835,7 +836,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
             self.reset_raft_tick(GroupState::Chaos);
-        } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
+        } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id()
+            || msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+        {
             self.reset_raft_tick(GroupState::Ordered);
         }
 
@@ -850,6 +853,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         self.fsm.has_ready = true;
         Ok(())
+    }
+
+    fn on_extra_message(&mut self, msg: &RaftMessage) {
+        let extra_msg = msg.get_extra_msg();
+        match extra_msg.get_type() {
+            ExtraMessageType::MsgRegionWakeUp => {
+                self.reset_raft_tick(GroupState::Ordered);
+            }
+        }
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
