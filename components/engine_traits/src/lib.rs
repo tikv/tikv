@@ -117,13 +117,10 @@
 //!   }
 //!
 //!   trait IOLimiter { }
+//!   ```
 //!
 //!   ```ignore
 //!   // in engine_rocks
-//!
-//!   struct RocksEngine;
-//!
-//!   struct RocksIOLimiter;
 //!
 //!   impl IOLimiterExt for RocksEngine {
 //!       type IOLimiter = RocksIOLimiter;

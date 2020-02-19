@@ -73,7 +73,7 @@ tokio-core = "0.1"
 tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types", default-features = false }
-uuid = { version = "0.7", features = [ "serde", "v4" ] }
+uuid = { version = "0.7", features = ["serde", "v4"] }
 
 [dependencies.prometheus]
 git = "https://github.com/tikv/rust-prometheus.git"
