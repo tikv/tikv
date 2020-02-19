@@ -5,6 +5,8 @@ edition = "2018"
 publish = false
 
 [dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+futures-executor = "0.3"
 crc32fast = "1.2"
 engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage" }
@@ -26,7 +28,7 @@ tokio-sync = "0.1.7"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus.git"
+git = "https://github.com/tikv/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 default-features = false
 

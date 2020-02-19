@@ -4,6 +4,7 @@ mod storage_impl;
 
 pub use self::storage_impl::TiKVStorage;
 
+use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query::storage::IntervalRange;
@@ -16,7 +17,6 @@ use crate::storage::{Statistics, Store};
 pub fn build_handler<S: Store + 'static>(
     req: DagRequest,
     ranges: Vec<KeyRange>,
-    start_ts: u64,
     store: S,
     data_version: Option<u64>,
     deadline: Deadline,
@@ -24,20 +24,10 @@ pub fn build_handler<S: Store + 'static>(
     is_streaming: bool,
     enable_batch_if_possible: bool,
 ) -> Result<Box<dyn RequestHandler>> {
-    let mut is_batch = false;
+    // TODO: support batch executor while handling server-side streaming requests
+    // https://github.com/tikv/tikv/pull/5945
     if enable_batch_if_possible && !is_streaming {
-        let is_supported =
-            tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
-        if let Err(e) = is_supported {
-            // Not supported, will fallback to normal executor.
-            // To avoid user worries, let's output success message.
-            debug!("Successfully use normal Coprocessor query engine"; "start_ts" => start_ts, "reason" => %e);
-        } else {
-            is_batch = true;
-        }
-    }
-
-    if is_batch {
+        tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors())?;
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
         Ok(BatchDAGHandler::new(req, ranges, store, data_version, deadline)?.into_boxed())
     } else {
@@ -84,8 +74,9 @@ impl DAGHandler {
     }
 }
 
+#[async_trait]
 impl RequestHandler for DAGHandler {
-    fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<Response> {
         handle_qe_response(self.runner.handle_request(), self.data_version)
     }
 
@@ -123,9 +114,10 @@ impl BatchDAGHandler {
     }
 }
 
+#[async_trait]
 impl RequestHandler for BatchDAGHandler {
-    fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.runner.handle_request(), self.data_version)
+    async fn handle_request(&mut self) -> Result<Response> {
+        handle_qe_response(self.runner.handle_request().await, self.data_version)
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {

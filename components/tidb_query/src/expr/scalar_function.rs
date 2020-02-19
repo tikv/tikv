@@ -296,7 +296,10 @@ impl ScalarFunc {
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
-            | ScalarFuncSig::JsonDepthSig => (1, 1),
+            | ScalarFuncSig::JsonDepthSig
+            | ScalarFuncSig::RandomBytes => (1, 1),
+
+            ScalarFuncSig::JsonLengthSig => (1, 2),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -382,6 +385,7 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
+            | ScalarFuncSig::Uuid
             | ScalarFuncSig::Pi => (0, 0),
 
             // unimplemented signature
@@ -461,7 +465,6 @@ impl ScalarFunc {
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Password
             | ScalarFuncSig::Quarter
-            | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::RowCount
@@ -511,7 +514,6 @@ impl ScalarFunc {
             | ScalarFuncSig::UtcTimestampWithoutArg
             | ScalarFuncSig::UtcTimeWithArg
             | ScalarFuncSig::UtcTimeWithoutArg
-            | ScalarFuncSig::Uuid
             | ScalarFuncSig::ValuesDecimal
             | ScalarFuncSig::ValuesDuration
             | ScalarFuncSig::ValuesInt
@@ -530,7 +532,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonSearchSig
             | ScalarFuncSig::JsonStorageSizeSig
             | ScalarFuncSig::JsonKeysSig
-            | ScalarFuncSig::JsonLengthSig
             | ScalarFuncSig::JsonValidJsonSig
             | ScalarFuncSig::JsonContainsSig
             | ScalarFuncSig::JsonKeys2ArgsSig
@@ -868,6 +869,7 @@ dispatch_call! {
         UncompressedLength => uncompressed_length,
         Strcmp => strcmp,
         Instr => instr,
+        JsonLengthSig => json_length,
         Ord => ord,
         InstrUtf8 => instr_utf8,
         JsonDepthSig => json_depth,
@@ -1006,6 +1008,7 @@ dispatch_call! {
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
         Md5 => md5,
+        Uuid => uuid,
         Sha1 => sha1,
         Sha2 => sha2,
         Elt => elt,
@@ -1015,6 +1018,7 @@ dispatch_call! {
         Uncompress => uncompress,
         Quote => quote,
         OctInt => oct_int,
+        RandomBytes => random_bytes,
 
         Conv => conv,
         Trim1Arg => trim_1_arg,
@@ -1395,6 +1399,7 @@ mod tests {
                     ScalarFuncSig::OctInt,
                     ScalarFuncSig::Ord,
                     ScalarFuncSig::JsonDepthSig,
+                    ScalarFuncSig::RandomBytes,
                 ],
                 1,
                 1,
@@ -1510,10 +1515,12 @@ mod tests {
                     ScalarFuncSig::SubTimeDateTimeNull,
                     ScalarFuncSig::SubTimeDurationNull,
                     ScalarFuncSig::Pi,
+                    ScalarFuncSig::Uuid,
                 ],
                 0,
                 0,
             ),
+            (vec![ScalarFuncSig::JsonLengthSig], 1, 2),
         ];
         for (sigs, min, max) in cases {
             for sig in sigs {
@@ -1610,7 +1617,6 @@ mod tests {
             ScalarFuncSig::OctString,
             ScalarFuncSig::Password,
             ScalarFuncSig::Quarter,
-            ScalarFuncSig::RandomBytes,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::RowCount,
@@ -1660,7 +1666,6 @@ mod tests {
             ScalarFuncSig::UtcTimestampWithoutArg,
             ScalarFuncSig::UtcTimeWithArg,
             ScalarFuncSig::UtcTimeWithoutArg,
-            ScalarFuncSig::Uuid,
             ScalarFuncSig::ValuesDecimal,
             ScalarFuncSig::ValuesDuration,
             ScalarFuncSig::ValuesInt,

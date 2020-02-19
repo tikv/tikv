@@ -16,6 +16,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 pd_client = { path = "../pd_client" }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha" , default-features = false }
+raftstore = { path = "../raftstore", default-features = false }
 rand = "0.7"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger

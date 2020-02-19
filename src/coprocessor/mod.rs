@@ -25,7 +25,7 @@ pub mod dag;
 mod endpoint;
 mod error;
 pub mod local_metrics;
-mod metrics;
+pub(crate) mod metrics;
 pub mod readpool_impl;
 mod statistics;
 mod tracker;
@@ -34,12 +34,11 @@ pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 pub use checksum::checksum_crc64_xor;
 
+use crate::storage::Statistics;
+use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
-
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
-
-use crate::storage::Statistics;
 use txn_types::TsSet;
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -49,9 +48,10 @@ pub const REQ_TYPE_CHECKSUM: i64 = 105;
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 /// An interface for all kind of Coprocessor request handlers.
+#[async_trait]
 pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
-    fn handle_request(&mut self) -> Result<coppb::Response> {
+    async fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
 

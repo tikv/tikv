@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::intrinsics::copy_nonoverlapping;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::string::ToString;
@@ -291,46 +291,46 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
     let r_start = r_idx;
     let r_int_word_cnt = r_stop - r_idx;
 
-    let carry = if r_int_word_cnt > l_int_word_cnt {
-        Some(1)
-    } else if r_int_word_cnt == l_int_word_cnt {
-        let mut l_end = (l_stop + l_frac_word_cnt as usize - 1) as isize;
-        let mut r_end = (r_stop + r_frac_word_cnt as usize - 1) as isize;
-        // trims suffix 0(also trims the suffix 0 before the point
-        // when there is no digit after point).
-        while l_idx as isize <= l_end && lhs.word_buf[l_end as usize] == 0 {
-            l_end -= 1;
-        }
+    let carry = match r_int_word_cnt.cmp(&l_int_word_cnt) {
+        Ordering::Greater => Some(1),
+        Ordering::Equal => {
+            let mut l_end = (l_stop + l_frac_word_cnt as usize - 1) as isize;
+            let mut r_end = (r_stop + r_frac_word_cnt as usize - 1) as isize;
+            // trims suffix 0(also trims the suffix 0 before the point
+            // when there is no digit after point).
+            while l_idx as isize <= l_end && lhs.word_buf[l_end as usize] == 0 {
+                l_end -= 1;
+            }
 
-        // trims suffix 0(also trims the suffix 0 before the point
-        // when there is no digit after point).
-        while r_idx as isize <= r_end && rhs.word_buf[r_end as usize] == 0 {
-            r_end -= 1;
-        }
-        // here l_end is the last nonzero index in l.word_buf, attention:it may in the range of (0,l_int_word_cnt)
-        l_frac_word_cnt = cmp::max(0, l_end + 1 - l_stop as isize) as u8;
-        // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,r_int_word_cnt)
-        r_frac_word_cnt = cmp::max(0, r_end + 1 - r_stop as isize) as u8;
-        while l_idx as isize <= l_end
-            && r_idx as isize <= r_end
-            && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
-        {
-            l_idx += 1;
-            r_idx += 1;
-        }
-        if l_idx as isize <= l_end {
-            if r_idx as isize <= r_end && rhs.word_buf[r_idx] > lhs.word_buf[l_idx] {
+            // trims suffix 0(also trims the suffix 0 before the point
+            // when there is no digit after point).
+            while r_idx as isize <= r_end && rhs.word_buf[r_end as usize] == 0 {
+                r_end -= 1;
+            }
+            // here l_end is the last nonzero index in l.word_buf, attention:it may in the range of (0,l_int_word_cnt)
+            l_frac_word_cnt = cmp::max(0, l_end + 1 - l_stop as isize) as u8;
+            // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,r_int_word_cnt)
+            r_frac_word_cnt = cmp::max(0, r_end + 1 - r_stop as isize) as u8;
+            while l_idx as isize <= l_end
+                && r_idx as isize <= r_end
+                && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
+            {
+                l_idx += 1;
+                r_idx += 1;
+            }
+            if l_idx as isize <= l_end {
+                if r_idx as isize <= r_end && rhs.word_buf[r_idx] > lhs.word_buf[l_idx] {
+                    Some(1)
+                } else {
+                    Some(0)
+                }
+            } else if r_idx as isize <= r_end {
                 Some(1)
             } else {
-                Some(0)
+                None
             }
-        } else if r_idx as isize <= r_end {
-            Some(1)
-        } else {
-            None
         }
-    } else {
-        Some(0)
+        Ordering::Less => Some(0),
     };
     let l_res = (l_start, l_int_word_cnt, l_frac_word_cnt);
     let r_res = (r_start, r_int_word_cnt, r_frac_word_cnt);
@@ -341,9 +341,7 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
 fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let (carry, mut frac_word_to, l_res, r_res) = calc_sub_carry(lhs, rhs);
     if carry.is_none() {
-        let mut res = lhs.to_owned();
-        res.reset_to_zero();
-        return Res::Ok(res);
+        return Res::Ok(Decimal::zero());
     }
     let (mut l_start, mut l_int_word_cnt, mut l_frac_word_cnt) = l_res;
     let (mut r_start, mut r_int_word_cnt, mut r_frac_word_cnt) = r_res;
@@ -495,12 +493,10 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
         cmp::max(l_int_word_cnt, r_int_word_cnt),
         cmp::max(l_frac_word_cnt, r_frac_word_cnt),
     );
-    let x = if l_int_word_cnt > r_int_word_cnt {
-        lhs.word_buf[0]
-    } else if l_int_word_cnt < r_int_word_cnt {
-        rhs.word_buf[0]
-    } else {
-        lhs.word_buf[0] + rhs.word_buf[0]
+    let x = match l_int_word_cnt.cmp(&r_int_word_cnt) {
+        Ordering::Greater => lhs.word_buf[0],
+        Ordering::Less => rhs.word_buf[0],
+        Ordering::Equal => lhs.word_buf[0] + rhs.word_buf[0],
     };
     if x > WORD_MAX - 1 {
         int_word_to += 1;
@@ -874,7 +870,7 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
             idx += 1;
             if idx == end {
                 // we got decimal zero.
-                dec.reset_to_zero();
+                dec = Decimal::zero();
                 break;
             }
         }
@@ -898,8 +894,11 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
 /// `DECIMAL_STRUCT_SIZE`is the struct size of `Decimal`.
 pub const DECIMAL_STRUCT_SIZE: usize = 40;
 
+const_assert_eq!(DECIMAL_STRUCT_SIZE, mem::size_of::<Decimal>());
+
 /// `Decimal` represents a decimal value.
-#[derive(Clone, Debug)]
+#[repr(C)]
+#[derive(Clone, Debug, Copy)]
 pub struct Decimal {
     /// The number of *decimal* digits before the point.
     int_cnt: u8,
@@ -907,8 +906,6 @@ pub struct Decimal {
     /// The number of decimal digits after the point.
     frac_cnt: u8,
 
-    /// The number of significant digits of the decimal.
-    precision: u8,
     /// The number of calculated or printed result fraction digits.
     result_frac_cnt: u8,
 
@@ -960,7 +957,6 @@ impl Decimal {
         Decimal {
             int_cnt,
             frac_cnt,
-            precision: 0,
             result_frac_cnt: 0,
             negative,
             word_buf: [0; 9],
@@ -969,15 +965,6 @@ impl Decimal {
 
     pub fn is_negative(&self) -> bool {
         self.negative
-    }
-
-    /// reset the decimal to zero.
-    fn reset_to_zero(&mut self) {
-        self.int_cnt = 1;
-        self.frac_cnt = 0;
-        self.result_frac_cnt = 0;
-        self.negative = false;
-        self.word_buf[0] = 0;
     }
 
     /// Creates a new decimal which is zero.
@@ -1028,16 +1015,12 @@ impl Decimal {
 
     /// Get the least precision and fraction count to encode this decimal completely.
     pub fn prec_and_frac(&self) -> (u8, u8) {
-        if self.precision == 0 {
-            let (_, int_cnt) = self.remove_leading_zeroes(self.int_cnt);
-            let prec = int_cnt + self.frac_cnt;
-            if prec == 0 {
-                (1, self.frac_cnt)
-            } else {
-                (prec, self.frac_cnt)
-            }
+        let (_, int_cnt) = self.remove_leading_zeroes(self.int_cnt);
+        let prec = int_cnt + self.frac_cnt;
+        if prec == 0 {
+            (1, self.frac_cnt)
         } else {
-            (self.precision, self.result_frac_cnt)
+            (prec, self.frac_cnt)
         }
     }
 
@@ -1083,7 +1066,7 @@ impl Decimal {
     ///
     /// Result fitting in the buffer should be garanted.
     /// 'shift' have to be from 1 to DIGITS_PER_WORD - 1 (inclusive)
-    fn do_mini_left_shift(&mut self, shift: u8, beg: u8, end: u8) {
+    fn do_mini_left_shift(mut self, shift: u8, beg: u8, end: u8) -> Decimal {
         let shift = shift as usize;
         let mut buf_from = (beg / DIGITS_PER_WORD) as usize;
         let buf_end = ((end - 1) / DIGITS_PER_WORD) as usize;
@@ -1097,13 +1080,14 @@ impl Decimal {
             buf_from += 1;
         }
         self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) * TEN_POW[shift];
+        self
     }
 
     /// `do_mini_right_shift` does right shift for alignment of data in buffer.
     ///
     /// Result fitting in the buffer should be garanted.
     /// 'shift' have to be from 1 to DIGITS_PER_WORD - 1 (inclusive)
-    fn do_mini_right_shift(&mut self, shift: u8, beg: u8, end: u8) {
+    fn do_mini_right_shift(mut self, shift: u8, beg: u8, end: u8) -> Decimal {
         let shift = shift as usize;
         let mut buf_from = ((end - 1) / DIGITS_PER_WORD) as usize;
         let buf_end = (beg / DIGITS_PER_WORD) as usize;
@@ -1118,6 +1102,7 @@ impl Decimal {
             buf_from -= 1;
         }
         self.word_buf[buf_from] /= TEN_POW[shift];
+        self
     }
 
     // TODO: remove this after merge the `refactor ScalarFunc::builtin_cast`
@@ -1138,7 +1123,7 @@ impl Decimal {
             return Ok(self);
         }
 
-        let tmp = self.clone();
+        let tmp = self;
         let ret = self.round(decimal as i8, RoundMode::HalfEven).unwrap();
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && ret != tmp {
@@ -1158,7 +1143,7 @@ impl Decimal {
     }
 
     fn round_with_word_buf_len(
-        mut self,
+        self,
         mut frac: i8,
         word_buf_len: u8,
         round_mode: RoundMode,
@@ -1178,8 +1163,7 @@ impl Decimal {
             frac = frac_words_to * DIGITS_PER_WORD as i8;
             Res::Truncated(self)
         } else if self.int_cnt as i8 + frac < 0 {
-            self.reset_to_zero();
-            return Res::Ok(self);
+            return Res::Ok(Self::zero());
         } else {
             Res::Ok(self)
         };
@@ -1248,8 +1232,7 @@ impl Decimal {
                     res.word_buf[to_idx as usize] = WORD_BASE;
                 }
             } else if int_word_cnt as i8 + frac_words_to == 0 {
-                res.reset_to_zero();
-                return Res::Ok(res.unwrap());
+                return Res::Ok(Self::zero());
             }
         } else {
             // TODO - fix this code as it won't work for CEILING mode
@@ -1360,14 +1343,13 @@ impl Decimal {
         self.shift_with_word_buf_len(shift, WORD_BUF_LEN)
     }
 
-    fn shift_with_word_buf_len(mut self, shift: isize, word_buf_len: u8) -> Res<Decimal> {
+    fn shift_with_word_buf_len(self, shift: isize, word_buf_len: u8) -> Res<Decimal> {
         if shift == 0 {
             return Res::Ok(self);
         }
         let (mut beg, mut end) = self.digit_bounds();
         if beg == end {
-            self.reset_to_zero();
-            return Res::Ok(self);
+            return Res::Ok(Self::zero());
         }
 
         let upper = (DIGITS_PER_WORD * word_buf_len * 2) as isize;
@@ -1376,8 +1358,7 @@ impl Decimal {
             return Res::Overflow(self);
         } else if shift < -upper {
             // processor truncated by shift.
-            self.reset_to_zero();
-            return Res::Truncated(self);
+            return Res::Truncated(Self::zero());
         }
 
         let point = word_cnt!(self.int_cnt) * DIGITS_PER_WORD;
@@ -1404,8 +1385,7 @@ impl Decimal {
             let diff = frac_cnt - frac_word_cnt * DIGITS_PER_WORD as isize;
             frac_cnt = frac_word_cnt * DIGITS_PER_WORD as isize;
             if end as isize - diff <= beg as isize {
-                self.reset_to_zero();
-                return Res::Truncated(self);
+                return Res::Truncated(Self::zero());
             }
             end = (end as isize - diff) as u8;
             Res::Truncated(
@@ -1432,10 +1412,10 @@ impl Decimal {
                 do_left = (DIGITS_PER_WORD * word_buf_len - end) < r_mini_shift;
             }
             if do_left {
-                res.do_mini_left_shift(l_mini_shift, beg, end);
+                res = res.map(|d| d.do_mini_left_shift(l_mini_shift, beg, end));
                 mini_shift = -(l_mini_shift as i8);
             } else {
-                res.do_mini_right_shift(r_mini_shift, beg, end);
+                res = res.map(|d| d.do_mini_right_shift(r_mini_shift, beg, end));
                 mini_shift = r_mini_shift as i8;
             }
             new_point += mini_shift as isize;
@@ -1673,8 +1653,7 @@ impl Decimal {
                 )));
             }
             if exp < i64::from(i32::MIN) / 2 && !d.is_overflow() {
-                d.reset_to_zero();
-                return Ok(Res::Truncated(d.unwrap()));
+                return Ok(Res::Truncated(Self::zero()));
             }
             if !d.is_overflow() {
                 let is_truncated = d.is_truncated();
@@ -1850,9 +1829,9 @@ impl ConvertTo<Decimal> for Json {
     /// Port from TiDB's types.ConvertJSONToDecimal
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        match self {
-            Json::String(s) => {
-                Decimal::from_str(s.as_str()).or_else(|e| {
+        match self.as_ref().get_type() {
+            JsonType::String => {
+                Decimal::from_str(self.as_ref().get_str()?).or_else(|e| {
                     ctx.handle_truncate_err(e)?;
                     // FIXME: if TiDB's MyDecimal::FromString return err,
                     //  it may has res. However, if TiKV's Decimal::from_str
@@ -1937,7 +1916,7 @@ impl ToString for Decimal {
 
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
-        let mut dec = self.clone();
+        let mut dec = *self;
         dec = dec
             .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();
@@ -2099,20 +2078,28 @@ pub trait DecimalEncoder: NumberEncoder {
         Ok(res)
     }
 
+    #[inline]
     fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
-        self.write_u8(v.int_cnt)?;
-        self.write_u8(v.frac_cnt)?;
-        self.write_u8(v.result_frac_cnt)?;
-        self.write_u8(v.negative as u8)?;
-        let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
-        for id in 0..len as usize {
-            self.write_i32_le(v.word_buf[id] as i32)?;
-        }
+        let data = unsafe {
+            let p = v as *const Decimal as *const u8;
+            std::slice::from_raw_parts(p, DECIMAL_STRUCT_SIZE)
+        };
+        self.write_bytes(data)?;
         Ok(())
     }
 }
 
 impl<T: BufferWriter> DecimalEncoder for T {}
+
+pub trait DecimalDatumPayloadChunkEncoder: NumberEncoder + DecimalEncoder {
+    #[inline]
+    fn write_decimal_to_chunk_by_datum_payload(&mut self, mut src_payload: &[u8]) -> Result<()> {
+        let decimal = src_payload.read_decimal()?;
+        self.write_decimal_to_chunk(&decimal)
+    }
+}
+
+impl<T: BufferWriter> DecimalDatumPayloadChunkEncoder for T {}
 
 // Mark as `#[inline]` since in many cases `size` is a constant.
 #[inline]
@@ -2198,7 +2185,6 @@ pub trait DecimalDecoder: NumberDecoder {
             return Err(box_err!("decoding decimal failed: {:?}", res));
         }
         let mut d = Decimal::new(int_cnt, frac_cnt, mask != 0);
-        d.precision = prec;
         d.result_frac_cnt = frac_cnt;
         let mut word_idx = 0;
         let mut is_first = true;
@@ -2243,7 +2229,7 @@ pub trait DecimalDecoder: NumberDecoder {
                 }
         }
         if d.int_cnt == 0 && d.frac_cnt == 0 {
-            d.reset_to_zero();
+            d = Decimal::zero();
         }
         d.result_frac_cnt = frac_cnt;
         Ok(d)
@@ -2251,22 +2237,13 @@ pub trait DecimalDecoder: NumberDecoder {
 
     /// `read_decimal_from_chunk` decode Decimal encoded by `write_decimal_to_chunk`.
     fn read_decimal_from_chunk(&mut self) -> Result<Decimal> {
-        let buf = self.bytes();
-        if buf.len() <= 4 {
-            return Err(Error::unexpected_eof());
-        }
-        let int_cnt = buf[0];
-        let frac_cnt = buf[1];
-        let result_frac_cnt = buf[2];
-        let negative = buf[3] == 1;
-        self.advance(4);
-
-        let mut d = Decimal::new(int_cnt, frac_cnt, negative);
-        d.result_frac_cnt = result_frac_cnt;
-
-        for id in 0..WORD_BUF_LEN {
-            d.word_buf[id as usize] = self.read_i32_le()? as u32;
-        }
+        let buf = self.read_bytes(DECIMAL_STRUCT_SIZE)?;
+        let d = unsafe {
+            let mut d = mem::MaybeUninit::<Decimal>::uninit();
+            let p = d.as_mut_ptr() as *mut u8;
+            copy_nonoverlapping(buf.as_ptr(), p, DECIMAL_STRUCT_SIZE);
+            d.assume_init()
+        };
         Ok(d)
     }
 }
@@ -2355,6 +2332,7 @@ impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
 impl Rem for Decimal {
     type Output = Option<Res<Decimal>>;
 
+    #[allow(clippy::op_ref)]
     fn rem(self, rhs: Decimal) -> Option<Res<Decimal>> {
         &self % &rhs
     }
@@ -3144,6 +3122,16 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_chunk_from_tidb() {
+        let src: Vec<u8> = vec![
+            3, 3, 3, 0, 123, 0, 0, 0, 0, 2, 46, 27, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let decoded = src.as_slice().read_decimal_from_chunk().unwrap();
+        assert_eq!(Decimal::from_f64(123.456).unwrap(), decoded);
+    }
+
+    #[test]
     fn test_cmp() {
         let cases = vec![
             ("12", "13", Ordering::Less),
@@ -3558,20 +3546,20 @@ mod tests {
 
         for (pos, neg) in cases {
             let pos_dec: Decimal = pos.parse().unwrap();
-            let res = -pos_dec.clone();
+            let res = -pos_dec;
             assert_eq!(format!("{}", res), neg);
             assert!((&pos_dec + &res).is_zero());
 
             let neg_dec: Decimal = neg.parse().unwrap();
-            let res = -neg_dec.clone();
+            let res = -neg_dec;
             assert_eq!(format!("{}", res), pos);
             assert!((&neg_dec + &res).is_zero());
         }
 
         let max_dec = super::max_or_min_dec(false, 40, 20);
         let min_dec = super::max_or_min_dec(true, 40, 20);
-        assert_eq!(min_dec, -max_dec.clone());
-        assert_eq!(max_dec, -min_dec.clone());
+        assert_eq!(min_dec, -max_dec);
+        assert_eq!(max_dec, -min_dec);
     }
 
     #[test]
@@ -3603,26 +3591,6 @@ mod tests {
             negative_exp.push_str(exp);
             let res = negative.to_string();
             assert_eq!(res, negative_exp);
-        }
-    }
-
-    #[test]
-    fn test_reset_to_zero() {
-        let cases = vec![
-            "12345",
-            "0.99999",
-            "18446744073709551615",
-            "18446744073709551616",
-            "-1",
-            "1.23",
-            "9999999999999999999999999.000",
-        ];
-
-        for case in cases {
-            let mut dec: Decimal = case.parse().unwrap();
-            assert!(!dec.is_zero());
-            dec.reset_to_zero();
-            assert!(dec.is_zero());
         }
     }
 

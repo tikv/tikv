@@ -15,8 +15,8 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
@@ -54,7 +54,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<dyn Snapshot>,
+    snap: Box<dyn GenericSnapshot>,
     remain_bytes: usize,
 }
 
@@ -176,7 +176,7 @@ fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<dyn Snapshot>>,
+    file: Option<Box<dyn GenericSnapshot>>,
     raft_msg: RaftMessage,
 }
 

@@ -9,5 +9,6 @@ description = "TiKV query engine data types"
 bitflags = "1.0"
 failure = "0.1"
 num-traits = "0.2"
+num-derive = "0.3"
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
