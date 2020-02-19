@@ -297,7 +297,8 @@ impl ScalarFunc {
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
-            | ScalarFuncSig::JsonDepthSig => (1, 1),
+            | ScalarFuncSig::JsonDepthSig
+            | ScalarFuncSig::RandomBytes => (1, 1),
 
             ScalarFuncSig::JsonLengthSig => (1, 2),
 
@@ -465,7 +466,6 @@ impl ScalarFunc {
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Password
             | ScalarFuncSig::Quarter
-            | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::RowCount
@@ -1019,6 +1019,7 @@ dispatch_call! {
         Uncompress => uncompress,
         Quote => quote,
         OctInt => oct_int,
+        RandomBytes => random_bytes,
 
         Conv => conv,
         Trim1Arg => trim_1_arg,
@@ -1399,6 +1400,7 @@ mod tests {
                     ScalarFuncSig::OctInt,
                     ScalarFuncSig::Ord,
                     ScalarFuncSig::JsonDepthSig,
+                    ScalarFuncSig::RandomBytes,
                 ],
                 1,
                 1,
@@ -1616,7 +1618,6 @@ mod tests {
             ScalarFuncSig::OctString,
             ScalarFuncSig::Password,
             ScalarFuncSig::Quarter,
-            ScalarFuncSig::RandomBytes,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::RowCount,

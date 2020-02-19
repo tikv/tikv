@@ -10,21 +10,25 @@ extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use std::io::{self, Read};
+use std::io;
+use std::marker::Unpin;
 use std::path::Path;
 use std::sync::Arc;
 
+use futures_io::AsyncRead;
 #[cfg(feature = "prost-codec")]
 use kvproto::backup::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
 use kvproto::backup::StorageBackend_oneof_backend as Backend;
 #[cfg_attr(feature = "protobuf-codec", allow(unused_imports))]
-use kvproto::backup::{Local, Noop, StorageBackend};
+use kvproto::backup::{Local, Noop, StorageBackend, S3};
 
 mod local;
 pub use local::LocalStorage;
 mod noop;
 pub use noop::NoopStorage;
+mod s3;
+pub use s3::S3Storage;
 
 /// Create a new storage from the given storage backend description.
 pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalStorage>> {
@@ -33,7 +37,8 @@ pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalSt
             let p = Path::new(&local.path);
             LocalStorage::new(p).map(|s| Arc::new(s) as _)
         }
-        Some(Backend::Noop(_)) => Ok(Arc::new(NoopStorage::new()) as _),
+        Some(Backend::Noop(_)) => Ok(Arc::new(NoopStorage::default()) as _),
+        Some(Backend::S3(config)) => S3Storage::new(config).map(|s| Arc::new(s) as _),
         _ => {
             let u = url_of_backend(backend);
             error!("unknown storage"; "scheme" => u.scheme());
@@ -103,20 +108,46 @@ pub fn make_noop_backend() -> StorageBackend {
     }
 }
 
+// Creates a S3 `StorageBackend`
+pub fn make_s3_backend(config: S3) -> StorageBackend {
+    #[cfg(feature = "prost-codec")]
+    {
+        StorageBackend {
+            backend: Some(Backend::S3(config)),
+        }
+    }
+    #[cfg(feature = "protobuf-codec")]
+    {
+        let mut backend = StorageBackend::default();
+        backend.set_s3(config);
+        backend
+    }
+}
+
 /// An abstraction of an external storage.
+// TODO: these should all be returning a future (i.e. async fn).
 pub trait ExternalStorage: Sync + Send + 'static {
     /// Write all contents of the read to the given path.
-    // TODO: should it return a writer?
-    fn write(&self, name: &str, reader: &mut dyn Read) -> io::Result<()>;
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()>;
     /// Read all contents of the given path.
-    fn read(&self, name: &str) -> io::Result<Box<dyn Read>>;
+    fn read(&self, name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>>;
 }
 
 impl ExternalStorage for Arc<dyn ExternalStorage> {
-    fn write(&self, name: &str, reader: &mut dyn Read) -> io::Result<()> {
-        (**self).write(name, reader)
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()> {
+        (**self).write(name, reader, content_length)
     }
-    fn read(&self, name: &str) -> io::Result<Box<dyn Read>> {
+    fn read(&self, name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>> {
         (**self).read(name)
     }
 }

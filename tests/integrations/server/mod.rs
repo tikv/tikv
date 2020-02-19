@@ -143,6 +143,26 @@ trait MockKvService {
         UnsafeDestroyRangeRequest,
         UnsafeDestroyRangeResponse
     );
+    unary_call!(
+        register_lock_observer,
+        RegisterLockObserverRequest,
+        RegisterLockObserverResponse
+    );
+    unary_call!(
+        check_lock_observer,
+        CheckLockObserverRequest,
+        CheckLockObserverResponse
+    );
+    unary_call!(
+        remove_lock_observer,
+        RemoveLockObserverRequest,
+        RemoveLockObserverResponse
+    );
+    unary_call!(
+        physical_scan_lock,
+        PhysicalScanLockRequest,
+        PhysicalScanLockResponse
+    );
     unary_call!(coprocessor, Request, Response);
     sstream_call!(coprocessor_stream, Request, Response);
     cstream_call!(raft, RaftMessage, Done);
@@ -213,6 +233,26 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         unsafe_destroy_range,
         UnsafeDestroyRangeRequest,
         UnsafeDestroyRangeResponse
+    );
+    unary_call_dispatch!(
+        register_lock_observer,
+        RegisterLockObserverRequest,
+        RegisterLockObserverResponse
+    );
+    unary_call_dispatch!(
+        check_lock_observer,
+        CheckLockObserverRequest,
+        CheckLockObserverResponse
+    );
+    unary_call_dispatch!(
+        remove_lock_observer,
+        RemoveLockObserverRequest,
+        RemoveLockObserverResponse
+    );
+    unary_call_dispatch!(
+        physical_scan_lock,
+        PhysicalScanLockRequest,
+        PhysicalScanLockResponse
     );
     unary_call_dispatch!(coprocessor, Request, Response);
     sstream_call_dispatch!(coprocessor_stream, Request, Response);

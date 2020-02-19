@@ -12,9 +12,10 @@ use kvproto::metapb;
 use kvproto::pdpb;
 
 use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use raftstore::store;
 use test_util;
-use tikv::raftstore::store;
 use tikv_util::security::{SecurityConfig, SecurityManager};
+use txn_types::TimeStamp;
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -100,6 +101,9 @@ fn test_rpc_client() {
 
     let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
+
+    let ts = client.get_tso().wait().unwrap();
+    assert_ne!(ts, TimeStamp::zero());
 
     let mut prev_id = 0;
     for _ in 0..100 {

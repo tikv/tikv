@@ -7,25 +7,27 @@ mod metrics;
 pub mod waiter_manager;
 
 pub use self::config::{Config, LockManagerConfigManager};
-pub use self::deadlock::Service as DeadlockService;
+pub use self::deadlock::{Scheduler as DetectorScheduler, Service as DeadlockService};
+pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
 
-use self::deadlock::{Detector, Scheduler as DetectorScheduler};
-use self::waiter_manager::{Scheduler as WaiterMgrScheduler, WaiterManager};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
-use crate::raftstore::coprocessor::CoprocessorHost;
+use self::deadlock::{Detector, RoleChangeNotifier};
+use self::waiter_manager::WaiterManager;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{
     lock_manager::{Lock, LockManager as LockManagerTrait, WaitTimeout},
     ProcessResult, StorageCallback,
 };
+use raftstore::coprocessor::CoprocessorHost;
+
+use parking_lot::Mutex;
 use pd_client::PdClient;
-use spin::Mutex;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::thread::JoinHandle;
 use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
@@ -178,11 +180,11 @@ impl LockManager {
         }
     }
 
-    /// Creates a `Scheduler` of the deadlock detector worker and registers it to
+    /// Creates a `RoleChangeNotifier` of the deadlock detector worker and registers it to
     /// the `CoprocessorHost` to observe the role change events of the leader region.
     pub fn register_detector_role_change_observer(&self, host: &mut CoprocessorHost) {
-        host.registry
-            .register_role_observer(1, Box::new(self.detector_scheduler.clone()));
+        let role_change_notifier = RoleChangeNotifier::new(self.detector_scheduler.clone());
+        role_change_notifier.register(host);
     }
 
     /// Creates a `DeadlockService` to handle deadlock detect requests from other nodes.
@@ -271,13 +273,13 @@ impl LockManagerTrait for LockManager {
 
 #[cfg(test)]
 mod tests {
+    use self::deadlock::tests::*;
     use self::metrics::*;
     use self::waiter_manager::tests::*;
     use super::*;
-    use crate::server::resolve::Callback;
+    use raftstore::coprocessor::RegionChangeEvent;
     use tikv_util::security::SecurityConfig;
 
-    use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
@@ -285,24 +287,13 @@ mod tests {
     use kvproto::metapb::{Peer, Region};
     use raft::StateRole;
 
-    struct MockPdClient;
-
-    impl PdClient for MockPdClient {}
-
-    #[derive(Clone)]
-    struct MockResolver;
-
-    impl StoreAddrResolver for MockResolver {
-        fn resolve(&self, _store_id: u64, _cb: Callback) -> Result<()> {
-            Err(Error::Other(box_err!("unimplemented")))
-        }
-    }
-
     fn start_lock_manager() -> LockManager {
-        let (tx, _rx) = mpsc::sync_channel(100);
-        let mut coprocessor_host = CoprocessorHost::new(tx);
+        let mut coprocessor_host = CoprocessorHost::default();
 
         let mut lock_mgr = LockManager::new();
+        let mut cfg = Config::default();
+        cfg.wait_for_lock_timeout = 3000;
+        cfg.wake_up_delay_duration = 100;
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
         lock_mgr
             .start(
@@ -310,7 +301,7 @@ mod tests {
                 Arc::new(MockPdClient {}),
                 MockResolver {},
                 Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()),
-                &Config::default(),
+                &cfg,
             )
             .unwrap();
 
@@ -319,7 +310,11 @@ mod tests {
         leader_region.set_start_key(b"".to_vec());
         leader_region.set_end_key(b"foo".to_vec());
         leader_region.set_peers(vec![Peer::default()].into());
-        coprocessor_host.on_role_change(&leader_region, StateRole::Leader);
+        coprocessor_host.on_region_changed(
+            &leader_region,
+            RegionChangeEvent::Create,
+            StateRole::Leader,
+        );
         thread::sleep(Duration::from_millis(100));
 
         lock_mgr
@@ -343,7 +338,7 @@ mod tests {
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
-            3000,
+            2900,
             3200,
         );
         assert!(!lock_mgr.has_waiter());

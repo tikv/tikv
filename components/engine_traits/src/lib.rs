@@ -109,7 +109,7 @@
 //!
 //!   Example:
 //!
-//!   ```
+//!   ```ignore
 //!   // in engine_traits
 //!
 //!   trait IOLimiterExt {
@@ -119,8 +119,8 @@
 //!   trait IOLimiter { }
 //!   ```
 //!
-//!   ```
-//!   // in engine_rust
+//!   ```ignore
+//!   // in engine_rocks
 //!
 //!   impl IOLimiterExt for RocksEngine {
 //!       type IOLimiter = RocksIOLimiter;
@@ -219,8 +219,6 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use import::*;
-mod io_limiter;
-pub use io_limiter::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod sst;

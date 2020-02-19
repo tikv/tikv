@@ -12,6 +12,7 @@ required-features = ["failpoints"]
 [[test]]
 name = "integrations"
 path = "integrations/mod.rs"
+required-features = ["testexport"]
 
 [[bench]]
 name = "raftstore"
@@ -42,12 +43,18 @@ name = "channel"
 path = "benches/channel/mod.rs"
 
 [features]
-failpoints = ["tikv/failpoints"]
+default = ["failpoints", "testexport"]
+failpoints = ["fail/failpoints", "tikv/failpoints"]
+testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
-protobuf-codec = ["tikv/protobuf-codec", "external_storage/protobuf-codec"]
-prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec", "external_storage/prost-codec"]
+protobuf-codec = ["tikv/protobuf-codec", "external_storage/protobuf-codec", "raftstore/protobuf-codec"]
+prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec", "external_storage/prost-codec", "raftstore/prost-codec"]
+jemalloc = ["tikv/jemalloc"]
+sse = ["tikv/sse"]
+portable = ["tikv/portable"]
 
 [dependencies]
+fail = { version = "0.3", optional = true }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
@@ -63,6 +70,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 pd_client = { path = "../components/pd_client" }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha" , default-features = false }
+raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.6.5"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }

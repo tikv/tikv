@@ -15,9 +15,8 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use engine_rocks::RocksEngine;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
@@ -55,7 +54,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<dyn Snapshot<RocksEngine>>,
+    snap: Box<dyn GenericSnapshot>,
     remain_bytes: usize,
 }
 
@@ -103,7 +102,7 @@ struct SendStat {
 /// It will first send the normal raft snapshot message and then send the snapshot file.
 fn send_snap(
     env: Arc<Environment>,
-    mgr: SnapManager<RocksEngine>,
+    mgr: SnapManager,
     security_mgr: Arc<SecurityManager>,
     cfg: &Config,
     addr: &str,
@@ -177,12 +176,12 @@ fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<dyn Snapshot<RocksEngine>>>,
+    file: Option<Box<dyn GenericSnapshot>>,
     raft_msg: RaftMessage,
 }
 
 impl RecvSnapContext {
-    fn new(head_chunk: Option<SnapshotChunk>, snap_mgr: &SnapManager<RocksEngine>) -> Result<Self> {
+    fn new(head_chunk: Option<SnapshotChunk>, snap_mgr: &SnapManager) -> Result<Self> {
         // head_chunk is None means the stream is empty.
         let mut head = head_chunk.ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
         if !head.has_message() {
@@ -238,7 +237,7 @@ impl RecvSnapContext {
 fn recv_snap<R: RaftStoreRouter + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     raft_router: R,
 ) -> impl Future<Item = (), Error = Error> {
     let stream = stream.map_err(Error::from);
@@ -293,7 +292,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
     env: Arc<Environment>,
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     pool: CpuPool,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
@@ -305,7 +304,7 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
 impl<R: RaftStoreRouter + 'static> Runner<R> {
     pub fn new(
         env: Arc<Environment>,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<Config>,
