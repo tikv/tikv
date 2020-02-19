@@ -8,6 +8,9 @@ pub enum EvaluateError {
     #[fail(display = "Execution terminated due to exceeding max time limit")]
     MaxExecuteTimeExceeded,
 
+    #[fail(display = "Invalid {} character string", charset)]
+    InvalidCharacterString { charset: String },
+
     /// This variant is only a compatible layer for existing CodecError.
     /// Ideally each error kind should occupy an enum variant.
     #[fail(display = "{}", msg)]
@@ -21,7 +24,7 @@ impl EvaluateError {
     /// Returns the error code.
     pub fn code(&self) -> i32 {
         match self {
-            // TODO: We should assign our own error code
+            EvaluateError::InvalidCharacterString { .. } => 1300,
             EvaluateError::MaxExecuteTimeExceeded => 9007,
             EvaluateError::Custom { code, .. } => *code,
             EvaluateError::Other(_) => 10000,

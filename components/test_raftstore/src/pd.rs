@@ -18,9 +18,9 @@ use kvproto::pdpb;
 use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
-use tikv::raftstore::store::util::check_key_in_region;
-use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
+use pd_client::{ConfigClient, Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
+use raftstore::store::util::check_key_in_region;
+use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -868,23 +868,26 @@ impl TestPdClient {
     pub fn must_merge(&self, from: u64, target: u64) {
         self.merge_region(from, target);
 
-        for _ in 1..500 {
-            sleep_ms(10);
-
-            if self.get_region_by_id(from).wait().unwrap().is_none() {
-                return;
-            }
-        }
-
-        let region = self.get_region_by_id(from).wait().unwrap();
-        if region.is_none() {
-            return;
-        }
-        panic!("region {:?} is still not merged.", region.unwrap());
+        self.check_merged_timeout(from, Duration::from_secs(5));
     }
 
     pub fn check_merged(&self, from: u64) -> bool {
         self.get_region_by_id(from).wait().unwrap().is_none()
+    }
+
+    pub fn check_merged_timeout(&self, from: u64, duration: Duration) {
+        let timer = Instant::now();
+        loop {
+            let region = self.get_region_by_id(from).wait().unwrap();
+            if let Some(r) = region {
+                if timer.elapsed() > duration {
+                    panic!("region {:?} is still not merged.", r);
+                }
+            } else {
+                return;
+            }
+            sleep_ms(10);
+        }
     }
 
     pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
@@ -1065,6 +1068,7 @@ impl PdClient for TestPdClient {
 
     fn handle_region_heartbeat_response<F>(&self, store_id: u64, f: F) -> PdFuture<()>
     where
+        Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
         use futures::stream;
@@ -1206,7 +1210,9 @@ impl PdClient for TestPdClient {
         resp.set_region_id(region_id);
         Ok(resp)
     }
+}
 
+impl ConfigClient for TestPdClient {
     fn register_config(
         &self,
         _id: String,
