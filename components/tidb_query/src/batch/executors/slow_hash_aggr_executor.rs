@@ -246,7 +246,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             for group_by_result in &self.group_by_results_unsafe {
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
-                        value.as_ref().encode(
+                        value.as_ref().encode_with_collation(
                             value.logical_rows()[logical_row_idx],
                             field_type,
                             context,

@@ -6,7 +6,7 @@ use match_template::match_template;
 use tidb_query_datatype::{Collation, EvalType};
 
 use super::*;
-use crate::expr_util::collation::{match_template_collator, Collator};
+use crate::codec::collation::{match_template_collator, Collator};
 
 /// A scalar value container, a.k.a. datum, for all concrete eval types.
 ///
