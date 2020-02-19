@@ -109,7 +109,7 @@
 //!
 //!   Example:
 //!
-//!   ```
+//!   ```ignore
 //!   // in engine_traits
 //!
 //!   trait IOLimiterExt {
@@ -118,7 +118,8 @@
 //!
 //!   trait IOLimiter { }
 //!
-//!   // in engine_rust
+//!   ```ignore
+//!   // in engine_rocks
 //!
 //!   struct RocksEngine;
 //!

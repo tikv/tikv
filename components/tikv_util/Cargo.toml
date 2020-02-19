@@ -11,10 +11,10 @@ failpoints = ["fail/failpoints"]
 async-speed-limit = "0.2"
 backtrace = "0.3.9"
 byteorder = "1.2"
+coarsetime = "0.1"
 codec = { path = "../codec" }
 configuration = { path = "../configuration" }
 chrono = "0.4"
-coarsetime = "0.1"
 crc32fast = "1.2"
 crossbeam = "0.7.2"
 fail = "0.3"
@@ -48,7 +48,7 @@ url = "2"
 zeroize = { version = "0.10", features = [ "alloc" ] }
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus.git"
+git = "https://github.com/tikv/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 features = ["nightly", "push", "process"]
 

@@ -15,6 +15,8 @@ sse = ["rocksdb/sse"]
 [dependencies]
 engine = { path = "../engine", default-features = false }
 engine_traits = { path = "../engine_traits" }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 
@@ -25,3 +27,4 @@ package = "rocksdb"
 [dev-dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 tempfile = "3.0"
+rand = "0.7"

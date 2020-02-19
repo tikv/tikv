@@ -7,7 +7,6 @@ publish = false
 default-run = "tikv-server"
 
 [features]
-default = ["protobuf-codec"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -15,17 +14,6 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-prost-codec = [
-  "backup/prost-codec",
-  "engine/prost-codec",
-  "grpcio/prost-codec",
-  "keys/prost-codec",
-  "kvproto/prost-codec",
-  "pd_client/prost-codec",
-  "raft/prost-codec",
-  "tikv/prost-codec",
-  "txn_types/prost-codec",
-]
 protobuf-codec = [
   "backup/protobuf-codec",
   "engine/protobuf-codec",
@@ -34,8 +22,21 @@ protobuf-codec = [
   "kvproto/protobuf-codec",
   "pd_client/protobuf-codec",
   "raft/protobuf-codec",
+  "raftstore/protobuf-codec",
   "tikv/protobuf-codec",
   "txn_types/protobuf-codec",
+]
+prost-codec = [
+  "backup/prost-codec",
+  "engine/prost-codec",
+  "grpcio/prost-codec",
+  "keys/prost-codec",
+  "kvproto/prost-codec",
+  "pd_client/prost-codec",
+  "raft/prost-codec",
+  "raftstore/prost-codec",
+  "tikv/prost-codec",
+  "txn_types/prost-codec",
 ]
 
 [lib]
@@ -65,6 +66,7 @@ nix = "0.11"
 pd_client = { path = "../components/pd_client", default-features = false }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
+raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.7"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -75,9 +77,13 @@ toml = "0.4"
 txn_types = { path = "../components/txn_types", default-features = false }
 vlog = "0.1.4"
 
+[dependencies.prometheus]
+git = "https://github.com/tikv/rust-prometheus.git"
+rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+features = ["nightly", "push", "process"]
+
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
-rev = "4e3ac06b948f1c2dffe92986a760ef561d0bdbb9"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

@@ -26,8 +26,8 @@ crc32fast = "1.2"
 engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage", default-features = false }
 futures = "0.1"
-futures-util = { version = "0.3", default-features = false, features = ["io"] }
 futures-executor = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
 hex = "0.3"
 keys = { path = "../keys", default-features = false }
@@ -45,7 +45,7 @@ txn_types = { path = "../txn_types", default-features = false }
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus.git"
+git = "https://github.com/tikv/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 default-features = false
 

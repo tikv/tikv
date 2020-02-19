@@ -14,6 +14,7 @@ protobuf-codec = [
   "kvproto/protobuf-codec",
   "pd_client/protobuf-codec",
   "raft/protobuf-codec",
+  "raftstore/protobuf-codec",
   "tikv/protobuf-codec",
 ]
 prost-codec = [
@@ -24,6 +25,7 @@ prost-codec = [
   "kvproto/prost-codec",
   "pd_client/prost-codec",
   "raft/prost-codec",
+  "raftstore/prost-codec",
   "tikv/prost-codec",
 ]
 
@@ -38,6 +40,7 @@ keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../pd_client", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false }
+raftstore = { path = "../raftstore", default-features = false }
 rand = "0.7"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
