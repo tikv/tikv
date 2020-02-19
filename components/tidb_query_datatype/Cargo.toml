@@ -6,7 +6,6 @@ publish = false
 description = "TiKV query engine data types"
 
 [features]
-default = ["protobuf-codec"]
 protobuf-codec = ["tipb/protobuf-codec"]
 prost-codec = ["tipb/prost-codec"]
 

@@ -5,7 +5,6 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
 protobuf-codec = ["engine/protobuf-codec"]
 prost-codec = ["engine/prost-codec"]
 jemalloc = ["rocksdb/jemalloc"]

@@ -9,7 +9,6 @@ description = "test helpers for sst_importer"
 test = false
 
 [features]
-default = ["protobuf-codec"]
 protobuf-codec = [
   "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",

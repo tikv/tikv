@@ -43,7 +43,7 @@ name = "channel"
 path = "benches/channel/mod.rs"
 
 [features]
-default = ["failpoints", "testexport", "protobuf-codec"]
+default = ["failpoints", "testexport"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]

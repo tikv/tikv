@@ -110,7 +110,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 slog_derive = "0.1"
 parking_lot = "0.10"
 sst_importer = { path = "components/sst_importer", default-features = false }
-sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv2"}
+sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tempfile = "3.0"
 tidb_query = { path = "components/tidb_query", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc" }

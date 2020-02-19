@@ -6,7 +6,6 @@ publish = false
 description = "A query engine to run TiDB pushed down executors"
 
 [features]
-default = ["protobuf-codec"]
 protobuf-codec = [
   "kvproto/protobuf-codec",
   "tidb_query_datatype/protobuf-codec",
