@@ -5,10 +5,6 @@ use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
-use crate::raftstore::coprocessor::{
-    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
-    RoleObserver,
-};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
 use futures::{Future, Sink, Stream};
@@ -20,6 +16,10 @@ use kvproto::deadlock::*;
 use kvproto::metapb::Region;
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
+use raftstore::coprocessor::{
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, RoleObserver,
+};
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
@@ -289,8 +289,8 @@ pub enum Task {
     ChangeRole(Role),
     /// Change the ttl of DetectTable
     ChangeTTL(Duration),
-    /// Task only used for test
-    #[cfg(test)]
+    // Task only used for test
+    #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(u64) + Send>),
     #[cfg(test)]
     GetRole(Box<dyn FnOnce(Role) + Send>),
@@ -307,7 +307,7 @@ impl Display for Task {
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
             Task::ChangeTTL(ttl) => write!(f, "ChangeTTL {{ ttl: {:?} }}", ttl),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "Validate dead lock config"),
             #[cfg(test)]
             Task::GetRole(_) => write!(f, "Get role of the deadlock detector"),
@@ -365,7 +365,7 @@ impl Scheduler {
         self.notify_scheduler(Task::ChangeTTL(Duration::from_millis(t)));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testexport"))]
     pub fn validate(&self, f: Box<dyn FnOnce(u64) + Send>) {
         self.notify_scheduler(Task::Validate(f));
     }
@@ -412,9 +412,9 @@ impl RoleChangeNotifier {
 
     pub(crate) fn register(self, host: &mut CoprocessorHost) {
         host.registry
-            .register_role_observer(1, Box::new(self.clone()));
+            .register_role_observer(1, BoxRoleObserver::new(self.clone()));
         host.registry
-            .register_region_change_observer(1, Box::new(self));
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(self));
     }
 }
 
@@ -867,7 +867,7 @@ where
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
             Task::ChangeTTL(ttl) => self.handle_change_ttl(ttl),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(self.inner.borrow().detect_table.ttl.as_millis() as u64),
             #[cfg(test)]
             Task::GetRole(f) => f(self.inner.borrow().role),

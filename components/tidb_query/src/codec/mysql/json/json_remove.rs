@@ -1,14 +1,15 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::super::Result;
-use super::path_expr::{PathExpression, PathLeg};
-use super::Json;
+use super::modifier::BinaryModifier;
+use super::path_expr::PathExpression;
+use super::{Json, JsonRef};
 
-impl Json {
-    // Remove elements from Json,
-    // All path expressions cannot contain * or ** wildcard.
-    // If any error occurs, the input won't be changed.
-    pub fn remove(&mut self, path_expr_list: &[PathExpression]) -> Result<()> {
+impl<'a> JsonRef<'a> {
+    /// Removes elements from Json,
+    /// All path expressions cannot contain * or ** wildcard.
+    /// If any error occurs, the input won't be changed.
+    pub fn remove(&self, path_expr_list: &[PathExpression]) -> Result<Json> {
         if path_expr_list
             .iter()
             .any(|expr| expr.legs.is_empty() || expr.contains_any_asterisk())
@@ -16,41 +17,12 @@ impl Json {
             return Err(box_err!("Invalid path expression"));
         }
 
+        let mut res = self.to_owned();
         for expr in path_expr_list {
-            self.remove_path(&expr.legs);
+            let modifier = BinaryModifier::new(res.as_ref());
+            res = modifier.remove(&expr.legs)?;
         }
-        Ok(())
-    }
-
-    fn remove_path(&mut self, path_legs: &[PathLeg]) {
-        let (current_leg, sub_path_legs) = path_legs.split_first().unwrap();
-
-        if let PathLeg::Index(index) = *current_leg {
-            if let Json::Array(ref mut array) = *self {
-                let index = index as usize;
-                if array.len() <= index {
-                    return;
-                }
-                if sub_path_legs.is_empty() {
-                    array.remove(index);
-                    return;
-                }
-                array[index].remove_path(sub_path_legs);
-                return;
-            }
-        }
-
-        if let PathLeg::Key(ref key) = *current_leg {
-            if let Json::Object(ref mut obj) = *self {
-                if sub_path_legs.is_empty() {
-                    obj.remove(key);
-                    return;
-                }
-                if let Some(sub_obj) = obj.get_mut(key) {
-                    sub_obj.remove_path(sub_path_legs);
-                }
-            }
-        }
+        Ok(res)
     }
 }
 
@@ -93,14 +65,15 @@ mod tests {
                 i,
                 e
             );
-            let (mut j, p, e) = (j.unwrap(), p.unwrap(), e.unwrap());
-            let r = j.remove(vec![p].as_slice());
+            let (j, p, e) = (j.unwrap(), p.unwrap(), e.unwrap());
+            let r = j.as_ref().remove(vec![p].as_slice());
             if success {
                 assert!(r.is_ok(), "#{} expect remove ok but got {:?}", i, r);
+                let j = r.unwrap();
+                assert_eq!(e, j, "#{} expect remove json {:?} == {:?}", i, j, e);
             } else {
                 assert!(r.is_err(), "#{} expect remove error but got {:?}", i, r);
             }
-            assert_eq!(e, j, "#{} expect remove json {:?} == {:?}", i, j, e);
         }
     }
 }
