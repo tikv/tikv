@@ -173,10 +173,6 @@ impl EntryBatch {
         self.entries.len() == 0
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &TxnEntry> {
-        self.entries.iter()
-    }
-
     pub fn drain(&mut self) -> std::vec::Drain<'_, TxnEntry> {
         self.entries.drain(..)
     }
