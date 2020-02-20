@@ -86,7 +86,7 @@ make_static_metric! {
     }
 
     pub struct CoprAcquireSemaphoreResultCounterVec: IntCounter {
-        "result" => AcquireSemaphoreType,
+        "type" => AcquireSemaphoreType,
     }
 }
 
