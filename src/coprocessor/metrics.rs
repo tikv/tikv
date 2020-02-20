@@ -68,12 +68,12 @@ lazy_static! {
         "Total bytes of response body"
     )
     .unwrap();
-    pub static ref COPR_ACQUIRE_SEMAPHORE_RESULT: CoprAcquireSemaphoreResultCounterVec =
+    pub static ref COPR_ACQUIRE_SEMAPHORE_TYPE: CoprAcquireSemaphoreResultCounterVec =
         register_static_int_counter_vec!(
             CoprAcquireSemaphoreResultCounterVec,
-            "tikv_coprocessor_acquire_semaphore_result",
-            "The acquire result of the coprocessor semaphore",
-            &["result"],
+            "tikv_coprocessor_acquire_semaphore_type",
+            "The acquire type of the coprocessor semaphore",
+            &["type"],
         )
         .unwrap();
 }

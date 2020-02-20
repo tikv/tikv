@@ -313,16 +313,16 @@ impl<E: Engine> Endpoint<E> {
             // requests cause starving and OOM.
             if is_heavy {
                 let res = (Some(semaphore.acquire().await), None);
-                COPR_ACQUIRE_SEMAPHORE_RESULT.acquired_heavy.inc();
+                COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_heavy.inc();
                 res
             } else {
                 match semaphore.try_acquire() {
                     Ok(permit) => {
-                        COPR_ACQUIRE_SEMAPHORE_RESULT.acquired_generic.inc();
+                        COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_generic.inc();
                         (Some(permit), None)
                     }
                     Err(_) => {
-                        COPR_ACQUIRE_SEMAPHORE_RESULT.unacquired.inc();
+                        COPR_ACQUIRE_SEMAPHORE_TYPE.unacquired.inc();
                         (None, Some(LIGHT_TASK_THRESHOLD))
                     }
                 }
@@ -1432,7 +1432,12 @@ mod tests {
         assert_eq!(resp.data, 1usize.to_le_bytes());
 
         // remove all permits
-        std::mem::forget(cop.semaphore.as_ref().unwrap().try_acquire().unwrap());
+        cop.semaphore
+            .as_ref()
+            .unwrap()
+            .try_acquire()
+            .unwrap()
+            .forget();
         let resp_fut =
             cop.handle_unary_request(ReqContext::default_for_test(), handler_builder_gen());
 
