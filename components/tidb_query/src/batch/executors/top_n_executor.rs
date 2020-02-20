@@ -932,7 +932,7 @@ mod tests {
         assert_eq!(
             r.physical_columns[0].decoded().as_bytes_slice(),
             &[
-                Some("aaa".as_bytes().to_vec()),
+                Some(b"aaa".as_bytes().to_vec()),
                 Some("áaA".as_bytes().to_vec()),
                 Some(b"aa".to_vec()),
                 Some(b"Aa".to_vec()),
@@ -942,7 +942,7 @@ mod tests {
         assert_eq!(
             r.physical_columns[1].decoded().as_bytes_slice(),
             &[
-                Some("Aa".as_bytes().to_vec()),
+                Some(b"Aa".as_bytes().to_vec()),
                 Some("áa".as_bytes().to_vec()),
                 Some(b"aaa".to_vec()),
                 None,
@@ -1031,7 +1031,7 @@ mod tests {
                 Some(b"aaa".to_vec()),
                 None,
                 Some("áaA".as_bytes().to_vec()),
-                Some("aa".as_bytes().to_vec()),
+                Some(b"aa".as_bytes().to_vec()),
             ]
         );
         assert!(r.is_drained.unwrap());
