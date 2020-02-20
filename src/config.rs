@@ -1855,20 +1855,20 @@ impl TiKvConfig {
     }
 
     /// Validate the config, if encounter invalid config try to fallback to
-    /// the valid config
-    pub fn validate_with_rollback(
-        &mut self,
-        cfg: &TiKvConfig,
-    ) -> Result<ConfigChange, Box<dyn Error>> {
+    /// the valid config. Caller should not rely on this method for validating
+    /// because some configs not implement rollback collector yet.
+    pub fn validate_with_rollback(&mut self, cfg: &TiKvConfig) -> ConfigChange {
         let mut c = HashMap::new();
         let rb_collector = RollbackCollector::new(cfg, &mut c);
-        self.validate_or_rollback(Some(rb_collector))?;
-        Ok(c)
+        let _ = self.validate_or_rollback(Some(rb_collector));
+        c
     }
 
     // If `rb_collector` is `Some`, when encounter some invalid config, instead of
     // return an Error, a fallback from these invalid configs to the valid config
-    // will be collected and insert into `rb_collector`
+    // will be collected and insert into `rb_collector`. For configs that not implement
+    // rollback collector yet, an `Err` will return if encounter invalid config
+    // TODO: implement rollback collector for more config
     fn validate_or_rollback(
         &mut self,
         mut rb_collector: Option<RollbackCollector<TiKvConfig>>,
@@ -2299,6 +2299,10 @@ impl ConfigController {
         // Config from PD have not been checked, call `compatible_adjust()`
         // and `validate()` before use it
         incoming.compatible_adjust();
+        let rollback = incoming.validate_with_rollback(&self.current);
+        if !rollback.is_empty() {
+            return Ok(Either::Left(rollback));
+        }
         let diff = self.current.diff(&incoming);
         if diff.is_empty() {
             return Ok(Either::Right(false));
@@ -2308,7 +2312,7 @@ impl ConfigController {
             // equal to current config + diff
             let mut current = self.current.clone();
             current.update(diff.clone());
-            let rollback = current.validate_with_rollback(&self.current)?;
+            let rollback = current.validate_with_rollback(&self.current);
             if !rollback.is_empty() {
                 return Ok(Either::Left(rollback));
             }
@@ -2812,7 +2816,6 @@ mod tests {
         // Valid config do not have rollback
         assert!(valid_cfg
             .validate_with_rollback(&TiKvConfig::default())
-            .unwrap()
             .is_empty());
 
         // Call validate_with_rollback with an invalid config will
@@ -2823,7 +2826,7 @@ mod tests {
         // valid config
         c.raft_store.raft_log_gc_threshold = 200;
         assert!(c.validate().is_err());
-        let rollback = to_config_entry(c.validate_with_rollback(&valid_cfg).unwrap()).unwrap();
+        let rollback = to_config_entry(c.validate_with_rollback(&valid_cfg)).unwrap();
         assert_eq!(rollback.len(), 1);
         assert_eq!(rollback[0].name, "gc.batch-keys");
         assert_eq!(
@@ -2838,7 +2841,7 @@ mod tests {
         // config check: region_max_keys >= region_split_keys
         c.coprocessor.region_max_keys = 0;
         assert!(c.validate().is_err());
-        let mut rollback = to_config_entry(c.validate_with_rollback(&valid_cfg).unwrap()).unwrap();
+        let mut rollback = to_config_entry(c.validate_with_rollback(&valid_cfg)).unwrap();
         rollback.sort_unstable_by(|a, b| a.name.partial_cmp(&b.name).unwrap());
         assert_eq!(rollback.len(), 2);
         assert_eq!(rollback[0].name, "coprocessor.region-max-keys");
