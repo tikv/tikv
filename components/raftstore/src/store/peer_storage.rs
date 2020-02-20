@@ -24,11 +24,11 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
-use crate::into_other::into_other;
 use crate::store::fsm::GenSnapTask;
 use crate::store::util::conf_state_from_region;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
+use into_other::into_other;
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
