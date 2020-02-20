@@ -2996,13 +2996,13 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/hicqu/raft-rs?branch=downgrade-prost#55f9dd31484573be077c86d127bb545b92cd2ff6"
+source = "git+https://github.com/pingcap/raft-rs#afabefa23196a4a23832add0087f5a522d8ccc3b"
 dependencies = [
  "fxhash",
  "getset",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
- "raft-proto 0.6.0-alpha (git+https://github.com/hicqu/raft-rs?branch=downgrade-prost)",
+ "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)",
  "rand 0.7.2",
  "slog",
 ]
@@ -3012,12 +3012,12 @@ name = "raft"
 version = "0.6.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b246d7eb1d53af6915946f3c70d8503171664f8fa4c0efa092e9897275a19dc"
-replace = "raft 0.6.0-alpha (git+https://github.com/hicqu/raft-rs?branch=downgrade-prost)"
+replace = "raft 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
 
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/hicqu/raft-rs?branch=downgrade-prost#55f9dd31484573be077c86d127bb545b92cd2ff6"
+source = "git+https://github.com/pingcap/raft-rs#afabefa23196a4a23832add0087f5a522d8ccc3b"
 dependencies = [
  "bytes 0.4.12",
  "lazy_static",
@@ -3031,7 +3031,7 @@ name = "raft-proto"
 version = "0.6.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8892d0cb5e5f3b7d213ab9c7de44217d52b2751982654c69cdfbfa393940a42a"
-replace = "raft-proto 0.6.0-alpha (git+https://github.com/hicqu/raft-rs?branch=downgrade-prost)"
+replace = "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
 
 [[package]]
 name = "raftstore"
