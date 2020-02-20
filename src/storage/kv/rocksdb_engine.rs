@@ -282,12 +282,11 @@ impl Engine for RocksEngine {
             header.mut_not_leader().set_region_id(100);
             header
         };
-        let _not_leader = not_leader.clone();
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(Error::from(ErrorInner::Request(not_leader)))
+            Err(Error::from(ErrorInner::Request(not_leader.clone())))
         });
         if self.not_leader.load(Ordering::SeqCst) {
-            return Err(Error::from(ErrorInner::Request(_not_leader)));
+            return Err(Error::from(ErrorInner::Request(not_leader)));
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())

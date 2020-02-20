@@ -58,7 +58,9 @@ pub trait Scanner: Send {
                 }
                 Ok(None) => break,
                 Err(
-                    e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
+                    e
+                    @
+                    Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
                         ..
                     }))),
                 ) => {
@@ -169,6 +171,10 @@ impl EntryBatch {
 
     pub fn is_empty(&self) -> bool {
         self.entries.len() == 0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &TxnEntry> {
+        self.entries.iter()
     }
 
     pub fn drain(&mut self) -> std::vec::Drain<'_, TxnEntry> {
@@ -839,7 +845,7 @@ mod tests {
             .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
             .is_err());
         assert!(store
-            .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_d))
             .is_err());
 
         // Store with whole range
@@ -856,11 +862,9 @@ mod tests {
             .scanner(false, false, Some(bound_a.clone()), None)
             .is_ok());
         assert!(store2
-            .scanner(false, false, Some(bound_a.clone()), Some(bound_b.clone()))
+            .scanner(false, false, Some(bound_a), Some(bound_b))
             .is_ok());
-        assert!(store2
-            .scanner(false, false, None, Some(bound_c.clone()))
-            .is_ok());
+        assert!(store2.scanner(false, false, None, Some(bound_c)).is_ok());
     }
 
     fn gen_fixture_store() -> FixtureStore {
@@ -883,7 +887,7 @@ mod tests {
         data.insert(
             Key::from_raw(b"zz"),
             Err(Error::from(ErrorInner::Mvcc(MvccError::from(
-                txn_types::Error::BadFormatLock,
+                txn_types::Error::from(txn_types::ErrorInner::BadFormatLock),
             )))),
         );
 
@@ -1176,7 +1180,7 @@ mod benches {
             data.insert(Key::from_raw(&key), Ok(gen_payload(100)));
         }
         let store = FixtureStore::new(data);
-        let mut query_user_key = user_key.clone();
+        let mut query_user_key = user_key;
         query_user_key.push(10);
         let query_key = Key::from_raw(&query_user_key);
         b.iter(|| {

@@ -172,7 +172,7 @@ trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
                 self.encode_u64(v.to_packed_u64(ctx)?).map_err(Error::from)
             }
             ScalarValue::Duration(Some(v)) => self.encode_i64(v.to_nanos()).map_err(Error::from),
-            ScalarValue::Json(Some(v)) => self.write_json(&v),
+            ScalarValue::Json(Some(v)) => self.write_json(v.as_ref()),
             _ => unreachable!(),
         }
     }

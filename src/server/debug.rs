@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::path::Path;
 use std::str::FromStr;
@@ -25,19 +24,18 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
-use crate::raftstore::coprocessor::properties::{MvccProperties, RangeProperties};
-use crate::raftstore::coprocessor::{
-    get_region_approximate_keys_cf, get_region_approximate_middle,
-};
-use crate::raftstore::store::util as raftstore_util;
-use crate::raftstore::store::PeerStorage;
-use crate::raftstore::store::{
+use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
+use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
+use crate::storage::Iterator as EngineIterator;
+use engine_rocks::RangeProperties;
+use raftstore::coprocessor::properties::MvccProperties;
+use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
+use raftstore::store::util as raftstore_util;
+use raftstore::store::PeerStorage;
+use raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use crate::server::gc_worker::GcWorker;
-use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use crate::storage::{Engine, Iterator as EngineIterator};
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
@@ -134,14 +132,17 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 }
 
 #[derive(Clone)]
-pub struct Debugger<E: Engine> {
+pub struct Debugger {
     engines: Engines,
-    gc_worker: Option<GcWorker<E>>,
+    gc_worker_cfg: Option<GcWorkerConfigManager>,
 }
 
-impl<E: Engine> Debugger<E> {
-    pub fn new(engines: Engines, gc_worker: Option<GcWorker<E>>) -> Debugger<E> {
-        Debugger { engines, gc_worker }
+impl Debugger {
+    pub fn new(engines: Engines, gc_worker_cfg: Option<GcWorkerConfigManager>) -> Debugger {
+        Debugger {
+            engines,
+            gc_worker_cfg,
+        }
     }
 
     pub fn get_engine(&self) -> &Engines {
@@ -813,15 +814,12 @@ impl<E: Engine> Debugger<E> {
             Module::Server => {
                 if config_name == GC_IO_LIMITER_CONFIG_NAME {
                     if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
-                        let bps = i64::try_from(bytes_per_sec.0).unwrap_or_else(|_| {
-                            (panic!("{} > i64::max_value", GC_IO_LIMITER_CONFIG_NAME))
-                        });
-                        return self
-                            .gc_worker
-                            .as_ref()
-                            .expect("must be some")
-                            .change_io_limit(bps)
-                            .map_err(|e| Error::Other(e.into()));
+                        self.gc_worker_cfg.as_ref().expect("must be some").update(
+                            move |cfg: &mut GcConfig| {
+                                cfg.max_write_bytes_per_sec = bytes_per_sec;
+                            },
+                        );
+                        return Ok(());
                     }
                 }
                 Err(Error::InvalidArgument(format!(
@@ -883,7 +881,7 @@ impl<E: Engine> Debugger<E> {
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
         ]
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
         .collect();
         res.push((
             "middle_key_by_approximate_size".to_string(),
@@ -967,7 +965,7 @@ impl MvccChecker {
             let from = start_key.clone();
             let to = end_key.clone();
             let readopts = IterOption::new(
-                Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+                Some(KeyBuilder::from_vec(from, 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
             )
@@ -1461,7 +1459,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
     Ok(())
 }
 
-fn divide_db(db: &Arc<DB>, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let mut region = Region::default();
     region.mut_peers().push(Peer::default());
@@ -1477,7 +1475,7 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>
     divide_db_cf(db, parts, cf)
 }
 
-fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
     let collection = engine::util::get_range_properties_cf(db, cf, &start, &end)?;
@@ -1542,9 +1540,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::server::gc_worker::GcConfig;
     use crate::storage::mvcc::{Lock, LockType};
-    use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
@@ -1645,7 +1641,7 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger<TestEngine> {
+    fn new_debugger() -> Debugger {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -1664,13 +1660,10 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        let test_engine = TestEngineBuilder::new().build().unwrap();
-        let mut gc_worker = GcWorker::new(test_engine, None, None, GcConfig::default());
-        gc_worker.start().unwrap();
-        Debugger::new(engines, Some(gc_worker))
+        Debugger::new(engines, Some(Default::default()))
     }
 
-    impl Debugger<TestEngine> {
+    impl Debugger {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
@@ -1920,7 +1913,7 @@ mod tests {
         // region 3 with peers at stores 21, 22, 23.
         let region_3 = init_region_state(engine, 3, &[21, 22, 23]);
         // Got the target region from pd but the peers are not changed.
-        let mut target_region_3 = region_3.clone();
+        let mut target_region_3 = region_3;
         target_region_3.mut_region_epoch().set_conf_ver(100);
 
         // Test with bad target region. No region state in rocksdb should be changed.
