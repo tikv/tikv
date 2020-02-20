@@ -11,7 +11,7 @@ use engine_traits::engine_util::MetricsFlusher;
 use engine_traits::KvEngines;
 use rocksdb::DB;
 
-use crate::rocks::util::engine_metrics::*;
+use crate::rocks::util::*;
 use crate::RocksEngine;
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;

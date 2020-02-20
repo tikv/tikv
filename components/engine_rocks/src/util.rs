@@ -3,7 +3,7 @@
 use crate::cf_options::RocksColumnFamilyOptions;
 use crate::db_options::RocksDBOptions;
 use crate::engine::RocksEngine;
-use crate::rocks::util::engine_metrics::{
+use crate::rocks::util::rocks_metrics_defs::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
     ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE,
     ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE,
