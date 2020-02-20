@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error as StdError;
-use std::sync::{self, mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
 
@@ -223,7 +223,14 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
-        self.sim.wl().stop_node(node_id);
+        match self.sim.write() {
+            Ok(mut sim) => sim.stop_node(node_id),
+            Err(_) => {
+                if !thread::panicking() {
+                    panic!("failed to acquire write lock.")
+                }
+            }
+        }
         debug!("node {} stopped", node_id);
     }
 
@@ -522,13 +529,16 @@ impl<T: Simulator> Cluster<T> {
     pub fn shutdown(&mut self) {
         debug!("about to shutdown cluster");
         let keys;
-        match self.sim.try_read() {
+        match self.sim.read() {
             Ok(s) => keys = s.get_node_ids(),
-            Err(sync::TryLockError::Poisoned(e)) => {
-                let s = e.into_inner();
-                keys = s.get_node_ids();
+            Err(_) => {
+                if thread::panicking() {
+                    // Leave the resource to avoid double panic.
+                    return;
+                } else {
+                    panic!("failed to acquire read lock");
+                }
             }
-            Err(sync::TryLockError::WouldBlock) => unreachable!(),
         }
         for id in keys {
             self.stop_node(id);
