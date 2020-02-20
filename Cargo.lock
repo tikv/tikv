@@ -1714,6 +1714,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "into_other"
+version = "0.0.1"
+dependencies = [
+ "engine_traits",
+ "kvproto",
+ "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "iovec"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3009,6 +3018,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "hex 0.3.2",
+ "into_other",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4315,6 +4325,7 @@ dependencies = [
  "grpcio",
  "hex 0.3.2",
  "hyper",
+ "into_other",
  "itertools",
  "keys",
  "kvproto",

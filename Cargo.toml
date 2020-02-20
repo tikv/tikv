@@ -130,6 +130,7 @@ txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.7", features = ["serde", "v4"] }
 vlog = "0.1.4"
+into_other = { path = "components/into_other" }
 
 [dependencies.prometheus]
 git = "https://github.com/tikv/rust-prometheus.git"
@@ -194,6 +195,7 @@ members = [
   "components/batch-system",
   "components/cdc",
   "components/raftstore",
+  "components/into_other",
 ]
 default-members = ["cmd"]
 
