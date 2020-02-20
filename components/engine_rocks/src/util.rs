@@ -12,7 +12,6 @@ use crate::rocks::util::engine_metrics::{
 use engine::rocks::util::new_engine as new_engine_raw;
 use engine::rocks::util::new_engine_opt as new_engine_opt_raw;
 use engine::rocks::util::CFOptions;
-
 use engine_traits::Range;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Error, Result};

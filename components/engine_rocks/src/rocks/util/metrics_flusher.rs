@@ -3,16 +3,16 @@
 use std::io;
 use std::result::Result;
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine_traits::engine_util::MetricsFlusher;
+use engine_traits::KvEngines;
+use rocksdb::DB;
 
 use crate::rocks::util::engine_metrics::*;
 use crate::RocksEngine;
-use engine_traits::KvEngines;
-use rocksdb::DB;
-use std::sync::Arc;
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
 pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;
