@@ -58,6 +58,22 @@ pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<In
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
+pub fn day_of_week(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    if t.is_none() {
+        return Ok(None);
+    }
+    let t = t.as_ref().unwrap();
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+            .map(|_| Ok(None))?;
+    }
+    let day = t.weekday().number_from_sunday();
+    Ok(Some(Int::from(day)))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
 pub fn day_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
     if t.is_none() {
         return Ok(None);
@@ -415,6 +431,37 @@ mod tests {
         let output = RpnFnScalarEvaluator::new()
             .push_param(None::<DateTime>)
             .evaluate::<Int>(ScalarFuncSig::WeekOfYear)
+            .unwrap();
+        assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_day_of_week() {
+        let cases = vec![
+            ("2018-11-11 00:00:00.000000", Some(1)),
+            ("2018-11-12 00:00:00.000000", Some(2)),
+            ("2018-11-13 00:00:00.000000", Some(3)),
+            ("2018-11-14 00:00:00.000000", Some(4)),
+            ("2018-11-15 00:00:00.000000", Some(5)),
+            ("2018-11-16 00:00:00.000000", Some(6)),
+            ("2018-11-17 00:00:00.000000", Some(7)),
+            ("2018-11-18 00:00:00.000000", Some(1)),
+            ("0000-00-00 00:00:00.000000", None),
+            ("2018-11-00 00:00:00.000000", None),
+            ("2018-00-11 00:00:00.000000", None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(datetime.clone())
+                .evaluate(ScalarFuncSig::DayOfWeek)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<DateTime>)
+            .evaluate::<Int>(ScalarFuncSig::DayOfWeek)
             .unwrap();
         assert_eq!(output, None);
     }
