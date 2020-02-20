@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
 use tipb;
 
@@ -30,12 +29,8 @@ impl CmSketch {
 
     // `hash` hashes the data into two u64 using murmur hash.
     fn hash(mut bytes: &[u8]) -> (u64, u64) {
-        let mut out: [u8; 16] = [0; 16];
-        murmur3_x64_128(&mut bytes, 0, &mut out);
-        (
-            LittleEndian::read_u64(&out[0..8]),
-            LittleEndian::read_u64(&out[8..16]),
-        )
+        let out = murmur3_x64_128(&mut bytes, 0).unwrap();
+        (out as u64, (out >> 64) as u64)
     }
 
     // `insert` inserts the data into cm sketch. For each row i, the position at

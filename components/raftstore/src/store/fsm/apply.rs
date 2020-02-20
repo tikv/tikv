@@ -5,7 +5,7 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -22,7 +22,7 @@ use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::import_sstpb::SstMeta;
-use kvproto::metapb::{Peer as PeerMeta, Region};
+use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -33,15 +33,15 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
 use uuid::Builder as UuidBuilder;
 
-use crate::coprocessor::CoprocessorHost;
+use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::*;
-use crate::store::msg::{Callback, PeerMsg, SignificantMsg};
+use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
-use crate::store::util::check_region_epoch;
 use crate::store::util::KeysInfoFormatter;
-use crate::store::{cmd_resp, util, Config};
+use crate::store::util::{check_region_epoch, compare_region_epoch};
+use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
@@ -344,7 +344,7 @@ impl ApplyContext {
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
-    pub fn prepare_for(&mut self, delegate: &ApplyDelegate) {
+    pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate) {
         if self.kv_wb.is_none() {
             self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
             self.kv_wb_last_bytes = 0;
@@ -352,6 +352,17 @@ impl ApplyContext {
         }
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
+
+        if let Some(enabled) = &delegate.observe_cmd {
+            let region_id = delegate.region_id();
+            if enabled.load(Ordering::Acquire) {
+                self.host.prepare_for_apply(region_id);
+            } else {
+                info!("region is no longer observerd";
+                    "region_id" => region_id);
+                delegate.observe_cmd.take();
+            }
+        }
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates whether
@@ -467,6 +478,8 @@ impl ApplyContext {
                 );
             }
         }
+
+        self.host.on_flush_apply();
 
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
 
@@ -651,6 +664,9 @@ pub struct ApplyDelegate {
     /// The latest synced apply index.
     last_sync_apply_index: u64,
 
+    /// Indicates whether to observe executed cmds.
+    observe_cmd: Option<Arc<AtomicBool>>,
+
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
 }
@@ -676,6 +692,7 @@ impl ApplyDelegate {
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
+            observe_cmd: None,
         }
     }
 
@@ -810,6 +827,7 @@ impl ApplyDelegate {
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
+        // TOOD(cdc): should we observe empty cmd, aka leader change?
 
         self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
@@ -914,7 +932,7 @@ impl ApplyDelegate {
 
         let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         apply_ctx.host.pre_apply(&self.region, &cmd);
-        let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, cmd);
+        let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, &cmd);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
@@ -930,6 +948,11 @@ impl ApplyDelegate {
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_cb(index, term, is_conf_change);
+        if self.observe_cmd.is_some() {
+            let cmd = Cmd::new(index, cmd, resp.clone());
+            apply_ctx.host.on_apply_cmd(self.region_id(), cmd);
+        }
+
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
 
         exec_result
@@ -948,14 +971,14 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         index: u64,
         term: u64,
-        req: RaftCmdRequest,
+        req: &RaftCmdRequest,
     ) -> (RaftCmdResponse, ApplyResult) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.kv_kv_wb_mut().set_save_point();
-        let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
+        let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
             Ok(a) => {
                 ctx.kv_kv_wb_mut().pop_save_point().unwrap();
                 a
@@ -1054,16 +1077,16 @@ impl ApplyDelegate {
     fn exec_raft_cmd(
         &mut self,
         ctx: &mut ApplyContext,
-        req: RaftCmdRequest,
+        req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        check_region_epoch(&req, &self.region, include_region)?;
+        check_region_epoch(req, &self.region, include_region)?;
         if req.has_admin_request() {
-            self.exec_admin_cmd(ctx, &req)
+            self.exec_admin_cmd(ctx, req)
         } else {
-            self.exec_write_cmd(ctx, &req)
+            self.exec_write_cmd(ctx, req)
         }
     }
 
@@ -2305,6 +2328,20 @@ impl Debug for GenSnapTask {
     }
 }
 
+pub enum ChangeCmd {
+    RegisterObserver {
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        enabled: Arc<AtomicBool>,
+        cb: Callback<RocksEngine>,
+    },
+    Snapshot {
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        cb: Callback<RocksEngine>,
+    },
+}
+
 pub enum Msg {
     Apply {
         start: Instant,
@@ -2316,6 +2353,7 @@ pub enum Msg {
     Noop,
     Destroy(Destroy),
     Snapshot(GenSnapTask),
+    Change(ChangeCmd),
     #[cfg(any(test, feature = "testexport"))]
     Validate(u64, Box<dyn FnOnce((&ApplyDelegate, bool)) + Send>),
 }
@@ -2353,6 +2391,12 @@ impl Debug for Msg {
             Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
             Msg::Snapshot(GenSnapTask { region_id, .. }) => {
                 write!(f, "[region {}] requests a snapshot", region_id)
+            }
+            Msg::Change(ChangeCmd::RegisterObserver { region_id, .. }) => {
+                write!(f, "[region {}] registers cmd observer", region_id)
+            }
+            Msg::Change(ChangeCmd::Snapshot { region_id, .. }) => {
+                write!(f, "[region {}] cmd snapshot", region_id)
             }
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
@@ -2562,11 +2606,6 @@ impl ApplyFsm {
             return false;
         }
 
-        info!(
-            "all pending logs are applied";
-            "region_id" => self.delegate.region_id(),
-            "peer_id" => self.delegate.id(),
-        );
         true
     }
 
@@ -2656,6 +2695,61 @@ impl ApplyFsm {
         );
     }
 
+    fn handle_change(&mut self, apply_ctx: &mut ApplyContext, change: ChangeCmd) {
+        let (region_id, region_epoch, cb, enabled) = match change {
+            ChangeCmd::RegisterObserver {
+                region_id,
+                region_epoch,
+                enabled,
+                cb,
+            } => {
+                assert!(!self
+                    .delegate
+                    .observe_cmd
+                    .as_ref()
+                    .map_or(false, |e| e.load(Ordering::Relaxed)));
+                (region_id, region_epoch, cb, Some(enabled))
+            }
+            ChangeCmd::Snapshot {
+                region_id,
+                region_epoch,
+                cb,
+            } => (region_id, region_epoch, cb, None),
+        };
+
+        assert_eq!(self.delegate.region_id(), region_id);
+        let resp = match compare_region_epoch(
+            &region_epoch,
+            &self.delegate.region,
+            false, /* check_conf_ver */
+            true,  /* check_ver */
+            true,  /* include_region */
+        ) {
+            Ok(()) => {
+                // Commit the writebatch for ensuring the following snapshot can get all previous writes.
+                if apply_ctx.kv_wb.is_some() && apply_ctx.kv_wb().count() > 0 {
+                    apply_ctx.commit(&mut self.delegate);
+                }
+                ReadResponse {
+                    response: Default::default(),
+                    snapshot: Some(RegionSnapshot::<RocksEngine>::from_raw(
+                        apply_ctx.engines.kv.clone(),
+                        self.delegate.region.clone(),
+                    )),
+                }
+            }
+            Err(e) => ReadResponse {
+                response: cmd_resp::new_error(e),
+                snapshot: None,
+            },
+        };
+        if enabled.is_some() {
+            // TODO(cdc): take observe_cmd when enabled is false.
+            self.delegate.observe_cmd = enabled;
+        }
+        cb.invoke_read(resp);
+    }
+
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -2677,6 +2771,7 @@ impl ApplyFsm {
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
+                Some(Msg::Change(change_cmd)) => self.handle_change(apply_ctx, change_cmd),
                 #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
                 None => break,
@@ -2922,6 +3017,17 @@ impl ApplyRouter {
                         "region_id" => region_id,
                         "merge" => ?cul.merge,
                     );
+                    return;
+                }
+                Msg::Change(ChangeCmd::RegisterObserver { region_id, cb, .. })
+                | Msg::Change(ChangeCmd::Snapshot { region_id, cb, .. }) => {
+                    warn!("target region is not found";
+                            "region_id" => region_id);
+                    let resp = ReadResponse {
+                        response: cmd_resp::new_error(Error::RegionNotFound(region_id)),
+                        snapshot: None,
+                    };
+                    cb.invoke_read(resp);
                     return;
                 }
                 #[cfg(any(test, feature = "testexport"))]
@@ -3459,6 +3565,8 @@ mod tests {
         pre_query_count: Arc<AtomicUsize>,
         post_admin_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
+        cmd_batches: RefCell<Vec<CmdBatch>>,
+        cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
     }
 
     impl Coprocessor for ApplyObserver {}
@@ -3470,6 +3578,31 @@ mod tests {
 
         fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl CmdObserver for ApplyObserver {
+        fn on_prepare_for_apply(&self, region_id: u64) {
+            self.cmd_batches.borrow_mut().push(CmdBatch::new(region_id));
+        }
+
+        fn on_apply_cmd(&self, region_id: u64, cmd: Cmd) {
+            self.cmd_batches
+                .borrow_mut()
+                .last_mut()
+                .expect("should exist some cmd batch")
+                .push(region_id, cmd);
+        }
+
+        fn on_flush_apply(&self) {
+            if !self.cmd_batches.borrow().is_empty() {
+                let batches = self.cmd_batches.replace(Vec::default());
+                for b in batches {
+                    if let Some(sink) = self.cmd_sink.as_ref() {
+                        sink.lock().unwrap().send(b).unwrap();
+                    }
+                }
+            }
         }
     }
 
@@ -3714,6 +3847,153 @@ mod tests {
     }
 
     #[test]
+    fn test_cmd_observer() {
+        let (_path, engines) = create_tmp_engine("test-delegate");
+        let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let mut host = CoprocessorHost::default();
+        let mut obs = ApplyObserver::default();
+        let (sink, cmdbatch_rx) = mpsc::channel();
+        obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
+        host.registry
+            .register_cmd_observer(1, BoxCmdObserver::new(obs));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Notifier::Sender(tx);
+        let cfg = Config::default();
+        let (router, mut system) = create_apply_batch_system(&cfg);
+        let builder = super::Builder {
+            tag: "test-store".to_owned(),
+            cfg: Arc::new(VersionTrack::new(cfg)),
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engines,
+            router: router.clone(),
+        };
+        system.spawn("test-handle-raft".to_owned(), builder);
+
+        let mut reg = Registration::default();
+        reg.id = 3;
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(2, 3));
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        let region_epoch = reg.region.get_region_epoch().clone();
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let put_entry = EntryBuilder::new(1, 1)
+            .put(b"k1", b"v1")
+            .put(b"k2", b"v1")
+            .put(b"k3", b"v1")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![put_entry])));
+        fetch_apply_res(&rx);
+        // It must receive nothing because no region registered.
+        cmdbatch_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+        let (block_tx, block_rx) = mpsc::channel::<()>();
+        router.schedule_task(
+            1,
+            Msg::Validate(
+                1,
+                Box::new(move |_| {
+                    // Block the apply worker
+                    block_rx.recv().unwrap();
+                }),
+            ),
+        );
+        let put_entry = EntryBuilder::new(2, 2)
+            .put(b"k0", b"v0")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
+        // Register cmd observer to region 1.
+        let enabled = Arc::new(AtomicBool::new(true));
+        router.schedule_task(
+            1,
+            Msg::Change(ChangeCmd::RegisterObserver {
+                region_id: 1,
+                region_epoch: region_epoch.clone(),
+                enabled: enabled.clone(),
+                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                    assert!(!resp.response.get_header().has_error());
+                    assert!(resp.snapshot.is_some());
+                    let snap = resp.snapshot.unwrap();
+                    assert_eq!(snap.get_value(b"k0").unwrap().unwrap(), b"v0");
+                })),
+            }),
+        );
+        // Unblock the apply worker
+        block_tx.send(()).unwrap();
+        fetch_apply_res(&rx);
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let put_entry = EntryBuilder::new(3, 2)
+            .put_cf(CF_LOCK, b"k1", b"v1")
+            .epoch(1, 3)
+            .capture_resp(&router, 3, 1, capture_tx)
+            .build();
+        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
+        fetch_apply_res(&rx);
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        assert_eq!(resp.get_responses().len(), 1);
+        let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(resp, cmd_batch.into_iter(1).next().unwrap().response);
+
+        let put_entry1 = EntryBuilder::new(4, 2)
+            .put(b"k2", b"v2")
+            .epoch(1, 3)
+            .build();
+        let put_entry2 = EntryBuilder::new(5, 2)
+            .put(b"k2", b"v2")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(Apply::new(1, 2, vec![put_entry1, put_entry2])),
+        );
+        let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(2, cmd_batch.len());
+
+        // Stop observer regoin 1.
+        enabled.store(false, Ordering::SeqCst);
+        let put_entry = EntryBuilder::new(6, 2)
+            .put(b"k2", b"v2")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
+        // Must not receive new cmd.
+        cmdbatch_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        // Must response a RegionNotFound error.
+        router.schedule_task(
+            2,
+            Msg::Change(ChangeCmd::RegisterObserver {
+                region_id: 2,
+                region_epoch,
+                enabled,
+                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                    assert!(resp
+                        .response
+                        .get_header()
+                        .get_error()
+                        .has_region_not_found());
+                    assert!(resp.snapshot.is_none());
+                })),
+            }),
+        );
+
+        system.shutdown();
+    }
+
+    #[test]
     fn test_check_sst_for_ingestion() {
         let mut sst = SstMeta::default();
         let mut region = Region::default();
@@ -3824,10 +4104,17 @@ mod tests {
         reg.region.set_id(1);
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
+        let region_epoch = reg.region.get_region_epoch().clone();
         let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
         reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
+        let mut host = CoprocessorHost::default();
+        let mut obs = ApplyObserver::default();
+        let (sink, cmdbatch_rx) = mpsc::channel();
+        obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
+        host.registry
+            .register_cmd_observer(1, BoxCmdObserver::new(obs));
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
@@ -3837,13 +4124,26 @@ mod tests {
             sender,
             importer,
             region_scheduler,
-            coprocessor_host: CoprocessorHost::default(),
+            coprocessor_host: host,
             engines: engines.clone(),
             router: router.clone(),
         };
         system.spawn("test-split".to_owned(), builder);
 
         router.schedule_task(1, Msg::Registration(reg.clone()));
+        let enabled = Arc::new(AtomicBool::new(true));
+        router.schedule_task(
+            1,
+            Msg::Change(ChangeCmd::RegisterObserver {
+                region_id: 1,
+                region_epoch: region_epoch.clone(),
+                enabled: enabled.clone(),
+                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                    assert!(!resp.response.get_header().has_error(), "{:?}", resp);
+                    assert!(resp.snapshot.is_some());
+                })),
+            }),
+        );
 
         let mut index_id = 1;
         let (capture_tx, capture_rx) = mpsc::channel();
@@ -3867,6 +4167,7 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // 3 followers are required.
         assert!(error_msg(&resp).contains("id count"), "{:?}", resp);
+        cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
         splits.mut_requests().clear();
         let resp = exec_split(&router, splits.clone());
@@ -3976,6 +4277,27 @@ mod tests {
         checker.check(b"k3", b"k31", 1, &[3, 5, 7], false);
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
+
+        let (tx, rx) = mpsc::channel();
+        enabled.store(false, Ordering::SeqCst);
+        router.schedule_task(
+            1,
+            Msg::Change(ChangeCmd::RegisterObserver {
+                region_id: 1,
+                region_epoch,
+                enabled: Arc::new(AtomicBool::new(true)),
+                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
+                    assert!(
+                        resp.response.get_header().get_error().has_epoch_not_match(),
+                        "{:?}",
+                        resp
+                    );
+                    assert!(resp.snapshot.is_none());
+                    tx.send(()).unwrap();
+                })),
+            }),
+        );
+        rx.recv_timeout(Duration::from_millis(500)).unwrap();
 
         system.shutdown();
     }

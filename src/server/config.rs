@@ -4,7 +4,6 @@ use std::{i32, isize};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
-use sysinfo::SystemExt;
 
 use tikv_util::collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
@@ -114,8 +113,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = sysinfo::System::new().get_processors().len();
-
+        let cpu_num = sysinfo::get_logical_cores();
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),

@@ -88,6 +88,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "components/log_wrappers" }
 mime = "0.3.13"
 more-asserts = "0.1"
+murmur3 = "0.5.1"
 nix = "0.11"
 nom = "5.0.1"
 pd_client = { path = "components/pd_client" }
@@ -110,7 +111,7 @@ slog-term = "2.4"
 slog_derive = "0.1"
 parking_lot = "0.10"
 sst_importer = { path = "components/sst_importer" }
-sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv2"}
+sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tempfile = "3.0"
 tidb_query = { path = "components/tidb_query", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc", default-features = false }
@@ -129,9 +130,7 @@ toml = "0.4"
 url = "2"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
 vlog = "0.1.4"
-
-[dependencies.murmur3]
-git = "https://github.com/pingcap/murmur3.git"
+into_other = { path = "components/into_other" }
 
 [dependencies.prometheus]
 git = "https://github.com/tikv/rust-prometheus.git"
@@ -197,6 +196,7 @@ members = [
   "components/batch-system",
   "components/cdc",
   "components/raftstore",
+  "components/into_other",
 ]
 default-members = ["cmd"]
 

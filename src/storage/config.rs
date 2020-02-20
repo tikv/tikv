@@ -5,7 +5,6 @@
 use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
 use libc::c_int;
 use std::error::Error;
-use sysinfo::SystemExt;
 use tikv_util::config::{self, ReadableSize, KB};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
@@ -39,8 +38,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let total_cpu = sysinfo::System::new().get_processors().len();
-
+        let total_cpu = sysinfo::get_logical_cores();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
@@ -101,6 +99,7 @@ impl BlockCacheConfig {
         }
         let capacity = match self.capacity {
             None => {
+                use sysinfo::SystemExt;
                 let total_mem = sysinfo::System::new().get_total_memory() * KB;
                 ((total_mem as f64) * 0.45) as usize
             }
