@@ -251,6 +251,8 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+pub mod engine_util;
 pub mod util;
+pub use crate::engine_util::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
