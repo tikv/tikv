@@ -1386,8 +1386,12 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "failure",
+ "grpcio",
+ "kvproto",
+ "protobuf-build 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tidb_query",
  "tikv_util",
+ "tipb",
 ]
 
 [[package]]
@@ -1837,7 +1841,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#7f1b9fd3a03f9269d8915d304bfe23b84def11a1"
+source = "git+https://github.com/pingcap/kvproto.git#528e82bf724834aad85f56808e4fa5f388a1497c"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -1919,7 +1923,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#0502db094849f4db45678d4473f2ceb4fb915f8b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1937,7 +1941,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#0502db094849f4db45678d4473f2ceb4fb915f8b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2188,11 +2192,9 @@ dependencies = [
 
 [[package]]
 name = "murmur3"
-version = "0.4.0"
-source = "git+https://github.com/pingcap/murmur3.git#4af9e1a8f2d4206d90d81f11e513fb03c87208bf"
-dependencies = [
- "byteorder",
-]
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ead5388e485d38e622630c6b05afd3761a6701ff15c55b279ea5b31dcb62cff"
 
 [[package]]
 name = "native-tls"
@@ -3419,7 +3421,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#0502db094849f4db45678d4473f2ceb4fb915f8b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
 dependencies = [
  "libc",
  "librocksdb_sys",
