@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![allow(unused)]
-
 use crate::engine::RocksEngine;
 use crate::util;
 use engine_traits::Range;
