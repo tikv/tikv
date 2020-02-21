@@ -366,7 +366,7 @@ pub mod tests {
     /// Builds an executor that will return these logical data:
     ///
     /// == Schema ==
-    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int) Col4(Bytes-utf8_general_ci)
+    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)  Col4(Bytes-utf8_general_ci)
     /// == Call #1 ==
     /// NULL         1.0         abc         1          aa
     /// 7.0          2.0         NULL        NULL       aaa
