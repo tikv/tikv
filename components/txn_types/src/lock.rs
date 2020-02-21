@@ -104,8 +104,8 @@ impl Lock {
         if b.is_empty() {
             return Err(Error::from(ErrorInner::BadFormatLock));
         }
-        let lock_type =
-            LockType::from_u8(b.read_u8()?).ok_or_else(|| Error::from(ErrorInner::BadFormatLock))?;
+        let lock_type = LockType::from_u8(b.read_u8()?)
+            .ok_or_else(|| Error::from(ErrorInner::BadFormatLock))?;
         let primary = b.read_compact_bytes()?;
         if b.is_empty() {
             return Err(Error::from(ErrorInner::BadFormatLock));
