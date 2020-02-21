@@ -293,6 +293,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
+            | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
@@ -504,7 +505,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TimeStringTimeDiff
             | ScalarFuncSig::TimeTimeTimeDiff
             | ScalarFuncSig::TimeToSec
-            | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -788,6 +788,7 @@ dispatch_call! {
         WeekOfYear => week_of_year,
         Year => year,
         ToDays => to_days,
+        ToSeconds => to_seconds,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
@@ -1656,7 +1657,6 @@ mod tests {
             ScalarFuncSig::TimeStringTimeDiff,
             ScalarFuncSig::TimeTimeTimeDiff,
             ScalarFuncSig::TimeToSec,
-            ScalarFuncSig::ToSeconds,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
