@@ -77,6 +77,7 @@ tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
 url = "2"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
+into_other = { path = "../into_other" }
 
 [dependencies.prometheus]
 git = "https://github.com/tikv/rust-prometheus.git"
