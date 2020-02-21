@@ -4232,6 +4232,7 @@ dependencies = [
  "derive_more",
  "failure",
  "flate2",
+ "futures 0.3.1",
  "hex 0.3.2",
  "indexmap",
  "kvproto",
