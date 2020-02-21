@@ -30,7 +30,7 @@ impl
         PanicTablePropertiesCollectionIter,
         PanicTablePropertiesKey,
         PanicTableProperties,
-        UCPanicTableProperties,
+        PanicUserCollectedProperties,
     > for PanicTablePropertiesCollection
 {
     fn iter(&self) -> PanicTablePropertiesCollectionIter {
@@ -48,7 +48,7 @@ impl
     TablePropertiesCollectionIter<
         PanicTablePropertiesKey,
         PanicTableProperties,
-        UCPanicTableProperties,
+        PanicUserCollectedProperties,
     > for PanicTablePropertiesCollectionIter
 {
 }
@@ -75,7 +75,7 @@ impl Deref for PanicTablePropertiesKey {
 
 pub struct PanicTableProperties;
 
-impl TableProperties<UCPanicTableProperties> for PanicTableProperties {
+impl TableProperties<PanicUserCollectedProperties> for PanicTableProperties {
     fn num_entries(&self) -> u64 {
         panic!()
     }
