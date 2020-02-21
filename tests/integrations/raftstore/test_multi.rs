@@ -777,3 +777,23 @@ fn test_server_batch_write() {
     let mut cluster = new_server_cluster(0, 3);
     test_batch_write(&mut cluster);
 }
+
+#[test]
+fn test_single_voter_hibernate_restart() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+    cluster.pd_client.disable_default_operator();
+    cluster.run_conf_change();
+    cluster.pd_client.must_add_peer(1, new_learner_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    cluster.stop_node(2);
+    cluster.must_put(b"k2", b"v2");
+    cluster.stop_node(1);
+    // Restart learner first to avoid network influence.
+    cluster.run_node(2).unwrap();
+    cluster.run_node(1).unwrap();
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+}
