@@ -2563,6 +2563,9 @@ impl Peer {
             send_msg.set_from_peer(self.peer.clone());
             send_msg.set_region_epoch(self.region().get_region_epoch().clone());
             send_msg.set_to_peer(peer.clone());
+            send_msg
+                .mut_message()
+                .set_index(self.raft_group.get_store().committed_index());
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
             if let Err(e) = trans.send(send_msg) {

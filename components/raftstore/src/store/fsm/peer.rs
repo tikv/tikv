@@ -865,7 +865,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let extra_msg = msg.get_extra_msg();
         match extra_msg.get_type() {
             ExtraMessageType::MsgRegionWakeUp => {
-                self.reset_raft_tick(GroupState::Ordered);
+                if msg.get_message().get_index() < self.fsm.peer.get_store().committed_index() {
+                    self.reset_raft_tick(GroupState::Ordered);
+                }
             }
         }
     }
