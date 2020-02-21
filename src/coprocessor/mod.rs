@@ -25,7 +25,7 @@ pub mod dag;
 mod endpoint;
 mod error;
 pub mod local_metrics;
-mod metrics;
+pub(crate) mod metrics;
 pub mod readpool_impl;
 mod statistics;
 mod tracker;
@@ -58,6 +58,10 @@ pub trait RequestHandler: Send {
     /// Processes current request and produces streaming responses.
     fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
         panic!("streaming request is not supported for this handler");
+    }
+
+    fn set_execution_time_limit(&mut self, _execution_time_limit: Option<Duration>) {
+        // Execution time limit is not supported by default
     }
 
     /// Collects scan statistics generated in this request handler so far.

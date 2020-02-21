@@ -5,8 +5,17 @@ use failure::Fail;
 
 #[derive(Fail, Debug)]
 pub enum EvaluateError {
-    #[fail(display = "Execution terminated due to exceeding max time limit")]
-    MaxExecuteTimeExceeded,
+    #[fail(display = "Execution terminated due to exceeding the deadline")]
+    DeadlineExceeded,
+
+    /// When resource is exhausted, new requests will be cancelled if its execution time
+    /// exceeds a small limit. But the cancelled request can be retried if there is free
+    /// resource later.
+    #[fail(display = "Execution cancelled due to exceeding execution time limit (will retry)")]
+    ExecutionTimeLimitExceeded,
+
+    #[fail(display = "Invalid {} character string", charset)]
+    InvalidCharacterString { charset: String },
 
     /// This variant is only a compatible layer for existing CodecError.
     /// Ideally each error kind should occupy an enum variant.
@@ -21,10 +30,10 @@ impl EvaluateError {
     /// Returns the error code.
     pub fn code(&self) -> i32 {
         match self {
-            // TODO: We should assign our own error code
-            EvaluateError::MaxExecuteTimeExceeded => 9007,
+            EvaluateError::InvalidCharacterString { .. } => 1300,
+            EvaluateError::DeadlineExceeded => 9007,
             EvaluateError::Custom { code, .. } => *code,
-            EvaluateError::Other(_) => 10000,
+            EvaluateError::Other(_) | EvaluateError::ExecutionTimeLimitExceeded => 10000,
         }
     }
 }
@@ -51,7 +60,7 @@ impl From<Box<dyn std::error::Error + Send + Sync>> for EvaluateError {
 impl From<tikv_util::deadline::DeadlineError> for EvaluateError {
     #[inline]
     fn from(_: tikv_util::deadline::DeadlineError) -> Self {
-        EvaluateError::MaxExecuteTimeExceeded
+        EvaluateError::DeadlineExceeded
     }
 }
 
