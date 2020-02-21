@@ -8,7 +8,6 @@ publish = false
 futures = "0.1"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
 hex = "0.3"
-keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
@@ -28,7 +27,7 @@ tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus.git"
+git = "https://github.com/tikv/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 features = ["nightly", "push", "process"]
 
