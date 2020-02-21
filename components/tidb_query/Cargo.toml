@@ -68,3 +68,4 @@ git = "https://github.com/tikv/yatp.git"
 profiler = { path = "../profiler" }
 panic_hook = { path = "../panic_hook" }
 tipb_helper = { path = "../tipb_helper" }
+futures = "0.3"
