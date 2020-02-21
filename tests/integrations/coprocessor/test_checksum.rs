@@ -42,7 +42,7 @@ fn test_checksum() {
     ];
 
     let product = ProductTable::new();
-    let (store, endpoint) = init_data_with_commit(&product, &data, true);
+    let (store, endpoint, _pool) = init_data_with_commit(&product, &data, true);
 
     for column in &[&product["id"], &product["name"], &product["count"]] {
         assert!(column.index >= 0);

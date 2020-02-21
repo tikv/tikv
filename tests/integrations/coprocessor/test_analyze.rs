@@ -79,7 +79,7 @@ fn test_analyze_column_with_lock() {
 
     let product = ProductTable::new();
     for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
-        let (_, endpoint) = init_data_with_commit(&product, &data, false);
+        let (_, endpoint, _pool) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_column_req(&product, 3, 3, 3, 4, 32);
         let mut ctx = Context::default();
@@ -113,7 +113,7 @@ fn test_analyze_column() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, _pool) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_column_req(&product, 3, 3, 3, 4, 32);
     let resp = handle_request(&endpoint, req);
@@ -144,7 +144,7 @@ fn test_analyze_index_with_lock() {
 
     let product = ProductTable::new();
     for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
-        let (_, endpoint) = init_data_with_commit(&product, &data, false);
+        let (_, endpoint, _pool) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32);
         let mut ctx = Context::default();
@@ -178,7 +178,7 @@ fn test_analyze_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, _pool) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32);
     let resp = handle_request(&endpoint, req);
@@ -204,7 +204,7 @@ fn test_invalid_range() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+    let (_, endpoint, _pool) = init_data_with_commit(&product, &data, true);
     let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32);
     let mut key_range = KeyRange::default();
     key_range.set_start(b"xxx".to_vec());

@@ -95,6 +95,10 @@ impl ReadPoolHandle {
                 running_tasks,
                 max_tasks,
             } => {
+                fail_point!("read_pool_spawn_full", |_| Err(
+                    ReadPoolError::UnifiedReadPoolFull
+                ));
+
                 let running_tasks = running_tasks.clone();
                 if running_tasks.get() as usize >= *max_tasks {
                     return Err(ReadPoolError::UnifiedReadPoolFull);

@@ -6,7 +6,7 @@ use kvproto::kvrpcpb::Context;
 
 use tidb_query::codec::Datum;
 use tikv::coprocessor::Endpoint;
-use tikv::read_pool::{build_yatp_read_pool, tests::DummyReporter};
+use tikv::read_pool::{build_yatp_read_pool, tests::DummyReporter, ReadPool};
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
@@ -52,7 +52,7 @@ pub fn init_data_with_engine_and_commit<E: Engine>(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store<E>, Endpoint<E>) {
+) -> (Store<E>, Endpoint<E>, ReadPool) {
     init_data_with_details(ctx, engine, tbl, vals, commit, &Config::default())
 }
 
@@ -63,7 +63,7 @@ pub fn init_data_with_details<E: Engine>(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
     cfg: &Config,
-) -> (Store<E>, Endpoint<E>) {
+) -> (Store<E>, Endpoint<E>, ReadPool) {
     let mut store = Store::from_engine(engine.clone());
 
     store.begin();
@@ -85,14 +85,14 @@ pub fn init_data_with_details<E: Engine>(
         engine,
     );
     let cop = Endpoint::new(cfg, pool.handle());
-    (store, cop)
+    (store, cop, pool)
 }
 
 pub fn init_data_with_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
+) -> (Store<RocksEngine>, Endpoint<RocksEngine>, ReadPool) {
     let engine = TestEngineBuilder::new().build().unwrap();
     init_data_with_engine_and_commit(Context::default(), engine, tbl, vals, commit)
 }
@@ -101,6 +101,6 @@ pub fn init_data_with_commit(
 pub fn init_with_data(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
-) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
+) -> (Store<RocksEngine>, Endpoint<RocksEngine>, ReadPool) {
     init_data_with_commit(tbl, vals, true)
 }

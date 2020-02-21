@@ -51,7 +51,7 @@ fn test_select() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     // for dag selection
     let req = DAGSelect::from(&product).build();
     let mut resp = handle_select(&endpoint, req);
@@ -79,7 +79,7 @@ fn test_batch_row_limit() {
     let batch_row_limit = 3;
     let chunk_datum_limit = batch_row_limit * 3; // we have 3 fields.
     let product = ProductTable::new();
-    let (_, endpoint) = {
+    let (_, endpoint, _pool) = {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
@@ -115,7 +115,7 @@ fn test_stream_batch_row_limit() {
 
     let product = ProductTable::new();
     let stream_row_limit = 2;
-    let (_, endpoint) = {
+    let (_, endpoint, _pool) = {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
@@ -182,7 +182,7 @@ fn test_select_after_lease() {
 
     let product = ProductTable::new();
     let (cluster, raft_engine, ctx) = new_raft_engine(1, "");
-    let (_, endpoint) =
+    let (_, endpoint, _pool) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     // Sleep until the leader lease is expired.
@@ -212,7 +212,7 @@ fn test_scan_detail() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = {
+    let (_, endpoint, _pool) = {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = 50;
@@ -249,7 +249,7 @@ fn test_group_by() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from(&product)
         .group_by(&[&product["name"]])
@@ -284,7 +284,7 @@ fn test_aggr_count() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     let exp = vec![
         (Datum::Null, 1),
         (Datum::Bytes(b"name:0".to_vec()), 2),
@@ -361,7 +361,7 @@ fn test_aggr_first() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
 
     let exp = vec![
         (Datum::Null, 7),
@@ -436,7 +436,7 @@ fn test_aggr_avg() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, endpoint) = init_with_data(&product, &data);
+    let (mut store, endpoint, _pool) = init_with_data(&product, &data);
 
     store.begin();
     store
@@ -488,7 +488,7 @@ fn test_aggr_sum() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
 
     let exp = vec![
         (Datum::Null, 4),
@@ -531,7 +531,7 @@ fn test_aggr_extre() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, endpoint) = init_with_data(&product, &data);
+    let (mut store, endpoint, _pool) = init_with_data(&product, &data);
 
     store.begin();
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
@@ -599,7 +599,7 @@ fn test_aggr_bit_ops() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, endpoint) = init_with_data(&product, &data);
+    let (mut store, endpoint, _pool) = init_with_data(&product, &data);
 
     store.begin();
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
@@ -686,7 +686,7 @@ fn test_order_by_column() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from(&product)
         .order_by(&product["count"], true)
@@ -723,7 +723,7 @@ fn test_order_by_pk_with_select_from_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
     let req = DAGSelect::from_index(&product, &product["name"])
@@ -759,7 +759,7 @@ fn test_limit() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
     let req = DAGSelect::from(&product).limit(5).build();
@@ -792,7 +792,7 @@ fn test_reverse() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     data.reverse();
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
@@ -829,7 +829,7 @@ fn test_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from_index(&product, &product["id"]).build();
     let mut resp = handle_select(&endpoint, req);
@@ -857,7 +857,7 @@ fn test_index_reverse_limit() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     data.reverse();
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
@@ -891,7 +891,7 @@ fn test_limit_oom() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from_index(&product, &product["id"])
         .limit(100000000)
@@ -921,7 +921,7 @@ fn test_del_select() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, endpoint) = init_with_data(&product, &data);
+    let (mut store, endpoint, _pool) = init_with_data(&product, &data);
 
     store.begin();
     let (id, name, cnt) = data.remove(3);
@@ -952,7 +952,7 @@ fn test_index_group_by() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from_index(&product, &product["name"])
         .group_by(&[&product["name"]])
@@ -987,7 +987,7 @@ fn test_index_aggr_count() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from_index(&product, &product["name"])
         .count(&product["id"])
@@ -1076,7 +1076,7 @@ fn test_index_aggr_first() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
 
     let exp = vec![
         (Datum::Null, 7),
@@ -1125,7 +1125,7 @@ fn test_index_aggr_avg() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, endpoint) = init_with_data(&product, &data);
+    let (mut store, endpoint, _pool) = init_with_data(&product, &data);
 
     store.begin();
     store
@@ -1177,7 +1177,7 @@ fn test_index_aggr_sum() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
 
     let exp = vec![
         (Datum::Null, 4),
@@ -1220,7 +1220,7 @@ fn test_index_aggr_extre() {
     ];
 
     let product = ProductTable::new();
-    let (mut store, endpoint) = init_with_data(&product, &data);
+    let (mut store, endpoint, _pool) = init_with_data(&product, &data);
 
     store.begin();
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
@@ -1287,7 +1287,7 @@ fn test_where() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     let cols = product.columns_info();
     let cond = {
         let mut col = Expr::default();
@@ -1353,7 +1353,7 @@ fn test_handle_truncate() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     let cols = product.columns_info();
     let cases = vec![
         {
@@ -1518,7 +1518,7 @@ fn test_default_val() {
         .build();
     tbl.id = product.id;
 
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
     let expect: Vec<_> = data.drain(..5).collect();
     let req = DAGSelect::from(&tbl).limit(5).build();
     let mut resp = handle_select(&endpoint, req);
@@ -1548,7 +1548,7 @@ fn test_output_offsets() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
 
     let req = DAGSelect::from(&product)
         .output_offsets(Some(vec![1]))
@@ -1574,7 +1574,7 @@ fn test_key_is_locked_for_primary() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, false);
+    let (_, endpoint, _pool) = init_data_with_commit(&product, &data, false);
 
     let req = DAGSelect::from(&product).build();
     let resp = handle_request(&endpoint, req);
@@ -1592,7 +1592,7 @@ fn test_key_is_locked_for_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, false);
+    let (_, endpoint, _pool) = init_data_with_commit(&product, &data, false);
 
     let req = DAGSelect::from_index(&product, &product["name"]).build();
     let resp = handle_request(&endpoint, req);
@@ -1610,7 +1610,7 @@ fn test_output_counts() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
 
     let req = DAGSelect::from(&product).build();
     let resp = handle_select(&endpoint, req);
@@ -1627,7 +1627,7 @@ fn test_exec_details() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
 
     // get none
     let req = DAGSelect::from(&product).build();
@@ -1681,7 +1681,7 @@ fn test_invalid_range() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, _pool) = init_with_data(&product, &data);
 
     let mut select = DAGSelect::from(&product);
     select.key_range.set_start(b"xxx".to_vec());
@@ -1696,7 +1696,8 @@ fn test_snapshot_failed() {
     let product = ProductTable::new();
     let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
 
-    let (_, endpoint) = init_data_with_engine_and_commit(ctx, raft_engine, &product, &[], true);
+    let (_, endpoint, _pool) =
+        init_data_with_engine_and_commit(ctx, raft_engine, &product, &[], true);
 
     // Use an invalid context to make errors.
     let req = DAGSelect::from(&product).build_with(Context::default(), &[0]);
@@ -1717,7 +1718,7 @@ fn test_cache() {
     let product = ProductTable::new();
     let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
 
-    let (_, endpoint) =
+    let (_, endpoint, _pool) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     let req = DAGSelect::from(&product).build_with(ctx, &[0]);
