@@ -543,6 +543,8 @@ impl Peer {
                 && self.raft_group.raft.leader_id != raft::INVALID_ID
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
                 && !self.has_unresolved_reads()
+                // If it becomes leader, the stats is not valid anymore.
+                && !self.is_leader()
         }
     }
 
