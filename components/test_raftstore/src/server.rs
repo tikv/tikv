@@ -68,7 +68,6 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<RaftStoreBlackHole>,
-    _stats_pool: tokio_threadpool::ThreadPool,
 }
 
 impl ServerCluster {
@@ -80,14 +79,13 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
-        let stats_pool = tokio_threadpool::Builder::new().pool_size(1).build();
         let raft_client = RaftClient::new(
             env,
             Arc::new(Config::default()),
             security_mgr,
             RaftStoreBlackHole,
             Arc::new(ThreadLoad::with_threshold(usize::MAX)),
-            stats_pool.sender().clone(),
+            None,
         );
         ServerCluster {
             metas: HashMap::default(),
@@ -98,7 +96,6 @@ impl ServerCluster {
             importers: HashMap::default(),
             snap_paths: HashMap::default(),
             raft_client,
-            _stats_pool: stats_pool,
         }
     }
 

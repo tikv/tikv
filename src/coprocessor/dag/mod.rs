@@ -7,11 +7,13 @@ pub use self::storage_impl::TiKVStorage;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
+use std::time::Duration;
+use tidb_query::error::EvaluateError;
 use tidb_query::storage::IntervalRange;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 use crate::coprocessor::metrics::*;
-use crate::coprocessor::{Deadline, RequestHandler, Result};
+use crate::coprocessor::{Deadline, Error, RequestHandler, Result};
 use crate::storage::{Statistics, Store};
 
 pub fn build_handler<S: Store + 'static>(
@@ -120,6 +122,10 @@ impl RequestHandler for BatchDAGHandler {
         handle_qe_response(self.runner.handle_request().await, self.data_version)
     }
 
+    fn set_execution_time_limit(&mut self, execution_time_limit: Option<Duration>) {
+        self.runner.set_execution_time_limit(execution_time_limit);
+    }
+
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
         self.runner.collect_storage_stats(dest);
     }
@@ -143,6 +149,9 @@ fn handle_qe_response(
         }
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
+            ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded) => {
+                Err(Error::ExecutionTimeLimitExceeded)
+            }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
                 let mut sel_resp = SelectResponse::default();
@@ -172,6 +181,9 @@ fn handle_qe_stream_response(
         Ok((None, finished)) => Ok((None, finished)),
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
+            ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded) => {
+                Err(Error::ExecutionTimeLimitExceeded)
+            }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
                 let mut s_resp = StreamResponse::default();

@@ -149,6 +149,9 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
+        // Disable stats concurrency. procinfo performs too bad without optimization,
+        // disable it to save CPU for real tests.
+        stats_concurrency: 0,
         ..ServerConfig::default()
     }
 }

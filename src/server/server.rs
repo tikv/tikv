@@ -81,10 +81,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
-        let stats_pool = ThreadPoolBuilder::new()
-            .pool_size(cfg.stats_concurrency)
-            .name_prefix(STATS_THREAD_PREFIX)
-            .build();
+        let stats_pool = if cfg.stats_concurrency > 0 {
+            Some(
+                ThreadPoolBuilder::new()
+                    .pool_size(cfg.stats_concurrency)
+                    .name_prefix(STATS_THREAD_PREFIX)
+                    .build(),
+            )
+        } else {
+            None
+        };
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
         let readpool_normal_concurrency = storage.readpool_normal_concurrency();
         let readpool_normal_thread_load =
@@ -142,7 +148,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(security_mgr),
             raft_router.clone(),
             Arc::clone(&grpc_thread_load),
-            stats_pool.sender().clone(),
+            stats_pool.as_ref().map(|p| p.sender().clone()),
         )));
 
         let trans = ServerTransport::new(
@@ -160,7 +166,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router,
             snap_mgr,
             snap_worker,
-            stats_pool: Some(stats_pool),
+            stats_pool,
             grpc_thread_load,
             yatp_read_pool,
             readpool_normal_concurrency,
@@ -231,16 +237,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             stats.set_thread_target(self.readpool_normal_concurrency);
             stats
         };
-        self.stats_pool.as_ref().unwrap().spawn(
-            self.timer
-                .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
-                .map_err(|_| ())
-                .for_each(move |i| {
-                    grpc_load_stats.record(i);
-                    readpool_normal_load_stats.record(i);
-                    Ok(())
-                }),
-        );
+        if let Some(ref p) = self.stats_pool {
+            p.spawn(
+                self.timer
+                    .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
+                    .map_err(|_| ())
+                    .for_each(move |i| {
+                        grpc_load_stats.record(i);
+                        readpool_normal_load_stats.record(i);
+                        Ok(())
+                    }),
+            )
+        };
 
         info!("TiKV is ready to serve");
         Ok(())

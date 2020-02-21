@@ -146,6 +146,25 @@ pub fn replace(
 
 #[rpn_fn]
 #[inline]
+pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            if *rhs <= 0 {
+                return Ok(Some(Vec::new()));
+            }
+            let rhs = *rhs as usize;
+            if lhs.len() < rhs {
+                Ok(Some(lhs.to_vec()))
+            } else {
+                Ok(Some(lhs[..rhs].to_vec()))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
 pub fn left_utf8(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
@@ -162,6 +181,25 @@ pub fn left_utf8(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>
                     }
                 }
                 Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn right(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            if *rhs <= 0 {
+                return Ok(Some(Vec::new()));
+            }
+            let rhs = *rhs as usize;
+            if lhs.len() < rhs {
+                Ok(Some(lhs.to_vec()))
+            } else {
+                Ok(Some(lhs[(lhs.len() - rhs)..].to_vec()))
             }
         }
         _ => Ok(None),
@@ -861,6 +899,51 @@ mod tests {
     }
 
     #[test]
+    fn test_left() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(0), Some(b"".to_vec())),
+            (Some(b"hello".to_vec()), Some(1), Some(b"h".to_vec())),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(2),
+                Some(vec![230u8, 149u8]),
+            ),
+            (
+                Some("忠犬ハチ公".as_bytes().to_vec()),
+                Some(3),
+                Some(vec![229u8, 191u8, 160u8]),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(100),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(-1),
+                Some(b"".to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (None, Some(-1), None),
+            (Some(b"hello".to_vec()), None, None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::Left)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
     fn test_left_utf8() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(0i64), Some(b"".to_vec())),
@@ -900,6 +983,51 @@ mod tests {
                 .push_param(lhs)
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::LeftUtf8)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_right() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(0), Some(b"".to_vec())),
+            (Some(b"hello".to_vec()), Some(1), Some(b"o".to_vec())),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(2),
+                Some(vec![186u8, 147u8]),
+            ),
+            (
+                Some("忠犬ハチ公".as_bytes().to_vec()),
+                Some(3),
+                Some(vec![229u8, 133u8, 172u8]),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(100),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(-1),
+                Some(b"".to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (None, Some(-1), None),
+            (Some(b"hello".to_vec()), None, None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::Right)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
