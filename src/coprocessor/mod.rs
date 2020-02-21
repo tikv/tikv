@@ -60,6 +60,10 @@ pub trait RequestHandler: Send {
         panic!("streaming request is not supported for this handler");
     }
 
+    fn set_execution_time_limit(&mut self, _execution_time_limit: Option<Duration>) {
+        // Execution time limit is not supported by default
+    }
+
     /// Collects scan statistics generated in this request handler so far.
     fn collect_scan_statistics(&mut self, _dest: &mut Statistics) {
         // Do nothing by default

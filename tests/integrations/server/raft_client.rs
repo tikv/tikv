@@ -27,7 +27,7 @@ pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftSt
         security_mgr,
         RaftStoreBlackHole,
         grpc_thread_load,
-        pool.sender().clone(),
+        Some(pool.sender().clone()),
     )
 }
 
