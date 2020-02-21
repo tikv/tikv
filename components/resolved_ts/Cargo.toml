@@ -11,4 +11,4 @@ prost-codec = ["txn_types/prost-codec"]
 [dependencies]
 hex = "0.3"
 tikv_util = { path = "../tikv_util" }
-txn_types = { path = "../txn_types", default-features = false }
+txn_types = { path = "../txn_types" }

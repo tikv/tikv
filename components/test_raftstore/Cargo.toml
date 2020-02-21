@@ -29,17 +29,17 @@ prost-codec = [
 ]
 
 [dependencies]
-engine = { path = "../engine", default-features = false }
-engine_rocks = { path = "../engine_rocks", default-features = false }
+engine = { path = "../engine" }
+engine_rocks = { path = "../engine_rocks" }
 futures = "0.1"
 futures-cpupool = "0.1"
 grpcio = { version = "0.5.0-alpha.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.3"
-keys = { path = "../keys", default-features = false }
+keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-pd_client = { path = "../pd_client", default-features = false }
+pd_client = { path = "../pd_client" }
 raft = { version = "0.6.0-alpha", default-features = false }
-raftstore = { path = "../raftstore", default-features = false }
+raftstore = { path = "../raftstore" }
 rand = "0.7"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger

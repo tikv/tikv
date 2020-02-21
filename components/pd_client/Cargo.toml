@@ -31,7 +31,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 tokio-timer = "0.2"
-txn_types = { path = "../txn_types", default-features = false }
+txn_types = { path = "../txn_types" }
 
 [dependencies.prometheus]
 git = "https://github.com/tikv/rust-prometheus.git"
