@@ -163,7 +163,7 @@ fn test_read_hibernated_region() {
     cluster.pd_client.must_add_peer(r1, p3.clone());
     cluster.must_put(b"k0", b"v0");
     let region = cluster.get_region(b"k0");
-    cluster.must_transfer_leader(region.get_id(), p3.clone());
+    cluster.must_transfer_leader(region.get_id(), p3);
     // Make sure leader writes the data.
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
     // Wait for region is hibernated.
@@ -203,7 +203,7 @@ fn test_read_hibernated_region() {
     router.send_raft_message(wake_up_msg).unwrap();
     // Wait for the leader is woken up.
     thread::sleep(Duration::from_millis(500));
-    let resp2_ch = async_read_on_peer(&mut cluster, p2.clone(), region.clone(), b"k1", true, true);
+    let resp2_ch = async_read_on_peer(&mut cluster, p2, region, b"k1", true, true);
     let resp2 = resp2_ch.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(!resp2.get_header().has_error(), "{:?}", resp2);
 }
