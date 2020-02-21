@@ -75,7 +75,7 @@ where
 }
 
 pub trait UserCollectedProperties {
-    fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]>;
+    fn get(&self, index: &[u8]) -> Option<&[u8]>;
 
     fn len(&self) -> usize;
 

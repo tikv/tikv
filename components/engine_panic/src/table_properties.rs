@@ -88,7 +88,7 @@ impl TableProperties<PanicUserCollectedProperties> for PanicTableProperties {
 pub struct PanicUserCollectedProperties;
 
 impl UserCollectedProperties for PanicUserCollectedProperties {
-    fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]> {
+    fn get(&self, index: &[u8]) -> Option<&[u8]> {
         panic!()
     }
 

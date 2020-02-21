@@ -106,7 +106,7 @@ impl TableProperties<RocksUserCollectedProperties> for RocksTableProperties {
 pub struct RocksUserCollectedProperties(raw::UserCollectedProperties);
 
 impl UserCollectedProperties for RocksUserCollectedProperties {
-    fn get<Q: AsRef<[u8]>>(&self, index: Q) -> Option<&[u8]> {
+    fn get(&self, index: &[u8]) -> Option<&[u8]> {
         self.0.get(index)
     }
 
