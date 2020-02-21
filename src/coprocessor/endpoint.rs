@@ -1420,10 +1420,14 @@ mod tests {
     #[test]
     fn test_endpoint_semaphore() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+        let read_pool = build_yatp_read_pool(
+            &UnifiedReadPoolConfig {
+                max_thread_count: 1,
+                ..UnifiedReadPoolConfig::default_for_test()
+            },
+            DummyReporter,
             engine,
-        ));
+        );
         let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
         cop.semaphore = Some(Arc::new(Semaphore::new(1)));
 
