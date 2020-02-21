@@ -32,8 +32,8 @@ quick_error! {
         }
         Codec(err: codec::Error) {
             from(err: codec::Error) -> (err.into())
-            cause(err)
-            description(err.description())
+            //cause(err)
+            //description(err.description())
         }
         KeyLength { description("bad format key(length)") }
         BadFormatLock { description("bad format lock data") }

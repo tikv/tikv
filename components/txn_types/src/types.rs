@@ -1,5 +1,5 @@
 use crate::timestamp::TimeStamp;
-use crate::Error;
+use crate::{Error, ErrorInner};
 
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
@@ -131,7 +131,7 @@ impl Key {
             // functions to convert between `TimestampedKey` and `Key`.
             // `TimestampedKey` is in a higher (MVCC) layer, while `Key` is
             // in the core storage engine layer.
-            Err(Error::KeyLength)
+            Err(Error::from(ErrorInner::KeyLength))
         } else {
             self.0.truncate(len - number::U64_SIZE);
             Ok(self)
@@ -142,7 +142,7 @@ impl Key {
     #[inline]
     pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], TimeStamp), Error> {
         if key.len() < number::U64_SIZE {
-            Err(Error::KeyLength)
+            Err(Error::from(ErrorInner::KeyLength))
         } else {
             let pos = key.len() - number::U64_SIZE;
             let k = &key[..pos];
@@ -156,7 +156,7 @@ impl Key {
     pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], Error> {
         let len = key.len();
         if len < number::U64_SIZE {
-            return Err(Error::KeyLength);
+            return Err(Error::from(ErrorInner::KeyLength));
         }
         Ok(&key[..key.len() - number::U64_SIZE])
     }
@@ -166,7 +166,7 @@ impl Key {
     pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp, Error> {
         let len = key.len();
         if len < number::U64_SIZE {
-            return Err(Error::KeyLength);
+            return Err(Error::from(ErrorInner::KeyLength));
         }
         let mut ts = &key[len - number::U64_SIZE..];
         Ok(ts.read_u64_desc()?.into())

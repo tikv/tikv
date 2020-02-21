@@ -35,8 +35,8 @@ quick_error! {
         }
         Codec(err: codec::Error) {
             from()
-            cause(err)
-            description(err.description())
+            //cause(err)
+            //description(err.description())
         }
         KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
             description("key is locked (backoff or cleanup)")
@@ -246,7 +246,7 @@ impl From<txn_types::Error> for ErrorInner {
         match err {
             txn_types::Error(box txn_types::ErrorInner::Io(e)) => ErrorInner::Io(e),
             txn_types::Error(box txn_types::ErrorInner::Codec(e)) => ErrorInner::Codec(e),
-            txn_types::Error(box txn_types::ErrorInner::KeyLenght(e)) => ErrorInner::KeyLength(e),
+            txn_types::Error(box txn_types::ErrorInner::KeyLength) => ErrorInner::KeyLength(err),
             txn_types::Error(box txn_types::ErrorInner::BadFormatLock)
             | txn_types::Error(box txn_types::ErrorInner::BadFormatWrite) => {
                 ErrorInner::BadFormat(err)

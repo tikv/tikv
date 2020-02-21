@@ -65,12 +65,6 @@ impl Error {
     }
 }
 
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        "codec error"
-    }
-}
-
 impl From<ErrorInner> for Error {
     #[inline]
     fn from(e: ErrorInner) -> Self {
