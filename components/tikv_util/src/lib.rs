@@ -574,6 +574,7 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 mod tests {
     use super::*;
 
+    use fs2;
     use raft::eraftpb::Entry;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -773,13 +774,16 @@ mod tests {
             .tempdir()
             .unwrap();
         let data_path = tmp_dir.path();
+        let disk_stats_before = fs2::statvfs(data_path).unwrap();
+        let cap1 = disk_stats_before.available_space();
         let reserve_size = 64 * 1024;
-        let placeholder_path = data_path.join(SPACE_PLACEHOLDER_FILE);
-
         reserve_space_for_recover(data_path, reserve_size).unwrap();
-        assert_eq!(placeholder_path.metadata().unwrap().len(), reserve_size);
-
+        let disk_stats_after = fs2::statvfs(data_path).unwrap();
+        let cap2 = disk_stats_after.available_space();
+        assert_eq!(cap1 - cap2, reserve_size);
         reserve_space_for_recover(data_path, 0).unwrap();
-        assert!(!placeholder_path.exists());
+        let disk_stats = fs2::statvfs(data_path).unwrap();
+        let cap3 = disk_stats.available_space();
+        assert_eq!(cap1, cap3);
     }
 }
