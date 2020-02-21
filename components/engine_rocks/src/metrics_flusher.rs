@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
-use engine_traits::engine_util::MetricsFlusher;
 use engine_traits::KvEngines;
+use engine_traits::MetricsFlusher;
 use rocksdb::DB;
 
 use crate::rocks_metrics::*;
