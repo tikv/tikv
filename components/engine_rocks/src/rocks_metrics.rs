@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rocks::util::*;
+use crate::rocks_metrics_defs::*;
 use engine_traits::CF_DEFAULT;
 use lazy_static::lazy_static;
 use prometheus::{

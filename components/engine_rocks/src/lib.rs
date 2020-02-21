@@ -57,4 +57,11 @@ pub use compact_listener::*;
 mod properties;
 pub use properties::*;
 
-pub mod rocks;
+pub mod metrics_flusher;
+pub use metrics_flusher::*;
+
+pub mod rocks_metrics;
+pub use rocks_metrics::*;
+
+pub mod rocks_metrics_defs;
+pub use rocks_metrics_defs::*;
