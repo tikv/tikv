@@ -220,14 +220,14 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         if self.heap.len() < self.n {
             // HeapItemUnsafe must be checked valid to compare in advance, or else it may
             // panic inside BinaryHeap.
-            row.cmp_with_field_type(&row)?;
+            row.cmp_sort_key(&row)?;
 
             // Push into heap when heap is not full.
             self.heap.push(row);
         } else {
             // Swap the greatest row in the heap if this row is smaller than that row.
             let mut greatest_row = self.heap.peek_mut().unwrap();
-            if row.cmp_with_field_type(&greatest_row)? == Ordering::Less {
+            if row.cmp_sort_key(&greatest_row)? == Ordering::Less {
                 *greatest_row = row;
             }
         }
@@ -396,7 +396,7 @@ impl HeapItemUnsafe {
         &vec_buf[offset_begin..offset_end]
     }
 
-    fn cmp_with_field_type(&self, other: &Self) -> Result<Ordering> {
+    fn cmp_sort_key(&self, other: &Self) -> Result<Ordering> {
         // Only debug assert because this function is called pretty frequently.
         debug_assert_eq!(self.get_order_is_desc(), other.get_order_is_desc());
 
@@ -414,7 +414,7 @@ impl HeapItemUnsafe {
 
             // There is panic inside, but will never panic, since the data type of corresponding
             // column should be consistent for each `HeapItemUnsafe`.
-            let ord = lhs.cmp_with_collation(
+            let ord = lhs.cmp_sort_key(
                 &rhs,
                 order_exprs_field_type[column_idx].as_accessor().collation(),
             )?;
@@ -437,7 +437,7 @@ impl HeapItemUnsafe {
 /// So make sure that it is valid before putting it into a heap.
 impl Ord for HeapItemUnsafe {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.cmp_with_field_type(other).unwrap()
+        self.cmp_sort_key(other).unwrap()
     }
 }
 

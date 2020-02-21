@@ -352,7 +352,7 @@ impl VectorValue {
         }
     }
 
-    pub fn encode_with_collation(
+    pub fn encode_sort_key(
         &self,
         row_index: usize,
         field_type: &FieldType,
@@ -370,11 +370,12 @@ impl VectorValue {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        match_template_collator! {
+                        let sort_key = match_template_collator! {
                             TT, match field_type.as_accessor().collation() {
-                                Collation::TT => TT::write_sort_key(val, output)?
+                                Collation::TT => TT::sort_key(val)?
                             }
                         };
+                        output.write_evaluable_datum_bytes(&sort_key)?;
                     }
                 }
                 Ok(())

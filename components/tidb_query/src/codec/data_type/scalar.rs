@@ -178,11 +178,7 @@ impl<'a> ScalarValueRef<'a> {
     }
 
     #[inline]
-    pub fn cmp_with_collation(
-        &self,
-        other: &ScalarValueRef,
-        collation: Collation,
-    ) -> Result<Ordering> {
+    pub fn cmp_sort_key(&self, other: &ScalarValueRef, collation: Collation) -> Result<Ordering> {
         Ok(match_template! {
             TT = [Int, Real, Decimal, DateTime, Duration, Json],
             match (self, other) {
