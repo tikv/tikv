@@ -47,6 +47,8 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
 
     order_exprs: Box<[RpnExpression]>,
+    
+    /// This field stores the field type of the results evaluated by the exprs in `order_exprs`.
     order_exprs_field_type: Box<[FieldType]>,
 
     /// Whether or not it is descending order for each order by column.
