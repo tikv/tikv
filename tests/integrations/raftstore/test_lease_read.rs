@@ -210,6 +210,9 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     assert_eq!(state.get_last_index(), last_index);
     assert_eq!(detector.ctx.rl().len(), 0);
 
+    // Ensure peer 3 is ready to transfer leader.
+    must_get_equal(&cluster.get_engine(3), key, b"v1");
+
     // Drop MsgTimeoutNow to `peer3` so that the leader transfer procedure would abort later.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(region_id, peer3_store_id)

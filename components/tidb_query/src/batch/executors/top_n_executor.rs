@@ -49,6 +49,9 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     order_exprs: Box<[RpnExpression]>,
     order_exprs_field_type: Box<[FieldType]>,
 
+    /// This field stores the field type of the results evaluated by the exprs in `order_exprs`.
+    order_exprs_field_type: Box<[FieldType]>,
+
     /// Whether or not it is descending order for each order by column.
     order_is_desc: Box<[bool]>,
 
