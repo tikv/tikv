@@ -2303,6 +2303,7 @@ mod tests {
         expected_lock_info.set_lock_ttl(lock_ttl);
         expected_lock_info.set_txn_size(txn_size);
         expected_lock_info.set_lock_type(Op::Put);
+        expected_lock_info.set_lock_for_update_ts(0);
 
         let assert_lock_info_eq = |e, expected_lock_info: &kvproto::kvrpcpb::LockInfo| match e {
             Error(box ErrorInner::KeyIsLocked(info)) => assert_eq!(info, *expected_lock_info),
@@ -2350,6 +2351,7 @@ mod tests {
         expected_lock_info.set_lock_ttl(lock_ttl);
         expected_lock_info.set_lock_type(Op::PessimisticLock);
         expected_lock_info.set_txn_size(0);
+        expected_lock_info.set_lock_for_update_ts(50);
         assert_lock_info_eq(
             must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60),
             &expected_lock_info,
