@@ -13,8 +13,7 @@ use engine::{
     rocks::util::security::encrypted_env_from_cipher_file,
     rocks::{self},
 };
-use engine_rocks::metrics_flusher::*;
-use engine_rocks::RocksEngine;
+use engine_rocks::{metrics_flusher::*, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
