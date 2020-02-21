@@ -1,51 +1,104 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Json;
+use super::{Json, JsonRef, JsonType};
+use crate::codec::{Error, Result};
+use std::collections::BTreeMap;
 
 impl Json {
-    // `merge` is the implementation for JSON_MERGE in mysql
-    // https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#function_json-merge
-    //
-    // The merge rules are listed as following:
-    // 1. adjacent arrays are merged to a single array;
-    // 2. adjacent object are merged to a single object;
-    // 3. a scalar value is autowrapped as an array before merge;
-    // 4. an adjacent array and object are merged by autowrapping the object as an array.
-    pub fn merge(self, to_merge: Json) -> Json {
-        match (self, to_merge) {
-            // rule 1
-            (Json::Array(mut array), Json::Array(mut sub_array)) => {
-                array.append(&mut sub_array);
-                Json::Array(array)
-            }
-            // rule 3, 4
-            (Json::Array(mut array), suffix) => {
-                array.push(suffix);
-                Json::Array(array)
-            }
-            // rule 2
-            (Json::Object(mut obj), Json::Object(sub_obj)) => {
-                for (sub_key, sub_value) in sub_obj {
-                    let v = if let Some(value) = obj.remove(&sub_key) {
-                        value.merge(sub_value)
-                    } else {
-                        sub_value
-                    };
-                    obj.insert(sub_key, v);
+    /// `merge` is the implementation for JSON_MERGE in mysql
+    /// https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#function_json-merge
+    ///
+    /// The merge rules are listed as following:
+    /// 1. adjacent arrays are merged to a single array;
+    /// 2. adjacent object are merged to a single object;
+    /// 3. a scalar value is autowrapped as an array before merge;
+    /// 4. an adjacent array and object are merged by autowrapping the object as an array.
+    ///
+    /// See `MergeBinary()` in TiDB `json/binary_function.go`
+    #[allow(clippy::comparison_chain)]
+    pub fn merge<'a>(bjs: Vec<JsonRef<'a>>) -> Result<Json> {
+        let mut result = vec![];
+        let mut objects = vec![];
+        for j in bjs {
+            if j.get_type() != JsonType::Object {
+                if objects.len() == 1 {
+                    let o = objects.pop().unwrap();
+                    result.push(MergeUnit::Ref(o));
+                } else if objects.len() > 1 {
+                    // We have adjacent JSON objects, merge them into a single object
+                    result.push(MergeUnit::Owned(merge_binary_object(&mut objects)?));
                 }
-                Json::Object(obj)
+                result.push(MergeUnit::Ref(j));
+            } else {
+                objects.push(j);
             }
-            // rule 4
-            (obj, Json::Array(mut sub_array)) => {
-                let mut array = Vec::with_capacity(sub_array.len() + 1);
-                array.push(obj);
-                array.append(&mut sub_array);
-                Json::Array(array)
-            }
-            // rule 3, 4
-            (obj, suffix) => Json::Array(vec![obj, suffix]),
+        }
+        // Resolve the possibly remained objects
+        if !objects.is_empty() {
+            result.push(MergeUnit::Owned(merge_binary_object(&mut objects)?));
+        }
+        if result.len() == 1 {
+            return Ok(result.pop().unwrap().into_owned());
+        }
+        merge_binary_array(&result)
+    }
+}
+
+enum MergeUnit<'a> {
+    Ref(JsonRef<'a>),
+    Owned(Json),
+}
+
+impl<'a> MergeUnit<'a> {
+    fn as_ref(&self) -> JsonRef<'_> {
+        match self {
+            MergeUnit::Ref(r) => *r,
+            MergeUnit::Owned(o) => o.as_ref(),
         }
     }
+    fn into_owned(self) -> Json {
+        match self {
+            MergeUnit::Ref(r) => r.to_owned(),
+            MergeUnit::Owned(o) => o,
+        }
+    }
+}
+
+// See `mergeBinaryArray()` in TiDB `json/binary_function.go`
+fn merge_binary_array<'a>(elems: &[MergeUnit<'a>]) -> Result<Json> {
+    let mut buf = vec![];
+    for j in elems.iter() {
+        let j = j.as_ref();
+        if j.get_type() != JsonType::Array {
+            buf.push(j)
+        } else {
+            let child_count = j.get_elem_count();
+            for i in 0..child_count {
+                buf.push(j.array_get_elem(i)?);
+            }
+        }
+    }
+    Json::from_ref_array(buf)
+}
+
+// See `mergeBinaryObject()` in TiDB `json/binary_function.go`
+fn merge_binary_object<'a>(objects: &mut Vec<JsonRef<'a>>) -> Result<Json> {
+    let mut kv_map: BTreeMap<String, Json> = BTreeMap::new();
+    for j in objects.drain(..) {
+        let elem_count = j.get_elem_count();
+        for i in 0..elem_count {
+            let key = j.object_get_key(i);
+            let val = j.object_get_val(i)?;
+            let key = String::from_utf8(key.to_owned()).map_err(Error::from)?;
+            if let Some(old) = kv_map.remove(&key) {
+                let new = Json::merge(vec![old.as_ref(), val])?;
+                kv_map.insert(key, new);
+            } else {
+                kv_map.insert(key, val.to_owned());
+            }
+        }
+    }
+    Json::from_object(kv_map)
 }
 
 #[cfg(test)]
@@ -103,12 +156,14 @@ mod tests {
             ],
         ];
         for case in test_cases {
-            let base: Json = case[0].parse().unwrap();
-            let res = case[1..case.len() - 1]
+            let (to_be_merged, expect) = case.split_at(case.len() - 1);
+            let jsons = to_be_merged
                 .iter()
-                .map(|s| s.parse().unwrap())
-                .fold(base, Json::merge);
-            let expect: Json = case[case.len() - 1].parse().unwrap();
+                .map(|s| s.parse::<Json>().unwrap())
+                .collect::<Vec<Json>>();
+            let refs = jsons.iter().map(|j| j.as_ref()).collect::<Vec<_>>();
+            let res = Json::merge(refs).unwrap();
+            let expect: Json = expect[0].parse().unwrap();
             assert_eq!(res, expect);
         }
     }

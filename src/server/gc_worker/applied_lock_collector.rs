@@ -11,10 +11,11 @@ use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
-use crate::raftstore::coprocessor::{
-    ApplySnapshotObserver, Coprocessor, CoprocessorHost, ObserverContext, QueryObserver,
-};
 use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
+use raftstore::coprocessor::{
+    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Coprocessor,
+    CoprocessorHost, ObserverContext, QueryObserver,
+};
 
 // TODO: Use new error type for GCWorker instead of storage::Error.
 use super::{Error, ErrorInner, Result};
@@ -99,10 +100,10 @@ impl LockObserver {
     pub fn register(self, coprocessor_host: &mut CoprocessorHost) {
         coprocessor_host
             .registry
-            .register_apply_snapshot_observer(1, Box::new(self.clone()));
+            .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(self.clone()));
         coprocessor_host
             .registry
-            .register_query_observer(1, Box::new(self));
+            .register_query_observer(1, BoxQueryObserver::new(self));
     }
 
     fn send(&self, locks: Vec<(Key, Lock)>) {

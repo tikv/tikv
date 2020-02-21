@@ -13,25 +13,25 @@ pub mod config;
 pub mod errors;
 pub mod kv;
 pub mod lock_manager;
+pub(crate) mod metrics;
 pub mod mvcc;
 pub mod txn;
 
-mod metrics;
 mod read_pool;
 mod types;
 
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
-        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
+        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator, RocksEngine,
+        ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, StorageCallback, TxnStatus},
 };
 
-use crate::read_pool::ReadPool;
+use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
@@ -81,7 +81,7 @@ pub struct Storage<E: Engine, L: LockManager> {
     sched: TxnScheduler<E, L>,
 
     /// The thread pool used to run most read operations.
-    read_pool: ReadPool,
+    read_pool: ReadPoolHandle,
 
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
@@ -149,7 +149,7 @@ macro_rules! check_key_size {
 impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get concurrency of normal readpool.
     pub fn readpool_normal_concurrency(&self) -> usize {
-        if let ReadPool::FuturePools {
+        if let ReadPoolHandle::FuturePools {
             read_pool_normal, ..
         } = &self.read_pool
         {
@@ -163,7 +163,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn from_engine(
         engine: E,
         config: &Config,
-        read_pool: ReadPool,
+        read_pool: ReadPoolHandle,
         lock_mgr: Option<L>,
         pipelined_pessimistic_lock: bool,
     ) -> Result<Self> {
@@ -1191,7 +1191,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         Storage::from_engine(
             self.engine,
             &self.config,
-            read_pool.into(),
+            ReadPool::from(read_pool).handle(),
             lock_manager,
             self.pipelined_pessimistic_lock,
         )

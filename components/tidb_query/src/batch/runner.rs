@@ -1,16 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kvproto::coprocessor::KeyRange;
+use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::deadline::Deadline;
-use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
 use yatp::task::future::reschedule;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
+use crate::error::EvaluateError;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
 use crate::storage::Storage;
@@ -27,6 +30,8 @@ pub const BATCH_MAX_SIZE: usize = 1024;
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
+/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time a coroutine
+/// can run without being yielded.
 const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
@@ -34,6 +39,10 @@ pub struct BatchExecutorsRunner<SS> {
     /// whether or not the deadline is exceeded and break the process if so.
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
+
+    /// Unlike `deadline`, `execution_time_limit` limits the time used on this handler, excluding
+    /// all waiting time.
+    execution_time_limit: Option<Duration>,
 
     out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
 
@@ -110,6 +119,13 @@ impl BatchExecutorsRunner<()> {
 
         Ok(())
     }
+}
+
+#[inline]
+fn is_arrow_encodable(schema: &[FieldType]) -> bool {
+    schema
+        .iter()
+        .all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
 pub fn build_executors<S: Storage + 'static>(
@@ -295,10 +311,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
-        let encode_type = req.get_encode_type();
 
         let out_most_executor =
             build_executors(req.take_executors().into(), storage, ranges, config.clone())?;
+
+        let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
+            EncodeType::TypeDefault
+        } else {
+            req.get_encode_type()
+        };
 
         // Check output offsets
         let output_offsets = req.take_output_offsets();
@@ -317,6 +338,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         Ok(Self {
             deadline,
+            execution_time_limit: None,
             out_most_executor,
             output_offsets,
             config,
@@ -332,12 +354,24 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
 
+        let mut total_execution_time = Duration::default();
         let mut time_slice_start = Instant::now();
         loop {
-            if time_slice_start.elapsed() > MAX_TIME_SLICE {
+            let time_slice_len = time_slice_start.elapsed();
+            // Check whether we should cancel the execution because it tends to take a long time
+            // while not having a permit from the coprocessor semaphore
+            if let Some(limit) = self.execution_time_limit {
+                if total_execution_time + time_slice_len > limit {
+                    return Err(EvaluateError::ExecutionTimeLimitExceeded.into());
+                }
+            }
+            // Check whether we should yield from the execution
+            if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;
+                total_execution_time += time_slice_len;
                 time_slice_start = Instant::now();
             }
+
             self.deadline.check()?;
 
             let mut result = self.out_most_executor.next_batch(batch_size);
@@ -372,7 +406,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                             data.reserve(result.physical_columns.maximum_encoded_size_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
-                            )?);
+                            ));
                             result.physical_columns.encode_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -384,10 +418,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         _ => {
                             // For the default or unsupported encode type, use datum format.
                             self.encode_type = EncodeType::TypeDefault;
-                            data.reserve(result.physical_columns.maximum_encoded_size(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                            )?);
+                            data.reserve(
+                                result.physical_columns.maximum_encoded_size(
+                                    &result.logical_rows,
+                                    &self.output_offsets,
+                                ),
+                            );
                             result.physical_columns.encode(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -453,7 +489,92 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
     }
 
+    pub fn set_execution_time_limit(&mut self, execution_time_limit: Option<Duration>) {
+        self.execution_time_limit = execution_time_limit;
+    }
+
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {
         self.out_most_executor.collect_storage_stats(dest);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::batch::interface::BatchExecuteResult;
+    use crate::codec::batch::LazyBatchColumnVec;
+    use crate::error::{Error, ErrorInner, EvaluateError};
+    use crate::expr::EvalWarnings;
+    use crate::storage::IntervalRange;
+    use futures::executor::block_on;
+
+    pub struct MockExecutor {
+        left_batch_count: usize,
+        batch_duration: Duration,
+    }
+
+    impl MockExecutor {
+        fn new(batch_count: usize, batch_duration: Duration) -> Self {
+            MockExecutor {
+                left_batch_count: batch_count,
+                batch_duration,
+            }
+        }
+    }
+
+    impl BatchExecutor for MockExecutor {
+        type StorageStats = ();
+
+        fn schema(&self) -> &[FieldType] {
+            &[]
+        }
+
+        fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+            std::thread::sleep(self.batch_duration);
+            self.left_batch_count -= 1;
+            BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::empty(),
+                logical_rows: vec![],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(self.left_batch_count == 0),
+            }
+        }
+
+        fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {}
+
+        fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {}
+
+        fn take_scanned_range(&mut self) -> IntervalRange {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_execution_time_limit() {
+        // Exceed the limit
+        let mut runner = BatchExecutorsRunner {
+            deadline: Deadline::from_now(Duration::from_secs(60)),
+            execution_time_limit: Some(Duration::from_millis(5)),
+            out_most_executor: Box::new(MockExecutor::new(10, Duration::from_millis(1))),
+            output_offsets: vec![],
+            config: Arc::new(EvalConfig::default_for_test()),
+            collect_exec_summary: false,
+            exec_stats: ExecuteStats::new(1),
+            encode_type: EncodeType::TypeDefault,
+        };
+        match block_on(runner.handle_request()) {
+            Err(Error(box ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded))) => {}
+            _ => panic!("should return ExecutionTimeLimitExceeded error"),
+        }
+
+        // Not exceed the limit
+        runner.execution_time_limit = Some(Duration::from_secs(1));
+        runner.out_most_executor = Box::new(MockExecutor::new(10, Duration::from_millis(5)));
+        assert!(block_on(runner.handle_request()).is_ok());
+
+        // Unlimited
+        runner.execution_time_limit = None;
+        runner.out_most_executor = Box::new(MockExecutor::new(10, Duration::from_millis(5)));
+        assert!(block_on(runner.handle_request()).is_ok());
     }
 }

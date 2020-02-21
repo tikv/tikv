@@ -7,17 +7,18 @@ pub use self::storage_impl::TiKVStorage;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
+use std::time::Duration;
+use tidb_query::error::EvaluateError;
 use tidb_query::storage::IntervalRange;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 use crate::coprocessor::metrics::*;
-use crate::coprocessor::{Deadline, RequestHandler, Result};
+use crate::coprocessor::{Deadline, Error, RequestHandler, Result};
 use crate::storage::{Statistics, Store};
 
 pub fn build_handler<S: Store + 'static>(
     req: DagRequest,
     ranges: Vec<KeyRange>,
-    start_ts: u64,
     store: S,
     data_version: Option<u64>,
     deadline: Deadline,
@@ -25,20 +26,10 @@ pub fn build_handler<S: Store + 'static>(
     is_streaming: bool,
     enable_batch_if_possible: bool,
 ) -> Result<Box<dyn RequestHandler>> {
-    let mut is_batch = false;
+    // TODO: support batch executor while handling server-side streaming requests
+    // https://github.com/tikv/tikv/pull/5945
     if enable_batch_if_possible && !is_streaming {
-        let is_supported =
-            tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
-        if let Err(e) = is_supported {
-            // Not supported, will fallback to normal executor.
-            // To avoid user worries, let's output success message.
-            debug!("Successfully use normal Coprocessor query engine"; "start_ts" => start_ts, "reason" => %e);
-        } else {
-            is_batch = true;
-        }
-    }
-
-    if is_batch {
+        tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors())?;
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
         Ok(BatchDAGHandler::new(req, ranges, store, data_version, deadline)?.into_boxed())
     } else {
@@ -131,6 +122,10 @@ impl RequestHandler for BatchDAGHandler {
         handle_qe_response(self.runner.handle_request().await, self.data_version)
     }
 
+    fn set_execution_time_limit(&mut self, execution_time_limit: Option<Duration>) {
+        self.runner.set_execution_time_limit(execution_time_limit);
+    }
+
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
         self.runner.collect_storage_stats(dest);
     }
@@ -154,6 +149,9 @@ fn handle_qe_response(
         }
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
+            ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded) => {
+                Err(Error::ExecutionTimeLimitExceeded)
+            }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
                 let mut sel_resp = SelectResponse::default();
@@ -183,6 +181,9 @@ fn handle_qe_stream_response(
         Ok((None, finished)) => Ok((None, finished)),
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
+            ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded) => {
+                Err(Error::ExecutionTimeLimitExceeded)
+            }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
                 let mut s_resp = StreamResponse::default();
