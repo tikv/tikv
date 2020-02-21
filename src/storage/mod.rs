@@ -31,7 +31,7 @@ pub use self::{
     types::{StorageCallback, TxnStatus},
 };
 
-use crate::read_pool::ReadPool;
+use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
@@ -81,7 +81,7 @@ pub struct Storage<E: Engine, L: LockManager> {
     sched: TxnScheduler<E, L>,
 
     /// The thread pool used to run most read operations.
-    read_pool: ReadPool,
+    read_pool: ReadPoolHandle,
 
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
@@ -149,7 +149,7 @@ macro_rules! check_key_size {
 impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get concurrency of normal readpool.
     pub fn readpool_normal_concurrency(&self) -> usize {
-        if let ReadPool::FuturePools {
+        if let ReadPoolHandle::FuturePools {
             read_pool_normal, ..
         } = &self.read_pool
         {
@@ -163,7 +163,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn from_engine(
         engine: E,
         config: &Config,
-        read_pool: ReadPool,
+        read_pool: ReadPoolHandle,
         lock_mgr: Option<L>,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
@@ -1155,7 +1155,12 @@ impl<E: Engine> TestStorageBuilder<E> {
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
-        Storage::from_engine(self.engine, &self.config, read_pool.into(), None)
+        Storage::from_engine(
+            self.engine,
+            &self.config,
+            ReadPool::from(read_pool).handle(),
+            None,
+        )
     }
 }
 
