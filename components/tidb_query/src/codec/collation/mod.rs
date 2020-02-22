@@ -50,16 +50,12 @@ pub trait Collator {
     fn validate(bstr: &[u8]) -> Result<()>;
 
     /// Writes the SortKey of `bstr` into `writer`.
-    fn write_sort_key<W: BufferWriter>(
-        writer: &mut W,
-        bstr: &[u8],
-        pad_len: usize,
-    ) -> Result<usize>;
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8], flen: usize) -> Result<usize>;
 
     /// Returns the SortKey of `bstr` as an owned byte vector.
-    fn sort_key(bstr: &[u8], pad_len: usize) -> Result<Vec<u8>> {
+    fn sort_key(bstr: &[u8], flen: usize) -> Result<Vec<u8>> {
         let mut v = Vec::default();
-        Self::write_sort_key(&mut v, bstr, pad_len)?;
+        Self::write_sort_key(&mut v, bstr, flen)?;
         Ok(v)
     }
 
@@ -69,7 +65,7 @@ pub trait Collator {
     /// Hashes `bstr` based on its SortKey directly.
     ///
     /// WARN: `sort_hash(str) != hash(sort_key(str))`.
-    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], pad_len: usize) -> Result<()>;
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], flen: usize) -> Result<()>;
 }
 
 pub struct CollatorBinary;
@@ -83,11 +79,7 @@ impl Collator for CollatorBinary {
     }
 
     #[inline]
-    fn write_sort_key<W: BufferWriter>(
-        writer: &mut W,
-        bstr: &[u8],
-        _pad_len: usize,
-    ) -> Result<usize> {
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8], _flen: usize) -> Result<usize> {
         writer.write_bytes(bstr)?;
         Ok(bstr.len())
     }
@@ -98,7 +90,7 @@ impl Collator for CollatorBinary {
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], _pad_len: usize) -> Result<()> {
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], _flen: usize) -> Result<()> {
         use std::hash::Hash;
 
         bstr.hash(state);

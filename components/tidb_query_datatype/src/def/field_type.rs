@@ -115,7 +115,7 @@ impl Collation {
             -33 | -45 => Ok(Collation::Utf8Mb4GeneralCi),
             -46 | -83 => Ok(Collation::Utf8Mb4Bin),
             -63 | 63 => Ok(Collation::Binary),
-            n if n > 0 => Ok(Collation::Utf8Mb4BinNoPadding),
+            n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
             n => Err(DataTypeError::UnsupportedCollation { code: n }),
         }
     }

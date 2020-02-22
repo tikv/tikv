@@ -366,18 +366,14 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
         Ok(())
     }
 
-    fn write_sort_key<W: BufferWriter>(
-        writer: &mut W,
-        bstr: &[u8],
-        pad_len: usize,
-    ) -> Result<usize> {
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8], flen: usize) -> Result<usize> {
         let s = str::from_utf8(bstr)?;
         let mut n = 0;
         for ch in s.chars() {
             writer.write_u16_be(general_ci_convert(ch))?;
             n += 1;
         }
-        while n < pad_len {
+        while n < flen {
             writer.write_u16_be(PADDING_SPACE_GENEARAL_CI)?;
             n += 1;
         }
@@ -394,14 +390,14 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
         ))
     }
 
-    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], pad_len: usize) -> Result<()> {
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], flen: usize) -> Result<()> {
         let s = str::from_utf8(bstr)?;
         let mut n = 0;
         for ch in s.chars().map(general_ci_convert) {
             state.write_u16(ch);
             n += 1;
         }
-        while n < pad_len {
+        while n < flen {
             state.write_u16(PADDING_SPACE_GENEARAL_CI);
             n += 1;
         }
@@ -424,17 +420,13 @@ impl Collator for CollatorUtf8Mb4Bin {
     }
 
     #[inline]
-    fn write_sort_key<W: BufferWriter>(
-        writer: &mut W,
-        bstr: &[u8],
-        pad_len: usize,
-    ) -> Result<usize> {
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8], flen: usize) -> Result<usize> {
         str::from_utf8(bstr)?;
         writer.write_bytes(bstr)?;
-        for _ in 0..pad_len.saturating_sub(bstr.len()) {
+        for _ in 0..flen.saturating_sub(bstr.len()) {
             writer.write_u8(PADDING_SPACE)?;
         }
-        Ok(bstr.len().max(pad_len))
+        Ok(bstr.len().max(flen))
     }
 
     #[inline]
@@ -449,14 +441,14 @@ impl Collator for CollatorUtf8Mb4Bin {
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], pad_len: usize) -> Result<()> {
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], flen: usize) -> Result<()> {
         str::from_utf8(bstr)?;
         let mut n = 0;
         for ch in bstr.iter() {
             state.write_u8(*ch);
             n += 1;
         }
-        while n < pad_len {
+        while n < flen {
             state.write_u8(PADDING_SPACE);
             n += 1;
         }
@@ -498,11 +490,7 @@ impl Collator for CollatorUtf8Mb4BinNoPadding {
     }
 
     #[inline]
-    fn write_sort_key<W: BufferWriter>(
-        writer: &mut W,
-        bstr: &[u8],
-        _pad_len: usize,
-    ) -> Result<usize> {
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8], _flen: usize) -> Result<usize> {
         str::from_utf8(bstr)?;
         writer.write_bytes(bstr)?;
         Ok(bstr.len())
@@ -516,7 +504,7 @@ impl Collator for CollatorUtf8Mb4BinNoPadding {
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], _pad_len: usize) -> Result<()> {
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], _flen: usize) -> Result<()> {
         use std::hash::Hash;
 
         str::from_utf8(bstr)?;
@@ -535,18 +523,22 @@ mod tests {
         let s1 = "cAfe".as_bytes();
         let s2 = "café".as_bytes();
         type C = CollatorUtf8Mb4GeneralCi;
-        assert_eq!(C::sort_key(s1).unwrap(), C::sort_key(s2).unwrap());
+        assert_eq!(C::sort_key(s1, 0).unwrap(), C::sort_key(s2, 0).unwrap());
+        assert_eq!(C::sort_key(s1, 10).unwrap(), C::sort_key(s2, 10).unwrap());
         assert_eq!(C::sort_compare(s1, s2).unwrap(), Ordering::Equal);
     }
 
     #[test]
     fn test_general_ci_convert_code() {
         let cases = vec![
-            ("a", vec![0x00, 0x41]),
-            ("A", vec![0x00, 0x41]),
-            ("😃", vec![0xff, 0xfd]),
+            ("a", 0, vec![0x00, 0x41]),
+            ("A", 1, vec![0x00, 0x41]),
+            ("A", 2, vec![0x00, 0x41, 0x00, 0x20]),
+            ("😃", 1, vec![0xff, 0xfd]),
+            ("😃", 3, vec![0xff, 0xfd, 0x00, 0x20, 0x00, 0x20]),
             (
                 "Foo © bar 𝌆 baz ☃ qux",
+                0,
                 vec![
                     0x00, 0x46, 0x00, 0x4f, 0x00, 0x4f, 0x00, 0x20, 0x00, 0xa9, 0x00, 0x20, 0x00,
                     0x42, 0x00, 0x41, 0x00, 0x52, 0x00, 0x20, 0xff, 0xfd, 0x00, 0x20, 0x00, 0x42,
@@ -555,11 +547,11 @@ mod tests {
                 ],
             ),
         ];
-        for (s, expected) in &cases {
+        for (s, flen, expected) in cases {
             type C = CollatorUtf8Mb4GeneralCi;
             let mut code = Vec::new();
-            C::write_sort_key(s.as_bytes(), &mut code).unwrap();
-            assert_eq!(&code, expected);
+            C::write_sort_key(&mut code, s.as_bytes(), flen).unwrap();
+            assert_eq!(code, expected);
         }
     }
 }
