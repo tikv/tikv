@@ -6,7 +6,6 @@ use std::ptr::NonNull;
 
 use servo_arc::Arc;
 
-use tidb_query_datatype::FieldTypeAccessor;
 use tipb::{Expr, FieldType, TopN};
 
 use crate::batch::executors::util::*;
@@ -416,10 +415,7 @@ impl HeapItemUnsafe {
 
             // There is panic inside, but will never panic, since the data type of corresponding
             // column should be consistent for each `HeapItemUnsafe`.
-            let ord = lhs.cmp_sort_key(
-                &rhs,
-                order_exprs_field_type[column_idx].as_accessor().collation(),
-            )?;
+            let ord = lhs.cmp_sort_key(&rhs, &order_exprs_field_type[column_idx])?;
 
             if ord == Ordering::Equal {
                 continue;

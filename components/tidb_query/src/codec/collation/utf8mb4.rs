@@ -6,7 +6,7 @@ use std::str;
 
 use codec::prelude::*;
 
-use super::{Charset, Collator};
+use super::*;
 use crate::codec::Result;
 
 pub struct CharsetUtf8mb4;
@@ -339,6 +339,9 @@ static GENERAL_CI_PLANE_TABLE: [Option<&[u16; 256]>; 256] = [
     Some(&GENERAL_CI_PLANE_FF),
 ];
 
+pub const PADDING_SPACE: u8 = 0x20;
+pub const PADDING_SPACE_GENEARAL_CI: u16 = 0x20;
+
 pub struct CollatorUtf8Mb4GeneralCi;
 
 #[inline]
@@ -357,43 +360,54 @@ fn general_ci_convert(c: char) -> u16 {
 impl Collator for CollatorUtf8Mb4GeneralCi {
     type Charset = CharsetUtf8mb4;
 
-    fn write_sort_key<W: BufferWriter>(bstr: &[u8], writer: &mut W) -> Result<usize> {
-        let s = str::from_utf8(bstr)?;
-        let mut n = 0;
-        for ch in s.chars() {
-            writer.write_u16_be(general_ci_convert(ch))?;
-            n += 1;
-        }
-        Ok(n * std::mem::size_of::<u16>())
-    }
-
     #[inline]
     fn validate(bstr: &[u8]) -> Result<()> {
         str::from_utf8(bstr)?;
         Ok(())
     }
 
+    fn write_sort_key<W: BufferWriter>(
+        writer: &mut W,
+        bstr: &[u8],
+        pad_len: usize,
+    ) -> Result<usize> {
+        let s = str::from_utf8(bstr)?;
+        let mut n = 0;
+        for ch in s.chars() {
+            writer.write_u16_be(general_ci_convert(ch))?;
+            n += 1;
+        }
+        while n < pad_len {
+            writer.write_u16_be(PADDING_SPACE_GENEARAL_CI)?;
+            n += 1;
+        }
+        Ok(n * std::mem::size_of::<u16>())
+    }
+
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
         let sa = str::from_utf8(a)?;
         let sb = str::from_utf8(b)?;
-        let sa_chars = sa.chars();
-        let sb_chars = sb.chars();
-        Ok(sa_chars.cmp_by(sb_chars, |a, b| {
-            general_ci_convert(a).cmp(&general_ci_convert(b))
-        }))
+        Ok(sort_compare_padding(
+            sa.chars().map(general_ci_convert),
+            sb.chars().map(general_ci_convert),
+            PADDING_SPACE_GENEARAL_CI,
+        ))
     }
 
-    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<()> {
-        use std::hash::Hash;
-
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], pad_len: usize) -> Result<()> {
+        let s = str::from_utf8(bstr)?;
+        let mut n = 0;
+        for ch in s.chars().map(general_ci_convert) {
+            state.write_u16(ch);
+            n += 1;
+        }
+        while n < pad_len {
+            state.write_u16(PADDING_SPACE_GENEARAL_CI);
+            n += 1;
+        }
         // We follow the `[T]::hash` implementation to hash length as well.
         // See `impl<T> Hash for [T]` in https://doc.rust-lang.org/std/hash/trait.Hash.html
-        bstr.len().hash(state);
-
-        let s = str::from_utf8(bstr)?;
-        for ch in s.chars() {
-            state.write_u16(general_ci_convert(ch));
-        }
+        state.write_usize(n);
         Ok(())
     }
 }
@@ -404,16 +418,94 @@ impl Collator for CollatorUtf8Mb4Bin {
     type Charset = CharsetUtf8mb4;
 
     #[inline]
-    fn write_sort_key<W: BufferWriter>(bstr: &[u8], writer: &mut W) -> Result<usize> {
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_sort_key<W: BufferWriter>(
+        writer: &mut W,
+        bstr: &[u8],
+        pad_len: usize,
+    ) -> Result<usize> {
         str::from_utf8(bstr)?;
         writer.write_bytes(bstr)?;
-        Ok(bstr.len())
+        for _ in 0..pad_len.saturating_sub(bstr.len()) {
+            writer.write_u8(PADDING_SPACE)?;
+        }
+        Ok(bstr.len().max(pad_len))
     }
+
+    #[inline]
+    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
+        str::from_utf8(a)?;
+        str::from_utf8(b)?;
+        Ok(sort_compare_padding(
+            a.iter().copied(),
+            b.iter().copied(),
+            PADDING_SPACE,
+        ))
+    }
+
+    #[inline]
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], pad_len: usize) -> Result<()> {
+        str::from_utf8(bstr)?;
+        let mut n = 0;
+        for ch in bstr.iter() {
+            state.write_u8(*ch);
+            n += 1;
+        }
+        while n < pad_len {
+            state.write_u8(PADDING_SPACE);
+            n += 1;
+        }
+        // We follow the `[T]::hash` implementation to hash length as well.
+        // See `impl<T> Hash for [T]` in https://doc.rust-lang.org/std/hash/trait.Hash.html
+        state.write_usize(n);
+        Ok(())
+    }
+}
+
+#[inline]
+fn sort_compare_padding<Char: Ord>(
+    mut a: impl Iterator<Item = Char>,
+    mut b: impl Iterator<Item = Char>,
+    padding_char: Char,
+) -> Ordering {
+    loop {
+        let result = match (a.next(), b.next()) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (Some(a), None) => a.cmp(&padding_char),
+            (None, Some(b)) => padding_char.cmp(&b),
+            (None, None) => return Ordering::Equal,
+        };
+        if result != Ordering::Equal {
+            return result;
+        }
+    }
+}
+
+pub struct CollatorUtf8Mb4BinNoPadding;
+
+impl Collator for CollatorUtf8Mb4BinNoPadding {
+    type Charset = CharsetUtf8mb4;
 
     #[inline]
     fn validate(bstr: &[u8]) -> Result<()> {
         str::from_utf8(bstr)?;
         Ok(())
+    }
+
+    #[inline]
+    fn write_sort_key<W: BufferWriter>(
+        writer: &mut W,
+        bstr: &[u8],
+        _pad_len: usize,
+    ) -> Result<usize> {
+        str::from_utf8(bstr)?;
+        writer.write_bytes(bstr)?;
+        Ok(bstr.len())
     }
 
     #[inline]
@@ -424,7 +516,7 @@ impl Collator for CollatorUtf8Mb4Bin {
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<()> {
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], _pad_len: usize) -> Result<()> {
         use std::hash::Hash;
 
         str::from_utf8(bstr)?;
