@@ -401,9 +401,6 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
             state.write_u16(PADDING_SPACE_GENEARAL_CI);
             n += 1;
         }
-        // We follow the `[T]::hash` implementation to hash length as well.
-        // See `impl<T> Hash for [T]` in https://doc.rust-lang.org/std/hash/trait.Hash.html
-        state.write_usize(n);
         Ok(())
     }
 }
@@ -421,9 +418,9 @@ impl Collator for CollatorUtf8Mb4Bin {
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8], flen: usize) -> Result<usize> {
-        str::from_utf8(bstr)?;
+        let s = str::from_utf8(bstr)?;
         writer.write_bytes(bstr)?;
-        for _ in 0..flen.saturating_sub(bstr.len()) {
+        for _ in 0..flen.saturating_sub(s.chars().count()) {
             writer.write_u8(PADDING_SPACE)?;
         }
         Ok(bstr.len().max(flen))
@@ -442,19 +439,13 @@ impl Collator for CollatorUtf8Mb4Bin {
 
     #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8], flen: usize) -> Result<()> {
-        str::from_utf8(bstr)?;
-        let mut n = 0;
+        let s = str::from_utf8(bstr)?;
         for ch in bstr.iter() {
             state.write_u8(*ch);
-            n += 1;
         }
-        while n < flen {
+        for _ in 0..flen.saturating_sub(s.chars().count()) {
             state.write_u8(PADDING_SPACE);
-            n += 1;
         }
-        // We follow the `[T]::hash` implementation to hash length as well.
-        // See `impl<T> Hash for [T]` in https://doc.rust-lang.org/std/hash/trait.Hash.html
-        state.write_usize(n);
         Ok(())
     }
 }
@@ -516,6 +507,7 @@ impl Collator for CollatorUtf8Mb4BinNoPadding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tidb_query_datatype::Collation;
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]
@@ -529,29 +521,76 @@ mod tests {
     }
 
     #[test]
-    fn test_general_ci_convert_code() {
+    fn test_utf8mb4_sort_key() {
+        let collations = [
+            (Collation::Utf8Mb4Bin, 0),
+            (Collation::Utf8Mb4BinNoPadding, 1),
+            (Collation::Utf8Mb4GeneralCi, 2),
+        ];
         let cases = vec![
-            ("a", 0, vec![0x00, 0x41]),
-            ("A", 1, vec![0x00, 0x41]),
-            ("A", 2, vec![0x00, 0x41, 0x00, 0x20]),
-            ("😃", 1, vec![0xff, 0xfd]),
-            ("😃", 3, vec![0xff, 0xfd, 0x00, 0x20, 0x00, 0x20]),
+            // (str, flen, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
+            ("a", 0, [vec![0x61], vec![0x61], vec![0x00, 0x41]]),
+            ("A", 1, [vec![0x41], vec![0x41], vec![0x00, 0x41]]),
+            (
+                "A",
+                2,
+                [vec![0x41, 0x20], vec![0x41], vec![0x00, 0x41, 0x00, 0x20]],
+            ),
+            (
+                "😃",
+                1,
+                [
+                    vec![0xF0, 0x9F, 0x98, 0x83],
+                    vec![0xF0, 0x9F, 0x98, 0x83],
+                    vec![0xff, 0xfd],
+                ],
+            ),
+            (
+                "😃",
+                3,
+                [
+                    vec![0xF0, 0x9F, 0x98, 0x83, 0x20, 0x20],
+                    vec![0xF0, 0x9F, 0x98, 0x83],
+                    vec![0xff, 0xfd, 0x00, 0x20, 0x00, 0x20],
+                ],
+            ),
             (
                 "Foo © bar 𝌆 baz ☃ qux",
                 0,
-                vec![
-                    0x00, 0x46, 0x00, 0x4f, 0x00, 0x4f, 0x00, 0x20, 0x00, 0xa9, 0x00, 0x20, 0x00,
-                    0x42, 0x00, 0x41, 0x00, 0x52, 0x00, 0x20, 0xff, 0xfd, 0x00, 0x20, 0x00, 0x42,
-                    0x00, 0x41, 0x00, 0x5a, 0x00, 0x20, 0x26, 0x3, 0x00, 0x20, 0x00, 0x51, 0x00,
-                    0x55, 0x00, 0x58,
+                [
+                    vec![
+                        0x46, 0x6F, 0x6F, 0x20, 0xC2, 0xA9, 0x20, 0x62, 0x61, 0x72, 0x20, 0xF0,
+                        0x9D, 0x8C, 0x86, 0x20, 0x62, 0x61, 0x7A, 0x20, 0xE2, 0x98, 0x83, 0x20,
+                        0x71, 0x75, 0x78,
+                    ],
+                    vec![
+                        0x46, 0x6F, 0x6F, 0x20, 0xC2, 0xA9, 0x20, 0x62, 0x61, 0x72, 0x20, 0xF0,
+                        0x9D, 0x8C, 0x86, 0x20, 0x62, 0x61, 0x7A, 0x20, 0xE2, 0x98, 0x83, 0x20,
+                        0x71, 0x75, 0x78,
+                    ],
+                    vec![
+                        0x00, 0x46, 0x00, 0x4f, 0x00, 0x4f, 0x00, 0x20, 0x00, 0xa9, 0x00, 0x20,
+                        0x00, 0x42, 0x00, 0x41, 0x00, 0x52, 0x00, 0x20, 0xff, 0xfd, 0x00, 0x20,
+                        0x00, 0x42, 0x00, 0x41, 0x00, 0x5a, 0x00, 0x20, 0x26, 0x3, 0x00, 0x20,
+                        0x00, 0x51, 0x00, 0x55, 0x00, 0x58,
+                    ],
                 ],
             ),
         ];
         for (s, flen, expected) in cases {
-            type C = CollatorUtf8Mb4GeneralCi;
-            let mut code = Vec::new();
-            C::write_sort_key(&mut code, s.as_bytes(), flen).unwrap();
-            assert_eq!(code, expected);
+            for (collation, order_in_expected) in &collations {
+                let mut code = Vec::new();
+                match_template_collator! {
+                    TT, match collation {
+                        Collation::TT => TT::write_sort_key(&mut code, s.as_bytes(), flen).unwrap()
+                    }
+                };
+                assert_eq!(
+                    code, expected[*order_in_expected],
+                    "when testing {} against {:?} with flen {}",
+                    s, collation, flen
+                );
+            }
         }
     }
 }

@@ -786,7 +786,7 @@ mod tests {
                 ],
             ),
         ];
-        let collations = vec![
+        let collations = [
             (Collation::Binary, 0),
             (Collation::Utf8Mb4BinNoPadding, 1),
             (Collation::Utf8Mb4Bin, 2),
