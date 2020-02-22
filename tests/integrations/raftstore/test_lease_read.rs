@@ -11,8 +11,8 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine::Peekable;
+use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -209,6 +209,9 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index);
     assert_eq!(detector.ctx.rl().len(), 0);
+
+    // Ensure peer 3 is ready to transfer leader.
+    must_get_equal(&cluster.get_engine(3), key, b"v1");
 
     // Drop MsgTimeoutNow to `peer3` so that the leader transfer procedure would abort later.
     cluster.add_send_filter(CloneFilterFactory(

@@ -26,7 +26,7 @@ fn bench_encode_chunk(b: &mut Bencher) {
         let s = format!("{}.123435", row_id);
         let bs = Datum::Bytes(s.as_bytes().to_vec());
         let dec = Datum::Dec(s.parse().unwrap());
-        let json = Datum::Json(Json::String(s));
+        let json = Datum::Json(Json::from_string(s).unwrap());
         chunk.append_datum(0, &Datum::Null).unwrap();
         chunk.append_datum(1, &Datum::I64(row_id as i64)).unwrap();
         chunk.append_datum(2, &bs).unwrap();

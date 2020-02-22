@@ -19,7 +19,7 @@ use std::usize;
 
 use kvproto::configpb::{self, StatusCode};
 
-use configuration::{ConfigChange, ConfigValue, Configuration};
+use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -28,10 +28,6 @@ use engine::rocks::{
 use slog;
 
 use crate::import::Config as ImportConfig;
-use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-use crate::raftstore::coprocessor::Config as CopConfig;
-use crate::raftstore::store::Config as RaftstoreConfig;
-use crate::raftstore::store::PdTask;
 use crate::server::gc_worker::GcConfig;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
@@ -49,6 +45,10 @@ use engine_rocks::{
 };
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient};
+use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
+use raftstore::coprocessor::Config as CopConfig;
+use raftstore::store::Config as RaftstoreConfig;
+use raftstore::store::PdTask;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
@@ -140,7 +140,8 @@ impl TitanCfConfig {
 fn get_background_job_limit(
     default_background_jobs: i32,
     default_sub_compactions: u32,
-) -> (i32, u32) {
+    default_background_gc: i32,
+) -> (i32, u32, i32) {
     let cpu_num = sysinfo::get_logical_cores();
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
@@ -154,7 +155,10 @@ fn get_background_job_limit(
         1,
         cmp::min(default_sub_compactions, (max_compactions - 1) as u32),
     );
-    (max_background_jobs, max_sub_compactions)
+    // Maximum background GC threads for Titan
+    let max_background_gc: i32 = cmp::min(default_background_gc, cpu_num as i32);
+
+    (max_background_jobs, max_sub_compactions, max_background_gc)
 }
 
 macro_rules! cf_config {
@@ -163,22 +167,33 @@ macro_rules! cf_config {
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
+            #[config(skip)]
             pub block_size: ReadableSize,
             pub block_cache_size: ReadableSize,
+            #[config(skip)]
             pub disable_block_cache: bool,
+            #[config(skip)]
             pub cache_index_and_filter_blocks: bool,
+            #[config(skip)]
             pub pin_l0_filter_and_index_blocks: bool,
+            #[config(skip)]
             pub use_bloom_filter: bool,
+            #[config(skip)]
             pub optimize_filters_for_hits: bool,
+            #[config(skip)]
             pub whole_key_filtering: bool,
+            #[config(skip)]
             pub bloom_filter_bits_per_key: i32,
+            #[config(skip)]
             pub block_based_bloom_filter: bool,
+            #[config(skip)]
             pub read_amp_bytes_per_bit: u32,
             #[serde(with = "rocks_config::compression_type_level_serde")]
             #[config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
             pub write_buffer_size: ReadableSize,
             pub max_write_buffer_number: i32,
+            #[config(skip)]
             pub min_write_buffer_number_to_merge: i32,
             pub max_bytes_for_level_base: ReadableSize,
             pub target_file_size_base: ReadableSize,
@@ -189,7 +204,9 @@ macro_rules! cf_config {
             #[serde(with = "rocks_config::compaction_pri_serde")]
             #[config(skip)]
             pub compaction_pri: CompactionPriority,
+            #[config(skip)]
             pub dynamic_level_bytes: bool,
+            #[config(skip)]
             pub num_levels: i32,
             pub max_bytes_for_level_multiplier: i32,
             #[serde(with = "rocks_config::compaction_style_serde")]
@@ -198,9 +215,13 @@ macro_rules! cf_config {
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
+            #[config(skip)]
             pub force_consistency_checks: bool,
+            #[config(skip)]
             pub prop_size_index_distance: u64,
+            #[config(skip)]
             pub prop_keys_index_distance: u64,
+            #[config(skip)]
             pub enable_doubly_skiplist: bool,
             #[config(submodule)]
             pub titan: TitanCfConfig,
@@ -670,7 +691,7 @@ impl Default for TitanDBConfig {
             enabled: false,
             dirname: "".to_owned(),
             disable_gc: false,
-            max_background_gc: 1,
+            max_background_gc: 4,
             purge_obsolete_files_period: ReadableDuration::secs(10),
         }
     }
@@ -698,32 +719,49 @@ pub struct DbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
+    #[config(skip)]
     pub wal_dir: String,
+    #[config(skip)]
     pub wal_ttl_seconds: u64,
+    #[config(skip)]
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
+    #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
+    #[config(skip)]
     pub create_if_missing: bool,
     pub max_open_files: i32,
+    #[config(skip)]
     pub enable_statistics: bool,
+    #[config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
+    #[config(skip)]
     pub info_log_max_size: ReadableSize,
+    #[config(skip)]
     pub info_log_roll_time: ReadableDuration,
+    #[config(skip)]
     pub info_log_keep_log_file_num: u64,
+    #[config(skip)]
     pub info_log_dir: String,
+    #[config(skip)]
     pub rate_bytes_per_sec: ReadableSize,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
+    #[config(skip)]
     pub auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
+    #[config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
+    #[config(skip)]
     pub use_direct_io_for_flush_and_compaction: bool,
+    #[config(skip)]
     pub enable_pipelined_write: bool,
+    #[config(skip)]
     pub enable_unordered_write: bool,
     #[config(submodule)]
     pub defaultcf: DefaultCfConfig,
@@ -739,7 +777,10 @@ pub struct DbConfig {
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
-        let (max_background_jobs, max_sub_compactions) = get_background_job_limit(8, 3);
+        let (max_background_jobs, max_sub_compactions, max_background_gc) =
+            get_background_job_limit(8, 3, 4);
+        let mut titan_config = TitanDBConfig::default();
+        titan_config.max_background_gc = max_background_gc;
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -771,7 +812,7 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
-            titan: TitanDBConfig::default(),
+            titan: titan_config,
         }
     }
 }
@@ -949,26 +990,42 @@ pub struct RaftDbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
+    #[config(skip)]
     pub wal_dir: String,
+    #[config(skip)]
     pub wal_ttl_seconds: u64,
+    #[config(skip)]
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
+    #[config(skip)]
     pub max_manifest_file_size: ReadableSize,
+    #[config(skip)]
     pub create_if_missing: bool,
     pub max_open_files: i32,
+    #[config(skip)]
     pub enable_statistics: bool,
+    #[config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
+    #[config(skip)]
     pub info_log_max_size: ReadableSize,
+    #[config(skip)]
     pub info_log_roll_time: ReadableDuration,
+    #[config(skip)]
     pub info_log_keep_log_file_num: u64,
+    #[config(skip)]
     pub info_log_dir: String,
+    #[config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
+    #[config(skip)]
     pub use_direct_io_for_flush_and_compaction: bool,
+    #[config(skip)]
     pub enable_pipelined_write: bool,
+    #[config(skip)]
     pub enable_unordered_write: bool,
+    #[config(skip)]
     pub allow_concurrent_memtable_write: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
@@ -980,7 +1037,10 @@ pub struct RaftDbConfig {
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
-        let (max_background_jobs, max_sub_compactions) = get_background_job_limit(4, 2);
+        let (max_background_jobs, max_sub_compactions, max_background_gc) =
+            get_background_job_limit(4, 2, 4);
+        let mut titan_config = TitanDBConfig::default();
+        titan_config.max_background_gc = max_background_gc;
         RaftDbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -1007,7 +1067,7 @@ impl Default for RaftDbConfig {
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
-            titan: TitanDBConfig::default(),
+            titan: titan_config,
         }
     }
 }
@@ -1266,6 +1326,8 @@ pub mod log_level_serde {
 pub struct UnifiedReadPoolConfig {
     pub min_thread_count: usize,
     pub max_thread_count: usize,
+    pub stack_size: ReadableSize,
+    pub max_tasks_per_worker: usize,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -1283,6 +1345,16 @@ impl UnifiedReadPoolConfig {
                     .into(),
             );
         }
+        if self.stack_size.0 < ReadableSize::mb(2).0 {
+            return Err("readpool.unified.stack-size should be >= 2mb"
+                .to_string()
+                .into());
+        }
+        if self.max_tasks_per_worker <= 1 {
+            return Err("readpool.unified.max-tasks-per-worker should be > 1"
+                .to_string()
+                .into());
+        }
         Ok(())
     }
 }
@@ -1298,6 +1370,8 @@ impl Default for UnifiedReadPoolConfig {
         Self {
             min_thread_count: 1,
             max_thread_count: concurrency,
+            stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
+            max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
         }
     }
 }
@@ -1311,6 +1385,8 @@ mod unified_read_pool_tests {
         let cfg = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,
+            stack_size: ReadableSize::mb(2),
+            max_tasks_per_worker: 2000,
         };
         assert!(cfg.validate().is_ok());
 
@@ -1323,6 +1399,19 @@ mod unified_read_pool_tests {
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 2,
             max_thread_count: 1,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+
+        let invalid_cfg = UnifiedReadPoolConfig {
+            stack_size: ReadableSize::mb(1),
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+
+        let invalid_cfg = UnifiedReadPoolConfig {
+            max_tasks_per_worker: 1,
+            ..cfg
         };
         assert!(invalid_cfg.validate().is_err());
     }
@@ -1399,10 +1488,12 @@ macro_rules! readpool_config {
                     )
                     .into());
                 }
-                if self.stack_size.0 < ReadableSize::mb(2).0 {
-                    return Err(
-                        format!("readpool.{}.stack-size should be >= 2mb", $display_name).into(),
-                    );
+                if self.stack_size.0 < ReadableSize::mb(MIN_READPOOL_STACK_SIZE_MB).0 {
+                    return Err(format!(
+                        "readpool.{}.stack-size should be >= {}mb",
+                        $display_name, MIN_READPOOL_STACK_SIZE_MB
+                    )
+                    .into());
                 }
                 if self.max_tasks_per_worker_high <= 1 {
                     return Err(format!(
@@ -1490,8 +1581,9 @@ const DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY: usize = 8;
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
 // backoff. So when it needs to wait for more than 2 seconds, return error won't causse
 // larger latency.
-const DEFAULT_READPOOL_MAX_TASKS_PER_WORKER: usize = 2 as usize * 1000;
+const DEFAULT_READPOOL_MAX_TASKS_PER_WORKER: usize = 2 * 1000;
 
+const MIN_READPOOL_STACK_SIZE_MB: u64 = 2;
 const DEFAULT_READPOOL_STACK_SIZE_MB: u64 = 10;
 
 readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
@@ -1564,7 +1656,7 @@ impl ReadPoolConfig {
 impl Default for ReadPoolConfig {
     fn default() -> ReadPoolConfig {
         ReadPoolConfig {
-            unify_read_pool: false,
+            unify_read_pool: true,
             unified: Default::default(),
             storage: Default::default(),
             coprocessor: Default::default(),
@@ -1582,6 +1674,8 @@ mod readpool_tests {
         let unified = UnifiedReadPoolConfig {
             min_thread_count: 0,
             max_thread_count: 0,
+            stack_size: ReadableSize::mb(0),
+            max_tasks_per_worker: 0,
         };
         assert!(unified.validate().is_err());
         let storage = StorageReadPoolConfig::default();
@@ -1641,6 +1735,7 @@ mod readpool_tests {
         let unified = UnifiedReadPoolConfig {
             min_thread_count: 0,
             max_thread_count: 0,
+            ..Default::default()
         };
         assert!(unified.validate().is_err());
         let storage = StorageReadPoolConfig::default();
@@ -1751,6 +1846,7 @@ impl Default for TiKvConfig {
 }
 
 impl TiKvConfig {
+    // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
@@ -2095,13 +2191,7 @@ pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) ->
     }
 }
 
-type CfgResult<T> = Result<T, Box<dyn Error>>;
-
-pub trait ConfigManager: Send {
-    fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
-}
-
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Module {
     Readpool,
     Server,
@@ -2166,6 +2256,7 @@ impl ConfigController {
         // Config from PD have not been checked, call `compatible_adjust()`
         // and `validate()` before use it
         incoming.compatible_adjust();
+        // TODO: return the invalid config instead
         if incoming.validate().is_err() {
             let diff = incoming.diff(&self.current);
             return Ok(Either::Left(diff));
@@ -2198,14 +2289,9 @@ impl ConfigController {
         Ok(Either::Right(true))
     }
 
-    pub fn register(&mut self, module: &str, cfg_mgr: Box<dyn ConfigManager>) {
-        match Module::from(module) {
-            Module::Unknown(name) => warn!("tried to register unknown module: {}", name),
-            m => {
-                if self.config_mgrs.insert(m, cfg_mgr).is_some() {
-                    warn!("config manager for module {} already registered", module)
-                }
-            }
+    pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
+        if self.config_mgrs.insert(module.clone(), cfg_mgr).is_some() {
+            warn!("config manager for module {:?} already registered", module)
         }
     }
 
@@ -2241,10 +2327,6 @@ impl ConfigHandler {
             version,
             config_controller: controller,
         })
-    }
-
-    pub fn get_refresh_interval(&self) -> Duration {
-        Duration::from(self.config_controller.current.refresh_config_interval)
     }
 
     pub fn get_id(&self) -> String {
@@ -2293,7 +2375,7 @@ impl ConfigHandler {
 
     /// Update the local config if remote config had been changed,
     /// rollback the remote config if the change are invalid.
-    pub fn refresh_config(&mut self, cfg_client: Arc<impl ConfigClient>) -> CfgResult<()> {
+    pub fn refresh_config(&mut self, cfg_client: &dyn ConfigClient) -> CfgResult<()> {
         let mut resp = cfg_client.get_config(self.get_id(), self.version.clone())?;
         let version = resp.take_version();
         match resp.get_status().get_code() {
@@ -2335,7 +2417,7 @@ impl ConfigHandler {
         &mut self,
         version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
-        cfg_client: Arc<impl ConfigClient>,
+        cfg_client: &dyn ConfigClient,
     ) -> CfgResult<()> {
         let mut resp = cfg_client.update_config(self.get_id(), version, entries)?;
         match resp.get_status().get_code() {
@@ -2348,6 +2430,31 @@ impl ConfigHandler {
                 Err(format!("{:?}", resp).into())
             }
         }
+    }
+}
+
+use raftstore::store::DynamicConfig;
+impl DynamicConfig for ConfigHandler {
+    fn refresh(&mut self, cfg_client: &dyn ConfigClient) {
+        debug!(
+            "refresh config";
+            "component id" => self.get_id(),
+            "version" => ?self.get_version()
+        );
+        if let Err(e) = self.refresh_config(cfg_client) {
+            warn!(
+                "failed to refresh config";
+                "component id" => self.get_id(),
+                "version" => ?self.get_version(),
+                "err" => ?e
+            )
+        }
+    }
+    fn refresh_interval(&self) -> Duration {
+        Duration::from(self.config_controller.current.refresh_config_interval)
+    }
+    fn get(&self) -> String {
+        toml::to_string(self.get_config()).unwrap()
     }
 }
 
@@ -2565,7 +2672,7 @@ mod tests {
 
         let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register(
-            "rocksdb",
+            Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
         );
         (engine, cfg_controller)

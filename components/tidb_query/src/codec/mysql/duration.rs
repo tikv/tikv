@@ -76,7 +76,7 @@ fn check_nanos_part(nanos: u32) -> Result<u32> {
 
 #[inline]
 fn check_nanos(nanos: i64) -> Result<i64> {
-    if nanos.abs() > MAX_NANOS {
+    if nanos < -MAX_NANOS || nanos > MAX_NANOS {
         Err(Error::truncated_wrong_val("NANOS", nanos))
     } else {
         Ok(nanos)
@@ -146,42 +146,30 @@ mod parser {
         ctx: &mut EvalContext,
         input: &'a str,
         fsp: u8,
-    ) -> IResult<&'a str, [u32; 4], ()> {
+    ) -> IResult<&'a str, Duration, ()> {
         let (rest, digits) = digit1(input)?;
         if digits.len() == 12 || digits.len() == 14 {
-            let datetime = DateTime::parse_datetime(ctx, digits, fsp as i8, true)
+            let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
                 .map_err(|_| nom::Err::Error(()))?;
-            let (rest, fraction) = fraction(input, fsp)?;
-            return Ok((
-                rest,
-                [
-                    datetime.hour(),
-                    datetime.minute(),
-                    datetime.second(),
-                    fraction,
-                ],
-            ));
+            return Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?));
         }
         let (rest, _) = anysep(rest)?;
         let (rest, _) = digit1(rest)?;
         let (rest, _) = anysep(rest)?;
         let (rest, _) = digit1(rest)?;
 
-        if rest.is_empty() {
+        let has_datetime_sep = match rest.chars().next() {
+            Some(c) if c == 'T' || c == ' ' => true,
+            _ => false,
+        };
+
+        if !has_datetime_sep {
             return Err(nom::Err::Error(()));
         }
 
         let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
             .map_err(|_| nom::Err::Error(()))?;
-        Ok((
-            rest,
-            [
-                datetime.hour(),
-                datetime.minute(),
-                datetime.second(),
-                datetime.micro(),
-            ],
-        ))
+        Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?))
     }
 
     fn anysep(input: &str) -> IResult<&str, char, ()> {
@@ -221,7 +209,7 @@ mod parser {
         day_hhmmss(rest)
             .ok()
             .and_then(|(rest, (day, [hh, mm, ss]))| {
-                Some((rest, [day.checked_mul(24)? + hh, mm, ss]))
+                Some((rest, [day.checked_mul(24)?.checked_add(hh)?, mm, ss]))
             })
             .or_else(|| hhmmss_delimited(rest, true).ok())
             .or_else(|| hhmmss_compact(rest).ok())
@@ -238,8 +226,9 @@ mod parser {
                 ))
             })
             .or_else(|| {
-                let (_, [h, m, s, f]) = hhmmss_datetime(ctx, rest, fsp).ok()?;
-                Some(Duration::new_from_parts(neg, h, m, s, f, fsp as i8))
+                hhmmss_datetime(ctx, rest, fsp)
+                    .ok()
+                    .map(|(_, duration)| Ok(duration))
             })
             .and_then(|result| {
                 result
@@ -258,14 +247,16 @@ mod parser {
 } /* parser */
 
 #[inline]
-fn round(nanos: i64, fsp: u8) -> i64 {
+fn checked_round(nanos: i64, fsp: u8) -> Result<i64> {
+    check_nanos(nanos)?;
     let min_step = TEN_POW[NANO_WIDTH - fsp as usize] as i64;
     let rem = nanos % min_step;
-    if rem.abs() < min_step / 2 {
+    let nanos = if rem.abs() < min_step / 2 {
         nanos - rem
     } else {
         nanos - rem + min_step * nanos.signum()
-    }
+    };
+    check_nanos(nanos)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -384,8 +375,7 @@ impl Duration {
         let nanos = millis
             .checked_mul(NANOS_PER_MILLI)
             .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
-        let nanos = round(nanos, fsp);
-        check_nanos(nanos)?;
+        let nanos = checked_round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -394,14 +384,13 @@ impl Duration {
         let nanos = micros
             .checked_mul(NANOS_PER_MICRO)
             .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
-        let nanos = round(nanos, fsp);
-        check_nanos(nanos)?;
+        let nanos = checked_round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
     pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        check_nanos(nanos)?;
+        let nanos = checked_round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -423,8 +412,7 @@ impl Duration {
         let second = second as i64 + minute * SECS_PER_MINUTE;
         let nanos = nanos as i64 + second * NANOS_PER_SEC;
         let nanos = signum * nanos;
-        let nanos = round(nanos, fsp);
-        check_nanos(nanos)?;
+        let nanos = checked_round(nanos, fsp)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -448,7 +436,7 @@ impl Duration {
             return Ok(Duration { fsp, ..self });
         }
 
-        let nanos = round(self.nanos, fsp);
+        let nanos = checked_round(self.nanos, fsp)?;
 
         Ok(Duration { nanos, fsp })
     }
@@ -755,6 +743,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_datetime() {
+        let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
+            (b"2010-02-12", 0, None),
+            (b"2010-02-12t12:23:34", 0, None),
+            (b"2010-02-12T12:23:34", 0, Some("12:23:34")),
+            (b"2010-02-12 12:23:34", 0, Some("12:23:34")),
+            (b"2010-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
+            (b"10-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
+        ];
+
+        for (input, fsp, expected) in cases {
+            let actual = Duration::parse(&mut EvalContext::default(), input, fsp).ok();
+            assert_eq!(
+                actual.map(|d| d.to_string()),
+                expected.map(|s| s.to_string()),
+                "failed case: {}",
+                std::str::from_utf8(input).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn test_parse() {
         let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
             (b"10:11:12", 0, Some("10:11:12")),
@@ -822,6 +832,8 @@ mod tests {
             (b"- 1 .1", 1, Some("-00:00:01.1")),
             (b"18446744073709551615:59:59", 0, None),
             (b"4294967295 0:59:59", 0, None),
+            (b"4294967295 232:59:59", 0, None),
+            (b"-4294967295 232:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
             (b"1:62:3", 0, None),
