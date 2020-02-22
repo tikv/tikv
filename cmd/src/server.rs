@@ -20,6 +20,16 @@ use kvproto::{
     diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
 use pd_client::{PdClient, RpcClient};
+use raftstore::{
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
+    router::ServerRaftStoreRouter,
+    store::{
+        config::RaftstoreConfigManager,
+        fsm,
+        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+        new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
+    },
+};
 use std::{
     convert::TryFrom,
     fmt,
@@ -29,20 +39,11 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
-use tikv::config::ConfigHandler;
-use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::{
-    config::{ConfigController, TiKvConfig},
+    config::{ConfigController, ConfigHandler, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
-    raftstore::{
-        coprocessor::{CoprocessorHost, RegionInfoAccessor},
-        store::{
-            fsm,
-            fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-            new_compaction_listener, LocalReader, SnapManagerBuilder,
-        },
-    },
+    read_pool::{build_yatp_read_pool, ReadPool},
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -55,11 +56,12 @@ use tikv::{
     },
     storage,
 };
+use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     security::SecurityManager,
     time::Monitor,
-    worker::{FutureWorker, Worker},
+    worker::{FutureScheduler, FutureWorker, Worker},
 };
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -73,6 +75,7 @@ pub fn run_tikv(config: TiKvConfig) {
     let _m = Monitor::default();
 
     tikv.init_fs();
+    tikv.init_yatp();
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
     let server_config = tikv.init_servers(&gc_worker);
@@ -113,6 +116,7 @@ struct Engines {
 }
 
 struct Servers {
+    pd_sender: FutureScheduler<PdTask>,
     lock_mgr: Option<LockManager>,
     server: Server<ServerRaftStoreRouter, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
@@ -174,8 +178,7 @@ impl TiKVServer {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
-        let mut version = Default::default();
-        if config.dynamic_config {
+        let version = if config.dynamic_config {
             // Advertise address and cluster id can not be changed
             if config.server.advertise_addr.is_empty() {
                 config.server.advertise_addr = config.server.addr.clone();
@@ -195,8 +198,10 @@ impl TiKVServer {
             cfg.log_file = log_file;
             cfg.dynamic_config = true;
             config = cfg;
-            version = v;
-        }
+            v
+        } else {
+            Default::default()
+        };
 
         validate_and_persist_config(&mut config, true);
         check_system_config(&config);
@@ -262,6 +267,24 @@ impl TiKVServer {
                 tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
             );
         }
+
+        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space to compaction when TiKV recover. This file is created in data_dir rather than db_path, because we must not increase store size of db_path.
+        tikv_util::reserve_space_for_recover(
+            &self.config.storage.data_dir,
+            self.config.storage.reserve_space.0,
+        )
+        .unwrap();
+    }
+
+    fn init_yatp(&self) {
+        let yatp_enabled = self.config.readpool.unify_read_pool;
+        if !yatp_enabled {
+            return;
+        }
+
+        yatp::metrics::set_namespace(Some("tikv"));
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone())).unwrap();
+        prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
     }
 
     fn init_engines(&mut self) {
@@ -316,6 +339,16 @@ impl TiKVServer {
             LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Rocksdb,
+            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
+        );
+        cfg_controller.register(
+            tikv::config::Module::Raftdb,
+            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
+        );
+
         let engine = RaftKv::new(raft_router.clone());
 
         self.engines = Some(Engines {
@@ -326,7 +359,7 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&self) -> GcWorker<RaftKv<ServerRaftStoreRouter>> {
+    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -338,6 +371,9 @@ impl TiKVServer {
         gc_worker
             .start()
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
+        gc_worker
+            .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
+            .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
         gc_worker
     }
@@ -347,12 +383,20 @@ impl TiKVServer {
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Gc,
+            Box::new(gc_worker.get_config_manager()),
+        );
+
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
         let lock_mgr = if self.config.pessimistic_txn.enabled {
             let lock_mgr = LockManager::new();
-            cfg_controller.register("pessimistic_txn", Box::new(lock_mgr.config_manager()));
+            cfg_controller.register(
+                tikv::config::Module::PessimisticTxn,
+                Box::new(lock_mgr.config_manager()),
+            );
             lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
             Some(lock_mgr)
         } else {
@@ -363,15 +407,32 @@ impl TiKVServer {
 
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
-        let storage_read_pool = storage::build_read_pool(
-            &self.config.readpool.storage,
-            pd_sender.clone(),
-            engines.engine.clone(),
-        );
+
+        let unified_read_pool = if self.config.readpool.unify_read_pool {
+            Some(build_yatp_read_pool(
+                &self.config.readpool.unified,
+                pd_sender.clone(),
+                engines.engine.clone(),
+            ))
+        } else {
+            None
+        };
+
+        let storage_read_pool_handle = if self.config.readpool.unify_read_pool {
+            unified_read_pool.as_ref().unwrap().handle()
+        } else {
+            let storage_read_pools = ReadPool::from(storage::build_read_pool(
+                &self.config.readpool.storage,
+                pd_sender.clone(),
+                engines.engine.clone(),
+            ));
+            storage_read_pools.handle()
+        };
+
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
-            storage_read_pool,
+            storage_read_pool_handle,
             lock_mgr.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
@@ -393,11 +454,16 @@ impl TiKVServer {
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.
-        let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-            &self.config.readpool.coprocessor,
-            pd_sender,
-            engines.engine.clone(),
-        );
+        let cop_read_pool_handle = if self.config.readpool.unify_read_pool {
+            unified_read_pool.as_ref().unwrap().handle()
+        } else {
+            let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
+                &self.config.readpool.coprocessor,
+                pd_sender.clone(),
+                engines.engine.clone(),
+            ));
+            cop_read_pools.handle()
+        };
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -406,20 +472,51 @@ impl TiKVServer {
             &server_config,
             &self.security_mgr,
             storage,
-            coprocessor::Endpoint::new(&server_config, cop_read_pool),
+            coprocessor::Endpoint::new(&server_config, cop_read_pool_handle),
             engines.raft_router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
+            unified_read_pool,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
         let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+
+        let mut split_check_worker = Worker::new("split-check");
+        let split_check_runner = SplitCheckRunner::new(
+            engines.engines.kv.clone(),
+            self.router.clone(),
+            coprocessor_host.clone(),
+            self.config.coprocessor.clone(),
+        );
+        split_check_worker.start(split_check_runner).unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Coprocessor,
+            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+        );
+
+        self.config
+            .raft_store
+            .validate()
+            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
+        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        cfg_controller.register(
+            tikv::config::Module::Raftstore,
+            Box::new(RaftstoreConfigManager(raft_store.clone())),
+        );
+        let config_client = ConfigHandler::start(
+            self.config.server.advertise_addr.clone(),
+            cfg_controller,
+            pd_worker.scheduler(),
+        )
+        .unwrap_or_else(|e| fatal!("failed to start config client: {}", e));
+
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config,
-            &self.config.raft_store,
+            raft_store,
             self.pd_client.clone(),
         );
         node.start(
@@ -430,7 +527,8 @@ impl TiKVServer {
             engines.store_meta.clone(),
             coprocessor_host,
             importer.clone(),
-            cfg_controller,
+            split_check_worker,
+            Box::new(config_client) as _,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -447,6 +545,7 @@ impl TiKVServer {
         }
 
         self.servers = Some(Servers {
+            pd_sender,
             lock_mgr,
             server,
             node,
@@ -486,7 +585,7 @@ impl TiKVServer {
             engines.engines.clone(),
             pool.clone(),
             engines.raft_router.clone(),
-            gc_worker,
+            gc_worker.get_config_manager(),
             self.config.dynamic_config,
         );
         if servers
@@ -572,22 +671,23 @@ impl TiKVServer {
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
-        let server = &mut self.servers.as_mut().unwrap().server;
+        let server = self.servers.as_mut().unwrap();
         server
+            .server
             .build_and_bind()
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
+            .server
             .start(server_config, self.security_mgr.clone())
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
 
         // Create a status server.
         let status_enabled =
             self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
-        // FIXME: How to keep config updated?
         if status_enabled {
             let mut status_server = Box::new(StatusServer::new(
                 self.config.server.status_thread_pool_size,
-                self.config.clone(),
+                server.pd_sender.clone(),
             ));
             // Start the status server.
             if let Err(e) = status_server.start(self.config.server.status_addr.clone()) {

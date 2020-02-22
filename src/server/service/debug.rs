@@ -14,11 +14,10 @@ use kvproto::raft_cmdpb::{
 };
 use tokio_sync::oneshot;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
-use crate::server::gc_worker::GcWorker;
-use crate::storage::kv::Engine;
+use crate::server::gc_worker::GcWorkerConfigManager;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::msg::Callback;
 use tikv_util::metrics;
 
 use tikv_alloc;
@@ -45,23 +44,23 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter, E: Engine> {
+pub struct Service<T: RaftStoreRouter> {
     pool: CpuPool,
-    debugger: Debugger<E>,
+    debugger: Debugger,
     raft_router: T,
     dynamic_config: bool,
 }
 
-impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
+impl<T: RaftStoreRouter> Service<T> {
     /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
     pub fn new(
         engines: Engines,
         pool: CpuPool,
         raft_router: T,
-        gc_worker: GcWorker<E>,
+        gc_worker_cfg: GcWorkerConfigManager,
         dynamic_config: bool,
-    ) -> Service<T, E> {
-        let debugger = Debugger::new(engines, Some(gc_worker));
+    ) -> Service<T> {
+        let debugger = Debugger::new(engines, Some(gc_worker_cfg));
         Service {
             pool,
             debugger,
@@ -88,7 +87,7 @@ impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb::Debug for Service<T, E> {
+impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 

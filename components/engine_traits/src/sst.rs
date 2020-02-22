@@ -19,6 +19,29 @@ pub trait SstReader: Iterable + Sized {
     fn iter(&self) -> Self::Iterator;
 }
 
+/// SstWriter is used to create sst files that can be added to database later.
+pub trait SstWriter {
+    type ExternalSstFileInfo: ExternalSstFileInfo;
+    type ExternalSstFileReader: std::io::Read;
+
+    /// Add key, value to currently opened file
+    /// REQUIRES: key is after any previously added key according to comparator.
+    fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()>;
+
+    /// Add a deletion key to currently opened file
+    /// REQUIRES: key is after any previously added key according to comparator.
+    fn delete(&mut self, key: &[u8]) -> Result<()>;
+
+    /// Return the current file size.
+    fn file_size(&mut self) -> u64;
+
+    /// Finalize writing to sst file and close file.
+    fn finish(self) -> Result<Self::ExternalSstFileInfo>;
+
+    /// Finalize writing to sst file and read the contents into the buffer.
+    fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
+}
+
 /// A builder builds a SstWriter.
 pub trait SstWriterBuilder<E>
 where
@@ -38,28 +61,6 @@ where
 
     /// Builder a SstWriter.
     fn build(self, path: &str) -> Result<E::SstWriter>;
-}
-
-/// SstWriter is used to create sst files that can be added to database later.
-pub trait SstWriter {
-    type ExternalSstFileInfo: ExternalSstFileInfo;
-
-    /// Add key, value to currently opened file
-    /// REQUIRES: key is after any previously added key according to comparator.
-    fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()>;
-
-    /// Add a deletion key to currently opened file
-    /// REQUIRES: key is after any previously added key according to comparator.
-    fn delete(&mut self, key: &[u8]) -> Result<()>;
-
-    /// Return the current file size.
-    fn file_size(&mut self) -> u64;
-
-    /// Finalize writing to sst file and close file.
-    fn finish(self) -> Result<Self::ExternalSstFileInfo>;
-
-    /// Finalize writing to sst file and read the contents into the buffer.
-    fn finish_into(self, buf: &mut Vec<u8>) -> Result<Self::ExternalSstFileInfo>;
 }
 
 pub trait ExternalSstFileInfo {

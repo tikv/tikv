@@ -15,12 +15,11 @@ use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::SnapManager;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::RocksEngine;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::SnapManager;
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
@@ -33,6 +32,7 @@ use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::ServerTransport;
 use super::{Config, Result};
+use crate::read_pool::ReadPool;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
@@ -55,12 +55,13 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     trans: ServerTransport<T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<ThreadPool>,
     grpc_thread_load: Arc<ThreadLoad>,
+    yatp_read_pool: Option<ReadPool>,
     readpool_normal_concurrency: usize,
     readpool_normal_thread_load: Arc<ThreadLoad>,
     timer: Handle,
@@ -75,14 +76,21 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
+        yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
-        let stats_pool = ThreadPoolBuilder::new()
-            .pool_size(cfg.stats_concurrency)
-            .name_prefix(STATS_THREAD_PREFIX)
-            .build();
+        let stats_pool = if cfg.stats_concurrency > 0 {
+            Some(
+                ThreadPoolBuilder::new()
+                    .pool_size(cfg.stats_concurrency)
+                    .name_prefix(STATS_THREAD_PREFIX)
+                    .build(),
+            )
+        } else {
+            None
+        };
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
         let readpool_normal_concurrency = storage.readpool_normal_concurrency();
         let readpool_normal_thread_load =
@@ -140,7 +148,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(security_mgr),
             raft_router.clone(),
             Arc::clone(&grpc_thread_load),
-            stats_pool.sender().clone(),
+            stats_pool.as_ref().map(|p| p.sender().clone()),
         )));
 
         let trans = ServerTransport::new(
@@ -158,8 +166,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router,
             snap_mgr,
             snap_worker,
-            stats_pool: Some(stats_pool),
+            stats_pool,
             grpc_thread_load,
+            yatp_read_pool,
             readpool_normal_concurrency,
             readpool_normal_thread_load,
             timer: GLOBAL_TIMER_HANDLE.clone(),
@@ -228,16 +237,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             stats.set_thread_target(self.readpool_normal_concurrency);
             stats
         };
-        self.stats_pool.as_ref().unwrap().spawn(
-            self.timer
-                .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
-                .map_err(|_| ())
-                .for_each(move |i| {
-                    grpc_load_stats.record(i);
-                    readpool_normal_load_stats.record(i);
-                    Ok(())
-                }),
-        );
+        if let Some(ref p) = self.stats_pool {
+            p.spawn(
+                self.timer
+                    .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
+                    .map_err(|_| ())
+                    .for_each(move |i| {
+                        grpc_load_stats.record(i);
+                        readpool_normal_load_stats.record(i);
+                        Ok(())
+                    }),
+            )
+        };
 
         info!("TiKV is ready to serve");
         Ok(())
@@ -252,6 +263,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         if let Some(pool) = self.stats_pool.take() {
             let _ = pool.shutdown_now().wait();
         }
+        let _ = self.yatp_read_pool.take();
         Ok(())
     }
 
@@ -276,10 +288,10 @@ mod tests {
     use super::super::{Config, Result};
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
-    use crate::raftstore::store::transport::Transport;
-    use crate::raftstore::store::*;
-    use crate::raftstore::Result as RaftStoreResult;
     use crate::storage::TestStorageBuilder;
+    use raftstore::store::transport::Transport;
+    use raftstore::store::*;
+    use raftstore::Result as RaftStoreResult;
 
     use engine_rocks::RocksEngine;
     use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -339,9 +351,14 @@ mod tests {
     }
 
     fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
-        *msg == SignificantMsg::Unreachable {
-            region_id,
-            to_peer_id,
+        if let SignificantMsg::Unreachable {
+            region_id: r_id,
+            to_peer_id: p_id,
+        } = *msg
+        {
+            region_id == r_id && to_peer_id == p_id
+        } else {
+            false
         }
     }
 
@@ -367,11 +384,11 @@ mod tests {
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
-        let cop_read_pool = readpool_impl::build_read_pool_for_test(
+        let cop_read_pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
-        );
-        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);
+        ));
+        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool.handle());
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
@@ -386,6 +403,7 @@ mod tests {
             },
             SnapManager::new("", None),
             gc_worker,
+            None,
         )
         .unwrap();
 

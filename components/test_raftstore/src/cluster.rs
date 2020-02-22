@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error as StdError;
-use std::sync::{self, mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
 
@@ -20,10 +20,11 @@ use engine::Peekable;
 use engine::CF_DEFAULT;
 use engine_rocks::RocksEngine;
 use pd_client::PdClient;
+use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
+use raftstore::store::transport::CasualRouter;
+use raftstore::store::*;
+use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
-use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
-use tikv::raftstore::store::*;
-use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
 use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
@@ -222,7 +223,14 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
-        self.sim.wl().stop_node(node_id);
+        match self.sim.write() {
+            Ok(mut sim) => sim.stop_node(node_id),
+            Err(_) => {
+                if !thread::panicking() {
+                    panic!("failed to acquire write lock.")
+                }
+            }
+        }
         debug!("node {} stopped", node_id);
     }
 
@@ -521,13 +529,16 @@ impl<T: Simulator> Cluster<T> {
     pub fn shutdown(&mut self) {
         debug!("about to shutdown cluster");
         let keys;
-        match self.sim.try_read() {
+        match self.sim.read() {
             Ok(s) => keys = s.get_node_ids(),
-            Err(sync::TryLockError::Poisoned(e)) => {
-                let s = e.into_inner();
-                keys = s.get_node_ids();
+            Err(_) => {
+                if thread::panicking() {
+                    // Leave the resource to avoid double panic.
+                    return;
+                } else {
+                    panic!("failed to acquire read lock");
+                }
             }
-            Err(sync::TryLockError::WouldBlock) => unreachable!(),
         }
         for id in keys {
             self.stop_node(id);
@@ -851,16 +862,16 @@ impl<T: Simulator> Cluster<T> {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let split_key = split_key.to_vec();
-        router
-            .send(
-                region.get_id(),
-                PeerMsg::CasualMessage(CasualMessage::SplitRegion {
-                    region_epoch: region.get_region_epoch().clone(),
-                    split_keys: vec![split_key],
-                    callback: cb,
-                }),
-            )
-            .unwrap();
+        CasualRouter::send(
+            &router,
+            region.get_id(),
+            CasualMessage::SplitRegion {
+                region_epoch: region.get_region_epoch().clone(),
+                split_keys: vec![split_key],
+                callback: cb,
+            },
+        )
+        .unwrap();
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
@@ -1037,17 +1048,17 @@ impl<T: Simulator> Cluster<T> {
         // Request snapshot.
         let (request_tx, request_rx) = mpsc::channel();
         let router = self.sim.rl().get_router(store_id).unwrap();
-        router
-            .send(
-                region_id,
-                PeerMsg::CasualMessage(CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
-                    let idx = peer.peer.raft_group.get_store().committed_index();
-                    peer.peer.raft_group.request_snapshot(idx).unwrap();
-                    debug!("{} request snapshot at {}", idx, peer.peer.tag);
-                    request_tx.send(idx).unwrap();
-                }))),
-            )
-            .unwrap();
+        CasualRouter::send(
+            &router,
+            region_id,
+            CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
+                let idx = peer.peer.raft_group.get_store().committed_index();
+                peer.peer.raft_group.request_snapshot(idx).unwrap();
+                debug!("{} request snapshot at {}", idx, peer.peer.tag);
+                request_tx.send(idx).unwrap();
+            })),
+        )
+        .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
     }
 }

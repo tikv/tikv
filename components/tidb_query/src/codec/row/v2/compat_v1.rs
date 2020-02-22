@@ -292,9 +292,10 @@ mod tests {
 
     #[test]
     fn test_duration() {
+        let mut ctx = EvalContext::default();
         let cases = vec![
-            Duration::parse(b"31 11:30:45.123", 4).unwrap(),
-            Duration::parse(b"-11:30:45.9233456", 4).unwrap(),
+            Duration::parse(&mut ctx, b"31 11:30:45.123", 4).unwrap(),
+            Duration::parse(&mut ctx, b"-11:30:45.9233456", 4).unwrap(),
         ];
 
         let mut ctx = EvalContext::default();
