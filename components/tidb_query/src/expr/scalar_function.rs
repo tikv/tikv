@@ -254,6 +254,7 @@ impl ScalarFunc {
             | ScalarFuncSig::ReverseUtf8
             | ScalarFuncSig::Reverse
             | ScalarFuncSig::Quote
+            | ScalarFuncSig::UpperUtf8
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -989,6 +990,7 @@ dispatch_call! {
         RightUtf8 => right_utf8,
         Left => left,
         Right => right,
+        UpperUtf8 => upper_utf8,
         Upper => upper,
         Lower => lower,
         DateFormatSig => date_format,
@@ -1378,6 +1380,7 @@ mod tests {
                     ScalarFuncSig::ReverseUtf8,
                     ScalarFuncSig::Reverse,
                     ScalarFuncSig::Lower,
+                    ScalarFuncSig::UpperUtf8,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
                     ScalarFuncSig::IsIPv4Compat,
