@@ -5,11 +5,10 @@ use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
 
-use engine::rocks::TablePropertiesCollection;
 use engine::CfName;
 use engine::IterOption;
 use engine::CF_DEFAULT;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
 use engine_traits::Peekable;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
@@ -20,15 +19,15 @@ use kvproto::raft_cmdpb::{
 use txn_types::{Key, Value};
 
 use super::metrics::*;
-use crate::raftstore::errors::Error as RaftServerError;
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
-use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
     Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
 use crate::storage::{self, kv};
+use raftstore::errors::Error as RaftServerError;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
+use raftstore::store::{RegionIterator, RegionSnapshot};
 
 quick_error! {
     #[derive(Debug)]
@@ -407,7 +406,7 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
         ))
     }
 
-    fn get_properties_cf(&self, cf: CfName) -> kv::Result<TablePropertiesCollection> {
+    fn get_properties_cf(&self, cf: CfName) -> kv::Result<RocksTablePropertiesCollection> {
         RegionSnapshot::get_properties_cf(self, cf).map_err(|e| e.into())
     }
 
@@ -428,12 +427,12 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
 }
 
 impl EngineIterator for RegionIterator<RocksEngine> {
-    fn next(&mut self) -> bool {
-        RegionIterator::next(self)
+    fn next(&mut self) -> kv::Result<bool> {
+        RegionIterator::next(self).map_err(KvError::from)
     }
 
-    fn prev(&mut self) -> bool {
-        RegionIterator::prev(self)
+    fn prev(&mut self) -> kv::Result<bool> {
+        RegionIterator::prev(self).map_err(KvError::from)
     }
 
     fn seek(&mut self, key: &Key) -> kv::Result<bool> {
@@ -450,20 +449,16 @@ impl EngineIterator for RegionIterator<RocksEngine> {
         RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
     }
 
-    fn seek_to_first(&mut self) -> bool {
-        RegionIterator::seek_to_first(self)
+    fn seek_to_first(&mut self) -> kv::Result<bool> {
+        RegionIterator::seek_to_first(self).map_err(KvError::from)
     }
 
-    fn seek_to_last(&mut self) -> bool {
-        RegionIterator::seek_to_last(self)
+    fn seek_to_last(&mut self) -> kv::Result<bool> {
+        RegionIterator::seek_to_last(self).map_err(KvError::from)
     }
 
-    fn valid(&self) -> bool {
-        RegionIterator::valid(self)
-    }
-
-    fn status(&self) -> kv::Result<()> {
-        RegionIterator::status(self).map_err(From::from)
+    fn valid(&self) -> kv::Result<bool> {
+        RegionIterator::valid(self).map_err(KvError::from)
     }
 
     fn validate_key(&self, key: &Key) -> kv::Result<()> {

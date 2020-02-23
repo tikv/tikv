@@ -4,10 +4,13 @@ use std::borrow::Cow;
 use std::cmp::{max, min, Ordering};
 use std::{f64, i64};
 
+use tidb_query_datatype::{Collation, FieldTypeAccessor};
+
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::codec::{datum, mysql, Datum};
 use crate::expr::Expression;
+use crate::expr_util::collation::*;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum CmpOp {
@@ -58,14 +61,39 @@ impl ScalarFunc {
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
-    pub fn compare_string(
+    fn compare_string_with_collator<C: Collator>(
         &self,
         ctx: &mut EvalContext,
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
         let e = |i: usize| self.children[i].eval_string(ctx, row);
-        do_compare(e, op, |l, r| Ok(l.cmp(&r)))
+        do_compare(e, op, |l, r| {
+            Ok(box_try!(C::sort_compare(l.as_ref(), r.as_ref())))
+        })
+    }
+
+    pub fn compare_string(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+        op: CmpOp,
+    ) -> Result<Option<i64>> {
+        match self.field_type.as_accessor().collation() {
+            Collation::Utf8GeneralCi => {
+                self.compare_string_with_collator::<CollatorUtf8Mb4GeneralCi>(ctx, row, op)
+            }
+            Collation::Utf8Mb4GeneralCi => {
+                self.compare_string_with_collator::<CollatorUtf8Mb4GeneralCi>(ctx, row, op)
+            }
+            Collation::Utf8Mb4Bin => {
+                self.compare_string_with_collator::<CollatorUtf8Mb4Bin>(ctx, row, op)
+            }
+            Collation::Binary => self.compare_string_with_collator::<CollatorBinary>(ctx, row, op),
+            Collation::Utf8Bin => {
+                self.compare_string_with_collator::<CollatorUtf8Mb4Bin>(ctx, row, op)
+            }
+        }
     }
 
     pub fn compare_time(
@@ -502,8 +530,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         let dec = "1.1".parse::<Decimal>().unwrap();
         let s = "你好".as_bytes().to_owned();
-        let dur = Duration::parse(b"01:00:00", 0).unwrap();
-        let json = Json::I64(12);
+        let dur = Duration::parse(&mut ctx, b"01:00:00", 0).unwrap();
+        let json = Json::from_i64(12).unwrap();
         let t = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:39", 0, true).unwrap();
         let cases = vec![
             (ScalarFuncSig::CoalesceInt, vec![Datum::Null], Datum::Null),
@@ -534,7 +562,7 @@ mod tests {
             ),
             (
                 ScalarFuncSig::CoalesceDecimal,
-                vec![Datum::Null, Datum::Dec(dec.clone())],
+                vec![Datum::Null, Datum::Dec(dec)],
                 Datum::Dec(dec),
             ),
             (
@@ -577,10 +605,10 @@ mod tests {
         let mut ctx = EvalContext::default();
         let dec1 = "1.1".parse::<Decimal>().unwrap();
         let dec2 = "1.11".parse::<Decimal>().unwrap();
-        let dur1 = Duration::parse(b"01:00:00", 0).unwrap();
-        let dur2 = Duration::parse(b"02:00:00", 0).unwrap();
-        let json1 = Json::I64(11);
-        let json2 = Json::I64(12);
+        let dur1 = Duration::parse(&mut ctx, b"01:00:00", 0).unwrap();
+        let dur2 = Duration::parse(&mut ctx, b"02:00:00", 0).unwrap();
+        let json1 = Json::from_i64(11).unwrap();
+        let json2 = Json::from_i64(12).unwrap();
         let s1 = "你好".as_bytes().to_owned();
         let s2 = "你好啊".as_bytes().to_owned();
         let t1 = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:39", 0, false).unwrap();
@@ -623,16 +651,12 @@ mod tests {
             ),
             (
                 ScalarFuncSig::InDecimal,
-                vec![Datum::Dec(dec1.clone()), Datum::Dec(dec2.clone())],
+                vec![Datum::Dec(dec1), Datum::Dec(dec2)],
                 Datum::I64(0),
             ),
             (
                 ScalarFuncSig::InDecimal,
-                vec![
-                    Datum::Dec(dec1.clone()),
-                    Datum::Dec(dec2.clone()),
-                    Datum::Dec(dec1.clone()),
-                ],
+                vec![Datum::Dec(dec1), Datum::Dec(dec2), Datum::Dec(dec1)],
                 Datum::I64(1),
             ),
             (
@@ -654,8 +678,8 @@ mod tests {
                 ScalarFuncSig::InJson,
                 vec![
                     Datum::Json(json1.clone()),
-                    Datum::Json(json2.clone()),
-                    Datum::Json(json1.clone()),
+                    Datum::Json(json2),
+                    Datum::Json(json1),
                 ],
                 Datum::I64(1),
             ),
@@ -666,11 +690,7 @@ mod tests {
             ),
             (
                 ScalarFuncSig::InString,
-                vec![
-                    Datum::Bytes(s1.clone()),
-                    Datum::Bytes(s2.clone()),
-                    Datum::Bytes(s1.clone()),
-                ],
+                vec![Datum::Bytes(s1.clone()), Datum::Bytes(s2), Datum::Bytes(s1)],
                 Datum::I64(1),
             ),
             (
@@ -812,7 +832,7 @@ mod tests {
             ),
             (
                 vec![
-                    Datum::Bytes(s1.clone()),
+                    Datum::Bytes(s1),
                     Datum::Bytes(s2.clone()),
                     Datum::Bytes(s3.clone()),
                 ],
@@ -856,9 +876,9 @@ mod tests {
                     Datum::Bytes(t1.clone()),
                     Datum::Bytes(t2.clone()),
                     Datum::Bytes(t3.clone()),
-                    Datum::Bytes(t5.clone()),
-                    Datum::Bytes(t6.clone()),
-                    Datum::Bytes(t7.clone()),
+                    Datum::Bytes(t5),
+                    Datum::Bytes(t6),
+                    Datum::Bytes(t7),
                 ],
                 Datum::Bytes(b"2018-04-03 00:00:00.000000".to_vec()),
                 Datum::Bytes(b"2012-12-12 12:00:38.120038".to_vec()),
@@ -930,10 +950,10 @@ mod tests {
                 .set_sql_mode(SqlMode::STRICT_ALL_TABLES);
             let mut ctx = EvalContext::new(Arc::new(eval_config));
             let row = vec![
-                Datum::Bytes(t1.clone()),
-                Datum::Bytes(t2.clone()),
-                Datum::Bytes(t3.clone()),
-                Datum::Bytes(t4.clone()),
+                Datum::Bytes(t1),
+                Datum::Bytes(t2),
+                Datum::Bytes(t3),
+                Datum::Bytes(t4),
             ];
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let mut expr = Expr::default();
@@ -943,6 +963,169 @@ mod tests {
             let e = Expression::build(&mut ctx, expr).unwrap();
             let err = e.eval(&mut ctx, &[]).unwrap_err();
             assert_eq!(err.code(), ERR_TRUNCATE_WRONG_VALUE);
+        }
+    }
+
+    #[test]
+    fn test_interval() {
+        let cases = vec![
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::Null, Datum::Null],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::Null, Datum::I64(3)],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(3), Datum::Null],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(1), Datum::I64(2), Datum::I64(3)],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(2), Datum::I64(1), Datum::I64(3)],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(3), Datum::I64(1), Datum::I64(2)],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(23),
+                    Datum::I64(1),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(30),
+                    Datum::I64(44),
+                    Datum::I64(200),
+                ],
+                Datum::I64(4),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(200),
+                    Datum::I64(1),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(30),
+                    Datum::I64(44),
+                    Datum::I64(200),
+                ],
+                Datum::I64(7),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(i64::MAX),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(i64::MAX),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::Null, Datum::Null],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::Null, Datum::F64(3.0)],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(3.0), Datum::Null],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(1.0), Datum::F64(2.0), Datum::F64(3.0)],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(2.0), Datum::F64(1.0), Datum::F64(3.0)],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(3.0), Datum::F64(1.0), Datum::F64(2.0)],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![
+                    Datum::F64(23.0),
+                    Datum::F64(1.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(30.0),
+                    Datum::F64(44.0),
+                    Datum::F64(200.0),
+                ],
+                Datum::I64(4),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![
+                    Datum::F64(200.0),
+                    Datum::F64(1.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(30.0),
+                    Datum::F64(44.0),
+                    Datum::F64(200.0),
+                ],
+                Datum::I64(7),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (sig, row, exp) in cases {
+            let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
+            let mut expr = Expr::default();
+            expr.set_tp(ExprType::ScalarFunc);
+            expr.set_sig(sig);
+
+            expr.set_children(children.into());
+            let e = Expression::build(&mut ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &row).unwrap();
+            assert_eq!(res, exp);
         }
     }
 }

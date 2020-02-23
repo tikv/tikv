@@ -422,7 +422,8 @@ fn process_read_impl<E: Engine>(
                         next_scan_key,
                         kv_pairs,
                         cmd.ctx.clone(),
-                    ),
+                    )
+                    .into(),
                 })
             }
         }
@@ -825,7 +826,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 ProcessResult::Res
             } else {
                 ProcessResult::NextCommand {
-                    cmd: ResolveLock::new(txn_status, scan_key.take(), vec![], cmd.ctx.clone()),
+                    cmd: ResolveLock::new(txn_status, scan_key.take(), vec![], cmd.ctx.clone())
+                        .into(),
                 }
             };
 
@@ -838,7 +840,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         }) => {
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &resolve_keys);
 
-            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let rows = resolve_keys.len();
             let mut is_pessimistic_txn = false;
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
@@ -867,7 +869,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             advise_ttl,
         }) => {
             // TxnHeartBeat never remove locks. No need to wake up waiters.
-            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
 
             statistics.add(&txn.take_statistics());
@@ -883,7 +885,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             current_ts,
             rollback_if_not_exist,
         }) => {
-            let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !cmd.ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache());
             let (txn_status, is_pessimistic_txn) = txn.check_txn_status(
                 primary_key.clone(),
                 caller_start_ts,
@@ -1108,16 +1110,7 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let cmd = Prewrite::new(
-            mutations,
-            primary,
-            TimeStamp::from(start_ts),
-            0,
-            false,
-            0,
-            TimeStamp::default(),
-            ctx,
-        );
+        let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
         let m = DummyLockManager {};
         let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
@@ -1149,7 +1142,7 @@ mod tests {
             ctx,
         );
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
+        let ret = process_write_impl(cmd.into(), snap, Some(m), statistics)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

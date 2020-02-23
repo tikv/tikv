@@ -11,8 +11,8 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine::Peekable;
+use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -98,7 +98,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(state.get_last_index(), last_index + 1);
 
     // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v2");
+    must_read_on_peer(cluster, peer, region, key, b"v2");
 
     // Check if the leader does a local read.
     assert_eq!(detector.ctx.rl().len(), expect_lease_read);
@@ -151,13 +151,7 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(election_timeout * 2);
 
     // Issue a read request and check the value on response.
-    must_error_read_on_peer(
-        cluster,
-        peer.clone(),
-        region.clone(),
-        key,
-        Duration::from_secs(1),
-    );
+    must_error_read_on_peer(cluster, peer, region, key, Duration::from_secs(1));
 }
 
 #[test]
@@ -216,6 +210,9 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     assert_eq!(state.get_last_index(), last_index);
     assert_eq!(detector.ctx.rl().len(), 0);
 
+    // Ensure peer 3 is ready to transfer leader.
+    must_get_equal(&cluster.get_engine(3), key, b"v1");
+
     // Drop MsgTimeoutNow to `peer3` so that the leader transfer procedure would abort later.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(region_id, peer3_store_id)
@@ -255,7 +252,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     thread::sleep(election_timeout / 2);
 
     // Check if the leader does a local read.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(cluster, peer, region, key, b"v1");
     let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
     assert_eq!(detector.ctx.rl().len(), 3);
@@ -395,6 +392,7 @@ fn test_read_index_when_transfer_leader_1() {
     let filter = Box::new(
         RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
             .direction(Direction::Recv)
+            .skip(MessageType::MsgTransferLeader)
             .when(Arc::new(AtomicBool::new(true)))
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );

@@ -8,8 +8,8 @@ use grpcio::CompressionAlgorithms;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
 
-pub use crate::raftstore::store::Config as RaftStoreConfig;
 pub use crate::storage::config::Config as StorageConfig;
+pub use raftstore::store::Config as RaftStoreConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
@@ -80,6 +80,7 @@ pub struct Config {
     pub end_point_stream_batch_row_limit: usize,
     pub end_point_enable_batch_if_possible: bool,
     pub end_point_request_max_handle_duration: ReadableDuration,
+    pub end_point_max_concurrency: usize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     pub stats_concurrency: usize,
@@ -112,6 +113,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
+        let cpu_num = sysinfo::get_logical_cores();
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -142,6 +144,7 @@ impl Default for Config {
             end_point_request_max_handle_duration: ReadableDuration::secs(
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
+            end_point_max_concurrency: cpu_num,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,

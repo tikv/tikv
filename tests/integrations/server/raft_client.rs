@@ -10,7 +10,7 @@ use grpcio::{
 };
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
-use tikv::raftstore::router::RaftStoreBlackHole;
+use raftstore::router::RaftStoreBlackHole;
 use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
@@ -27,7 +27,7 @@ pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftSt
         security_mgr,
         RaftStoreBlackHole,
         grpc_thread_load,
-        pool.sender().clone(),
+        Some(pool.sender().clone()),
     )
 }
 

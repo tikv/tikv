@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::rocks;
-use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
+use crate::rocks::{Writable, WriteBatch, DB};
 use crate::CF_LOCK;
 
 use super::Result;
@@ -50,8 +50,8 @@ pub fn delete_all_in_range_cf(
             iter_opt.set_key_only(true);
         }
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
-        it.seek(start_key.into());
-        while it.valid() {
+        let mut it_valid = it.seek(start_key.into())?;
+        while it_valid {
             wb.delete_cf(handle, it.key())?;
             if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Can't use write_without_wal here.
@@ -59,12 +59,8 @@ pub fn delete_all_in_range_cf(
                 db.write(&wb)?;
                 wb.clear();
             }
-
-            if !it.next() {
-                break;
-            }
+            it_valid = it.next()?;
         }
-        it.status()?;
     }
 
     if wb.count() > 0 {
@@ -87,18 +83,6 @@ pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> R
     Ok(())
 }
 
-pub fn get_range_properties_cf(
-    db: &DB,
-    cfname: &str,
-    start_key: &[u8],
-    end_key: &[u8],
-) -> Result<TablePropertiesCollection> {
-    let cf = rocks::util::get_cf_handle(db, cfname)?;
-    let range = Range::new(start_key, end_key);
-    db.get_properties_of_tables_in_range(cf, &[range])
-        .map_err(|e| e.into())
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::Builder;
@@ -115,13 +99,13 @@ mod tests {
         for cf in cfs {
             let handle = get_cf_handle(db, cf).unwrap();
             let mut iter = db.iter_cf(handle);
-            iter.seek(SeekKey::Start);
+            iter.seek(SeekKey::Start).unwrap();
             for &(k, v) in expected {
                 assert_eq!(k, iter.key());
                 assert_eq!(v, iter.value());
-                iter.next();
+                iter.next().unwrap();
             }
-            assert!(!iter.valid());
+            assert!(!iter.valid().unwrap());
         }
     }
 
