@@ -32,6 +32,7 @@ pub use self::peer::{
 };
 pub use self::peer_storage::{
     clear_meta, do_snapshot, init_apply_state, init_raft_state, write_initial_apply_state,
+    write_initial_apply_state_2, write_initial_raft_state_2, write_peer_state_2,
     write_initial_raft_state, write_peer_state, CacheQueryStats, PeerStorage, SnapState,
     INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
