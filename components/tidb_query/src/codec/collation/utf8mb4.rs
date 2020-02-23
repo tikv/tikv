@@ -511,13 +511,90 @@ mod tests {
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]
-    fn test_general_ci() {
-        let s1 = "cAfe".as_bytes();
-        let s2 = "café".as_bytes();
-        type C = CollatorUtf8Mb4GeneralCi;
-        assert_eq!(C::sort_key(s1, 0).unwrap(), C::sort_key(s2, 0).unwrap());
-        assert_eq!(C::sort_key(s1, 10).unwrap(), C::sort_key(s2, 10).unwrap());
-        assert_eq!(C::sort_compare(s1, s2).unwrap(), Ordering::Equal);
+    fn test_compare() {
+        use std::cmp::Ordering;
+        use std::collections::hash_map::DefaultHasher;
+
+        let collations = [
+            (Collation::Utf8Mb4Bin, 0),
+            (Collation::Utf8Mb4BinNoPadding, 1),
+            (Collation::Utf8Mb4GeneralCi, 2),
+        ];
+        let cases = vec![
+            // (sa, sb, flen, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
+            (
+                "a".as_bytes(),
+                "a".as_bytes(),
+                0,
+                [Ordering::Equal, Ordering::Equal, Ordering::Equal],
+            ),
+            (
+                "a".as_bytes(),
+                "a\t".as_bytes(),
+                2,
+                [Ordering::Greater, Ordering::Less, Ordering::Greater],
+            ),
+            (
+                "A".as_bytes(),
+                "a\t".as_bytes(),
+                2,
+                [Ordering::Less, Ordering::Less, Ordering::Greater],
+            ),
+            (
+                "cAfe".as_bytes(),
+                "café".as_bytes(),
+                0,
+                [Ordering::Less, Ordering::Less, Ordering::Equal],
+            ),
+            (
+                "cAfe ".as_bytes(),
+                "café".as_bytes(),
+                5,
+                [Ordering::Less, Ordering::Less, Ordering::Equal],
+            ),
+        ];
+
+        for (sa, sb, flen, expected) in cases {
+            for (collation, order_in_expected) in &collations {
+                let eval_hash = |s| {
+                    let mut hasher = DefaultHasher::default();
+                    match_template_collator! {
+                        TT, match collation {
+                            Collation::TT => TT::sort_hash(&mut hasher, s, flen).unwrap()
+                        }
+                    }
+                    hasher.finish()
+                };
+                let ha = eval_hash(sa);
+                let hb = eval_hash(sb);
+
+                let cmp = match_template_collator! {
+                    TT, match collation {
+                        Collation::TT => TT::sort_compare(sa, sb).unwrap()
+                    }
+                };
+
+                assert_eq!(
+                    cmp, expected[*order_in_expected],
+                    "when comparing {:?} and {:?} by {:?}",
+                    sa, sb, collation
+                );
+
+                if expected[*order_in_expected] == Ordering::Equal {
+                    assert_eq!(
+                        ha, hb,
+                        "when comparing the hash of {:?} and {:?} by {:?}, which should be equal",
+                        sa, sb, collation
+                    );
+                } else {
+                    assert_ne!(
+                        ha, hb,
+                        "when comparing the hash of {:?} and {:?} by {:?}, which should be not equal",
+                        sa, sb, collation
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -579,15 +656,14 @@ mod tests {
         ];
         for (s, flen, expected) in cases {
             for (collation, order_in_expected) in &collations {
-                let mut code = Vec::new();
-                match_template_collator! {
+                let code = match_template_collator! {
                     TT, match collation {
-                        Collation::TT => TT::write_sort_key(&mut code, s.as_bytes(), flen).unwrap()
+                        Collation::TT => TT::sort_key(s.as_bytes(), flen).unwrap()
                     }
                 };
                 assert_eq!(
                     code, expected[*order_in_expected],
-                    "when testing {} against {:?} with flen {}",
+                    "when testing {} by {:?} with flen {}",
                     s, collation, flen
                 );
             }
