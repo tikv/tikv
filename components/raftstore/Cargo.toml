@@ -79,12 +79,13 @@ txn_types = { path = "../txn_types"}
 uuid = { version = "0.7", features = ["serde", "v4"] }
 
 [dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+git = "https://github.com/renkai/rust-prometheus.git"
+rev = "fcc6b1a7ac30f7591a157f4067a42482ac321fe0"
 features = ["nightly", "push", "process"]
 
 [dependencies.yatp]
-git = "https://github.com/tikv/yatp.git"
+git = "https://github.com/renkai/yatp.git"
+branch = "master"
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }

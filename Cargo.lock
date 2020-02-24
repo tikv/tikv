@@ -207,7 +207,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00)",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
  "raftstore",
  "rand 0.7.2",
@@ -568,7 +568,7 @@ dependencies = [
  "log",
  "nix 0.11.1",
  "pd_client",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
  "raftstore",
@@ -1000,7 +1000,7 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "lazy_static",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00)",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
@@ -2516,7 +2516,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00)",
  "quick-error",
  "serde",
  "serde_derive",
@@ -2734,9 +2734,10 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087#d919ccd35976b9b84b8d03c07138c1cc05a36087"
+source = "git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00#40bc80b466bce257eacd8a438cbfb58b13a65c00"
 dependencies = [
  "cfg-if",
+ "coarsetime",
  "fnv",
  "lazy_static",
  "libc",
@@ -2748,9 +2749,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "prometheus"
+version = "0.8.0"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087#d919ccd35976b9b84b8d03c07138c1cc05a36087"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "spin",
+ "thiserror",
+]
+
+[[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087#d919ccd35976b9b84b8d03c07138c1cc05a36087"
+source = "git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00#40bc80b466bce257eacd8a438cbfb58b13a65c00"
 dependencies = [
  "lazy_static",
  "proc-macro2 1.0.9",
@@ -3046,7 +3060,7 @@ dependencies = [
  "log_wrappers",
  "panic_hook",
  "pd_client",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00)",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
@@ -3844,7 +3858,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00)",
  "quick-error",
  "serde",
  "serde_derive",
@@ -4234,7 +4248,7 @@ dependencies = [
  "ordered-float",
  "panic_hook",
  "profiler",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00)",
  "prometheus-static-metric",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
@@ -4330,7 +4344,7 @@ dependencies = [
  "pin-project",
  "pprof",
  "procinfo",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00)",
  "prometheus-static-metric",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -4412,7 +4426,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "procinfo",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/renkai/rust-prometheus.git?rev=40bc80b466bce257eacd8a438cbfb58b13a65c00)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "rand 0.7.2",
@@ -5103,7 +5117,7 @@ dependencies = [
  "lazy_static",
  "num_cpus",
  "parking_lot_core 0.7.0",
- "prometheus",
+ "prometheus 0.8.0 (git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087)",
  "rand 0.7.2",
 ]
 

@@ -38,8 +38,8 @@ tikv_util = { path = "../tikv_util" }
 time = "0.1"
 
 [dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+git = "https://github.com/renkai/rust-prometheus.git"
+rev = "fcc6b1a7ac30f7591a157f4067a42482ac321fe0"
 features = ["nightly", "push", "process"]
 
 [dependencies.rocksdb]

@@ -101,6 +101,16 @@ impl GcTask {
             GcTask::Validate(_) => "validate_config",
         }
     }
+
+    pub fn get_enum_label(&self) -> GcCommandKind {
+        match self {
+            GcTask::Gc { .. } => GcCommandKind::gc,
+            GcTask::UnsafeDestroyRange { .. } => GcCommandKind::unsafe_destroy_range,
+            GcTask::PhysicalScanLock { .. } => GcCommandKind::physical_scan_lock,
+            #[cfg(any(test, feature = "testexport"))]
+            GcTask::Validate(_) => GcCommandKind::validate_config,
+        }
+    }
 }
 
 impl Display for GcTask {
@@ -520,10 +530,12 @@ impl<E: Engine> GcRunner<E> {
 
     fn update_statistics_metrics(&mut self) {
         let stats = mem::replace(&mut self.stats, Statistics::default());
-        for (cf, details) in stats.details().iter() {
+
+        for (cf, details) in stats.details_enum().iter() {
             for (tag, count) in details.iter() {
-                GC_KEYS_COUNTER_VEC
-                    .with_label_values(&[cf, *tag])
+                GC_KEYS_COUNTER_STATIC
+                    .get(*cf)
+                    .get(*tag)
                     .inc_by(*count as i64);
             }
         }
@@ -543,7 +555,9 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
     #[inline]
     fn run(&mut self, task: GcTask, _handle: &Handle) {
         let label = task.get_label();
-        GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
+        let enum_label = task.get_enum_label();
+
+        GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
 
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
         let update_metrics = |is_err| {
@@ -552,7 +566,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 .observe(duration_to_sec(timer.elapsed()));
 
             if is_err {
-                GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();
+                GC_GCTASK_FAIL_COUNTER_STATIC.get(enum_label).inc();
             }
         };
 
