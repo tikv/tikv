@@ -2289,71 +2289,81 @@ mod tests {
         use kvproto::kvrpcpb::{LockInfo, Op};
 
         let engine = TestEngineBuilder::new().build().unwrap();
-
         let k = b"k";
         let v = b"v";
-
-        let lock_ttl = 3;
-        let txn_size = 10;
-
-        let mut expected_lock_info = LockInfo::default();
-        expected_lock_info.set_primary_lock(k.to_vec());
-        expected_lock_info.set_lock_version(10);
-        expected_lock_info.set_key(k.to_vec());
-        expected_lock_info.set_lock_ttl(lock_ttl);
-        expected_lock_info.set_txn_size(txn_size);
-        expected_lock_info.set_lock_type(Op::Put);
 
         let assert_lock_info_eq = |e, expected_lock_info: &kvproto::kvrpcpb::LockInfo| match e {
             Error(box ErrorInner::KeyIsLocked(info)) => assert_eq!(info, *expected_lock_info),
             _ => panic!("unexpected error"),
         };
 
-        // Write an optimistic lock.
-        must_prewrite_put_impl(
-            &engine,
-            k,
-            v,
-            k,
-            10,
-            false,
-            lock_ttl,
-            TimeStamp::default(),
-            txn_size,
-            TimeStamp::default(),
-        );
+        for is_optimistic in &[false, true] {
+            let mut expected_lock_info = LockInfo::default();
+            expected_lock_info.set_primary_lock(k.to_vec());
+            expected_lock_info.set_lock_version(10);
+            expected_lock_info.set_key(k.to_vec());
+            expected_lock_info.set_lock_ttl(3);
+            if *is_optimistic {
+                expected_lock_info.set_txn_size(10);
+                expected_lock_info.set_lock_type(Op::Put);
+                // Write an optimistic lock.
+                must_prewrite_put_impl(
+                    &engine,
+                    expected_lock_info.get_key(),
+                    v,
+                    expected_lock_info.get_primary_lock(),
+                    expected_lock_info.get_lock_version(),
+                    false,
+                    expected_lock_info.get_lock_ttl(),
+                    TimeStamp::zero(),
+                    expected_lock_info.get_txn_size(),
+                    TimeStamp::zero(),
+                );
+            } else {
+                expected_lock_info.set_lock_type(Op::PessimisticLock);
+                expected_lock_info.set_lock_for_update_ts(10);
+                // Write a pessimistic lock.
+                must_acquire_pessimistic_lock_impl(
+                    &engine,
+                    expected_lock_info.get_key(),
+                    expected_lock_info.get_primary_lock(),
+                    expected_lock_info.get_lock_version(),
+                    expected_lock_info.get_lock_ttl(),
+                    expected_lock_info.get_lock_for_update_ts(),
+                );
+            }
 
-        assert_lock_info_eq(
-            must_prewrite_put_err(&engine, k, v, k, 20),
-            &expected_lock_info,
-        );
+            assert_lock_info_eq(
+                must_prewrite_put_err(&engine, k, v, k, 20),
+                &expected_lock_info,
+            );
 
-        assert_lock_info_eq(
-            must_acquire_pessimistic_lock_err(&engine, k, k, 30, 30),
-            &expected_lock_info,
-        );
+            assert_lock_info_eq(
+                must_acquire_pessimistic_lock_err(&engine, k, k, 30, 30),
+                &expected_lock_info,
+            );
 
-        // If the lock is not expired, cleanup will return the lock info.
-        assert_lock_info_eq(must_cleanup_err(&engine, k, 10, 1), &expected_lock_info);
+            // If the lock is not expired, cleanup will return the lock info.
+            assert_lock_info_eq(must_cleanup_err(&engine, k, 10, 1), &expected_lock_info);
 
-        expected_lock_info.set_lock_ttl(0);
-        assert_lock_info_eq(
-            must_pessimistic_prewrite_put_err(&engine, k, v, k, 40, 40, false),
-            &expected_lock_info,
-        );
+            expected_lock_info.set_lock_ttl(0);
+            assert_lock_info_eq(
+                must_pessimistic_prewrite_put_err(&engine, k, v, k, 40, 40, false),
+                &expected_lock_info,
+            );
 
-        // Write a pessimistic lock.
-        must_rollback(&engine, k, 10);
-        must_acquire_pessimistic_lock_impl(&engine, k, k, 50, lock_ttl, 50.into());
-
-        expected_lock_info.set_lock_version(50);
-        expected_lock_info.set_lock_ttl(lock_ttl);
-        expected_lock_info.set_lock_type(Op::PessimisticLock);
-        expected_lock_info.set_txn_size(0);
-        assert_lock_info_eq(
-            must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60),
-            &expected_lock_info,
-        );
+            // Delete the lock
+            if *is_optimistic {
+                must_rollback(&engine, k, expected_lock_info.get_lock_version());
+            } else {
+                must_pessimistic_rollback(
+                    &engine,
+                    k,
+                    expected_lock_info.get_lock_version(),
+                    expected_lock_info.get_lock_for_update_ts(),
+                );
+            }
+        }
     }
 
     #[test]
