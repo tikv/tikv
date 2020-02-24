@@ -12,6 +12,29 @@ use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::codec::Datum;
 use crate::expr_util::rand::MySQLRng;
 
+const U64_TEN_POWS: [u64; 20] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+    10_000_000_000_000_000_000,
+];
+
 impl ScalarFunc {
     #[inline]
     pub fn abs_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -382,11 +405,11 @@ impl ScalarFunc {
         if d >= 0 {
             Ok(Some(x))
         } else {
-            if d < -19 {
+            if d <= -(U64_TEN_POWS.len() as i64) {
                 return Ok(Some(0));
             }
             let x = x as u64;
-            let shift = 10_u64.pow(-d as u32);
+            let shift = U64_TEN_POWS[-d as usize];
             Ok(Some((x / shift * shift) as i64))
         }
     }
