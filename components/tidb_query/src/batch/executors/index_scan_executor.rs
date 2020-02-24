@@ -188,6 +188,8 @@ impl IndexScanExecutorImpl {
             let (_, remaining) = datum::split_datum(key_payload, false)?;
             key_payload = remaining;
         }
+        // skip tail len.
+        value = &value[1..];
         let mut handle_val = 0;
         if key_payload.is_empty() {
             // This is a unique index, and we should look up PK handle in value.
