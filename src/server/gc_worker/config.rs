@@ -39,7 +39,7 @@ impl GcConfig {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if self.batch_keys == 0 {
             rollback_or!(rb_collector, batch_keys, {
-                return Err(("gc.batch_keys should not be 0.").into());
+                Err(("gc.batch_keys should not be 0.").into())
             })
         }
         Ok(())

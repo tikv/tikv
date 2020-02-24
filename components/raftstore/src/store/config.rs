@@ -263,7 +263,7 @@ impl Config {
     ) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             rollback_or!(rb_collector, raft_heartbeat_ticks, {
-                return Err(box_err!("heartbeat tick must greater than 0"));
+                Err(box_err!("heartbeat tick must greater than 0"))
             })
         }
 
@@ -280,9 +280,9 @@ impl Config {
                 raft_election_timeout_ticks,
                 raft_heartbeat_ticks,
                 {
-                    return Err(box_err!(
+                    Err(box_err!(
                         "election tick must be greater than heartbeat tick"
-                    ));
+                    ))
                 }
             )
         }
@@ -304,28 +304,28 @@ impl Config {
                 raft_max_election_timeout_ticks,
                 raft_election_timeout_ticks,
                 {
-                    return Err(box_err!(
+                    Err(box_err!(
                         "invalid timeout range [{}, {}) for timeout {}",
                         self.raft_min_election_timeout_ticks,
                         self.raft_max_election_timeout_ticks,
                         self.raft_election_timeout_ticks
-                    ));
+                    ))
                 }
             )
         }
 
         if self.raft_log_gc_threshold < 1 {
             rollback_or!(rb_collector, raft_log_gc_threshold, {
-                return Err(box_err!(
+                Err(box_err!(
                     "raft log gc threshold must >= 1, not {}",
                     self.raft_log_gc_threshold
-                ));
+                ))
             })
         }
 
         if self.raft_log_gc_size_limit.0 == 0 {
             rollback_or!(rb_collector, raft_log_gc_size_limit, {
-                return Err(box_err!("raft log gc size limit should large than 0."));
+                Err(box_err!("raft log gc size limit should large than 0."))
             })
         }
 
@@ -339,28 +339,28 @@ impl Config {
                 raft_election_timeout_ticks,
                 raft_store_max_leader_lease,
                 {
-                    return Err(box_err!(
+                    Err(box_err!(
                         "election timeout {} ms is less than lease {} ms",
                         election_timeout,
                         lease
-                    ));
+                    ))
                 }
             )
         }
 
         if self.merge_max_log_gap >= self.raft_log_gc_count_limit {
             rollback_or!(rb_collector, merge_max_log_gap, raft_log_gc_count_limit, {
-                return Err(box_err!(
+                Err(box_err!(
                     "merge log gap {} should be less than log gc limit {}.",
                     self.merge_max_log_gap,
                     self.raft_log_gc_count_limit
-                ));
+                ))
             })
         }
 
         if self.merge_check_tick_interval.as_millis() == 0 {
             rollback_or!(rb_collector, merge_check_tick_interval, {
-                return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
+                Err(box_err!("raftstore.merge-check-tick-interval can't be 0."))
             })
         }
 
@@ -372,20 +372,20 @@ impl Config {
                 raft_election_timeout_ticks,
                 peer_stale_state_check_interval,
                 {
-                    return Err(box_err!(
+                    Err(box_err!(
                         "peer stale state check interval {} ms is less than election timeout x 2 {} ms",
                         stale_state_check,
                         election_timeout * 2
-                    ));
+                    ))
                 }
             )
         }
 
         if self.leader_transfer_max_log_lag < 10 {
             rollback_or!(rb_collector, leader_transfer_max_log_lag, {
-                return Err(box_err!(
+                Err(box_err!(
                     "raftstore.leader-transfer-max-log-lag should be >= 10."
-                ));
+                ))
             })
         }
 
@@ -396,11 +396,11 @@ impl Config {
                 peer_stale_state_check_interval,
                 abnormal_leader_missing_duration,
                 {
-                    return Err(box_err!(
+                    Err(box_err!(
                     "abnormal leader missing {} ms is less than peer stale state check interval {} ms",
                     abnormal_leader_missing,
                     stale_state_check
-                ));
+                ))
                 }
             )
         }
@@ -412,11 +412,11 @@ impl Config {
                 abnormal_leader_missing_duration,
                 max_leader_missing_duration,
                 {
-                    return Err(box_err!(
+                    Err(box_err!(
                         "max leader missing {} ms is less than abnormal leader missing {} ms",
                         max_leader_missing,
                         abnormal_leader_missing
-                    ));
+                    ))
                 }
             )
         }
@@ -425,42 +425,42 @@ impl Config {
             || self.region_compact_tombstones_percent > 100
         {
             rollback_or!(rb_collector, region_compact_tombstones_percent, {
-                return Err(box_err!(
+                Err(box_err!(
                     "region-compact-tombstones-percent must between 1 and 100, current value is {}",
                     self.region_compact_tombstones_percent
-                ));
+                ))
             })
         }
 
         if self.local_read_batch_size == 0 {
             rollback_or!(rb_collector, local_read_batch_size, {
-                return Err(box_err!("local-read-batch-size must be greater than 0"));
+                Err(box_err!("local-read-batch-size must be greater than 0"))
             })
         }
 
         if self.apply_pool_size == 0 {
             rollback_or!(rb_collector, apply_pool_size, {
-                return Err(box_err!("apply-pool-size should be greater than 0"));
+                Err(box_err!("apply-pool-size should be greater than 0"))
             })
         }
         if self.apply_max_batch_size == 0 {
             rollback_or!(rb_collector, apply_max_batch_size, {
-                return Err(box_err!("apply-max-batch-size should be greater than 0"));
+                Err(box_err!("apply-max-batch-size should be greater than 0"))
             })
         }
         if self.store_pool_size == 0 {
             rollback_or!(rb_collector, store_pool_size, {
-                return Err(box_err!("store-pool-size should be greater than 0"));
+                Err(box_err!("store-pool-size should be greater than 0"))
             })
         }
         if self.store_max_batch_size == 0 {
             rollback_or!(rb_collector, store_max_batch_size, {
-                return Err(box_err!("store-max-batch-size should be greater than 0"));
+                Err(box_err!("store-max-batch-size should be greater than 0"))
             })
         }
         if self.future_poll_size == 0 {
             rollback_or!(rb_collector, future_poll_size, {
-                return Err(box_err!("future-poll-size should be greater than 0."));
+                Err(box_err!("future-poll-size should be greater than 0."))
             })
         }
         Ok(())

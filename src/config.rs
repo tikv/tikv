@@ -1860,7 +1860,9 @@ impl TiKvConfig {
     pub fn validate_with_rollback(&mut self, cfg: &TiKvConfig) -> ConfigChange {
         let mut c = HashMap::new();
         let rb_collector = RollbackCollector::new(cfg, &mut c);
-        let _ = self.validate_or_rollback(Some(rb_collector));
+        if let Err(e) = self.validate_or_rollback(Some(rb_collector)) {
+            warn!("Invalid config"; "err" => ?e)
+        }
         c
     }
 

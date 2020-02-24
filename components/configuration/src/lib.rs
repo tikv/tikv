@@ -110,7 +110,8 @@ impl<'a, 'b, T> RollbackCollector<'a, 'b, T> {
 
 #[macro_export]
 macro_rules! rollback_or {
-    ($rollback: ident, $($name: ident),+ , $else_branch: block) => {
+    ($rollback: ident, $($name: ident),+ , $err: block) => {{
+        let err = $err;
         if let Some(rb_collector) = &mut $rollback {
             $(
                 rb_collector.push(
@@ -118,8 +119,9 @@ macro_rules! rollback_or {
                     rb_collector.cfg.$name.clone()
                 );
             )*
-        } else $else_branch
-    };
+            warn!("Invalid config"; "err" => ?err)
+        } else { return err; }
+    }};
     ($rollback: ident, $name: ident, $valid_or_rb: expr, $else_branch: expr) => {
         if let Some(rb_collector) = &mut $rollback {
             let mut r = std::collections::HashMap::new();

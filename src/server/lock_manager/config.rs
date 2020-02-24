@@ -37,7 +37,7 @@ impl Config {
     ) -> Result<(), Box<dyn Error>> {
         if self.wait_for_lock_timeout == 0 {
             rollback_or!(rb_collector, wait_for_lock_timeout, {
-                return Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into());
+                Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into())
             })
         }
         Ok(())

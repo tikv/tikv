@@ -64,20 +64,20 @@ impl Config {
     ) -> Result<()> {
         if self.region_max_size.0 < self.region_split_size.0 {
             rollback_or!(rb_collector, region_max_size, region_split_size, {
-                return Err(box_err!(
+                Err(box_err!(
                     "region max size {} must >= split size {}",
                     self.region_max_size.0,
                     self.region_split_size.0
-                ));
+                ))
             })
         }
         if self.region_max_keys < self.region_split_keys {
             rollback_or!(rb_collector, region_max_keys, region_split_keys, {
-                return Err(box_err!(
+                Err(box_err!(
                     "region max keys {} must >= split keys {}",
                     self.region_max_keys,
                     self.region_split_keys
-                ));
+                ))
             })
         }
         Ok(())
