@@ -25,11 +25,12 @@ use crate::rocks::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
+use crate::{Error, Result};
 
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::rocks::CFHandle;
+use engine_traits::{ALL_CFS, CF_DEFAULT};
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
@@ -524,6 +525,7 @@ mod tests {
     use super::*;
     use crate::rocks::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use crate::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
     use tempfile::Builder;
 
     #[test]

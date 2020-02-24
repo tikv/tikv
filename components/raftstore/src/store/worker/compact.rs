@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use engine::rocks;
 use engine::rocks::util::compact_range;
-use engine::CF_WRITE;
 use engine::DB;
+use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;

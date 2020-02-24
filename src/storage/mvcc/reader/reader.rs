@@ -2,9 +2,10 @@
 
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine::{IterOption, CF_LOCK, CF_WRITE};
+use engine::IterOption;
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{TableProperties, TablePropertiesCollection};
+use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::coprocessor::properties::MvccProperties;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};

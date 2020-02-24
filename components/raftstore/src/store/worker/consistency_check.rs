@@ -6,8 +6,8 @@ use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine::CF_RAFT;
 use engine_rocks::RocksEngine;
+use engine_traits::CF_RAFT;
 use engine_traits::{Iterable, KvEngine, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use txn_types::Key;
 
-use engine::{CfName, CF_LOCK};
+use engine_traits::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};

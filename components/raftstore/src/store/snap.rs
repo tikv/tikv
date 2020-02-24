@@ -13,7 +13,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};

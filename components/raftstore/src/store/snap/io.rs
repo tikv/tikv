@@ -3,7 +3,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader};
 use std::{fs, usize};
 
-use engine::CfName;
+use engine_traits::CfName;
 use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
 use engine_traits::{Mutable, WriteBatch};

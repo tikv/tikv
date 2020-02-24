@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 use engine::rocks;
 use engine::rocks::DB;
 use engine::Range;
-use engine::LARGE_CFS;
-use engine::{CF_DEFAULT, CF_WRITE};
 use engine_rocks::Compat;
+use engine_traits::LARGE_CFS;
 use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 

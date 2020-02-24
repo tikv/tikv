@@ -3,8 +3,8 @@
 use crate::store::{CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
-use engine::CF_WRITE;
 use engine_rocks::Compat;
+use engine_traits::CF_WRITE;
 use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;

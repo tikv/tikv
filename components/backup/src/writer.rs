@@ -3,8 +3,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::{CfName, CF_DEFAULT, CF_WRITE, DB};
+use engine::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use futures_util::io::AllowStdIo;
