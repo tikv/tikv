@@ -503,6 +503,56 @@ pub fn truncate_real(x: Real, d: i32) -> Real {
     }
 }
 
+const I64_TEN_POWS: [i64; 19] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+];
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_int_with_uint(arg0: &Option<Int>, arg1: &Option<Int>) -> Result<Option<Int>> {
+    match (arg0, arg1) {
+        (&Some(x), Some(_)) => Ok(Some(x)),
+        _ => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_int_with_int(arg0: &Option<Int>, arg1: &Option<Int>) -> Result<Option<Int>> {
+    match (arg0, arg1) {
+        (&Some(x), &Some(d)) => {
+            if d >= 0 {
+                Ok(Some(x))
+            } else {
+                if d <= -(I64_TEN_POWS.len() as i64) {
+                    return Ok(Some(0));
+                }
+                let shift = I64_TEN_POWS[-d as usize];
+                Ok(Some(x / shift * shift))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 thread_local! {
    static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
@@ -1506,6 +1556,51 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(Real::from(expected)));
+        }
+    }
+
+    #[test]
+    fn test_truncate_int() {
+        let test_cases = vec![
+            (Some(1028), false, Some(0), false, Some(1028)),
+            (Some(1028), false, Some(5), false, Some(1028)),
+            (Some(1028), false, Some(-2), false, Some(1000)),
+            (Some(1028), false, Some(309), false, Some(1028)),
+            (Some(1028), false, Some(i64::min_value()), false, Some(0)),
+            (
+                Some(1028),
+                false,
+                Some(u64::max_value() as i64),
+                true,
+                Some(1028),
+            ),
+        ];
+
+        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, expected) in test_cases {
+            let lhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if lhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(lhs, lhs_field_type)
+                .push_param_with_field_type(rhs, rhs_field_type)
+                .evaluate(ScalarFuncSig::TruncateInt)
+                .unwrap();
+
+            assert_eq!(output, expected);
         }
     }
 }
