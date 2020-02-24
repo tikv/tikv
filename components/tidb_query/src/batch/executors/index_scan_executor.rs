@@ -11,10 +11,12 @@ use tipb::IndexScan;
 use super::util::scan_executor::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use crate::codec::table::check_index_key;
+use crate::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN};
+use crate::codec::{datum, table};
 use crate::expr::{EvalConfig, EvalContext};
 use crate::storage::{IntervalRange, Storage};
 use crate::Result;
+use codec::prelude::NumberDecoder;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
@@ -161,12 +163,86 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     fn process_kv_pair(
         &mut self,
         key: &[u8],
+        value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
+            self.process_kv_pair_new(key, value, columns)
+        } else {
+            self.process_kv_pair_old(key, value, columns)
+        }
+    }
+}
+
+impl IndexScanExecutorImpl {
+    fn process_kv_pair_new(
+        &mut self,
+        key: &[u8],
         mut value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use crate::codec::{datum, table};
-        use codec::prelude::NumberDecoder;
+        check_index_key(key)?;
+        // // The payload part of the key
+        let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
+        for _ in 0..self.columns_len_without_handle {
+            let (_, remaining) = datum::split_datum(key_payload, false)?;
+            key_payload = remaining;
+        }
+        let mut handle_val = 0;
+        if key_payload.is_empty() {
+            // This is a unique index, and we should look up PK handle in value.
 
+            // NOTE: it is not `number::decode_i64`.
+            handle_val = (value
+                .read_u64()
+                .map_err(|_| other_err!("Failed to decode handle in value as i64"))?)
+                as i64;
+            value = &value[8..];
+        } else if self.decode_handle {
+            // This is a normal index. The remaining payload part is the PK handle.
+            // Let's decode it and put in the column.
+            let flag = key_payload[0];
+            let mut val = &key_payload[1..];
+
+            // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
+            // receiving optional time zone first.
+
+            handle_val = match flag {
+                datum::INT_FLAG => val
+                    .read_i64()
+                    .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
+                datum::UINT_FLAG => {
+                    (val.read_u64()
+                        .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
+                        as i64
+                }
+                _ => {
+                    return Err(other_err!("Unexpected handle flag {}", flag));
+                }
+            }
+        }
+
+        for i in 0..self.columns_len_without_handle {
+            let (val, remaining) = datum::split_datum(value, false)?;
+            columns[i].mut_raw().push(val);
+            value = remaining;
+        }
+
+        if self.decode_handle {
+            columns[self.columns_len_without_handle]
+                .mut_decoded()
+                .push_int(Some(handle_val));
+        }
+
+        Ok(())
+    }
+
+    fn process_kv_pair_old(
+        &mut self,
+        key: &[u8],
+        mut value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
         check_index_key(key)?;
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
