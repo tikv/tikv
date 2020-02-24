@@ -342,7 +342,7 @@ pub mod tests {
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;

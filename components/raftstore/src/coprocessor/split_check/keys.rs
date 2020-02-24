@@ -209,7 +209,7 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
-    use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;

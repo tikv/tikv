@@ -90,7 +90,6 @@ mod tests {
     use crate::rocks;
     use crate::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
     use crate::rocks::{ColumnFamilyOptions, DBOptions, SeekKey, Writable};
-    use crate::ALL_CFS;
     use crate::DB;
 
     use super::*;

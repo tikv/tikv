@@ -448,8 +448,9 @@ mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
-    use engine::{IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine::IterOption;
     use engine_rocks::RocksEngine;
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;

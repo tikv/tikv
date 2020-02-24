@@ -176,8 +176,8 @@ mod tests {
     use super::*;
     use crate::store::snap::tests::*;
     use crate::store::snap::SNAPSHOT_CFS;
-    use engine::CF_DEFAULT;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+    use engine_traits::CF_DEFAULT;
     use tempfile::Builder;
     use tikv_util::time::Limiter;
 

@@ -815,7 +815,11 @@ pub mod tests {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine::CF_DEFAULT, engine::CF_LOCK, engine::CF_WRITE])
+            .cfs(&[
+                engine_traits::CF_DEFAULT,
+                engine_traits::CF_LOCK,
+                engine_traits::CF_WRITE,
+            ])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
@@ -865,7 +869,7 @@ pub mod tests {
                     end_key,
                     endpoint.region_info.clone(),
                     false,
-                    engine::CF_DEFAULT,
+                    engine_traits::CF_DEFAULT,
                 );
 
                 let mut ranges = Vec::with_capacity(expect.len());
@@ -921,7 +925,7 @@ pub mod tests {
                     concurrency: 4,
                     cancel: Arc::default(),
                     is_raw_kv: false,
-                    cf: engine::CF_DEFAULT,
+                    cf: engine_traits::CF_DEFAULT,
                 };
                 endpoint.handle_backup_task(task);
                 let resps: Vec<_> = rx.collect().wait().unwrap();

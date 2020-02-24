@@ -689,8 +689,8 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, Writable, WriteBatch};
     use engine::Engines;
     use engine::{Mutable, Peekable};
-    use engine::{CF_DEFAULT, CF_RAFT};
     use engine_rocks::RocksSnapshot;
+    use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;

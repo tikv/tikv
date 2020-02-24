@@ -232,7 +232,7 @@ mod tests {
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine::ALL_CFS;
+    use engine_traits::ALL_CFS;
     use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;

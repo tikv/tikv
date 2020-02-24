@@ -1354,7 +1354,6 @@ mod tests {
     use tempfile::Builder;
 
     use crate::rocks;
-    use crate::ALL_CFS;
     use engine_traits::ALL_CFS;
 
     #[test]

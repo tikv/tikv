@@ -158,8 +158,8 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine::{CF_DEFAULT, CF_RAFT};
     use engine_rocks::RocksSnapshot;
+    use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;

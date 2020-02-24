@@ -428,7 +428,7 @@ impl Drop for AppliedLockCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{PutRequest, RaftCmdRequest};

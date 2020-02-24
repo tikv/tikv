@@ -111,7 +111,7 @@ mod tests {
     use engine::rocks;
     use engine::Engines;
     use engine::Peekable;
-    use engine::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
 
     #[test]
     fn test_bootstrap() {
