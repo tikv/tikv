@@ -2289,21 +2289,8 @@ mod tests {
         use kvproto::kvrpcpb::{LockInfo, Op};
 
         let engine = TestEngineBuilder::new().build().unwrap();
-
         let k = b"k";
         let v = b"v";
-
-        let lock_ttl = 3;
-        let txn_size = 10;
-
-        let mut expected_lock_info = LockInfo::default();
-        expected_lock_info.set_primary_lock(k.to_vec());
-        expected_lock_info.set_lock_version(10);
-        expected_lock_info.set_key(k.to_vec());
-        expected_lock_info.set_lock_ttl(lock_ttl);
-        expected_lock_info.set_txn_size(txn_size);
-        expected_lock_info.set_lock_type(Op::Put);
-        expected_lock_info.set_lock_for_update_ts(0);
 
         let assert_lock_info_eq = |e, expected_lock_info: &kvproto::kvrpcpb::LockInfo| match e {
             Error(box ErrorInner::KeyIsLocked(info)) => assert_eq!(info, *expected_lock_info),
