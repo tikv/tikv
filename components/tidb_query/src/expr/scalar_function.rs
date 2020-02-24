@@ -254,6 +254,7 @@ impl ScalarFunc {
             | ScalarFuncSig::ReverseUtf8
             | ScalarFuncSig::Reverse
             | ScalarFuncSig::Quote
+            | ScalarFuncSig::UpperUtf8
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -293,6 +294,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
+            | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
@@ -504,7 +506,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TimeStringTimeDiff
             | ScalarFuncSig::TimeTimeTimeDiff
             | ScalarFuncSig::TimeToSec
-            | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -788,6 +789,7 @@ dispatch_call! {
         WeekOfYear => week_of_year,
         Year => year,
         ToDays => to_days,
+        ToSeconds => to_seconds,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
@@ -988,6 +990,7 @@ dispatch_call! {
         RightUtf8 => right_utf8,
         Left => left,
         Right => right,
+        UpperUtf8 => upper_utf8,
         Upper => upper,
         Lower => lower,
         DateFormatSig => date_format,
@@ -1377,6 +1380,7 @@ mod tests {
                     ScalarFuncSig::ReverseUtf8,
                     ScalarFuncSig::Reverse,
                     ScalarFuncSig::Lower,
+                    ScalarFuncSig::UpperUtf8,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
                     ScalarFuncSig::IsIPv4Compat,
@@ -1656,7 +1660,6 @@ mod tests {
             ScalarFuncSig::TimeStringTimeDiff,
             ScalarFuncSig::TimeTimeTimeDiff,
             ScalarFuncSig::TimeToSec,
-            ScalarFuncSig::ToSeconds,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
