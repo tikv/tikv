@@ -136,14 +136,14 @@ mod tests {
     fn test_constant_eval() {
         let dec = "1.1".parse::<Decimal>().unwrap();
         let s = "你好".as_bytes().to_owned();
-        let dur = Duration::parse(b"01:00:00", 0).unwrap();
+        let dur = Duration::parse(&mut EvalContext::default(), b"01:00:00", 0).unwrap();
 
         let tests = vec![
             datum_expr(Datum::Null),
             datum_expr(Datum::I64(-30)),
             datum_expr(Datum::U64(u64::MAX)),
             datum_expr(Datum::F64(124.32)),
-            datum_expr(Datum::Dec(dec.clone())),
+            datum_expr(Datum::Dec(dec)),
             datum_expr(Datum::Bytes(s.clone())),
             datum_expr(Datum::Dur(dur)),
         ];
@@ -153,8 +153,8 @@ mod tests {
             EvalResults(Some(-30), None, None, None, None, None, None),
             EvalResults(Some(-1), None, None, None, None, None, None),
             EvalResults(None, Some(124.32), None, None, None, None, None),
-            EvalResults(None, None, Some(dec.clone()), None, None, None, None),
-            EvalResults(None, None, None, Some(s.clone()), None, None, None),
+            EvalResults(None, None, Some(dec), None, None, None, None),
+            EvalResults(None, None, None, Some(s), None, None, None),
             EvalResults(None, None, None, None, None, Some(dur), None),
         ];
 

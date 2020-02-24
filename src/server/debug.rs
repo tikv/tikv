@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::path::Path;
 use std::str::FromStr;
@@ -11,12 +10,14 @@ use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
-    SeekKey, Writable, WriteBatch, WriteOptions, DB,
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, ReadOptions, SeekKey,
+    Writable, WriteBatch, WriteOptions, DB,
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::Compat;
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
@@ -25,19 +26,18 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
-use crate::raftstore::coprocessor::properties::{MvccProperties, RangeProperties};
-use crate::raftstore::coprocessor::{
-    get_region_approximate_keys_cf, get_region_approximate_middle,
-};
-use crate::raftstore::store::util as raftstore_util;
-use crate::raftstore::store::PeerStorage;
-use crate::raftstore::store::{
+use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
+use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
+use crate::storage::Iterator as EngineIterator;
+use engine_rocks::RangeProperties;
+use raftstore::coprocessor::properties::MvccProperties;
+use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
+use raftstore::store::util as raftstore_util;
+use raftstore::store::PeerStorage;
+use raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use crate::server::gc_worker::GcWorker;
-use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use crate::storage::{Engine, Iterator as EngineIterator};
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
@@ -134,14 +134,17 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 }
 
 #[derive(Clone)]
-pub struct Debugger<E: Engine> {
+pub struct Debugger {
     engines: Engines,
-    gc_worker: Option<GcWorker<E>>,
+    gc_worker_cfg: Option<GcWorkerConfigManager>,
 }
 
-impl<E: Engine> Debugger<E> {
-    pub fn new(engines: Engines, gc_worker: Option<GcWorker<E>>) -> Debugger<E> {
-        Debugger { engines, gc_worker }
+impl Debugger {
+    pub fn new(engines: Engines, gc_worker_cfg: Option<GcWorkerConfigManager>) -> Debugger {
+        Debugger {
+            engines,
+            gc_worker_cfg,
+        }
     }
 
     pub fn get_engine(&self) -> &Engines {
@@ -290,12 +293,12 @@ impl<E: Engine> Debugger<E> {
             read_opt.set_iterate_upper_bound(end.to_vec());
         }
         let mut iter = db.iter_cf_opt(cf_handle, read_opt);
-        if !iter.seek_to_first() {
+        if !iter.seek_to_first().unwrap() {
             return Ok(vec![]);
         }
 
         let mut res = vec![(iter.key().to_vec(), iter.value().to_vec())];
-        while res.len() < limit && iter.next() {
+        while res.len() < limit && iter.next().unwrap() {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
         }
 
@@ -476,7 +479,7 @@ impl<E: Engine> Debugger<E> {
         .build_read_opts();
         let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
-        iter.seek(SeekKey::from(from.as_ref()));
+        iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
         let fake_snap_worker = Worker::new("fake-snap-worker");
 
@@ -813,15 +816,12 @@ impl<E: Engine> Debugger<E> {
             Module::Server => {
                 if config_name == GC_IO_LIMITER_CONFIG_NAME {
                     if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
-                        let bps = i64::try_from(bytes_per_sec.0).unwrap_or_else(|_| {
-                            (panic!("{} > i64::max_value", GC_IO_LIMITER_CONFIG_NAME))
-                        });
-                        return self
-                            .gc_worker
-                            .as_ref()
-                            .expect("must be some")
-                            .change_io_limit(bps)
-                            .map_err(|e| Error::Other(e.into()));
+                        self.gc_worker_cfg.as_ref().expect("must be some").update(
+                            move |cfg: &mut GcConfig| {
+                                cfg.max_write_bytes_per_sec = bytes_per_sec;
+                            },
+                        );
+                        return Ok(());
                     }
                 }
                 Err(Error::InvalidArgument(format!(
@@ -854,12 +854,10 @@ impl<E: Engine> Debugger<E> {
         let mut mvcc_properties = MvccProperties::new();
         let start = keys::enc_start_key(&region);
         let end = keys::enc_end_key(&region);
-        let collection = box_try!(engine::util::get_range_properties_cf(
-            db, CF_WRITE, &start, &end
-        ));
-        for (_, v) in &*collection {
+        let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
+        for (_, v) in collection.iter() {
             num_entries += v.num_entries();
-            let mvcc = box_try!(MvccProperties::decode(v.user_collected_properties()));
+            let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
             mvcc_properties.add(&mvcc);
         }
 
@@ -883,7 +881,7 @@ impl<E: Engine> Debugger<E> {
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
         ]
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
         .collect();
         res.push((
             "middle_key_by_approximate_size".to_string(),
@@ -892,12 +890,13 @@ impl<E: Engine> Debugger<E> {
         res.push((
             "sst_files".to_string(),
             collection
-                .into_iter()
+                .iter()
                 .map(|(k, _)| {
-                    Path::new(k)
+                    Path::new(&*k)
                         .file_name()
                         .map(|f| f.to_str().unwrap())
-                        .unwrap_or(k)
+                        .unwrap_or(&*k)
+                        .to_string()
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
@@ -967,14 +966,14 @@ impl MvccChecker {
             let from = start_key.clone();
             let to = end_key.clone();
             let readopts = IterOption::new(
-                Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+                Some(KeyBuilder::from_vec(from, 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
             )
             .build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
-            iter.seek(SeekKey::Start);
+            iter.seek(SeekKey::Start).unwrap();
             Ok(iter)
         };
 
@@ -992,7 +991,7 @@ impl MvccChecker {
     }
 
     fn min_key(key: Option<Vec<u8>>, iter: &DBIterator, f: fn(&[u8]) -> &[u8]) -> Option<Vec<u8>> {
-        let iter_key = if iter.valid() {
+        let iter_key = if iter.valid().unwrap() {
             Some(f(keys::origin_key(iter.key())).to_vec())
         } else {
             None
@@ -1154,16 +1153,16 @@ impl MvccChecker {
     }
 
     fn next_lock(&mut self, key: &[u8]) -> Result<Option<Lock>> {
-        if self.lock_iter.valid() && keys::origin_key(self.lock_iter.key()) == key {
+        if self.lock_iter.valid().unwrap() && keys::origin_key(self.lock_iter.key()) == key {
             let lock = box_try!(Lock::parse(self.lock_iter.value()));
-            self.lock_iter.next();
+            self.lock_iter.next().unwrap();
             return Ok(Some(lock));
         }
         Ok(None)
     }
 
     fn next_default(&mut self, key: &[u8]) -> Result<Option<TimeStamp>> {
-        if self.default_iter.valid()
+        if self.default_iter.valid().unwrap()
             && box_try!(Key::truncate_ts_for(keys::origin_key(
                 self.default_iter.key()
             ))) == key
@@ -1171,21 +1170,21 @@ impl MvccChecker {
             let start_ts = box_try!(Key::decode_ts_from(keys::origin_key(
                 self.default_iter.key()
             )));
-            self.default_iter.next();
+            self.default_iter.next().unwrap();
             return Ok(Some(start_ts));
         }
         Ok(None)
     }
 
     fn next_write(&mut self, key: &[u8]) -> Result<Option<(TimeStamp, Write)>> {
-        if self.write_iter.valid()
+        if self.write_iter.valid().unwrap()
             && box_try!(Key::truncate_ts_for(keys::origin_key(
                 self.write_iter.key()
             ))) == key
         {
             let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
             let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(self.write_iter.key())));
-            self.write_iter.next();
+            self.write_iter.next().unwrap();
             return Ok(Some((commit_ts, write)));
         }
         Ok(None)
@@ -1225,6 +1224,8 @@ pub struct MvccInfoIterator {
     write_iter: DBIterator,
 }
 
+pub type Kv = (Vec<u8>, Vec<u8>);
+
 impl MvccInfoIterator {
     fn new(db: &Arc<DB>, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
         if !keys::validate_data_key(from) {
@@ -1243,7 +1244,7 @@ impl MvccInfoIterator {
             let readopts = IterOption::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
-            iter.seek(SeekKey::from(from));
+            iter.seek(SeekKey::from(from)).unwrap();
             Ok(iter)
         };
         Ok(MvccInfoIterator {
@@ -1313,10 +1314,10 @@ impl MvccInfoIterator {
     }
 
     fn next_grouped(iter: &mut DBIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
-        if iter.valid() {
+        if iter.valid().unwrap() {
             let prefix = Key::truncate_ts_for(iter.key()).unwrap().to_vec();
             let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
-            while iter.next() && iter.key().starts_with(&prefix) {
+            while iter.next().unwrap() && iter.key().starts_with(&prefix) {
                 kvs.push((iter.key().to_vec(), iter.value().to_vec()));
             }
             return Some((prefix, kvs));
@@ -1332,7 +1333,10 @@ impl MvccInfoIterator {
         let mut mvcc_info = MvccInfo::default();
         let mut min_prefix = Vec::new();
 
-        let (lock_ok, writes_ok) = match (self.lock_iter.valid(), self.write_iter.valid()) {
+        let (lock_ok, writes_ok) = match (
+            self.lock_iter.valid().unwrap(),
+            self.write_iter.valid().unwrap(),
+        ) {
             (false, false) => return Ok(None),
             (true, true) => {
                 let prefix1 = self.lock_iter.key();
@@ -1358,7 +1362,7 @@ impl MvccInfoIterator {
                 min_prefix = prefix;
             }
         }
-        if self.default_iter.valid() {
+        if self.default_iter.valid().unwrap() {
             match box_try!(Key::truncate_ts_for(self.default_iter.key())).cmp(&min_prefix) {
                 Ordering::Equal => {
                     if let Some((_, values)) = self.next_default()? {
@@ -1456,7 +1460,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
     Ok(())
 }
 
-fn divide_db(db: &Arc<DB>, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let mut region = Region::default();
     region.mut_peers().push(Peer::default());
@@ -1472,15 +1476,15 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>
     divide_db_cf(db, parts, cf)
 }
 
-fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
-    let collection = engine::util::get_range_properties_cf(db, cf, &start, &end)?;
+    let collection = db.c().get_range_properties_cf(cf, &start, &end)?;
 
     let mut keys = Vec::new();
     let mut found_keys_count = 0;
-    for (_, v) in &*collection {
-        let props = RangeProperties::decode(v.user_collected_properties())?;
+    for (_, v) in collection.iter() {
+        let props = RangeProperties::decode(&v.user_collected_properties())?;
         keys.extend(
             props
                 .take_excluded_range(start.as_slice(), end.as_slice())
@@ -1537,9 +1541,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::server::gc_worker::GcConfig;
     use crate::storage::mvcc::{Lock, LockType};
-    use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
@@ -1640,7 +1642,7 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger<TestEngine> {
+    fn new_debugger() -> Debugger {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -1659,13 +1661,10 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        let test_engine = TestEngineBuilder::new().build().unwrap();
-        let mut gc_worker = GcWorker::new(test_engine, None, None, GcConfig::default());
-        gc_worker.start().unwrap();
-        Debugger::new(engines, Some(gc_worker))
+        Debugger::new(engines, Some(Default::default()))
     }
 
-    impl Debugger<TestEngine> {
+    impl Debugger {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
@@ -1915,7 +1914,7 @@ mod tests {
         // region 3 with peers at stores 21, 22, 23.
         let region_3 = init_region_state(engine, 3, &[21, 22, 23]);
         // Got the target region from pd but the peers are not changed.
-        let mut target_region_3 = region_3.clone();
+        let mut target_region_3 = region_3;
         target_region_3.mut_region_epoch().set_conf_ver(100);
 
         // Test with bad target region. No region state in rocksdb should be changed.

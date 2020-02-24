@@ -48,9 +48,7 @@ endif
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
-TEST_THREADS := --test-threads=2
-else
-TEST_THREADS := ""
+RUST_TEST_THREADS ?= 2
 endif
 
 # Build portable binary by default unless disable explicitly
@@ -77,9 +75,7 @@ endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
-DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
-GOROOT ?= $(DEPS_PATH)/go
 CARGO_TARGET_DIR ?= $(CURDIR)/target
 
 # Build-time environment, captured for reporting by the application binary
@@ -90,6 +86,7 @@ export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${
 export TIKV_BUILD_GIT_TAG := $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
@@ -114,6 +111,7 @@ all: format build test
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
+build: export TIKV_PROFILE=debug
 build:
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
@@ -127,6 +125,7 @@ build:
 # with RocksDB compiled with the "portable" option, for -march=x86-64 (an
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
+release: export TIKV_PROFILE=release
 release:
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
 
@@ -142,7 +141,7 @@ prof_release:
 # An optimized build instrumented with failpoints.
 # This is used for schrodinger chaos testing.
 fail_release:
-	FAIL_POINT=1 make release
+	FAIL_POINT=1 make dist_release
 
 ## Distribution builds (true release builds)
 ## -------------------
@@ -162,6 +161,7 @@ dist_release:
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
+build_dist_release: export TIKV_PROFILE=dist_release
 build_dist_release:
 	make x-build-dist
 ifeq ($(shell uname),Linux) # Macs don't have objcopy
@@ -223,21 +223,35 @@ test:
 	# they require special compile-time and run-time setup
 	# Forturately rebuilding with the mem-profiling feature will only
 	# rebuild starting at jemalloc-sys.
+	# TODO: remove cd commands after https://github.com/rust-lang/cargo/issues/5364 is resolved.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude \
+		cdc --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cd tests && cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && cd .. && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" -p cdc ${EXTRA_CARGO_ARGS} -- --nocapture && cd ../.. && \
+	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && cd ../.. && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
+	bash scripts/check-udeps.sh
 
 # This is used for CI test
-ci_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
-	bash scripts/check-bins-for-jemalloc.sh
+ci_test: ci_doc_test
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--all-targets --no-run --message-format=json
+	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
+	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
+
+ci_doc_test:
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer --doc
 
 ## Static analysis
 ## ---------------
@@ -256,16 +270,38 @@ format: pre-format
 pre-clippy: unset-override
 	@rustup component add clippy
 
+ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
+	-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
+	-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
+	-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
+	-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
+	-A clippy::needless_range_loop -A clippy::redundant_closure \
+	-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
+	-A clippy::identity_conversion -A clippy::new_ret_no_self
+
+# PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 clippy: pre-clippy
-	@cargo clippy --all --all-targets --no-default-features --features "${ENABLE_FEATURES}" -- \
-		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
-		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
-		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
-		-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
-		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
-		-A clippy::needless_range_loop -A clippy::redundant_closure \
-		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
-		-A clippy::identity_conversion
+	@cargo clippy --all --exclude cdc --exclude backup \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--all-targets --no-default-features \
+		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
+	@for pkg in "cdc" "backup"; do \
+		cd components/$$pkg && \
+		cargo clippy -p $$pkg --all-targets --no-default-features \
+			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
+		cd ../.. ;\
+	done
+	@for pkg in "fuzz" "fuzz/fuzzer-afl" "fuzz/fuzzer-honggfuzz" "fuzz/fuzzer-libfuzzer"; do \
+		cd $$pkg && \
+		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
+		cd - >/dev/null; \
+	done
+
+# TODO fix tests warnings
+# @cd tests && \
+# cargo clippy -p tests --all-targets --no-default-features \
+# 	--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
+# cd ..
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
@@ -278,6 +314,12 @@ pre-audit:
 audit: pre-audit
 	cargo audit
 
+FUZZER ?= Honggfuzz
+
+.PHONY: fuzz
+fuzz:
+	@cargo run --package fuzz --no-default-features --features "${ENABLE_FEATURES}" -- run ${FUZZER} ${FUZZ_TARGET} \
+	|| echo "" && echo "Set the target for fuzzing using FUZZ_TARGET and the fuzzer using FUZZER (default is Honggfuzz)"
 
 ## Special targets
 ## ---------------

@@ -10,7 +10,7 @@ mod vector;
 pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
-pub use crate::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
+pub use crate::codec::mysql::{Decimal, Duration, Json, JsonType, Time as DateTime};
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
@@ -59,6 +59,13 @@ where
             None => Ok(false),
             Some(ref v) => v.as_mysql_bool(context),
         }
+    }
+}
+
+pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
+    match_template::match_template! {
+        $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json],
+        $($tail)*
     }
 }
 

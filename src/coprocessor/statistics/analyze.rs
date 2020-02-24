@@ -2,11 +2,11 @@
 
 use std::mem;
 
-use rand::rngs::ThreadRng;
-use rand::{thread_rng, Rng};
-
+use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
+use rand::rngs::ThreadRng;
+use rand::{thread_rng, Rng};
 use tidb_query::codec::datum;
 use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
 use tidb_query::expr::EvalContext;
@@ -100,8 +100,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
     }
 }
 
+#[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
@@ -134,7 +135,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
-                resp.set_other_error(e.to_string());
+                resp.set_other_error(e);
                 Ok(resp)
             }
             Err(e) => Err(e),
@@ -279,7 +280,7 @@ impl SampleCollector {
         self.count += 1;
         self.fm_sketch.insert(&data);
         if let Some(c) = self.cm_sketch.as_mut() {
-            c.insert(&data)
+            c.insert(&data);
         }
         self.total_size += data.len() as u64;
         if self.samples.len() < self.max_sample_size {

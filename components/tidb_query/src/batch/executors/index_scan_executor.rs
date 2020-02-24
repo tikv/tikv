@@ -364,7 +364,7 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                store.clone(),
+                store,
                 Arc::new(EvalConfig::default()),
                 vec![
                     columns_info[0].clone(),
@@ -494,7 +494,7 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                store.clone(),
+                store,
                 Arc::new(EvalConfig::default()),
                 vec![
                     columns_info[0].clone(),

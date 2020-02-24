@@ -11,6 +11,7 @@ use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
+use uuid::Uuid;
 
 const IPV6_LENGTH: usize = 16;
 const IPV4_LENGTH: usize = 4;
@@ -186,6 +187,17 @@ impl ScalarFunc {
             Ok(Some(0))
         }
     }
+
+    pub fn uuid<'a, 'b: 'a>(
+        &'b self,
+        _ctx: &mut EvalContext,
+        _row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let result = Uuid::new_v4();
+        let mut buf = vec![0; uuid::adapter::Hyphenated::LENGTH];
+        result.to_hyphenated().encode_lower(&mut buf);
+        Ok(Some(Cow::Owned(buf)))
+    }
 }
 
 #[cfg(test)]
@@ -283,11 +295,11 @@ mod tests {
     fn test_json_any_value() {
         test_any_value!(
             vec![(
-                Json::U64(1),
-                Json::U64(2),
-                Json::U64(3),
-                Json::U64(4),
-                Json::U64(1),
+                Json::from_u64(1).unwrap(),
+                Json::from_u64(2).unwrap(),
+                Json::from_u64(3).unwrap(),
+                Json::from_u64(4).unwrap(),
+                Json::from_u64(1).unwrap(),
             )],
             Vec<(Json, Json, Json, Json, Json)>,
             Datum::Json,
@@ -630,5 +642,21 @@ mod tests {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
+    }
+
+    #[test]
+    fn test_uuid() {
+        let mut ctx = EvalContext::default();
+        let op = scalar_func_expr(ScalarFuncSig::Uuid, &[]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let r = got.into_string().unwrap_or_default();
+        let v: Vec<&str> = r.split('-').collect();
+        assert_eq!(v.len(), 5);
+        assert_eq!(v[0].len(), 8);
+        assert_eq!(v[1].len(), 4);
+        assert_eq!(v[2].len(), 4);
+        assert_eq!(v[3].len(), 4);
+        assert_eq!(v[4].len(), 12);
     }
 }

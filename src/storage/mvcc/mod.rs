@@ -245,12 +245,15 @@ impl From<codec::Error> for ErrorInner {
 impl From<txn_types::Error> for ErrorInner {
     fn from(err: txn_types::Error) -> Self {
         match err {
-            txn_types::Error::Io(e) => ErrorInner::Io(e),
-            txn_types::Error::Codec(e) => ErrorInner::Codec(e),
-            txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => {
+            txn_types::Error(box txn_types::ErrorInner::Io(e)) => ErrorInner::Io(e),
+            txn_types::Error(box txn_types::ErrorInner::Codec(e)) => ErrorInner::Codec(e),
+            txn_types::Error(box txn_types::ErrorInner::BadFormatLock)
+            | txn_types::Error(box txn_types::ErrorInner::BadFormatWrite) => {
                 ErrorInner::BadFormat(err)
             }
-            txn_types::Error::KeyIsLocked(lock_info) => ErrorInner::KeyIsLocked(lock_info),
+            txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock_info)) => {
+                ErrorInner::KeyIsLocked(lock_info)
+            }
         }
     }
 }
@@ -283,7 +286,6 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot};
-    use crate::storage::txn::commands::Options;
     use crate::storage::types::TxnStatus;
     use engine::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -346,7 +348,10 @@ pub mod tests {
         txn.prewrite(
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             pk,
-            &Options::default(),
+            false,
+            0,
+            0,
+            TimeStamp::default(),
         )?;
         write(engine, &ctx, txn.into_modifies());
         Ok(())
@@ -359,17 +364,29 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
         is_pessimistic_lock: bool,
-        options: Options,
+        lock_ttl: u64,
+        for_update_ts: TimeStamp,
+        txn_size: u64,
+        min_commit_ts: TimeStamp,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
-        if options.for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &options).unwrap();
-        } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+        if for_update_ts.is_zero() {
+            txn.prewrite(mutation, pk, false, lock_ttl, txn_size, min_commit_ts)
                 .unwrap();
+        } else {
+            txn.pessimistic_prewrite(
+                mutation,
+                pk,
+                is_pessimistic_lock,
+                lock_ttl,
+                for_update_ts,
+                txn_size,
+                min_commit_ts,
+            )
+            .unwrap();
         }
         write(engine, &ctx, txn.into_modifies());
     }
@@ -381,8 +398,18 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) {
-        let options = Options::default();
-        must_prewrite_put_impl(engine, key, value, pk, ts, false, options);
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            ts,
+            false,
+            0,
+            TimeStamp::default(),
+            0,
+            TimeStamp::default(),
+        );
     }
 
     pub fn must_pessimistic_prewrite_put<E: Engine>(
@@ -394,9 +421,18 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
         is_pessimistic_lock: bool,
     ) {
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts.into();
-        must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            ts,
+            is_pessimistic_lock,
+            0,
+            for_update_ts.into(),
+            0,
+            TimeStamp::default(),
+        );
     }
 
     pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
@@ -409,10 +445,18 @@ pub mod tests {
         is_pessimistic_lock: bool,
         lock_ttl: u64,
     ) {
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts.into();
-        options.lock_ttl = lock_ttl;
-        must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            ts,
+            is_pessimistic_lock,
+            lock_ttl,
+            for_update_ts.into(),
+            0,
+            TimeStamp::default(),
+        );
     }
 
     pub fn must_prewrite_put_for_large_txn<E: Engine>(
@@ -424,12 +468,10 @@ pub mod tests {
         ttl: u64,
         for_update_ts: impl Into<TimeStamp>,
     ) {
-        let mut options = Options::default();
-        options.lock_ttl = ttl;
+        let lock_ttl = ttl;
         let ts = ts.into();
-        options.min_commit_ts = (ts.into_inner() + 1).into();
+        let min_commit_ts = (ts.into_inner() + 1).into();
         let for_update_ts = for_update_ts.into();
-        options.for_update_ts = for_update_ts;
         must_prewrite_put_impl(
             engine,
             key,
@@ -437,7 +479,10 @@ pub mod tests {
             pk,
             ts,
             !for_update_ts.is_zero(),
-            options,
+            lock_ttl,
+            for_update_ts,
+            0,
+            min_commit_ts,
         );
     }
 
@@ -453,15 +498,22 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let mut options = Options::default();
-        let for_update_ts = for_update_ts.into();
-        options.for_update_ts = for_update_ts;
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+        let for_update_ts = for_update_ts.into();
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &options).unwrap_err()
-        } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
                 .unwrap_err()
+        } else {
+            txn.pessimistic_prewrite(
+                mutation,
+                pk,
+                is_pessimistic_lock,
+                0,
+                for_update_ts,
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap_err()
         }
     }
 
@@ -506,15 +558,22 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let mut options = Options::default();
-        let for_update_ts = for_update_ts.into();
-        options.for_update_ts = for_update_ts;
         let mutation = Mutation::Delete(Key::from_raw(key));
+        let for_update_ts = for_update_ts.into();
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &options).unwrap();
-        } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
                 .unwrap();
+        } else {
+            txn.pessimistic_prewrite(
+                mutation,
+                pk,
+                is_pessimistic_lock,
+                0,
+                for_update_ts,
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap();
         }
         engine.write(&ctx, txn.into_modifies()).unwrap();
     }
@@ -550,15 +609,22 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let mut options = Options::default();
         let for_update_ts = for_update_ts.into();
-        options.for_update_ts = for_update_ts;
         let mutation = Mutation::Lock(Key::from_raw(key));
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &options).unwrap();
-        } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
                 .unwrap();
+        } else {
+            txn.pessimistic_prewrite(
+                mutation,
+                pk,
+                is_pessimistic_lock,
+                0,
+                for_update_ts,
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap();
         }
         engine.write(&ctx, txn.into_modifies()).unwrap();
     }
@@ -582,7 +648,14 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         assert!(txn
-            .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
+            .prewrite(
+                Mutation::Lock(Key::from_raw(key)),
+                pk,
+                false,
+                0,
+                0,
+                TimeStamp::default()
+            )
             .is_err());
     }
 
@@ -602,13 +675,20 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
-        options: Options,
+        lock_ttl: u64,
+        for_update_ts: impl Into<TimeStamp>,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
-            .unwrap();
+        txn.acquire_pessimistic_lock(
+            Key::from_raw(key),
+            pk,
+            false,
+            lock_ttl,
+            for_update_ts.into(),
+        )
+        .unwrap();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
             engine.write(&ctx, modifies).unwrap();
@@ -633,10 +713,7 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
         ttl: u64,
     ) {
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts.into();
-        options.lock_ttl = ttl;
-        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, options);
+        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, ttl, for_update_ts.into());
     }
 
     pub fn must_acquire_pessimistic_lock_for_large_txn<E: Engine>(
@@ -660,9 +737,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts.into();
-        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, 0, for_update_ts.into())
             .unwrap_err()
     }
 

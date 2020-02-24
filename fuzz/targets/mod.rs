@@ -7,6 +7,7 @@ mod util;
 use self::util::ReadLiteralExt;
 use failure::Error;
 use std::io::Cursor;
+use tidb_query::codec::datum_codec::DatumFlagAndPayloadEncoder;
 use tidb_query::expr::{EvalConfig, EvalContext};
 
 #[inline(always)]
@@ -114,7 +115,7 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
 
         let mode = cursor.read_as_decimal_round_mode()?;
         let frac = cursor.read_as_i8()?;
-        let _ = lhs.clone().round(frac, mode.clone());
+        let _ = lhs.clone().round(frac, mode);
 
         let shift = cursor.read_as_u64()? as isize;
         let _ = lhs.clone().shift(shift);
@@ -130,8 +131,8 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
         let _ = lhs - rhs;
         let _ = lhs * rhs;
         let _ = lhs / rhs;
-        let _ = lhs.clone() % rhs.clone();
-        let _ = -lhs.clone();
+        let _ = *lhs % *rhs;
+        let _ = -*lhs;
         Ok(())
     }
 
@@ -249,7 +250,6 @@ fn fuzz_duration(
 ) -> Result<(), Error> {
     use tidb_query::codec::convert::ConvertTo;
     use tidb_query::codec::mysql::decimal::Decimal;
-    use tidb_query::codec::mysql::DurationEncoder;
 
     let _ = t.fsp();
     let u = t;
@@ -264,7 +264,7 @@ fn fuzz_duration(
     let u = t;
     u.round_frac(cursor.read_as_i8()?)?;
     let mut v = Vec::new();
-    let _ = v.write_duration(t);
+    let _ = v.write_datum_duration_int(t);
 
     let mut ctx = EvalContext::default();
     let _: Decimal = t.convert(&mut ctx)?;
@@ -287,6 +287,6 @@ pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<(), Err
     let fsp = cursor.read_as_i8()?;
     let mut buf: [u8; 32] = [b' '; 32];
     cursor.read_exact(&mut buf)?;
-    let d = Duration::parse(&buf, fsp)?;
+    let d = Duration::parse(&mut EvalContext::default(), &buf, fsp)?;
     fuzz_duration(d, cursor)
 }

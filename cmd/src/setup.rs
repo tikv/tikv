@@ -1,11 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chrono;
+use chrono::Local;
 use clap::ArgMatches;
-
 use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
@@ -26,11 +27,17 @@ macro_rules! fatal {
     })
 }
 
+// TODO: There is a very small chance that duplicate files will be generated if there are
+// a lot of logs written in a very short time. Consider rename the rotated file with a version
+// number while rotate by size.
+fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
+    let mut new_path = path.to_path_buf().into_os_string();
+    new_path.push(format!("{}", Local::now().format("%Y-%m-%d-%H:%M:%S%.f")));
+    Ok(PathBuf::from(new_path))
+}
+
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
-    let log_rotation_timespan = chrono::Duration::from_std(config.log_rotation_timespan.into())
-        .expect("config.log_rotation_timespan is an invalid duration.");
-
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
@@ -38,14 +45,19 @@ pub fn initial_logger(config: &TiKvConfig) {
             fatal!("failed to initialize log: {}", e);
         });
     } else {
-        let drainer =
-            logger::file_drainer(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
-                fatal!(
-                    "failed to initialize log with file {}: {}",
-                    config.log_file,
-                    e
-                );
-            });
+        let drainer = logger::file_drainer(
+            &config.log_file,
+            config.log_rotation_timespan,
+            config.log_rotation_size,
+            rename_by_timestamp,
+        )
+        .unwrap_or_else(|e| {
+            fatal!(
+                "failed to initialize log with file {}: {}",
+                config.log_file,
+                e
+            );
+        });
 
         // use async drainer and init std log.
         logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
@@ -77,6 +89,10 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
 #[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
+    if matches.is_present("enable-dynamic-config") {
+        config.dynamic_config = true;
+    }
+
     if let Some(level) = matches.value_of("log-level") {
         config.log_level = logger::get_level_by_string(level).unwrap();
     }

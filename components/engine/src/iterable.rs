@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::DATA_KEY_PREFIX_LEN;
-pub use crate::rocks::{DBIterator, ReadOptions, TableFilter, TableProperties, DB};
+pub use crate::rocks::{DBIterator, ReadOptions, TableFilter, DB};
 use crate::Result;
+use rocksdb::TableProperties;
 use tikv_util::codec::number;
 use tikv_util::keybuilder::KeyBuilder;
 
@@ -128,17 +129,25 @@ pub trait Iterable {
     }
 
     // Seek the first key >= given key, if not found, return None.
+    // TODO: Make it zero-copy.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.new_iterator(IterOption::default());
-        iter.seek(key.into());
-        Ok(iter.kv())
+        if iter.seek(key.into())? {
+            let (k, v) = (iter.key().to_vec(), iter.value().to_vec());
+            return Ok(Some((k, v)));
+        }
+        Ok(None)
     }
 
     // Seek the first key >= given key, if not found, return None.
+    // TODO: Make it zero-copy.
     fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.new_iterator_cf(cf, IterOption::default())?;
-        iter.seek(key.into());
-        Ok(iter.kv())
+        if iter.seek(key.into())? {
+            let (k, v) = (iter.key().to_vec(), iter.value().to_vec());
+            return Ok(Some((k, v)));
+        }
+        Ok(None)
     }
 }
 
@@ -146,14 +155,9 @@ fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], mut f: F) -> Result<(
 where
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
-    it.seek(start_key.into());
-    while it.valid() {
-        let r = f(it.key(), it.value())?;
-
-        if !r || !it.next() {
-            break;
-        }
+    let mut remained = it.seek(start_key.into())?;
+    while remained {
+        remained = f(it.key(), it.value())? && it.next()?;
     }
-
-    it.status().map_err(From::from)
+    Ok(())
 }
