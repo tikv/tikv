@@ -676,13 +676,19 @@ pub mod tests {
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
         lock_ttl: u64,
-        for_update_ts: TimeStamp,
+        for_update_ts: impl Into<TimeStamp>,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, lock_ttl, for_update_ts)
-            .unwrap();
+        txn.acquire_pessimistic_lock(
+            Key::from_raw(key),
+            pk,
+            false,
+            lock_ttl,
+            for_update_ts.into(),
+        )
+        .unwrap();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
             engine.write(&ctx, modifies).unwrap();

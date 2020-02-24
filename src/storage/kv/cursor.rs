@@ -508,8 +508,8 @@ mod tests {
     use tempfile::Builder;
     use txn_types::Key;
 
-    use crate::raftstore::store::{new_temp_engine, RegionSnapshot};
     use crate::storage::{CfStatistics, Cursor, ScanMode};
+    use raftstore::store::{new_temp_engine, RegionSnapshot};
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 

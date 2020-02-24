@@ -9,8 +9,8 @@ use kvproto::configpb::*;
 use configuration::{ConfigChange, Configuration};
 use pd_client::errors::Result;
 use pd_client::ConfigClient;
+use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
-use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::FutureWorker;
 
@@ -153,7 +153,7 @@ fn test_update_config() {
     let mut cfg = cfg_handler.get_config().clone();
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client.as_ref()).unwrap();
 
     // nothing change if there are no update on pd side
     assert_eq!(cfg_handler.get_config(), &cfg);
@@ -164,7 +164,7 @@ fn test_update_config() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client).unwrap();
+    cfg_handler.refresh_config(pd_client.as_ref()).unwrap();
 
     // config update
     cfg.refresh_config_interval = ReadableDuration::hours(12);
@@ -186,7 +186,7 @@ fn test_update_not_support_config() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client).unwrap();
+    cfg_handler.refresh_config(pd_client.as_ref()).unwrap();
 
     // nothing change
     assert_eq!(cfg_handler.get_config(), &cfg);
@@ -209,7 +209,7 @@ fn test_update_to_invalid() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client.as_ref()).unwrap();
 
     // local config should not change
     assert_eq!(
@@ -245,7 +245,7 @@ fn test_compatible_config() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client).unwrap();
+    cfg_handler.refresh_config(pd_client.as_ref()).unwrap();
 
     cfg.raft_store.raft_log_gc_threshold = 2048;
     assert_eq!(cfg_handler.get_config(), &cfg);
@@ -253,9 +253,9 @@ fn test_compatible_config() {
 
 #[test]
 fn test_dispatch_change() {
+    use configuration::ConfigManager;
     use std::error::Error;
     use std::result::Result;
-    use tikv::config::ConfigManager;
 
     #[derive(Clone)]
     struct CfgManager(Arc<Mutex<RaftstoreConfig>>);
@@ -277,7 +277,7 @@ fn test_dispatch_change() {
         let (version, cfg) = ConfigHandler::create(id.to_owned(), pd_client.clone(), cfg).unwrap();
         *mgr.0.lock().unwrap() = cfg.raft_store.clone();
         let mut controller = ConfigController::new(cfg, version);
-        controller.register("raft_store", Box::new(mgr.clone()));
+        controller.register(Module::Raftstore, Box::new(mgr.clone()));
         ConfigHandler::start(
             id.to_owned(),
             controller,
@@ -291,7 +291,7 @@ fn test_dispatch_change() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client).unwrap();
+    cfg_handler.refresh_config(pd_client.as_ref()).unwrap();
 
     // config update
     assert_eq!(

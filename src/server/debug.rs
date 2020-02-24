@@ -16,6 +16,8 @@ use engine::rocks::{
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::Compat;
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
@@ -24,20 +26,18 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
-use crate::raftstore::coprocessor::properties::MvccProperties;
-use crate::raftstore::coprocessor::{
-    get_region_approximate_keys_cf, get_region_approximate_middle,
-};
-use crate::raftstore::store::util as raftstore_util;
-use crate::raftstore::store::PeerStorage;
-use crate::raftstore::store::{
-    init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
-    write_peer_state,
-};
 use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::Iterator as EngineIterator;
 use engine_rocks::RangeProperties;
+use raftstore::coprocessor::properties::MvccProperties;
+use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
+use raftstore::store::util as raftstore_util;
+use raftstore::store::PeerStorage;
+use raftstore::store::{
+    init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
+    write_peer_state,
+};
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
@@ -854,12 +854,10 @@ impl Debugger {
         let mut mvcc_properties = MvccProperties::new();
         let start = keys::enc_start_key(&region);
         let end = keys::enc_end_key(&region);
-        let collection = box_try!(engine::util::get_range_properties_cf(
-            db, CF_WRITE, &start, &end
-        ));
-        for (_, v) in &*collection {
+        let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
+        for (_, v) in collection.iter() {
             num_entries += v.num_entries();
-            let mvcc = box_try!(MvccProperties::decode(v.user_collected_properties()));
+            let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
             mvcc_properties.add(&mvcc);
         }
 
@@ -892,12 +890,13 @@ impl Debugger {
         res.push((
             "sst_files".to_string(),
             collection
-                .into_iter()
+                .iter()
                 .map(|(k, _)| {
-                    Path::new(k)
+                    Path::new(&*k)
                         .file_name()
                         .map(|f| f.to_str().unwrap())
-                        .unwrap_or(k)
+                        .unwrap_or(&*k)
+                        .to_string()
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
@@ -1461,7 +1460,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
     Ok(())
 }
 
-fn divide_db(db: &Arc<DB>, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let mut region = Region::default();
     region.mut_peers().push(Peer::default());
@@ -1477,15 +1476,15 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>
     divide_db_cf(db, parts, cf)
 }
 
-fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
-    let collection = engine::util::get_range_properties_cf(db, cf, &start, &end)?;
+    let collection = db.c().get_range_properties_cf(cf, &start, &end)?;
 
     let mut keys = Vec::new();
     let mut found_keys_count = 0;
-    for (_, v) in &*collection {
-        let props = RangeProperties::decode(v.user_collected_properties())?;
+    for (_, v) in collection.iter() {
+        let props = RangeProperties::decode(&v.user_collected_properties())?;
         keys.extend(
             props
                 .take_excluded_range(start.as_slice(), end.as_slice())

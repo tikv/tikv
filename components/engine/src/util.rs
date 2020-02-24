@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::rocks;
-use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
+use crate::rocks::{Writable, WriteBatch, DB};
 use crate::CF_LOCK;
 
 use super::Result;
@@ -81,18 +81,6 @@ pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> R
     }
 
     Ok(())
-}
-
-pub fn get_range_properties_cf(
-    db: &DB,
-    cfname: &str,
-    start_key: &[u8],
-    end_key: &[u8],
-) -> Result<TablePropertiesCollection> {
-    let cf = rocks::util::get_cf_handle(db, cfname)?;
-    let range = Range::new(start_key, end_key);
-    db.get_properties_of_tables_in_range(cf, &[range])
-        .map_err(|e| e.into())
 }
 
 #[cfg(test)]
