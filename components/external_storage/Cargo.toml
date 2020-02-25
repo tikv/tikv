@@ -9,6 +9,7 @@ protobuf-codec = ["kvproto/protobuf-codec"]
 prost-codec = ["kvproto/prost-codec"]
 
 [dependencies]
+bytes = "0.5.3"
 futures01 = { version = "0.1.29", package = "futures" }
 futures = "0.3"
 futures-executor = "0.3"
@@ -16,8 +17,8 @@ futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 rand = "0.7"
-serde = "*"
-serde_json = "*"
+serde = "1.0"
+serde_json = "1.0"
 rusoto_core = "0.42.0"
 rusoto_s3 = "0.42.0"
 rusoto_credential = "0.42.0"
@@ -27,10 +28,10 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tikv_alloc = { path = "../tikv_alloc" }
 tokio = { version = "0.1.22", default-features = false, features = ["codec"] }
 url = "2.0"
-reqwest = "*"
-tame-gcs = "*"
-tame-oauth = "*"
-http = "*"
+reqwest = "0.10.2"
+tame-gcs = "0.6.1"
+tame-oauth = "0.4.2"
+http = "0.2.0"
 
 [dev-dependencies]
 clap = { version = "2.32", features = ["yaml"] }

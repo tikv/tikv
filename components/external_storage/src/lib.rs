@@ -20,8 +20,8 @@ use futures_io::AsyncRead;
 use kvproto::backup::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
 use kvproto::backup::StorageBackend_oneof_backend as Backend;
-#[cfg_attr(feature = "protobuf-codec", allow(unused_imports))]
-use kvproto::backup::{Local, Noop, StorageBackend, S3};
+#[cfg(feature = "protobuf-codec")]
+use kvproto::backup::{Gcs, Noop, StorageBackend, S3};
 
 mod local;
 pub use local::LocalStorage;
@@ -71,7 +71,13 @@ pub fn url_of_backend(backend: &StorageBackend) -> url::Url {
             }
             u.set_path(s3.get_prefix());
         }
-        Some(Backend::Gcs(_)) => unimplemented!(),
+        Some(Backend::Gcs(gcs)) => {
+            u.set_scheme("gcs").unwrap();
+            if let Err(e) = u.set_host(Some(&gcs.bucket)) {
+                warn!("ignoring invalid GCS bucket name"; "bucket" => &gcs.bucket, "error" => %e);
+            }
+            u.set_path(gcs.get_prefix());
+        }
         None => {}
     }
     u
@@ -123,6 +129,22 @@ pub fn make_s3_backend(config: S3) -> StorageBackend {
     {
         let mut backend = StorageBackend::default();
         backend.set_s3(config);
+        backend
+    }
+}
+
+// Creates a GCS `StorageBackend`
+pub fn make_gcs_backend(config: Gcs) -> StorageBackend {
+    #[cfg(feature = "prost-codec")]
+    {
+        StorageBackend {
+            backend: Some(Backend::Gcs(config)),
+        }
+    }
+    #[cfg(feature = "protobuf-codec")]
+    {
+        let mut backend = StorageBackend::default();
+        backend.set_gcs(config);
         backend
     }
 }
@@ -192,6 +214,18 @@ mod tests {
         assert_eq!(
             url_of_backend(&backend).to_string(),
             "s3://bucket/backup%2001/prefix/"
+        );
+
+        backend.backend = Some(Backend::Gcs(Gcs {
+            bucket: "bucket".to_owned(),
+            prefix: "/backup 02/prefix/".to_owned(),
+            endpoint: "http://endpoint.com".to_owned(),
+            // ^ only 'bucket' and 'prefix' should be visible in url_of_backend()
+            ..Gcs::default()
+        }));
+        assert_eq!(
+            url_of_backend(&backend).to_string(),
+            "gcs://bucket/backup%2002/prefix/"
         );
     }
 }
