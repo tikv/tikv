@@ -855,7 +855,7 @@ impl ApplyDelegate {
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
     ) -> ApplyResult {
-        // Although conf change can't yield in normal case, it is convenient to 
+        // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
             ApplyResult::Yield
