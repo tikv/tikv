@@ -1645,7 +1645,12 @@ impl Peer {
         None
     }
 
-    fn batch_callback_err(&mut self, cbs: Vec<(Callback<RocksEngine>, usize)>, term: u64, e: Error) {
+    fn batch_callback_err(
+        &mut self,
+        cbs: Vec<(Callback<RocksEngine>, usize)>,
+        term: u64,
+        e: Error,
+    ) {
         let mut resp = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut resp, term);
         cmd_resp::bind_error(&mut resp, e);
