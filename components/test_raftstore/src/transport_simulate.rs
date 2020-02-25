@@ -9,13 +9,14 @@ use std::{mem, thread, time, usize};
 
 use rand;
 
+use engine_rocks::RocksEngine;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
-use tikv::raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
-use tikv::raftstore::{DiscardReason, Error, Result};
-use tikv::server::transport::*;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
+use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{Either, HandyRwLock};
 
@@ -192,7 +193,7 @@ impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> Result<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> Result<()> {
         self.ch.send_command(req, cb)
     }
 
@@ -311,15 +312,17 @@ impl Direction {
 
 /// Drop specified messages for the store with special region.
 ///
-/// If `msg_type` is None, all message will be filtered.
+/// If `drop_type` is empty, all message will be dropped.
 #[derive(Clone)]
 pub struct RegionPacketFilter {
     region_id: u64,
     store_id: u64,
     direction: Direction,
     block: Either<Arc<AtomicUsize>, Arc<AtomicBool>>,
-    msg_type: Option<MessageType>,
+    drop_type: Vec<MessageType>,
+    skip_type: Vec<MessageType>,
     dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
+    msg_callback: Option<Arc<dyn Fn(&RaftMessage) + Send + Sync>>,
 }
 
 impl Filter for RegionPacketFilter {
@@ -328,15 +331,17 @@ impl Filter for RegionPacketFilter {
             let region_id = m.get_region_id();
             let from_store_id = m.get_from_peer().get_store_id();
             let to_store_id = m.get_to_peer().get_store_id();
+            let msg_type = m.get_message().get_msg_type();
 
             if self.region_id == region_id
                 && (self.direction.is_send() && self.store_id == from_store_id
                     || self.direction.is_recv() && self.store_id == to_store_id)
-                && self
-                    .msg_type
-                    .as_ref()
-                    .map_or(true, |t| t == &m.get_message().get_msg_type())
+                && (self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
+                && !self.skip_type.contains(&msg_type)
             {
+                if let Some(f) = self.msg_callback.as_ref() {
+                    f(m)
+                }
                 return match self.block {
                     Either::Left(ref count) => loop {
                         let left = count.load(Ordering::SeqCst);
@@ -368,9 +373,11 @@ impl RegionPacketFilter {
             region_id,
             store_id,
             direction: Direction::Both,
-            msg_type: None,
+            drop_type: vec![],
+            skip_type: vec![],
             block: Either::Right(Arc::new(AtomicBool::new(true))),
             dropped_messages: None,
+            msg_callback: None,
         }
     }
 
@@ -379,8 +386,14 @@ impl RegionPacketFilter {
         self
     }
 
+    // TODO: rename it to `drop`.
     pub fn msg_type(mut self, m_type: MessageType) -> RegionPacketFilter {
-        self.msg_type = Some(m_type);
+        self.drop_type.push(m_type);
+        self
+    }
+
+    pub fn skip(mut self, m_type: MessageType) -> RegionPacketFilter {
+        self.skip_type.push(m_type);
         self
     }
 
@@ -396,6 +409,14 @@ impl RegionPacketFilter {
 
     pub fn reserve_dropped(mut self, dropped: Arc<Mutex<Vec<RaftMessage>>>) -> RegionPacketFilter {
         self.dropped_messages = Some(dropped);
+        self
+    }
+
+    pub fn set_msg_callback(
+        mut self,
+        cb: Arc<dyn Fn(&RaftMessage) + Send + Sync>,
+    ) -> RegionPacketFilter {
+        self.msg_callback = Some(cb);
         self
     }
 }
@@ -523,6 +544,26 @@ impl Filter for DropSnapshotFilter {
                 false
             }
         });
+        Ok(())
+    }
+}
+
+/// Capture the first snapshot message.
+pub struct RecvSnapshotFilter {
+    pub notifier: Mutex<Option<Sender<RaftMessage>>>,
+    pub region_id: u64,
+}
+
+impl Filter for RecvSnapshotFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot
+                && msg.get_region_id() == self.region_id
+            {
+                let tx = self.notifier.lock().unwrap().take().unwrap();
+                tx.send(msg.clone()).unwrap();
+            }
+        }
         Ok(())
     }
 }
@@ -712,6 +753,24 @@ impl Filter for LeaseReadFilter {
                 msg.take_context();
             }
         }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct DropMessageFilter {
+    ty: MessageType,
+}
+
+impl DropMessageFilter {
+    pub fn new(ty: MessageType) -> DropMessageFilter {
+        DropMessageFilter { ty }
+    }
+}
+
+impl Filter for DropMessageFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        msgs.retain(|m| m.get_message().get_msg_type() != self.ty);
         Ok(())
     }
 }

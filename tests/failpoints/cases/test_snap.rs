@@ -3,15 +3,18 @@
 use std::fs;
 use std::io;
 use std::sync::atomic::Ordering;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::*;
 
 use fail;
 use raft::eraftpb::MessageType;
 
+use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_overlap_cleanup() {
@@ -216,4 +219,124 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
             );
         }
     }
+}
+
+#[test]
+fn test_node_request_snapshot_on_split() {
+    let _guard = crate::setup();
+
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_request_snapshot(&mut cluster);
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    // Make sure peer 2 does not in the pending state.
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    for _ in 0..100 {
+        cluster.must_put(&[7; 100], &[7; 100]);
+    }
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+
+    let split_fp = "apply_before_split_1_3";
+    fail::cfg(split_fp, "pause").unwrap();
+    let (split_tx, split_rx) = mpsc::channel();
+    cluster.split_region(
+        &region,
+        b"k1",
+        Callback::Write(Box::new(move |_| {
+            split_tx.send(()).unwrap();
+        })),
+    );
+    // Split is stopped on peer3.
+    split_rx
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
+
+    // Request snapshot.
+    let committed_index = cluster.must_request_snapshot(2, region.get_id());
+
+    // Install snapshot filter after requesting snapshot.
+    let (tx, rx) = mpsc::channel();
+    let notifier = Mutex::new(Some(tx));
+    cluster.sim.wl().add_recv_filter(
+        2,
+        Box::new(RecvSnapshotFilter {
+            notifier,
+            region_id: region.get_id(),
+        }),
+    );
+    // There is no snapshot as long as we pause the split.
+    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+
+    // Continue split.
+    fail::remove(split_fp);
+    split_rx.recv().unwrap();
+    let mut m = rx.recv().unwrap();
+    let snapshot = m.take_message().take_snapshot();
+
+    // Requested snapshot_index >= committed_index.
+    assert!(
+        snapshot.get_metadata().get_index() >= committed_index,
+        "{:?} | {}",
+        m,
+        committed_index
+    );
+}
+
+// A peer on store 3 is isolated and is applying snapshot. (add failpoint so it's always pending)
+// Then two conf change happens, this peer is removed and a new peer is added on store 3.
+// Then isolation clear, this peer will be destroyed because of a bigger peer id in msg.
+// Peerfsm can be destroyed synchronously because snapshot state is pending and can be canceled.
+// I.e. async_remove is false.
+#[test]
+fn test_destroy_peer_on_pending_snapshot() {
+    let _guard = crate::setup();
+
+    let mut cluster = new_server_cluster(0, 4);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+    // Ensure peer 3 is initialized.
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    for i in 0..20 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
+    }
+
+    let apply_snapshot_fp = "apply_pending_snapshot";
+    fail::cfg(apply_snapshot_fp, "return()").unwrap();
+
+    cluster.clear_send_filters();
+    // Wait for leader send snapshot.
+    sleep_ms(100);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    pd_client.must_add_peer(r1, new_peer(4, 4));
+
+    pd_client.must_remove_peer(r1, new_peer(4, 4));
+    pd_client.must_add_peer(r1, new_peer(3, 5));
+
+    let destroy_peer_fp = "destroy_peer";
+    fail::cfg(destroy_peer_fp, "pause").unwrap();
+    cluster.clear_send_filters();
+    // Wait for leader send msg to peer 3.
+    // Then destroy peer 3 and create peer 5.
+    sleep_ms(100);
+    fail::remove(destroy_peer_fp);
+
+    fail::remove(apply_snapshot_fp);
+    // After peer 5 has applied snapshot, data should be got.
+    must_get_equal(&cluster.get_engine(3), b"k119", b"v1");
 }

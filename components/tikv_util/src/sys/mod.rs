@@ -8,6 +8,7 @@ pub mod thread {
     use std::io::Error;
 
     pub fn set_priority(pri: i32) -> Result<(), Error> {
+        // Unsafe due to FFI.
         unsafe {
             let tid = libc::syscall(libc::SYS_gettid);
             if libc::setpriority(libc::PRIO_PROCESS as u32, tid as u32, pri) != 0 {
@@ -19,6 +20,7 @@ pub mod thread {
     }
 
     pub fn get_priority() -> Result<i32, Error> {
+        // Unsafe due to FFI.
         unsafe {
             let tid = libc::syscall(libc::SYS_gettid);
             clear_errno();
@@ -43,6 +45,7 @@ pub mod thread {
     }
 
     fn clear_errno() {
+        // Unsafe due to FFI.
         unsafe {
             *errno_location() = 0;
         }

@@ -7,11 +7,17 @@ use std::net::{SocketAddrV4, SocketAddrV6};
 use std::ops::{Div, Mul};
 use std::path::Path;
 use std::str::{self, FromStr};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
+
+use super::time::SlowTimer;
+use crate::slow_log;
+use configuration::ConfigValue;
 
 quick_error! {
     #[derive(Debug)]
@@ -61,20 +67,36 @@ const DAY: u64 = HOUR * TIME_MAGNITUDE_3;
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub struct ReadableSize(pub u64);
 
+impl From<ReadableSize> for ConfigValue {
+    fn from(size: ReadableSize) -> ConfigValue {
+        ConfigValue::Size(size.0)
+    }
+}
+
+impl Into<ReadableSize> for ConfigValue {
+    fn into(self) -> ReadableSize {
+        if let ConfigValue::Size(s) = self {
+            ReadableSize(s)
+        } else {
+            panic!("expect: ConfigValue::Size, got: {:?}", self);
+        }
+    }
+}
+
 impl ReadableSize {
-    pub fn kb(count: u64) -> ReadableSize {
+    pub const fn kb(count: u64) -> ReadableSize {
         ReadableSize(count * KB)
     }
 
-    pub fn mb(count: u64) -> ReadableSize {
+    pub const fn mb(count: u64) -> ReadableSize {
         ReadableSize(count * MB)
     }
 
-    pub fn gb(count: u64) -> ReadableSize {
+    pub const fn gb(count: u64) -> ReadableSize {
         ReadableSize(count * GB)
     }
 
-    pub fn as_mb(self) -> u64 {
+    pub const fn as_mb(self) -> u64 {
         self.0 / MB
     }
 }
@@ -218,12 +240,28 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
 impl From<ReadableDuration> for Duration {
     fn from(readable: ReadableDuration) -> Duration {
         readable.0
+    }
+}
+
+impl From<ReadableDuration> for ConfigValue {
+    fn from(duration: ReadableDuration) -> ConfigValue {
+        ConfigValue::Duration(duration.0.as_millis() as u64)
+    }
+}
+
+impl Into<ReadableDuration> for ConfigValue {
+    fn into(self) -> ReadableDuration {
+        if let ConfigValue::Duration(d) = self {
+            ReadableDuration(Duration::from_millis(d))
+        } else {
+            panic!("expect: ConfigValue::Duration, got: {:?}", self);
+        }
     }
 }
 
@@ -253,6 +291,10 @@ impl ReadableDuration {
 
     pub fn as_millis(&self) -> u64 {
         crate::time::duration_to_ms(self.0)
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.0.as_nanos() == 0
     }
 }
 
@@ -649,7 +691,7 @@ mod check_data_dir {
 
         // TODO check ext4 nodelalloc
         let fs_info = get_fs_info(&real_path, mnt_file)?;
-        info!("check data dir"; "data_path" => data_path, "mount_fs" => ?fs_info);
+        info!("data dir"; "data_path" => data_path, "mount_fs" => ?fs_info);
 
         if get_rotational_info(&fs_info.fsname)? != "0" {
             warn!("not on SSD device"; "data_path" => data_path);
@@ -662,7 +704,7 @@ mod check_data_dir {
         use std::fs::File;
         use std::io::Write;
         use std::os::unix::fs::symlink;
-        use tempdir::TempDir;
+        use tempfile::Builder;
 
         use super::*;
 
@@ -674,7 +716,7 @@ mod check_data_dir {
 
         #[test]
         fn test_get_fs_info() {
-            let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
+            let tmp_dir = Builder::new().prefix("test-get-fs-info").tempdir().unwrap();
             let mninfo = br#"tmpfs /home tmpfs rw,nosuid,noexec,relatime,size=1628744k,mode=755 0 0
 /dev/sda4 /home/shirly ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
 /dev/sdb /data1 ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
@@ -704,7 +746,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let ret = check_data_dir("/sys/invalid", "/proc/mounts");
             assert!(ret.is_err());
             // get real path's fs_info
-            let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
+            let tmp_dir = Builder::new().prefix("test-get-fs-info").tempdir().unwrap();
             let data_path = format!("{}/data1", tmp_dir.path().display());
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
@@ -754,6 +796,53 @@ pub fn check_data_dir(_data_path: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn get_file_count(data_path: &str, extension: &str) -> Result<usize, ConfigError> {
+    let op = "data-dir.file-count.get";
+    let dir = fs::read_dir(data_path).map_err(|e| {
+        ConfigError::FileSystem(format!(
+            "{}: read file dir {:?} failed: {:?}",
+            op, data_path, e
+        ))
+    })?;
+    let mut file_count = 0;
+    for entry in dir {
+        let entry = entry.map_err(|e| {
+            ConfigError::FileSystem(format!(
+                "{}: read file in file dir {:?} failed: {:?}",
+                op, data_path, e
+            ))
+        })?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if extension.is_empty() || extension == ext {
+                    file_count += 1;
+                }
+            } else if extension.is_empty() {
+                file_count += 1;
+            }
+        }
+    }
+    Ok(file_count)
+}
+
+// check dir is empty of file with certain extension, empty string for any extension.
+pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
+    let op = "data-dir.empty.check";
+    let dir = Path::new(data_path);
+    if dir.exists() && !dir.is_file() {
+        let count = get_file_count(data_path, extension)?;
+        if count > 0 {
+            return Err(ConfigError::Limit(format!(
+                "{}: the number of file with extension {} in directory {} is non-zero, \
+                 got {}, expect 0.",
+                op, extension, data_path, count,
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
 pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
@@ -795,13 +884,79 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+#[derive(Default)]
+pub struct VersionTrack<T> {
+    value: RwLock<T>,
+    version: AtomicU64,
+}
+
+impl<T> VersionTrack<T> {
+    pub fn new(value: T) -> Self {
+        VersionTrack {
+            value: RwLock::new(value),
+            version: AtomicU64::new(1),
+        }
+    }
+
+    /// Update the value
+    pub fn update<F>(&self, f: F)
+    where
+        F: FnOnce(&mut T),
+    {
+        f(&mut self.value.write().unwrap());
+        self.version.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn value(&self) -> RwLockReadGuard<'_, T> {
+        self.value.read().unwrap()
+    }
+
+    pub fn tracker(self: Arc<Self>, tag: String) -> Tracker<T> {
+        Tracker {
+            tag,
+            version: self.version.load(Ordering::Relaxed),
+            inner: self,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Tracker<T> {
+    tag: String,
+    inner: Arc<VersionTrack<T>>,
+    version: u64,
+}
+
+impl<T> Tracker<T> {
+    // The update of `value` and `version` is not atomic
+    // so there maybe false positive.
+    pub fn any_new(&mut self) -> Option<RwLockReadGuard<'_, T>> {
+        let v = self.inner.version.load(Ordering::Acquire);
+        if self.version < v {
+            self.version = v;
+            match self.inner.value.try_read() {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    let t = SlowTimer::new();
+                    let value = self.inner.value.read().unwrap();
+                    slow_log!(t, "{} tracker get updated value", self.tag);
+                    Some(value)
+                }
+            }
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::io::Write;
     use std::path::Path;
 
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use toml;
 
     #[test]
@@ -965,7 +1120,10 @@ mod tests {
 
     #[test]
     fn test_canonicalize_path() {
-        let tmp_dir = TempDir::new("test-canonicalize").unwrap();
+        let tmp_dir = Builder::new()
+            .prefix("test-canonicalize")
+            .tempdir()
+            .unwrap();
         let path1 = format!(
             "{}",
             tmp_dir.path().to_path_buf().join("test1.dump").display()
@@ -1051,5 +1209,89 @@ mod tests {
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
         }
+    }
+
+    fn create_file(fpath: &str, buf: &[u8]) {
+        let mut file = File::create(fpath).unwrap();
+        file.write_all(buf).unwrap();
+        file.flush().unwrap();
+    }
+
+    #[test]
+    fn test_get_file_count() {
+        let tmp_path = Builder::new()
+            .prefix("test-get-file-count")
+            .tempdir()
+            .unwrap()
+            .into_path();
+        let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
+        assert_eq!(count, 0);
+        let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
+        create_file(&tmp_file, b"");
+        let count = get_file_count(tmp_path.to_str().unwrap(), "").unwrap();
+        assert_eq!(count, 1);
+        let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
+        assert_eq!(count, 1);
+        let count = get_file_count(tmp_path.to_str().unwrap(), "xt").unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_check_data_dir_empty() {
+        // test invalid data_path
+        let ret = check_data_dir_empty("/sys/invalid", "txt");
+        assert!(ret.is_ok());
+        // test empty data_path
+        let tmp_path = Builder::new()
+            .prefix("test-get-file-count")
+            .tempdir()
+            .unwrap()
+            .into_path();
+        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
+        assert!(ret.is_ok());
+        // test non-empty data_path
+        let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
+        create_file(&tmp_file, b"");
+        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
+        assert!(ret.is_err());
+        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
+        assert!(ret.is_err());
+        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
+        assert!(ret.is_ok());
+    }
+
+    #[test]
+    fn test_multi_tracker() {
+        use super::*;
+        use std::sync::Arc;
+
+        #[derive(Debug, Default, PartialEq)]
+        struct Value {
+            v1: u64,
+            v2: bool,
+        }
+
+        let count = 10;
+        let vc = Arc::new(VersionTrack::new(Value::default()));
+        let mut trackers = Vec::with_capacity(count);
+        for _ in 0..count {
+            trackers.push(vc.clone().tracker("test-tracker".to_owned()));
+        }
+
+        assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
+
+        vc.update(|v| {
+            v.v1 = 1000;
+            v.v2 = true;
+        });
+        for tr in trackers.iter_mut() {
+            let incoming = tr.any_new();
+            assert!(incoming.is_some());
+            let incoming = incoming.unwrap();
+            assert_eq!(incoming.v1, 1000);
+            assert_eq!(incoming.v2, true);
+        }
+
+        assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
     }
 }

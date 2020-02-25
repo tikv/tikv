@@ -32,11 +32,14 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_encrypted_env_from_cipher_file() {
-        let path = TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
+        let path = Builder::new()
+            .prefix("/tmp/encrypted_env_from_cipher_file")
+            .tempdir()
+            .unwrap();
 
         // Cipher file not exists.
         assert!(encrypted_env_from_cipher_file(path.path().join("file0"), None).is_err());

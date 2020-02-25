@@ -1,0 +1,15 @@
+[package]
+name = "tidb_query_codegen"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+darling = "0.10"
+heck = "0.3"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "1", features = ["full", "extra-traits"] }

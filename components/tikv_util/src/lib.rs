@@ -2,6 +2,8 @@
 
 #![cfg_attr(test, feature(test))]
 
+#[macro_use(fail_point)]
+extern crate fail;
 #[macro_use]
 extern crate futures;
 #[macro_use]
@@ -10,20 +12,7 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(
-    kv,
-    slog_o,
-    slog_kv,
-    slog_error,
-    slog_warn,
-    slog_info,
-    slog_debug,
-    slog_crit,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
+#[macro_use(slog_o)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
@@ -33,17 +22,19 @@ extern crate test;
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
+use std::io;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
-use std::{env, slice, thread, u64};
+use std::{env, thread, u64};
 
-use protobuf::Message;
+use fs2::FileExt;
 use rand;
 use rand::rngs::ThreadRng;
 
+pub mod buffer_vec;
 pub mod codec;
 pub mod collections;
 pub mod config;
@@ -52,6 +43,7 @@ pub mod future;
 pub mod future_pool;
 #[macro_use]
 pub mod macros;
+pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
@@ -64,6 +56,7 @@ pub mod timer;
 pub mod worker;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
+const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
 pub fn panic_when_unexpected_key_or_data() -> bool {
     PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
@@ -99,6 +92,24 @@ pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
     file::file_exists(path)
 }
 
+// create a file with hole, to reserve space for TiKV.
+pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {
+    let path = data_dir.as_ref().join(SPACE_PLACEHOLDER_FILE);
+    if file::file_exists(path.clone()) {
+        if file::get_file_size(path.clone())? == file_size {
+            return Ok(());
+        }
+        file::delete_file_if_exist(path.clone())?;
+    }
+    if file_size > 0 {
+        let f = File::create(path)?;
+        f.allocate(file_size)?;
+        f.sync_all()?;
+        file::sync_dir(data_dir)?;
+    }
+    Ok(())
+}
+
 pub const NO_LIMIT: u64 = u64::MAX;
 
 pub trait AssertClone: Clone {}
@@ -108,28 +119,6 @@ pub trait AssertCopy: Copy {}
 pub trait AssertSend: Send {}
 
 pub trait AssertSync: Sync {}
-
-pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
-    if max == NO_LIMIT || entries.len() <= 1 {
-        return;
-    }
-
-    let mut size = 0;
-    let limit = entries
-        .iter()
-        .take_while(|&e| {
-            if size == 0 {
-                size += u64::from(Message::compute_size(e));
-                true
-            } else {
-                size += u64::from(Message::compute_size(e));
-                size <= max
-            }
-        })
-        .count();
-
-    entries.truncate(limit);
-}
 
 /// Take slices in the range.
 ///
@@ -277,14 +266,6 @@ pub fn unescape(s: &str) -> Vec<u8> {
     }
     buf.shrink_to_fit();
     buf
-}
-
-/// Converts a borrow to a slice.
-pub fn as_slice<T>(t: &T) -> &[T] {
-    unsafe {
-        let ptr = t as *const T;
-        slice::from_raw_parts(ptr, 1)
-    }
 }
 
 /// A helper trait for `Entry` to accept a failable closure.
@@ -453,7 +434,7 @@ impl<T> DerefMut for MustConsumeVec<T> {
 impl<T> Drop for MustConsumeVec<T> {
     fn drop(&mut self) {
         if !self.is_empty() {
-            panic!("resource leak detected: {}.", self.tag);
+            safe_panic!("resource leak detected: {}.", self.tag);
         }
     }
 }
@@ -508,13 +489,14 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
-        if let Some(level) = log::max_log_level().to_log_level() {
+        if let Some(level) = log::max_level().to_level() {
             let drainer = logger::term_drainer();
             let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),
                 false, // Use sync logger to avoid an unnecessary log thread.
                 false, // It is initialized already.
+                vec![],
             );
         }
 
@@ -526,7 +508,13 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         if panic_abort {
             process::abort();
         } else {
-            process::exit(1);
+            unsafe {
+                // Calling process::exit would trigger global static to destroy, like C++
+                // static variables of RocksDB, which may cause other threads encounter
+                // pure virtual method call. So calling libc::_exit() instead to skip the
+                // cleanup process.
+                libc::_exit(1);
+            }
         }
     }))
 }
@@ -559,35 +547,33 @@ pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
 }
 
-pub unsafe fn erase_lifetime_mut<'a, T: ?Sized>(v: &mut T) -> &'a mut T {
-    &mut *(v as *mut T)
-}
-
-pub unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
-    &*(v as *const T)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protobuf::Message;
-    use raft::eraftpb::Entry;
+
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
-    use tempdir::TempDir;
+    use fs2;
+    use tempfile::Builder;
 
     #[test]
     fn test_panic_mark_file_path() {
-        let dir = TempDir::new("test_panic_mark_file_path").unwrap();
+        let dir = Builder::new()
+            .prefix("test_panic_mark_file_path")
+            .tempdir()
+            .unwrap();
         let panic_mark_file = panic_mark_file_path(dir.path());
         assert_eq!(panic_mark_file, dir.path().join(PANIC_MARK_FILE))
     }
 
     #[test]
     fn test_panic_mark_file_exists() {
-        let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
+        let dir = Builder::new()
+            .prefix("test_panic_mark_file_exists")
+            .tempdir()
+            .unwrap();
         create_panic_mark_file(dir.path());
         assert!(panic_mark_file_exists(dir.path()));
     }
@@ -641,34 +627,8 @@ mod tests {
             }
         }
 
-        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
-            a.clone()
-        }
-    }
-
-    #[test]
-    fn test_limit_size() {
-        let mut e = Entry::new();
-        e.set_data(b"0123456789".to_vec());
-        let size = u64::from(e.compute_size());
-
-        let tbls = vec![
-            (vec![], NO_LIMIT, 0),
-            (vec![], size, 0),
-            (vec![e.clone(); 10], 0, 1),
-            (vec![e.clone(); 10], NO_LIMIT, 10),
-            (vec![e.clone(); 10], size, 1),
-            (vec![e.clone(); 10], size + 1, 1),
-            (vec![e.clone(); 10], 2 * size, 2),
-            (vec![e.clone(); 10], 10 * size - 1, 9),
-            (vec![e.clone(); 10], 10 * size, 10),
-            (vec![e.clone(); 10], 10 * size + 1, 10),
-        ];
-
-        for (mut entries, max, len) in tbls {
-            limit_size(&mut entries, max);
-            assert_eq!(entries.len(), len);
+            *a
         }
     }
 
@@ -731,10 +691,7 @@ mod tests {
         assert_eq!(unescape(r"a\\023"), b"a\\023");
         // Escaped three digit octal
         assert_eq!(unescape(r"a\000"), b"a\0");
-        assert_eq!(
-            unescape(r"\342\235\244\360\237\220\267"),
-            "❤🐷".as_bytes()
-        );
+        assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
         // Whitespace
         assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
         // Hex Octals
@@ -747,5 +704,37 @@ mod tests {
         assert!(is_zero_duration(&Duration::new(0, 0)));
         assert!(!is_zero_duration(&Duration::new(1, 0)));
         assert!(!is_zero_duration(&Duration::new(0, 1)));
+    }
+
+    #[test]
+    fn test_must_consume_vec_dtor_not_abort() {
+        let res = panic_hook::recover_safe(|| {
+            let mut v = MustConsumeVec::new("test");
+            v.push(2);
+            panic!("Panic with MustConsumeVec non-empty");
+            // It would abort if there was a double-panic in dtor, thus
+            // the test would fail.
+        });
+        res.unwrap_err();
+    }
+
+    #[test]
+    fn test_reserve_space_for_recover() {
+        let tmp_dir = Builder::new()
+            .prefix("test_reserve_space_for_recover")
+            .tempdir()
+            .unwrap();
+        let data_path = tmp_dir.path();
+        let disk_stats_before = fs2::statvfs(data_path).unwrap();
+        let cap1 = disk_stats_before.available_space();
+        let reserve_size = 64 * 1024;
+        reserve_space_for_recover(data_path, reserve_size).unwrap();
+        let disk_stats_after = fs2::statvfs(data_path).unwrap();
+        let cap2 = disk_stats_after.available_space();
+        assert_eq!(cap1 - cap2, reserve_size);
+        reserve_space_for_recover(data_path, 0).unwrap();
+        let disk_stats = fs2::statvfs(data_path).unwrap();
+        let cap3 = disk_stats.available_space();
+        assert_eq!(cap1, cap3);
     }
 }

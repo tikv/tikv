@@ -1,8 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::Either;
-use futures::sync::oneshot;
 use futures::{Async, Future, IntoFuture, Poll};
+use tokio_sync::oneshot;
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
@@ -11,6 +11,23 @@ where
     T: Send + 'static,
 {
     let (tx, future) = oneshot::channel::<T>();
+    let callback = Box::new(move |result| {
+        let r = tx.send(result);
+        if r.is_err() {
+            warn!("paired_future_callback: Failed to send result to the future rx, discarded.");
+        }
+    });
+    (callback, future)
+}
+
+pub fn paired_std_future_callback<T>() -> (
+    Box<dyn FnOnce(T) + Send>,
+    futures03::channel::oneshot::Receiver<T>,
+)
+where
+    T: Send + 'static,
+{
+    let (tx, future) = futures03::channel::oneshot::channel::<T>();
     let callback = Box::new(move |result| {
         let r = tx.send(result);
         if r.is_err() {

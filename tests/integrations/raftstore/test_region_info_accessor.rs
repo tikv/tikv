@@ -1,15 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use keys::data_end_key;
 use kvproto::metapb::Region;
 use raft::StateRole;
+use raftstore::coprocessor::{RegionInfo, RegionInfoAccessor};
+use raftstore::store::util::{find_peer, new_peer};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
-use tikv::raftstore::coprocessor::{RegionInfo, RegionInfoAccessor};
-use tikv::raftstore::store::keys::data_end_key;
-use tikv::raftstore::store::util::{find_peer, new_peer};
 use tikv_util::HandyRwLock;
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {

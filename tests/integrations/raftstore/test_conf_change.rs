@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::*;
 
 use futures::Future;
 
@@ -13,10 +13,9 @@ use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine::*;
+use pd_client::PdClient;
+use raftstore::Result;
 use test_raftstore::*;
-use tikv::pd::PdClient;
-use tikv::raftstore::store::*;
-use tikv::raftstore::Result;
 use tikv_util::config::ReadableDuration;
 use tikv_util::HandyRwLock;
 
@@ -57,6 +56,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // add peer (3, 3) to region 1.
     pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     // Remove peer (2, 2) from region 1.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
 
@@ -112,6 +112,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // add peer (2, 4) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 4));
+    cluster.must_put(b"add_2_4", b"add_2_4");
+    must_get_equal(&engine_2, b"add_2_4", b"add_2_4");
 
     // Remove peer (3, 3) from region 1.
     pd_client.must_remove_peer(r1, new_peer(3, 3));
@@ -185,16 +187,17 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // add new peer to first region.
     let peer3 = new_conf_change_peer(&stores[2], &pd_client);
+    let engine_3 = cluster.get_engine(peer3.get_store_id());
     pd_client.must_add_peer(region_id, peer3.clone());
+    must_get_equal(&engine_3, b"k1", b"v1");
 
     // Remove peer2 from first region.
-    pd_client.must_remove_peer(region_id, peer2.clone());
+    pd_client.must_remove_peer(region_id, peer2);
 
     let (key, value) = (b"k3", b"v3");
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     // now peer 3 must have v1, v2 and v3
-    let engine_3 = cluster.get_engine(peer3.get_store_id());
     must_get_equal(&engine_3, b"k1", b"v1");
     must_get_equal(&engine_3, b"k2", b"v2");
     must_get_equal(&engine_3, b"k3", b"v3");
@@ -206,7 +209,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let peer4 = new_conf_change_peer(&stores[1], &pd_client);
     pd_client.must_add_peer(region_id, peer4.clone());
     // Remove peer3 from first region.
-    pd_client.must_remove_peer(region_id, peer3.clone());
+    pd_client.must_remove_peer(region_id, peer3);
 
     let (key, value) = (b"k4", b"v4");
     cluster.must_put(key, value);
@@ -295,13 +298,20 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
         })
         .unwrap();
 
-    let peer = new_conf_change_peer(&stores[i], &pd_client);
+    for peer in region.get_peers() {
+        must_get_equal(&cluster.get_engine(peer.get_store_id()), b"k1", b"v1");
+    }
+
+    let mut peer = new_conf_change_peer(&stores[i], &pd_client);
+    peer.set_is_learner(true);
     let engine = cluster.get_engine(peer.get_store_id());
     must_get_none(&engine, b"k1");
 
     pd_client.must_add_peer(region_id, peer.clone());
-
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 6);
+    must_get_equal(&engine, b"k1", b"v1");
+    peer.set_is_learner(false);
+    pd_client.must_add_peer(region_id, peer);
 
     // it should remove extra replica.
     pd_client.enable_default_operator();
@@ -344,9 +354,11 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_threshold = 10000;
 
     let r1 = cluster.run_conf_change();
-
+    cluster.must_put(b"kk", b"vv");
     pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"kk", b"vv");
     pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"kk", b"vv");
 
     // 1, stop node 2
     // 2, add data to guarantee leader has more logs
@@ -428,11 +440,19 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let r1 = cluster.run_conf_change();
 
+    cluster.must_put(b"k0", b"v0");
     pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    cluster.must_transfer_leader(r1, new_peer(2, 2));
+    cluster.must_put(b"kk0", b"vv0");
+    must_get_equal(&cluster.get_engine(1), b"kk0", b"vv0");
+    must_get_equal(&cluster.get_engine(2), b"kk0", b"vv0");
+    must_get_equal(&cluster.get_engine(3), b"kk0", b"vv0");
 
     // leader isolation
-    cluster.must_transfer_leader(r1, new_peer(2, 2));
     cluster.add_send_filter(IsolationFilterFactory::new(1));
 
     // refresh region info, maybe no need
@@ -516,8 +536,11 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     // Test adding nodes.
 
     // Ensure it works to add one node to a cluster that has only one node.
+    cluster.must_put(b"k0", b"v0");
     pd_client.must_add_peer(region_id, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     pd_client.must_add_peer(region_id, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
     // Isolate the leader.
     cluster.must_transfer_leader(region_id, new_peer(1, 1));
@@ -573,10 +596,14 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region_id = cluster.run_conf_change();
     let cfg = cluster.cfg.clone();
+    cluster.must_put(b"k1", b"v1");
 
     // Test adding nodes.
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     // transfer to all followers
     let mut leader_id = cluster.leader_of_region(region_id).unwrap().get_id();
     for peer in cluster.get_region(b"").get_peers() {
@@ -859,8 +886,10 @@ fn test_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
 
     pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(3, 3));
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
@@ -896,4 +925,23 @@ where
     let epoch = cluster.pd_client.get_region_epoch(region_id);
     let admin_req = new_admin_request(region_id, &epoch, conf_change);
     cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
+}
+
+/// Tests if conf change relies on heartbeat.
+#[test]
+fn test_conf_change_fast() {
+    let mut cluster = new_server_cluster(0, 3);
+    // Sets heartbeat timeout to more than 5 seconds. It also changes the election timeout,
+    // but it's OK as the cluster starts with only one peer, it will campaigns immediately.
+    configure_for_lease_read(&mut cluster, Some(5000), None);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    let timer = Instant::now();
+    // If conf change relies on heartbeat, it will take more than 5 seconds to finish,
+    // hence it must timeout.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    assert!(timer.elapsed() < Duration::from_secs(5));
 }

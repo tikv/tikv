@@ -18,6 +18,37 @@
 ## timestamp appended to its name and a new file will be created.
 # log-rotation-timespan = "24h"
 
+## Size of log file that triggers the log rotation.
+## Once the size of log file exceeds the threshold value, the log file will be rotated
+## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
+# log-rotation-size = "300MB"
+
+## The interval at which to refresh the local config
+## Set it small are good to debug and tuning.
+# refresh-config-interval = "30s"
+
+[readpool]
+## (Experimental) Whether to use a single thread pool to serve all the read requests. If it is
+## set to `true`, the `readpool.storage` and `readpool.coprocessor` sections will be invalid and
+## be ignored automatically.
+# unify-read-pool = true
+
+# Configurations for the single thread pool serving read requests.
+# It only takes effect when `unify-read-pool` is `true`.
+[readpool.unified]
+## The minimal working thread count of the thread pool.
+# min-thread-count = 1
+
+## The maximum working thread count of the thread pool.
+## The default value is max(4, LOGICAL_CPU_NUM * 0.8).
+# max-thread-count = 8
+
+## Size of the stack for each thread in the thread pool.
+# stack-size = "10MB"
+
+## Max running tasks of each worker, reject if exceeded.
+# max-tasks-per-worker = 2000
+
 [readpool.storage]
 ## Size of the thread pool for high-priority operations.
 # high-concurrency = 4
@@ -81,8 +112,13 @@
 ## The number of max concurrent streams/requests on a client connection.
 # grpc-concurrent-stream = 1024
 
+## Limit the memory size can be used by gRPC. Default is unlimited.
+## gRPC usually works well to reclaim memory by itself. Limit the memory in case OOM
+## is observed. Note that limit the usage can lead to potential stall.
+# grpc-memory-pool-quota = "32G"
+
 ## The number of connections with each TiKV server to send Raft messages.
-# grpc-raft-conn-num = 10
+# grpc-raft-conn-num = 1
 
 ## Amount to read ahead on individual gRPC streams.
 # grpc-stream-initial-window-size = "2MB"
@@ -110,15 +146,24 @@
 ## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
 
+## Whether to enable request batch.
+# enable-request-batch = true
+
+## Whether to collect batch across commands.
+## When disabled, wait duration is ignored. When enabled, collect batch for specified duration
+## when load is high.
+# request-batch-enable-cross-command = true
+
+## Wait duration before each request batch is processed. Wait is triggered when cross-command
+## option is enabled and system load is high.
+# request-batch-wait-duration = "1ms"
+
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
 [storage]
 ## The path to RocksDB directory.
 # data-dir = "/tmp/tikv/store"
-
-## Internal notify capacity of Scheduler's channel.
-# scheduler-notify-capacity = 10240
 
 ## The number of slots in Scheduler latches, which controls write concurrency.
 ## In most cases you can use the default value. When importing data, you can set it to a larger
@@ -279,7 +324,7 @@
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.
 ## It is recommended to turn off this option if there will be a large number of tables created.
-# split-region-on-table = true
+# split-region-on-table = false
 
 ## One split check produces several split keys in batch. This config limits the number of produced
 ## split keys in one batch.
@@ -300,15 +345,21 @@
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
 ## The background tasks include compaction and flush. For detailed information why RocksDB needs to
-## do compaction, see RocksDB-related materials. When write traffic (like the importing data size)
-## is big, it is recommended to enable more threads. But set the number of the enabled threads
-## smaller than that of CPU cores. For example, when importing data, for a machine with a 32-core
-## CPU, set the value to 28.
+## do compaction, see RocksDB-related materials. RocksDB will adjust flush and compaction threads
+## according to the formula:
+##   max_flushes = max_flushes = max(1, max_background_jobs / 4)
+##   max_compactions = max(1, max_background_jobs - max_flushes)
+## When write traffic (like the importing data size)  is big, it is recommended to enable more
+## threads. But set the number of the enabled threads  smaller than that of CPU cores. For example,
+## when importing data, for a machine with a 32-core CPU, set the value to 28.
+## The default value is set to 8 or CPU_NUM - 1, whichever is smaller.
 # max-background-jobs = 8
 
 ## Represents the maximum number of threads that will concurrently perform a sub-compaction job by
 ## breaking it into multiple, smaller ones running simultaneously.
-# max-sub-compactions = 1
+## The default value is set to 3 or the largest number to allow for two compactions, whichever is
+## smaller.
+# max-sub-compactions = 3
 
 ## Number of open files that can be used by the DB.
 ## Value -1 means files opened are always kept open and RocksDB will prefetch index and filter
@@ -432,17 +483,9 @@
 ## default: false
 # enabled = false
 
-## Specifies `Titan` blob files directory
-## default: "titandb" (if not specific or empty)
-# dirname = ""
-
-## Disable blob file gc
-# default: false
-# disable-gc = false
-
 ## Maximum number of threads of `Titan` background gc jobs.
-# default: 1
-# max-background-gc = 1
+# default: 4
+# max-background-gc = 4
 
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
@@ -598,29 +641,10 @@
 # default: 0
 # blob-cache-size = "0GB"
 
-## The minimum batch size of one gc job. The total blob file size
-## of one gc job cannot smaller than this threshold.
-## default: 16MB
-# min-gc-batch-size = "16MB"
-
-## The maximum batch size of one gc job. The total blob file size
-## of one gc job cannot exceed this threshold.
-# max-gc-batch-size = "64MB"
-
 ## If the ratio of discardable size of a blob file is larger than
 ## this threshold, the blob file will be GCed out.
 # default: 0.5
 # discardable-ratio = 0.5
-
-## The gc job will sample the target blob files to see if its
-## discardable ratio is smaller than discardable-ratio metioned
-## above before gc start, if so the blob file will be exclude.
-# sample-ratio = 0.1
-
-## If the size of the blob file is smaller than this threshold,
-## the blob file will be merge.
-# default: 8MB
-# merge-small-file-threshold = "8MB"
 
 ## The mode used to process blob files. In read-only mode Titan
 ## stops writing value into blob log. In fallback mode Titan
@@ -660,7 +684,7 @@
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
 # block-size = "16KB"
-# write-buffer-size = "128MB"
+# write-buffer-size = "32MB"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "128MB"
@@ -740,13 +764,20 @@
 ## Enable pessimistic transaction
 # enabled = true
 
-## Time to wait in milliseconds before responding to TiDB when pessimistic
-## transactions # encounter locks
+## The default and maximum delay in milliseconds before responding to TiDB when pessimistic
+## transactions encounter locks
 # wait-for-lock-timeout = 1000
 
-## Time to delay in milliseconds before responding to TiDB when other transactions
-## release locks that pessimistic transactions are waiting for(0 to disable).
-# wake-up-delay-duration = 1
-#
-## Interval in milliseconds to check the membership change of deadlock detector.
-# monitor-membership-interval = 3000
+## If more than one transaction is waiting for the same lock, only the one with smallest
+## start timestamp will be waked up immediately when the lock is released. Others will
+## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
+## one more likely acquires the lock.
+# wake-up-delay-duration = 20
+
+[gc]
+## The number of keys to GC in one batch.
+# batch-keys = 512
+
+## Max bytes that GC worker can write to rocksdb in one second.
+## If it is set to 0, there is no limit.
+# max-write-bytes-per-sec = "0"

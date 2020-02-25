@@ -1,80 +1,113 @@
-# TiKV root 
-dir="."
-output="./Dockerfile"
+#! /bin/bash
+# This Docker image contains a minimal build environment for TiKV
+#
+# It contains all the tools necessary to reproduce official production builds of TiKV
 
-if [ "$#" -ge 1 ]; then
-    output=$1
-fi
+# We need to use CentOS 7 because many of our users choose this as their deploy machine.
+# Since the glibc it uses (2.17) is from 2012 (https://sourceware.org/glibc/wiki/Glibc%20Timeline)
+# it is our lowest common denominator in terms of distro support.
 
-cat <<EOT > ${output}
-FROM pingcap/rust as builder
+# Some commands in this script are structured in order to reduce the number of layers Docker
+# generates. Unfortunately Docker is limited to only 125 layers: 
+# https://github.com/moby/moby/blob/a9507c6f76627fdc092edc542d5a7ef4a6df5eec/layer/layer.go#L50-L53
 
+# We require epel packages, so enable the fedora EPEL repo then install dependencies.
+# Install the system dependencies
+# Attempt to clean and rebuild the cache to avoid 404s
+cat <<EOT
+FROM centos:7.6.1810 as builder
+RUN yum clean all && \
+    yum makecache && \
+    yum update -y && \
+    yum install -y epel-release && \
+    yum clean all && \
+    yum makecache && \
+	yum update -y && \
+	yum install -y tar wget git which file unzip python-pip openssl-devel \
+		make cmake3 gcc gcc-c++ libstdc++-static pkg-config psmisc gdb \
+		libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
+        dwz && \
+	yum clean all
+EOT
+
+
+# CentOS gives cmake 3 a weird binary name, so we link it to something more normal
+# This is required by many build scripts, including ours.
+cat <<EOT
+RUN ln -s /usr/bin/cmake3 /usr/bin/cmake
+ENV LIBRARY_PATH /usr/local/lib:\$LIBRARY_PATH
+ENV LD_LIBRARY_PATH /usr/local/lib:\$LD_LIBRARY_PATH
+EOT
+
+# Install Rustup
+cat <<EOT
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
+ENV PATH /root/.cargo/bin/:\$PATH
+EOT
+
+# Install the Rust toolchain
+cat <<EOT
 WORKDIR /tikv
-
-# Install Rust
 COPY rust-toolchain ./
-RUN rustup default $(cat "rust-toolchain")
-
-# Install dependencies at first
-COPY Cargo.toml Cargo.lock ./
-
-# Remove fuzz and test workspace, remove profiler feature
-RUN sed -i '/fuzz/d' Cargo.toml && \\
-    sed -i '/test\_/d' Cargo.toml && \\
-    sed -i '/profiler/d' Cargo.toml
+RUN rustup self update
+RUN rustup set profile minimal
+RUN rustup default \$(cat "rust-toolchain")
+EOT
 
 # Use Makefile to build
+cat <<EOT
 COPY Makefile ./
+EOT
 
+# For cargo
+cat <<EOT
+COPY scripts ./scripts
+COPY etc ./etc
+COPY Cargo.lock ./Cargo.lock
 EOT
 
 # Get components, remove test and profiler components
-components=$(ls -d ${dir}/components/*  | xargs -n 1 basename | grep -v "test" | grep -v "profiler")
-
+components=($(find . -type f -name 'Cargo.toml' | sed -r 's|/[^/]+$||' | sort -u))
+src_dirs=$(for i in ${components[@]}; do echo ${i}/src; done | xargs)
+lib_files=$(for i in ${components[@]}; do echo ${i}/src/lib.rs; done | xargs)
 # List components and add their Cargo files
-echo "# Add components Cargo files
-# Notice: every time we add a new component, we must regenerate the dockerfile" >> ${output}
-
-for i in ${components}; do 
-    echo "COPY ${dir}/components/${i}/Cargo.toml ./components/${i}/Cargo.toml" >> ${output}
+echo "RUN mkdir -p ${src_dirs} && touch ${lib_files}"
+for i in ${components[@]}; do
+    echo "COPY ${i}/Cargo.toml ${i}/Cargo.toml"
 done
-
-
-cat <<EOT >> ${output}
 
 # Create dummy files, build the dependencies
-# then remove TiKV fingerprint for following rebuild
-RUN mkdir -p ./src/bin && \\
-    echo 'fn main() {}' > ./src/bin/tikv-ctl.rs && \\
-    echo 'fn main() {}' > ./src/bin/tikv-server.rs && \\
-    echo 'fn main() {}' > ./src/bin/tikv-importer.rs && \\
-    echo '' > ./src/lib.rs && \\
+# then remove TiKV fingerprint for following rebuild.
+# Finally, remove test dependencies and profile features.
+cat <<EOT
+RUN mkdir -p ./cmd/src/bin && \\
+    echo 'fn main() {}' > ./cmd/src/bin/tikv-ctl.rs && \\
+    echo 'fn main() {}' > ./cmd/src/bin/tikv-server.rs && \\
+    for cargotoml in \$(find . -name "Cargo.toml"); do \\
+        sed -i '/fuzz/d' \${cargotoml} && \\
+        sed -i '/test\_/d' \${cargotoml} && \\
+        sed -i '/profiler/d' \${cargotoml} && \\
+        sed -i '/\"tests\",/d' \${cargotoml} ; \\
+    done && \\
+    make build_dist_release
 EOT
 
-for i in ${components}; do 
-    echo "    mkdir ./components/${i}/src && echo '' > ./components/${i}/src/lib.rs && \\" >> ${output}
+# Remove fingerprints for when we build the real binaries.
+fingerprint_dirs=$(for i in ${components[@]}; do echo ./target/release/.fingerprint/$(basename ${i})-*; done | xargs)
+echo "RUN rm -rf ${fingerprint_dirs} ./target/release/.fingerprint/tikv-*"
+for i in "${components[@]:1}"; do
+    echo "COPY ${i} ${i}"
 done
-
-echo '    make build_release && \' >> ${output}
-
-for i in ${components}; do 
-    echo "    rm -rf ./target/release/.fingerprint/${i}-* && \\" >> ${output}
-done
-
-echo "    rm -rf ./target/release/.fingerprint/tikv-*" >> ${output}
-
-cat <<EOT >> ${output}
+echo "COPY src src"
 
 # Build real binaries now
-COPY ${dir}/src ./src
-COPY ${dir}/components ./components
+cat <<EOT
+COPY ./.git ./.git
+RUN make build_dist_release
+EOT
 
-RUN make build_release
-
-# Strip debug info to reduce the docker size, may strip later?
-# RUN strip --strip-debug /tikv/target/release/tikv-server && \\
-#     strip --strip-debug /tikv/target/release/tikv-ctl
-
+# Export to a clean image
+cat <<EOT
 FROM pingcap/alpine-glibc
 COPY --from=builder /tikv/target/release/tikv-server /tikv-server
 COPY --from=builder /tikv/target/release/tikv-ctl /tikv-ctl

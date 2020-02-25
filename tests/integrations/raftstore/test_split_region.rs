@@ -6,17 +6,18 @@ use std::time::Duration;
 use std::{fs, thread};
 
 use kvproto::metapb;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use engine::Iterable;
 use engine::CF_WRITE;
+use keys::data_key;
+use pd_client::PdClient;
+use raftstore::store::{Callback, WriteResponse};
+use raftstore::Result;
 use test_raftstore::*;
-use tikv::pd::PdClient;
-use tikv::raftstore::store::keys::data_key;
-use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::raftstore::Result;
 use tikv_util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
@@ -122,7 +123,7 @@ fn test_server_split_region_twice() {
         let mut resp = write_resp.response;
         let admin_resp = resp.mut_admin_response();
         let split_resp = admin_resp.mut_splits();
-        let mut regions = split_resp.take_regions().into_vec();
+        let mut regions: Vec<_> = split_resp.take_regions().into();
         let mut d = regions.drain(..);
         let (left, right) = (d.next().unwrap(), d.next().unwrap());
         assert_eq!(left.get_end_key(), key.as_slice());
@@ -164,7 +165,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
 
     // it should be finished in millis if split.
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(300));
 
     let target = pd_client.get_region(&last_key).unwrap();
 
@@ -177,7 +178,11 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         &mut range,
     );
 
-    thread::sleep(Duration::from_secs(1));
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    if left == right {
+        cluster.wait_region_split(&region);
+    }
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
@@ -728,20 +733,20 @@ fn test_server_quick_election_after_split() {
 }
 
 #[test]
-fn test_node_half_split_region() {
+fn test_node_split_region() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_half_split_region(&mut cluster);
+    test_split_region(&mut cluster);
 }
 
 #[test]
-fn test_server_half_split_region() {
+fn test_server_split_region() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_half_split_region(&mut cluster);
+    test_split_region(&mut cluster);
 }
 
-fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // length of each key+value
     let item_len = 74;
     // make bucket's size to item_len, which means one row one bucket
@@ -754,7 +759,7 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let max_key = put_till_size(cluster, 9 * item_len, &mut range);
     let target = pd_client.get_region(&max_key).unwrap();
     assert_eq!(region, target);
-    pd_client.must_half_split_region(target);
+    pd_client.must_split_region(target, pdpb::CheckPolicy::Scan, vec![]);
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
@@ -762,6 +767,19 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(mid_key.as_slice(), right.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
+
+    let region = pd_client.get_region(b"x").unwrap();
+    pd_client.must_split_region(
+        region,
+        pdpb::CheckPolicy::Usekey,
+        vec![b"x1".to_vec(), b"y2".to_vec()],
+    );
+    let x1 = pd_client.get_region(b"x1").unwrap();
+    assert_eq!(x1.get_start_key(), b"x1");
+    assert_eq!(x1.get_end_key(), b"y2");
+    let y2 = pd_client.get_region(b"y2").unwrap();
+    assert_eq!(y2.get_start_key(), b"y2");
+    assert_eq!(y2.get_end_key(), b"");
 }
 
 #[test]
@@ -794,7 +812,7 @@ fn test_node_split_update_region_right_derive() {
     must_get_equal(&cluster.get_engine(new_leader.get_store_id()), b"k4", b"v4");
 
     // Transfer leadership to another peer.
-    cluster.must_transfer_leader(right.get_id(), new_leader.clone());
+    cluster.must_transfer_leader(right.get_id(), new_leader);
 
     // Make sure the new_leader is in lease.
     cluster.must_put(b"k4", b"v5");
@@ -830,11 +848,11 @@ fn test_split_with_epoch_not_match() {
     pd_client.must_remove_peer(1, new_peer(2, 2));
     let region = cluster.get_region(b"");
 
-    let mut admin_req = AdminRequest::new();
+    let mut admin_req = AdminRequest::default();
     admin_req.set_cmd_type(AdminCmdType::BatchSplit);
 
-    let mut batch_split_req = BatchSplitRequest::new();
-    batch_split_req.mut_requests().push(SplitRequest::new());
+    let mut batch_split_req = BatchSplitRequest::default();
+    batch_split_req.mut_requests().push(SplitRequest::default());
     batch_split_req.mut_requests()[0].set_split_key(b"s".to_vec());
     batch_split_req.mut_requests()[0].set_new_region_id(1000);
     batch_split_req.mut_requests()[0].set_new_peer_ids(vec![1001, 1002]);

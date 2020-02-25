@@ -1,17 +1,20 @@
 <img src="images/tikv-logo.png" alt="tikv_logo" width="300"/>
 
-[![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/)
+## [Website](https://tikv.org) | [Documentation](https://tikv.org/docs/latest/concepts/overview/) | [Community Chat](https://tikv.org/chat)
+
+[![Build Status](https://internal.pingcap.net/idc-jenkins/buildStatus/icon?job=build_tikv_multi_branch%2Fmaster)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_multi_branch/)
 [![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master)
-![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
-TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
+TiKV is an open-source, distributed, and transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
-The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
+The design of TiKV ('Ti' stands for titanium) is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
+
+If you're interested in contributing to TiKV, or want to build it from source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ![cncf_logo](images/cncf.png)
 
-TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2018/08/28/cncf-to-host-tikv-in-the-sandbox/).
+TiKV is an incubating project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2019/05/21/toc-votes-to-move-tikv-into-cncf-incubator/).
 
 ---
 
@@ -39,9 +42,21 @@ TiKV has the following key features:
 
     Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transactions, support for RDBMS, and NoSQL design patterns.
 
+## Governance
+
+See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
+
+## Documentation
+
+For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
+
+> **Note:**
+>
+> We have migrated our documentation from the [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) to the [official website](https://tikv.org/docs). The original Wiki page is discontinued. If you have any suggestions or issues regarding documentation, offer your feedback [here](https://github.com/tikv/website).
+
 ## TiKV Adopters
 
-You can view the list of [TiKV Adopters](docs/adopters.md).
+You can view the list of [TiKV Adopters](https://tikv.org/adopters/).
 
 ## TiKV Roadmap
 
@@ -62,139 +77,38 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
 
-We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/TiKV-Documentation).
+We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's website](https://tikv.org/docs/3.0/concepts/overview/).
 
 ### Testing deployment
 
-- [Try TiKV and TiDB](https://github.com/pingcap/docs/blob/master/op-guide/docker-compose.md)
+- [Try TiKV and TiDB](https://github.com/pingcap/docs/blob/master/dev/how-to/get-started/deploy-tidb-from-docker-compose.md)
 
-    You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://github.com/pingcap/docs).
+    You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://pingcap.com/docs/).
 
 - Try TiKV separately
-    - [Deploy TiKV Using Docker Compose](docs/op-guide/deploy-tikv-using-docker-compose.md): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
-    - [Deploy TiKV Using Docker](docs/op-guide/deploy-tikv-using-docker.md): To deploy a multi-node TiKV testing cluster using Docker
-    - [Deploy TiKV Using Binary Files](docs/op-guide/deploy-tikv-using-binary.md): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
+    - [Deploy TiKV Using Docker Compose/Swarm](https://tikv.org/docs/3.0/tasks/deploy/docker-compose/): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
+    - [Deploy TiKV Using Docker](https://tikv.org/docs/3.0/tasks/deploy/docker/): To deploy a multi-node TiKV testing cluster using Docker
+    - [Deploy TiKV Using Binary Files](https://tikv.org/docs/3.0/tasks/deploy/binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
 
 ### Production deployment
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
-- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/op-guide/ansible-deployment.md)
-- [Deploy TiKV separately Using Ansible](docs/op-guide/deploy-tikv-using-ansible.md)
+- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md)
+- [Deploy TiKV separately Using Ansible](https://tikv.org/docs/3.0/tasks/deploy/ansible/)
 
 ## Client drivers
 
-Currently, the only interface to TiKV is the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
+Currently, the interfaces to TiKV are the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
 
-If you want to try the Go client, see [Try Two Types of APIs](docs/clients/go-client-api.md).
+These are the clients for TiKV:
 
-## Setting up a development workspace
+- [Go](https://github.com/tikv/client-go) (The most stable and widely used)
+- [Java](https://github.com/tikv/client-java)
+- [Rust](https://github.com/tikv/client-rust)
+- [C](https://github.com/tikv/client-c)
 
-The TiKV codebase is primarily written in Rust, but has components written in C++ (RocksDB) and Go (gRPC). To provide consistency and avoid opinion-based arguments, we make extensive use of linters and automated formatting tools. Additionally, due to Rust's youth we are currently utilizing nightly builds which provide access to many useful features.
-
-### Checking your prerequisites
-
-To build TiKV you'll need to at least have the following installed:
-
-* `git` - Version control
-* `rustup` - Rust toolchain manager
-* `awk` - Pattern scanning/processing language
-* `cmake` - Build tool (required for gRPC)
-* `go` - Programming language (required for gRPC)
-* `make` - Build tool (run common workflows)
-* `clang` or `gcc` - C compiler toolchain
-
-### Getting the repository
-
-```
-git clone https://github.com/tikv/tikv.git
-cd tikv
-# Future instructions assume you are in this repository
-```
-
-### Configuring your Rust toolchain
-
-`rustup` is an official toolchain manager for Rust, similar to `rvm` or `rbenv` from the Ruby world.
-
-TiKV uses the version of the Rust toolchain specified in `rust-toolchain`. `rustup` and `cargo` will automatically utilize this file. We also make use of the `rustfmt` and `clippy` components.
-
-```bash
-rustup component add rustfmt-preview
-```
-
-### Building & testing
-
-While TiKV includes a `Makefile` with common workflows, you are also able to use `cargo` as you would in a normal Rust project.
-
-At this point, you can build TiKV:
-
-```bash
-make build
-```
-
-During interactive development, you may prefer using `cargo check`, which will do parse, borrow check, and lint run on your code, but not actually compile it. It is particularly handy alongside `cargo-watch` which will run a command each time you change a file.
-
-```bash
-cargo install cargo-watch
-cargo watch -s "cargo check"
-```
-
-When you're ready to test out your changes, use the `dev` task. It will format your codebase, build with `clippy` enabled, and run tests. This should run without failure before you create a PR.
-
-```bash
-make dev
-```
-
-You can run the full test suite locally, or just run a specific test:
-
-```bash
-# Run the full suite
-make test
-# Run a specific test
-cargo test $TESTNAME
-```
-
-Our CI systems automatically test all the pull requests, so making sure the full suite passes the test before creating your PR is not strictly required. **All merged PRs must have passed CI test.**
-
-Note that, to reduce compilation time, TiKV builds do not include debugging information by default. The easiest way to enable debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo).
-
-```bash
-RUSTFLAGS=-Cdebuginfo=2 make
-RUSTFLAGS=-Cdebuginfo=2 cargo build
-```
-
-When building with make, cargo will automatically use [pipelined][p] compilation to increase the paralellism of the build. To turn on pipelining while using cargo directly,
-set `CARGO_BUILD_PIPELINING=true`:
-
-```bash
-CARGO_BUILD_PIPELINING=true cargo build
-```
-
-[p]: https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199
-
-### Getting the rest of the system working
-
-To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd)) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
-
-### Configuration
-
-Read our configuration guide to learn about various [configuration options](https://github.com/tikv/tikv/tree/master/docs/op-guide).
-
-## Contributing
-
-Contributions are welcome! See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
-
-For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level.
-
-If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on.
-
-The TiKV team actively develops and maintains a bunch of dependencies used in TiKV, which you may be also interested in:
-
-- [rust-prometheus](https://github.com/pingcap/rust-prometheus): The Prometheus client for Rust, our metrics collecting and reporting library
-- [rust-rocksdb](https://github.com/pingcap/rust-rocksdb): Our RocksDB binding and wrapper for Rust
-- [raft-rs](https://github.com/pingcap/raft-rs): The Raft distributed consensus algorithm implemented in Rust
-- [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
-- [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
+If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/reference/clients/go/).
 
 ## Communication
 
@@ -216,14 +130,14 @@ appearance, race, religion, or sexual identity and orientation.
 
 ### Slack
 
-Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk) - Sign up and join channels on TiKV topics that interest you.
+Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LWVlMWMzMDkyNWE5ZjY1ODAzMWUwZGVhNGNhYTc3MzJhYWE0Y2FjYjliYzY1OWJlYTc4OWVjZWM1NDkwN2QxNDE) - Sign up and join channels on TiKV topics that interest you.
 
 ### WeChat
 
-The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [zhangyanqing@pingcap.com](mailto:zhangyanqing@pingcap.com), with your personal information that includes the following:
+The TiKV community is also available on WeChat. If you want to join our WeChat group, send a request mail to [zhangyanqing@pingcap.com](mailto:zhangyanqing@pingcap.com), with your personal information that includes the following:
 
 - WeChat ID (**Required**)
-- PR you submitted to TiKV Repos (**Required**)
+- A contribution you've made to TiKV, such as a PR (**Required**)
 - Other basic information
 
 We will invite you in right away.

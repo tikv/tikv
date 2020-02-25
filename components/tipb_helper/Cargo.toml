@@ -4,7 +4,17 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[features]
+protobuf-codec = [
+  "tidb_query_datatype/protobuf-codec",
+  "tipb/protobuf-codec"
+]
+prost-codec = [
+  "tidb_query_datatype/prost-codec",
+  "tipb/prost-codec"
+]
+
 [dependencies]
-tipb = { git = "https://github.com/pingcap/tipb.git" }
 codec = { path = "../codec" }
-cop_datatype = { path = "../cop_datatype" }
+tidb_query_datatype = { path = "../tidb_query_datatype" }
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }

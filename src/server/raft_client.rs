@@ -9,16 +9,14 @@ use std::time::Instant;
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
-use crate::server::transport::RaftStoreRouter;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
 };
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::tikvpb::BatchRaftMessage;
-use kvproto::tikvpb_grpc::TikvClient;
-use protobuf::RepeatedField;
+use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
+use raftstore::router::RaftStoreRouter;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
@@ -74,8 +72,8 @@ impl Conn {
         let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
         let batch_send_or_fallback = batch_sink
             .send_all(Reusable(rx1).map(move |v| {
-                let mut batch_msgs = BatchRaftMessage::new();
-                batch_msgs.set_msgs(RepeatedField::from(v));
+                let mut batch_msgs = BatchRaftMessage::default();
+                batch_msgs.set_msgs(v.into());
                 (batch_msgs, WriteFlags::default().buffer_hint(false))
             }))
             .then(move |r| {
@@ -87,7 +85,7 @@ impl Conn {
                             as Box<dyn Future<Item = (), Error = GrpcError> + Send>
                     }
                     Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
-                        if status == RpcStatusCode::Unimplemented =>
+                        if status == RpcStatusCode::UNIMPLEMENTED =>
                     {
                         // Fallback to raft RPC.
                         warn!("batch_raft fail, fallback to raft");
@@ -109,13 +107,13 @@ impl Conn {
                             drop(receiver);
                             match r {
                                 Ok(_) => info!("raft RPC finished success"),
-                                Err(ref e) => error!("raft RPC finished fail"; "err" => ?e),
+                                Err(ref e) => warn!("raft RPC finished fail"; "err" => ?e),
                             };
                             r
                         }))
                     }
                     Err(e) => {
-                        error!("batch_raft RPC finished fail"; "err" => ?e);
+                        warn!("batch_raft RPC finished fail"; "err" => ?e);
                         Box::new(future::err(e))
                     }
                 }
@@ -154,7 +152,7 @@ pub struct RaftClient<T: 'static> {
     grpc_thread_load: Arc<ThreadLoad>,
     // When message senders want to delay the notification to the gRPC client,
     // it can put a tokio_timer::Delay to the runtime.
-    stats_pool: tokio_threadpool::Sender,
+    stats_pool: Option<tokio_threadpool::Sender>,
     timer: Handle,
 }
 
@@ -165,7 +163,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
         security_mgr: Arc<SecurityManager>,
         router: T,
         grpc_thread_load: Arc<ThreadLoad>,
-        stats_pool: tokio_threadpool::Sender,
+        stats_pool: Option<tokio_threadpool::Sender>,
     ) -> RaftClient<T> {
         RaftClient {
             env,
@@ -204,7 +202,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
             .stream
             .send(msg)
         {
-            error!("RaftClient fails to send");
+            warn!("send to {} fail, the gRPC connection could be broken", addr);
             let index = msg.region_id as usize % self.cfg.grpc_raft_conn_num;
             self.conns.remove(&(addr.to_owned(), index));
 
@@ -213,6 +211,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
                     self.addrs.insert(store_id, current_addr);
                 }
             }
+            return Err(box_err!("RaftClient send fail"));
         }
         Ok(())
     }
@@ -220,17 +219,20 @@ impl<T: RaftStoreRouter> RaftClient<T> {
     pub fn flush(&mut self) {
         let (mut counter, mut delay_counter) = (0, 0);
         for conn in self.conns.values_mut() {
+            if conn.stream.is_empty() {
+                continue;
+            }
             if let Some(notifier) = conn.stream.get_notifier() {
-                if !self.grpc_thread_load.in_heavy_load() {
+                if !self.grpc_thread_load.in_heavy_load() || self.stats_pool.is_none() {
                     notifier.notify();
                     counter += 1;
                     continue;
                 }
                 let wait = self.cfg.heavy_load_wait_duration.0;
-                let _ = self.stats_pool.spawn(
+                let _ = self.stats_pool.as_ref().unwrap().spawn(
                     self.timer
                         .delay(Instant::now() + wait)
-                        .map_err(|_| error!("RaftClient delay flush error"))
+                        .map_err(|_| warn!("RaftClient delay flush error"))
                         .inspect(move |_| notifier.notify()),
                 );
             }

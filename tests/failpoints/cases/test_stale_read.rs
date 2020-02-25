@@ -9,9 +9,9 @@ use fail;
 use kvproto::metapb::{Peer, Region};
 use raft::eraftpb::MessageType;
 
+use pd_client::PdClient;
+use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv::pd::PdClient;
-use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -225,7 +225,7 @@ fn test_stale_read_during_merging() {
     let election_timeout = configure_for_lease_read(&mut cluster, None, None);
     cluster.cfg.raft_store.right_derive_when_split = false;
     cluster.cfg.raft_store.pd_heartbeat_tick_interval =
-        cluster.cfg.raft_store.raft_base_tick_interval.clone();
+        cluster.cfg.raft_store.raft_base_tick_interval;
     debug!("max leader lease: {:?}", election_timeout);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -326,6 +326,8 @@ fn test_stale_read_during_merging() {
 
 #[test]
 fn test_read_index_when_transfer_leader_2() {
+    let _guard = crate::setup();
+
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
@@ -374,6 +376,7 @@ fn test_read_index_when_transfer_leader_2() {
     let filter = Box::new(
         RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
             .direction(Direction::Recv)
+            .skip(MessageType::MsgTransferLeader)
             .when(Arc::new(AtomicBool::new(true)))
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );

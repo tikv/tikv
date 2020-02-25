@@ -2,6 +2,7 @@
 
 use std::ptr;
 
+#[derive(Clone)]
 pub struct KeyBuilder {
     buf: Vec<u8>,
     start: usize,

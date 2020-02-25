@@ -2,51 +2,51 @@
 
 use std::mem;
 
+use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
-use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use tipb::executor::TableScan;
+use tidb_query::codec::datum;
+use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
+use tidb_query::expr::EvalContext;
+use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
-use crate::storage::{Snapshot, SnapshotStore};
-
-use crate::coprocessor::codec::datum;
-use crate::coprocessor::dag::executor::{
-    Executor, ExecutorMetrics, IndexScanExecutor, ScanExecutor, TableScanExecutor,
-};
-use crate::coprocessor::*;
-
-use super::cmsketch::CMSketch;
-use super::fmsketch::FMSketch;
+use super::cmsketch::CmSketch;
+use super::fmsketch::FmSketch;
 use super::histogram::Histogram;
+use crate::coprocessor::dag::TiKVStorage;
+use crate::coprocessor::*;
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    snap: Option<SnapshotStore<S>>,
+    storage: Option<TiKVStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
-    metrics: ExecutorMetrics,
+    storage_stats: Statistics,
 }
 
 impl<S: Snapshot> AnalyzeContext<S> {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
+        start_ts: u64,
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
-        let snap = SnapshotStore::new(
+        let store = SnapshotStore::new(
             snap,
-            req.get_start_ts(),
+            start_ts.into(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
+            req_ctx.bypass_locks.clone(),
         );
         Ok(Self {
             req,
-            snap: Some(snap),
+            storage: Some(store.into()),
             ranges,
-            metrics: ExecutorMetrics::default(),
+            storage_stats: Statistics::default(),
         })
     }
 
@@ -57,12 +57,12 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let (collectors, pk_builder) = builder.collect_columns_stats()?;
 
         let pk_hist = pk_builder.into_proto();
-        let cols: Vec<analyze::SampleCollector> =
+        let cols: Vec<tipb::SampleCollector> =
             collectors.into_iter().map(|col| col.into_proto()).collect();
 
         let res_data = {
-            let mut res = analyze::AnalyzeColumnsResp::new();
-            res.set_collectors(RepeatedField::from_vec(cols));
+            let mut res = tipb::AnalyzeColumnsResp::default();
+            res.set_collectors(cols.into());
             res.set_pk_hist(pk_hist);
             box_try!(res.write_to_bytes())
         };
@@ -73,10 +73,10 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut IndexScanExecutor<SnapshotStore<S>>,
+        scanner: &mut IndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
-        let mut cms = CMSketch::new(
+        let mut cms = CmSketch::new(
             req.get_cmsketch_depth() as usize,
             req.get_cmsketch_width() as usize,
         );
@@ -90,7 +90,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
             }
         }
-        let mut res = analyze::AnalyzeIndexResp::new();
+        let mut res = tipb::AnalyzeIndexResp::default();
         res.set_hist(hist.into_proto());
         if let Some(c) = cms {
             res.set_cms(c.into_proto());
@@ -100,53 +100,56 @@ impl<S: Snapshot> AnalyzeContext<S> {
     }
 }
 
+#[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
                 let mut scanner = ScanExecutor::index_scan_with_cols_len(
+                    EvalContext::default(),
                     i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
-                    self.snap.take().unwrap(),
+                    self.storage.take().unwrap(),
                 )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_metrics_into(&mut self.metrics);
+                scanner.collect_storage_stats(&mut self.storage_stats);
                 res
             }
 
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
-                let snap = self.snap.take().unwrap();
+                let storage = self.storage.take().unwrap();
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
-                let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
+                let mut builder = SampleBuilder::new(col_req, storage, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_metrics_into(&mut self.metrics);
+                builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
         };
         match ret {
             Ok(data) => {
-                let mut resp = Response::new();
+                let mut resp = Response::default();
                 resp.set_data(data);
                 Ok(resp)
             }
             Err(Error::Other(e)) => {
-                let mut resp = Response::new();
-                resp.set_other_error(format!("{}", e));
+                let mut resp = Response::default();
+                resp.set_other_error(e);
                 Ok(resp)
             }
             Err(e) => Err(e),
         }
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        metrics.merge(&mut self.metrics);
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        dest.add(&self.storage_stats);
+        self.storage_stats = Statistics::default();
     }
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: TableScanExecutor<SnapshotStore<S>>,
+    data: TableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,
@@ -163,7 +166,7 @@ struct SampleBuilder<S: Snapshot> {
 impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        snap: SnapshotStore<S>,
+        storage: TiKVStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let cols_info = req.take_columns_info();
@@ -176,9 +179,10 @@ impl<S: Snapshot> SampleBuilder<S> {
             col_len -= 1;
         }
 
-        let mut meta = TableScan::new();
+        let mut meta = TableScan::default();
         meta.set_columns(cols_info);
-        let table_scanner = ScanExecutor::table_scan(meta, ranges, snap, false)?;
+        let table_scanner =
+            ScanExecutor::table_scan(meta, EvalContext::default(), ranges, storage, false)?;
         Ok(Self {
             data: table_scanner,
             col_len,
@@ -207,7 +211,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         ];
         while let Some(row) = self.data.next()? {
             let row = row.take_origin()?;
-            let cols = row.get_binary_cols()?;
+            let cols = row.get_binary_cols(&mut EvalContext::default())?;
             let retrieve_len = cols.len();
             let mut cols_iter = cols.into_iter();
             if self.col_len != retrieve_len {
@@ -230,8 +234,8 @@ struct SampleCollector {
     null_count: u64,
     count: u64,
     max_sample_size: usize,
-    fm_sketch: FMSketch,
-    cm_sketch: Option<CMSketch>,
+    fm_sketch: FmSketch,
+    cm_sketch: Option<CmSketch>,
     rng: ThreadRng,
     total_size: u64,
 }
@@ -248,19 +252,19 @@ impl SampleCollector {
             null_count: 0,
             count: 0,
             max_sample_size,
-            fm_sketch: FMSketch::new(max_fm_sketch_size),
-            cm_sketch: CMSketch::new(cm_sketch_depth, cm_sketch_width),
+            fm_sketch: FmSketch::new(max_fm_sketch_size),
+            cm_sketch: CmSketch::new(cm_sketch_depth, cm_sketch_width),
             rng: thread_rng(),
             total_size: 0,
         }
     }
 
-    fn into_proto(self) -> analyze::SampleCollector {
-        let mut s = analyze::SampleCollector::new();
+    fn into_proto(self) -> tipb::SampleCollector {
+        let mut s = tipb::SampleCollector::default();
         s.set_null_count(self.null_count as i64);
         s.set_count(self.count as i64);
         s.set_fm_sketch(self.fm_sketch.into_proto());
-        s.set_samples(RepeatedField::from_vec(self.samples));
+        s.set_samples(self.samples.into());
         if let Some(c) = self.cm_sketch {
             s.set_cm_sketch(c.into_proto())
         }
@@ -276,7 +280,7 @@ impl SampleCollector {
         self.count += 1;
         self.fm_sketch.insert(&data);
         if let Some(c) = self.cm_sketch.as_mut() {
-            c.insert(&data)
+            c.insert(&data);
         }
         self.total_size += data.len() as u64;
         if self.samples.len() < self.max_sample_size {
@@ -285,7 +289,9 @@ impl SampleCollector {
         }
         if self.rng.gen_range(0, self.count) < self.max_sample_size as u64 {
             let idx = self.rng.gen_range(0, self.max_sample_size);
-            self.samples[idx] = data;
+            // https://github.com/pingcap/tidb/blob/master/statistics/sample.go#L173
+            self.samples.remove(idx);
+            self.samples.push(data);
         }
     }
 }
@@ -293,8 +299,9 @@ impl SampleCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::datum;
-    use crate::coprocessor::codec::datum::Datum;
+
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
 
     #[test]
     fn test_sample_collector() {
@@ -311,7 +318,7 @@ mod tests {
         let cases = vec![Datum::I64(1), Datum::Null, Datum::I64(2), Datum::I64(5)];
 
         for data in cases {
-            sample.collect(datum::encode_value(&[data]).unwrap());
+            sample.collect(datum::encode_value(&mut EvalContext::default(), &[data]).unwrap());
         }
         assert_eq!(sample.samples.len(), max_sample_size);
         assert_eq!(sample.null_count, 1);

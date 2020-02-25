@@ -1,42 +1,44 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
 
-use protobuf;
 use rand::RngCore;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
+use kvproto::pdpb::{
+    ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
+};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
+use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::{CompactionJobInfo, DB};
 use engine::*;
+use engine_rocks::CompactionListener;
+use engine_rocks::RocksEngine;
+use raftstore::store::fsm::RaftRouter;
+use raftstore::store::*;
+use raftstore::Result;
 use tikv::config::*;
-use tikv::raftstore::store::fsm::RaftRouter;
-use tikv::raftstore::store::*;
-use tikv::raftstore::Result;
-use tikv::server::Config as ServerConfig;
-use tikv::storage::kv::CompactionListener;
-use tikv::storage::Config as StorageConfig;
+use tikv::server::{lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig};
+use tikv::storage::config::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::config::*;
-use tikv_util::escape;
+use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
-pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
+pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-        if value.is_some() && res.is_some() {
-            assert_eq!(value.unwrap(), &*res.unwrap());
+        if let (Some(value), Some(res)) = (value, res.as_ref()) {
+            assert_eq!(value, &res[..]);
             return;
         }
         if value.is_none() && res.is_none() {
@@ -147,24 +149,42 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
+        // Disable stats concurrency. procinfo performs too bad without optimization,
+        // disable it to save CPU for real tests.
+        stats_concurrency: 0,
         ..ServerConfig::default()
     }
 }
 
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
+        unify_read_pool: false,
+        unified: UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 1,
+            ..UnifiedReadPoolConfig::default()
+        },
         storage: StorageReadPoolConfig {
             high_concurrency: 1,
             normal_concurrency: 1,
             low_concurrency: 1,
             ..StorageReadPoolConfig::default()
         },
-        coprocessor: CoprocessorReadPoolConfig {
+        coprocessor: CoprReadPoolConfig {
             high_concurrency: 1,
             normal_concurrency: 1,
             low_concurrency: 1,
-            ..CoprocessorReadPoolConfig::default()
+            ..CoprReadPoolConfig::default()
         },
+    }
+}
+
+pub fn new_pessimistic_txn_cfg() -> PessimisticTxnConfig {
+    PessimisticTxnConfig {
+        // Use a large value here since tests run slowly in CI.
+        wait_for_lock_timeout: 3000,
+        wake_up_delay_duration: 100,
+        ..PessimisticTxnConfig::default()
     }
 }
 
@@ -178,13 +198,14 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
         server: new_server_config(cluster_id),
         raft_store: new_store_cfg(),
         readpool: new_readpool_cfg(),
+        pessimistic_txn: new_pessimistic_txn_cfg(),
         ..TiKvConfig::default()
     }
 }
 
 // Create a base request.
 pub fn new_base_request(region_id: u64, epoch: RegionEpoch, read_quorum: bool) -> RaftCmdRequest {
-    let mut req = RaftCmdRequest::new();
+    let mut req = RaftCmdRequest::default();
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(epoch);
     req.mut_header().set_read_quorum(read_quorum);
@@ -198,12 +219,12 @@ pub fn new_request(
     read_quorum: bool,
 ) -> RaftCmdRequest {
     let mut req = new_base_request(region_id, epoch, read_quorum);
-    req.set_requests(protobuf::RepeatedField::from_vec(requests));
+    req.set_requests(requests.into());
     req
 }
 
 pub fn new_put_cmd(key: &[u8], value: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Put);
     cmd.mut_put().set_key(key.to_vec());
     cmd.mut_put().set_value(value.to_vec());
@@ -211,7 +232,7 @@ pub fn new_put_cmd(key: &[u8], value: &[u8]) -> Request {
 }
 
 pub fn new_put_cf_cmd(cf: &str, key: &[u8], value: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Put);
     cmd.mut_put().set_key(key.to_vec());
     cmd.mut_put().set_value(value.to_vec());
@@ -220,20 +241,20 @@ pub fn new_put_cf_cmd(cf: &str, key: &[u8], value: &[u8]) -> Request {
 }
 
 pub fn new_get_cmd(key: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Get);
     cmd.mut_get().set_key(key.to_vec());
     cmd
 }
 
 pub fn new_read_index_cmd() -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::ReadIndex);
     cmd
 }
 
 pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Get);
     cmd.mut_get().set_key(key.to_vec());
     cmd.mut_get().set_cf(cf.to_string());
@@ -241,7 +262,7 @@ pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
 }
 
 pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Delete);
     cmd.mut_delete().set_key(key.to_vec());
     cmd.mut_delete().set_cf(cf.to_string());
@@ -249,7 +270,7 @@ pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
 }
 
 pub fn new_delete_range_cmd(cf: &str, start: &[u8], end: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::DeleteRange);
     cmd.mut_delete_range().set_start_key(start.to_vec());
     cmd.mut_delete_range().set_end_key(end.to_vec());
@@ -262,20 +283,20 @@ pub fn new_status_request(
     peer: metapb::Peer,
     request: StatusRequest,
 ) -> RaftCmdRequest {
-    let mut req = new_base_request(region_id, RegionEpoch::new(), false);
+    let mut req = new_base_request(region_id, RegionEpoch::default(), false);
     req.mut_header().set_peer(peer);
     req.set_status_request(request);
     req
 }
 
 pub fn new_region_detail_cmd() -> StatusRequest {
-    let mut cmd = StatusRequest::new();
+    let mut cmd = StatusRequest::default();
     cmd.set_cmd_type(StatusCmdType::RegionDetail);
     cmd
 }
 
 pub fn new_region_leader_cmd() -> StatusRequest {
-    let mut cmd = StatusRequest::new();
+    let mut cmd = StatusRequest::default();
     cmd.set_cmd_type(StatusCmdType::RegionLeader);
     cmd
 }
@@ -291,7 +312,7 @@ pub fn new_admin_request(
 }
 
 pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
-    let mut req = AdminRequest::new();
+    let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ChangePeer);
     req.mut_change_peer().set_change_type(change_type);
     req.mut_change_peer().set_peer(peer);
@@ -299,7 +320,7 @@ pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) 
 }
 
 pub fn new_compact_log_request(index: u64, term: u64) -> AdminRequest {
-    let mut req = AdminRequest::new();
+    let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::CompactLog);
     req.mut_compact_log().set_compact_index(index);
     req.mut_compact_log().set_compact_term(term);
@@ -307,7 +328,7 @@ pub fn new_compact_log_request(index: u64, term: u64) -> AdminRequest {
 }
 
 pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
-    let mut cmd = AdminRequest::new();
+    let mut cmd = AdminRequest::default();
     cmd.set_cmd_type(AdminCmdType::TransferLeader);
     cmd.mut_transfer_leader().set_peer(peer);
     cmd
@@ -315,14 +336,14 @@ pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
 
 #[allow(dead_code)]
 pub fn new_prepare_merge(target_region: metapb::Region) -> AdminRequest {
-    let mut cmd = AdminRequest::new();
+    let mut cmd = AdminRequest::default();
     cmd.set_cmd_type(AdminCmdType::PrepareMerge);
     cmd.mut_prepare_merge().set_target(target_region);
     cmd
 }
 
 pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
-    let mut store = metapb::Store::new();
+    let mut store = metapb::Store::default();
     store.set_id(store_id);
     store.set_address(addr);
 
@@ -341,41 +362,43 @@ pub fn new_pd_change_peer(
     change_type: ConfChangeType,
     peer: metapb::Peer,
 ) -> RegionHeartbeatResponse {
-    let mut change_peer = ChangePeer::new();
+    let mut change_peer = ChangePeer::default();
     change_peer.set_change_type(change_type);
     change_peer.set_peer(peer);
 
-    let mut resp = RegionHeartbeatResponse::new();
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_change_peer(change_peer);
     resp
 }
 
-pub fn new_half_split_region() -> RegionHeartbeatResponse {
-    let split_region = SplitRegion::new();
-    let mut resp = RegionHeartbeatResponse::new();
+pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartbeatResponse {
+    let mut split_region = SplitRegion::default();
+    split_region.set_policy(policy);
+    split_region.set_keys(keys.into());
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_split_region(split_region);
     resp
 }
 
 pub fn new_pd_transfer_leader(peer: metapb::Peer) -> RegionHeartbeatResponse {
-    let mut transfer_leader = TransferLeader::new();
+    let mut transfer_leader = TransferLeader::default();
     transfer_leader.set_peer(peer);
 
-    let mut resp = RegionHeartbeatResponse::new();
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_transfer_leader(transfer_leader);
     resp
 }
 
 pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResponse {
-    let mut merge = Merge::new();
+    let mut merge = Merge::default();
     merge.set_target(target_region);
 
-    let mut resp = RegionHeartbeatResponse::new();
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_merge(merge);
     resp
 }
 
-pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdResponse>) {
+pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksEngine>, mpsc::Receiver<RaftCmdResponse>) {
     let mut is_read;
     let mut is_write;
     is_read = cmd.has_status_request();
@@ -383,7 +406,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
     for req in cmd.get_requests() {
         match req.get_cmd_type() {
             CmdType::Get | CmdType::Snap | CmdType::ReadIndex => is_read = true,
-            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSST => {
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSst => {
                 is_write = true
             }
             CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
@@ -393,7 +416,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
 
     let (tx, rx) = mpsc::channel();
     let cb = if is_read {
-        Callback::Read(Box::new(move |resp: ReadResponse| {
+        Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
@@ -423,6 +446,33 @@ pub fn read_on_peer<T: Simulator>(
     );
     request.mut_header().set_peer(peer);
     cluster.call_command(request, timeout)
+}
+
+pub fn async_read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+    replica_read: bool,
+) -> mpsc::Receiver<RaftCmdResponse> {
+    let node_id = peer.get_id();
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    request.mut_header().set_replica_read(replica_read);
+    let (tx, rx) = mpsc::sync_channel(1);
+    let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
+    cluster
+        .sim
+        .wl()
+        .async_command_on_node(node_id, request, cb)
+        .unwrap();
+    rx
 }
 
 pub fn read_index_on_peer<T: Simulator>(
@@ -459,7 +509,7 @@ pub fn must_read_on_peer<T: Simulator>(
     key: &[u8],
     value: &[u8],
 ) {
-    let timeout = Duration::from_secs(1);
+    let timeout = Duration::from_secs(5);
     match read_on_peer(cluster, peer, region, key, false, timeout) {
         Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
         other => panic!(
@@ -504,7 +554,7 @@ pub fn create_test_engine(
     let engines = match engines {
         Some(e) => e,
         None => {
-            path = Some(TempDir::new("test_cluster").unwrap());
+            path = Some(Builder::new().prefix("test_cluster").tempdir().unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
             let router = Mutex::new(router);
             let cmpacted_handler = Box::new(move |event| {
@@ -520,15 +570,12 @@ pub fn create_test_engine(
             ));
             let cache = cfg.storage.block_cache.build_shared_cache();
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
+            let kv_path = path.as_ref().unwrap().path().join(DEFAULT_ROCKSDB_SUB_DIR);
             let engine = Arc::new(
-                rocks::util::new_engine_opt(
-                    path.as_ref().unwrap().path().to_str().unwrap(),
-                    kv_db_opt,
-                    kv_cfs_opt,
-                )
-                .unwrap(),
+                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                    .unwrap(),
             );
-            let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
+            let raft_path = path.as_ref().unwrap().path().join("raft");
             let raft_engine = Arc::new(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
@@ -537,6 +584,13 @@ pub fn create_test_engine(
         }
     };
     (engines, path)
+}
+
+pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+    // We don't want to generate snapshots due to compact log.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
 }
 
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -587,6 +641,22 @@ pub fn configure_for_lease_read<T: Simulator>(
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 
     election_timeout
+}
+
+pub fn configure_for_enable_titan<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    min_blob_size: ReadableSize,
+) {
+    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
+    cluster.cfg.rocksdb.titan.max_background_gc = 10;
+    cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
+    cluster.cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
+    cluster.cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize::kb(0);
+}
+
+pub fn configure_for_disable_titan<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.rocksdb.titan.enabled = false;
 }
 
 /// Keep putting random kvs until specified size limit is reached.

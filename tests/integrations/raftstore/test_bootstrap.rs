@@ -3,26 +3,27 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use tempdir::TempDir;
+use tempfile::Builder;
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
-use engine::rocks;
-use engine::Engines;
 use engine::*;
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::{bootstrap_store, fsm, SnapManager};
 use test_raftstore::*;
+use tikv::config::ConfigController;
+use tikv::config::ConfigHandler;
 use tikv::import::SSTImporter;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};
 use tikv::server::Node;
-use tikv_util::worker::FutureWorker;
+use tikv_util::config::VersionTrack;
+use tikv_util::worker::{FutureWorker, Worker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
     cluster.add_first_region().unwrap();
-    // now  at same time start the another node, and will recive cluster is not bootstrap
+    // now at same time start the another node, and will recive cluster is not bootstrap
     // it will try to bootstrap with a new region, but will failed
     // the region number still 1
     cluster.start().unwrap();
@@ -41,7 +42,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
-    let tmp_path = TempDir::new("test_cluster").unwrap();
+    let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let engine = Arc::new(
         rocks::util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
     );
@@ -55,16 +56,21 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::clone(&raft_engine),
         shared_block_cache,
     );
-    let tmp_mgr = TempDir::new("test_cluster").unwrap();
+    let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
 
-    let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
+    let mut node = Node::new(
+        system,
+        &cfg.server,
+        Arc::new(VersionTrack::new(cfg.raft_store.clone())),
+        Arc::clone(&pd_client),
+    );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
     let pd_worker = FutureWorker::new("test-pd-worker");
 
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
     bootstrap_with_first_region(Arc::clone(&pd_client)).unwrap();
 
-    // now anthoer node at same time begin bootstrap node, but panic after prepared bootstrap
+    // now another node at same time begin bootstrap node, but panic after prepared bootstrap
     // now rocksDB must have some prepare data
     bootstrap_store(&engines, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
@@ -79,13 +85,20 @@ fn test_node_bootstrap_with_prepared_data() {
         .is_some());
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_router());
+    let coprocessor_host = CoprocessorHost::new(node.get_router());
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())
     };
 
+    let cfg_controller = ConfigController::new(cfg.clone(), Default::default());
+    let config_client = ConfigHandler::start(
+        cfg.server.advertise_addr,
+        cfg_controller,
+        pd_worker.scheduler(),
+    )
+    .unwrap();
     // try to restart this node, will clear the prepare data
     node.start(
         engines,
@@ -95,6 +108,8 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::new(Mutex::new(StoreMeta::new(0))),
         coprocessor_host,
         importer,
+        Worker::new("split"),
+        Box::new(config_client),
     )
     .unwrap();
     assert!(Arc::clone(&engine)

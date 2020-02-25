@@ -1,38 +1,43 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use engine::rocks;
 use engine::rocks::util::CFOptions;
-use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
+use engine::rocks::{
+    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB,
+};
 use engine::Engines;
-use engine::Error as EngineError;
+use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine::{IterOption, Peekable};
-#[cfg(not(feature = "no-fail"))]
-use kvproto::errorpb::Error as ErrorHeader;
+use engine_rocks::RocksEngineIterator;
+use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
 use kvproto::kvrpcpb::Context;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
+use txn_types::{Key, Value};
 
-use crate::storage::{BlockCacheConfig, Key, Value};
+use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
-    ScanMode, Snapshot,
+    Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
+    Result, ScanMode, Snapshot,
 };
 
-pub use engine::SyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
     Snapshot(Callback<RocksSnapshot>),
+    Pause(Duration),
 }
 
 impl Display for Task {
@@ -40,6 +45,7 @@ impl Display for Task {
         match *self {
             Task::Write(..) => write!(f, "write task"),
             Task::Snapshot(_) => write!(f, "snapshot task"),
+            Task::Pause(_) => write!(f, "pause"),
         }
     }
 }
@@ -54,6 +60,7 @@ impl Runnable<Task> for Runner {
                 CbContext::new(),
                 Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
             )),
+            Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
 }
@@ -67,16 +74,22 @@ struct RocksEngineCore {
 impl Drop for RocksEngineCore {
     fn drop(&mut self) {
         if let Some(h) = self.worker.stop() {
-            h.join().unwrap();
+            if let Err(e) = h.join() {
+                safe_panic!("RocksEngineCore engine thread panicked: {:?}", e);
+            }
         }
     }
 }
 
+/// The RocksEngine is based on `RocksDB`.
+///
+/// This is intended for **testing use only**.
 #[derive(Clone)]
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
     engines: Engines,
+    not_leader: Arc<AtomicBool>,
 }
 
 impl RocksEngine {
@@ -89,7 +102,7 @@ impl RocksEngine {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
-                let td = TempDir::new("temp-rocksdb").unwrap();
+                let td = Builder::new().prefix("temp-rocksdb").tempdir().unwrap();
                 (td.path().to_str().unwrap().to_owned(), Some(td))
             }
             _ => (path.to_owned(), None),
@@ -103,8 +116,17 @@ impl RocksEngine {
         Ok(RocksEngine {
             sched: worker.scheduler(),
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
+            not_leader: Arc::new(AtomicBool::new(false)),
             engines,
         })
+    }
+
+    pub fn trigger_not_leader(&self) {
+        self.not_leader.store(true, Ordering::SeqCst);
+    }
+
+    pub fn pause(&self, dur: Duration) {
+        self.sched.schedule(Task::Pause(dur)).unwrap();
     }
 
     pub fn get_rocksdb(&self) -> Arc<DB> {
@@ -192,7 +214,7 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let wb = WriteBatch::new();
+    let wb = WriteBatch::default();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -245,7 +267,7 @@ impl Engine for RocksEngine {
 
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
         if modifies.is_empty() {
-            return Err(Error::EmptyRequest);
+            return Err(Error::from(ErrorInner::EmptyRequest));
         }
         box_try!(self.sched.schedule(Task::Write(modifies, cb)));
         Ok(())
@@ -255,18 +277,24 @@ impl Engine for RocksEngine {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));
-        fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            let mut header = ErrorHeader::new();
+        let not_leader = {
+            let mut header = kvproto::errorpb::Error::default();
             header.mut_not_leader().set_region_id(100);
-            Err(Error::Request(header))
+            header
+        };
+        fail_point!("rockskv_async_snapshot_not_leader", |_| {
+            Err(Error::from(ErrorInner::Request(not_leader.clone())))
         });
+        if self.not_leader.load(Ordering::SeqCst) {
+            return Err(Error::from(ErrorInner::Request(not_leader)));
+        }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }
 }
 
 impl Snapshot for RocksSnapshot {
-    type Iter = DBIterator<Arc<DB>>;
+    type Iter = RocksEngineIterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
@@ -282,7 +310,7 @@ impl Snapshot for RocksSnapshot {
 
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
-        let iter = self.db_iterator(iter_opt);
+        let iter = self.iterator_opt(iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 
@@ -293,47 +321,76 @@ impl Snapshot for RocksSnapshot {
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
-        let iter = self.db_iterator_cf(cf, iter_opt)?;
+        let iter = self.iterator_cf_opt(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 }
 
-impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
-    fn next(&mut self) -> bool {
-        DBIterator::next(self)
+impl EngineIterator for RocksEngineIterator {
+    fn next(&mut self) -> Result<bool> {
+        Iterator::next(self).map_err(Error::from)
     }
 
-    fn prev(&mut self) -> bool {
-        DBIterator::prev(self)
+    fn prev(&mut self) -> Result<bool> {
+        Iterator::prev(self).map_err(Error::from)
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek(self, key.as_encoded().as_slice().into()))
+        Iterator::seek(self, key.as_encoded().as_slice().into()).map_err(Error::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek_for_prev(
-            self,
-            key.as_encoded().as_slice().into(),
-        ))
+        Iterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(Error::from)
     }
 
-    fn seek_to_first(&mut self) -> bool {
-        DBIterator::seek(self, SeekKey::Start)
+    fn seek_to_first(&mut self) -> Result<bool> {
+        Iterator::seek(self, SeekKey::Start).map_err(Error::from)
     }
 
-    fn seek_to_last(&mut self) -> bool {
-        DBIterator::seek(self, SeekKey::End)
+    fn seek_to_last(&mut self) -> Result<bool> {
+        Iterator::seek(self, SeekKey::End).map_err(Error::from)
     }
 
-    fn valid(&self) -> bool {
-        DBIterator::valid(self)
+    fn valid(&self) -> Result<bool> {
+        Iterator::valid(self).map_err(Error::from)
     }
 
-    fn status(&self) -> Result<()> {
-        DBIterator::status(self)
-            .map_err(|e| EngineError::RocksDb(e))
-            .map_err(From::from)
+    fn key(&self) -> &[u8] {
+        Iterator::key(self)
+    }
+
+    fn value(&self) -> &[u8] {
+        Iterator::value(self)
+    }
+}
+
+impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
+    fn next(&mut self) -> Result<bool> {
+        DBIterator::next(self).map_err(|e| box_err!(e))
+    }
+
+    fn prev(&mut self) -> Result<bool> {
+        DBIterator::prev(self).map_err(|e| box_err!(e))
+    }
+
+    fn seek(&mut self, key: &Key) -> Result<bool> {
+        DBIterator::seek(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
+    }
+
+    fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
+        DBIterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
+    }
+
+    fn seek_to_first(&mut self) -> Result<bool> {
+        DBIterator::seek(self, DBSeekKey::Start).map_err(|e| box_err!(e))
+    }
+
+    fn seek_to_last(&mut self) -> Result<bool> {
+        DBIterator::seek(self, DBSeekKey::End).map_err(|e| box_err!(e))
+    }
+
+    fn valid(&self) -> Result<bool> {
+        DBIterator::valid(self).map_err(|e| box_err!(e))
     }
 
     fn key(&self) -> &[u8] {
@@ -347,11 +404,10 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+    use super::super::perf_context::PerfStatisticsInstant;
     use super::super::tests::*;
-    use super::super::CFStatistics;
+    use super::super::CfStatistics;
     use super::*;
-    use tempdir::TempDir;
 
     #[test]
     fn test_rocksdb() {
@@ -382,7 +438,10 @@ mod tests {
 
     #[test]
     fn rocksdb_reopen() {
-        let dir = TempDir::new("rocksdb_test").unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("rocksdb_test")
+            .tempdir()
+            .unwrap();
         {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())
@@ -410,7 +469,7 @@ mod tests {
         test_perf_statistics(&engine);
     }
 
-    pub fn test_perf_statistics<E: Engine>(engine: &E) {
+    fn test_perf_statistics<E: Engine>(engine: &E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
         must_put(engine, b"foo3", b"bar3"); // deleted
@@ -422,32 +481,31 @@ mod tests {
         must_delete(engine, b"foo42");
         must_delete(engine, b"foo5");
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
 
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
 
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
     }
-
 }

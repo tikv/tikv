@@ -1,26 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
+#![feature(box_patterns)]
 
 extern crate test;
 
-#[macro_use(
-    slog_kv,
-    slog_error,
-    slog_info,
-    slog_debug,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
-extern crate slog;
 #[macro_use]
 extern crate slog_global;
 #[macro_use]
 extern crate tikv_util;
-#[macro_use]
-extern crate test_util;
+extern crate pd_client;
 
 mod config;
 mod coprocessor;

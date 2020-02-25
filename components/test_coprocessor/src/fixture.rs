@@ -4,8 +4,10 @@ use super::*;
 
 use kvproto::kvrpcpb::Context;
 
-use tikv::coprocessor::codec::Datum;
+use tidb_query::codec::Datum;
+use tikv::config::CoprReadPoolConfig;
 use tikv::coprocessor::{readpool_impl, Endpoint};
+use tikv::read_pool::ReadPool;
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
@@ -78,8 +80,11 @@ pub fn init_data_with_details<E: Engine>(
         store.commit_with_ctx(ctx);
     }
 
-    let pool = readpool_impl::build_read_pool_for_test(store.get_engine());
-    let cop = Endpoint::new(cfg, pool);
+    let pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
+        &CoprReadPoolConfig::default_for_test(),
+        store.get_engine(),
+    ));
+    let cop = Endpoint::new(cfg, pool.handle());
     (store, cop)
 }
 
@@ -89,7 +94,7 @@ pub fn init_data_with_commit(
     commit: bool,
 ) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
     let engine = TestEngineBuilder::new().build().unwrap();
-    init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
+    init_data_with_engine_and_commit(Context::default(), engine, tbl, vals, commit)
 }
 
 // This function will create a Product table and initialize with the specified data.

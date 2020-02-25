@@ -11,9 +11,11 @@ use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
+use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use raftstore::store;
 use test_util;
-use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use tikv_util::security::{SecurityConfig, SecurityManager};
+use txn_types::TimeStamp;
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -62,17 +64,17 @@ fn test_rpc_client() {
     assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
-    let mut store = metapb::Store::new();
+    let mut store = metapb::Store::default();
     store.set_id(store_id);
     debug!("bootstrap store {:?}", store);
 
     let peer_id = client.alloc_id().unwrap();
-    let mut peer = metapb::Peer::new();
+    let mut peer = metapb::Peer::default();
     peer.set_id(peer_id);
     peer.set_store_id(store_id);
 
     let region_id = client.alloc_id().unwrap();
-    let mut region = metapb::Region::new();
+    let mut region = metapb::Region::default();
     region.set_id(region_id);
     region.mut_peers().push(peer.clone());
     debug!("bootstrap region {:?}", region);
@@ -100,6 +102,9 @@ fn test_rpc_client() {
     let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
+    let ts = client.get_tso().wait().unwrap();
+    assert_ne!(ts, TimeStamp::zero());
+
     let mut prev_id = 0;
     for _ in 0..100 {
         let client = new_client(eps.clone(), None);
@@ -118,7 +123,12 @@ fn test_rpc_client() {
     });
     poller.spawn(f).forget();
     poller
-        .spawn(client.region_heartbeat(region.clone(), peer.clone(), RegionStat::default()))
+        .spawn(client.region_heartbeat(
+            store::RAFT_INIT_LOG_TERM,
+            region.clone(),
+            peer.clone(),
+            RegionStat::default(),
+        ))
         .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
@@ -127,15 +137,15 @@ fn test_rpc_client() {
     assert_eq!(region_info.leader.unwrap(), peer);
 
     client
-        .store_heartbeat(pdpb::StoreStats::new())
+        .store_heartbeat(pdpb::StoreStats::default())
         .wait()
         .unwrap();
     client
-        .ask_batch_split(metapb::Region::new(), 1)
+        .ask_batch_split(metapb::Region::default(), 1)
         .wait()
         .unwrap();
     client
-        .report_batch_split(vec![metapb::Region::new(), metapb::Region::new()])
+        .report_batch_split(vec![metapb::Region::default(), metapb::Region::default()])
         .wait()
         .unwrap();
 
@@ -148,26 +158,24 @@ fn test_get_tombstone_stores() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
-    let client = new_client(eps.clone(), None);
+    let client = new_client(eps, None);
 
     let mut all_stores = vec![];
     let store_id = client.alloc_id().unwrap();
-    let mut store = metapb::Store::new();
+    let mut store = metapb::Store::default();
     store.set_id(store_id);
     let region_id = client.alloc_id().unwrap();
-    let mut region = metapb::Region::new();
+    let mut region = metapb::Region::default();
     region.set_id(region_id);
-    client
-        .bootstrap_cluster(store.clone(), region.clone())
-        .unwrap();
+    client.bootstrap_cluster(store.clone(), region).unwrap();
 
-    all_stores.push(store.clone());
+    all_stores.push(store);
     assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
     let s = client.get_all_stores(false).unwrap();
     assert_eq!(s, all_stores);
 
     // Add tombstone store.
-    let mut store99 = metapb::Store::new();
+    let mut store99 = metapb::Store::default();
     store99.set_id(99);
     store99.set_state(metapb::StoreState::Tombstone);
     server.default_handler().add_store(store99.clone());
@@ -184,11 +192,11 @@ fn test_get_tombstone_stores() {
     assert_eq!(s, all_stores);
 
     // Add another tombstone store.
-    let mut store199 = store99.clone();
+    let mut store199 = store99;
     store199.set_id(199);
     server.default_handler().add_store(store199.clone());
 
-    all_stores.push(store199.clone());
+    all_stores.push(store199);
     all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
     let mut s = client.get_all_stores(false).unwrap();
     s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
@@ -208,7 +216,7 @@ fn test_reboot() {
 
     assert!(!client.is_cluster_bootstrapped().unwrap());
 
-    match client.bootstrap_cluster(metapb::Store::new(), metapb::Region::new()) {
+    match client.bootstrap_cluster(metapb::Store::default(), metapb::Region::default()) {
         Err(PdError::ClusterBootstrapped(_)) => (),
         _ => {
             panic!("failed, should return ClusterBootstrapped");
@@ -300,7 +308,7 @@ fn test_incompatible_version() {
 
     let client = new_client(eps, None);
 
-    let resp = client.ask_batch_split(metapb::Region::new(), 2);
+    let resp = client.ask_batch_split(metapb::Region::default(), 2);
     assert_eq!(
         resp.wait().unwrap_err().to_string(),
         PdError::Incompatible.to_string()
@@ -317,21 +325,19 @@ fn restart_leader(mgr: SecurityManager) {
     let client = new_client(eps.clone(), Some(Arc::clone(&mgr)));
     // Put a region.
     let store_id = client.alloc_id().unwrap();
-    let mut store = metapb::Store::new();
+    let mut store = metapb::Store::default();
     store.set_id(store_id);
 
     let peer_id = client.alloc_id().unwrap();
-    let mut peer = metapb::Peer::new();
+    let mut peer = metapb::Peer::default();
     peer.set_id(peer_id);
     peer.set_store_id(store_id);
 
     let region_id = client.alloc_id().unwrap();
-    let mut region = metapb::Region::new();
+    let mut region = metapb::Region::default();
     region.set_id(region_id);
     region.mut_peers().push(peer);
-    client
-        .bootstrap_cluster(store.clone(), region.clone())
-        .unwrap();
+    client.bootstrap_cluster(store, region.clone()).unwrap();
 
     let region = client
         .get_region_by_id(region.get_id())
@@ -383,7 +389,7 @@ fn test_change_leader_async() {
 
         let new = client.get_leader();
         if new != leader {
-            assert_eq!(1, counter.load(Ordering::SeqCst));
+            assert!(counter.load(Ordering::SeqCst) >= 1);
             return;
         }
         thread::sleep(LeaderChange::get_leader_interval());
@@ -408,11 +414,16 @@ fn test_region_heartbeat_on_leader_change() {
         tx.send(resp).unwrap();
     });
     poller.spawn(f).forget();
-    let region = metapb::Region::new();
-    let peer = metapb::Peer::new();
+    let region = metapb::Region::default();
+    let peer = metapb::Peer::default();
     let stat = RegionStat::default();
     poller
-        .spawn(client.region_heartbeat(region.clone(), peer.clone(), stat.clone()))
+        .spawn(client.region_heartbeat(
+            store::RAFT_INIT_LOG_TERM,
+            region.clone(),
+            peer.clone(),
+            stat.clone(),
+        ))
         .forget();
     rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
@@ -432,7 +443,12 @@ fn test_region_heartbeat_on_leader_change() {
             }
         }
         poller
-            .spawn(client.region_heartbeat(region.clone(), peer.clone(), stat.clone()))
+            .spawn(client.region_heartbeat(
+                store::RAFT_INIT_LOG_TERM,
+                region.clone(),
+                peer.clone(),
+                stat.clone(),
+            ))
             .forget();
         rx.recv_timeout(LeaderChange::get_leader_interval())
             .unwrap();

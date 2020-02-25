@@ -3,18 +3,19 @@
 mod file_log;
 mod formatter;
 
+use std::env;
 use std::fmt;
 use std::io::{self, BufWriter};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use chrono::{self, Duration};
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
-use self::file_log::RotatingFileLogger;
+use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
+use crate::config::{ReadableDuration, ReadableSize};
 
 pub use slog::Level;
 
@@ -31,13 +32,38 @@ pub fn init_log<D>(
     level: Level,
     use_async: bool,
     init_stdlog: bool,
+    mut disabled_targets: Vec<String>,
 ) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
     <D as Drain>::Err: std::fmt::Display,
 {
+    // Only for debug purpose, so use environment instead of configuration file.
+    if let Ok(extra_modules) = env::var("TIKV_DISABLE_LOG_TARGETS") {
+        disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
+    }
+
+    let filtered = drain.filter(move |record| {
+        if !disabled_targets.is_empty() {
+            // The format of the returned value from module() would like this:
+            // ```
+            //  raftstore::store::fsm::store
+            //  tikv_util
+            //  tikv_util::config::check_data_dir
+            //  raft::raft
+            //  grpcio::log_util
+            //  ...
+            // ```
+            // Here get the highest level module name to check.
+            let module = record.module().splitn(2, "::").nth(0).unwrap();
+            disabled_targets.iter().all(|target| target != module)
+        } else {
+            true
+        }
+    });
+
     let logger = if use_async {
-        let drain = Async::new(LogAndFuse(drain))
+        let drain = Async::new(LogAndFuse(filtered))
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
@@ -46,7 +72,7 @@ where
             .fuse();
         slog::Logger::root(drain, slog_o!())
     } else {
-        let drain = LogAndFuse(Mutex::new(drain).filter_level(level));
+        let drain = LogAndFuse(Mutex::new(filtered).filter_level(level));
         slog::Logger::root(drain, slog_o!())
     };
 
@@ -65,11 +91,21 @@ pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
 
 /// Constructs a new file drainer which outputs log to a file at the specified
 /// path. The file drainer rotates for the specified timespan.
-pub fn file_drainer(
+pub fn file_drainer<N>(
     path: impl AsRef<Path>,
-    rotation_timespan: Duration,
-) -> io::Result<TikvFormat<RotatingFileDecorator>> {
-    let logger = BufWriter::new(RotatingFileLogger::new(path, rotation_timespan)?);
+    rotation_timespan: ReadableDuration,
+    rotation_size: ReadableSize,
+    rename: N,
+) -> io::Result<TikvFormat<RotatingFileDecorator>>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
+    let logger = BufWriter::new(
+        RotatingFileLoggerBuilder::new(path, rename)
+            .add_rotator(RotateByTime::new(rotation_timespan))
+            .add_rotator(RotateBySize::new(rotation_size))
+            .build()?,
+    );
     let decorator = PlainDecorator::new(logger);
     let drain = TikvFormat::new(decorator);
     Ok(drain)
@@ -119,23 +155,23 @@ fn get_unified_log_level(lv: Level) -> &'static str {
     }
 }
 
-pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
+pub fn convert_slog_level_to_log_level(lv: Level) -> log::Level {
     match lv {
-        Level::Critical | Level::Error => log::LogLevel::Error,
-        Level::Warning => log::LogLevel::Warn,
-        Level::Debug => log::LogLevel::Debug,
-        Level::Trace => log::LogLevel::Trace,
-        Level::Info => log::LogLevel::Info,
+        Level::Critical | Level::Error => log::Level::Error,
+        Level::Warning => log::Level::Warn,
+        Level::Debug => log::Level::Debug,
+        Level::Trace => log::Level::Trace,
+        Level::Info => log::Level::Info,
     }
 }
 
-pub fn convert_log_level_to_slog_level(lv: log::LogLevel) -> Level {
+pub fn convert_log_level_to_slog_level(lv: log::Level) -> Level {
     match lv {
-        log::LogLevel::Error => Level::Error,
-        log::LogLevel::Warn => Level::Warning,
-        log::LogLevel::Debug => Level::Debug,
-        log::LogLevel::Trace => Level::Trace,
-        log::LogLevel::Info => Level::Info,
+        log::Level::Error => Level::Error,
+        log::Level::Warn => Level::Warning,
+        log::Level::Debug => Level::Debug,
+        log::Level::Trace => Level::Trace,
+        log::Level::Info => Level::Info,
     }
 }
 
@@ -195,10 +231,9 @@ where
             let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
             slog::slog_crit!(
                 fatal_logger,
-                "logger encountered error, TiKV cannot continue working";
+                "logger encountered error";
                 "err" => %e,
             );
-            panic!("logger encountered error");
         }
         Ok(())
     }
@@ -293,7 +328,6 @@ impl<'a> Drop for Serializer<'a> {
     fn drop(&mut self) {}
 }
 
-#[allow(clippy::write_literal)]
 impl<'a> slog::ser::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         self.emit_arguments(key, &format_args!("None"))
@@ -325,6 +359,7 @@ impl<'a> slog::ser::Serializer for Serializer<'a> {
 mod tests {
     use super::*;
     use chrono::DateTime;
+    use slog::{slog_debug, slog_info, slog_warn};
     use slog_term::PlainSyncDecorator;
     use std::cell::RefCell;
     use std::io;
@@ -455,7 +490,7 @@ mod tests {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// assert_eq!(true, validate_log_source_file("<unknown>", "<unknown>"));
     /// assert_eq!(true, validate_log_source_file("mod.rs:1", "mod.rs:1"));
     /// assert_eq!(true, validate_log_source_file("mod.rs:1", "mod.rs:100"));

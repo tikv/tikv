@@ -7,8 +7,6 @@ use tikv_util::collections::HashMap;
 use kvproto::metapb::{Peer, Region, Store, StoreState};
 use kvproto::pdpb::*;
 
-use protobuf::RepeatedField;
-
 use super::*;
 
 #[derive(Debug)]
@@ -33,8 +31,8 @@ impl Service {
         }
     }
 
-    fn header() -> ResponseHeader {
-        let mut header = ResponseHeader::new();
+    pub fn header() -> ResponseHeader {
+        let mut header = ResponseHeader::default();
         header.set_cluster_id(DEFAULT_CLUSTER_ID);
         header
     }
@@ -49,16 +47,16 @@ impl Service {
 fn make_members_response(eps: Vec<String>) -> GetMembersResponse {
     let mut members = Vec::with_capacity(eps.len());
     for (i, ep) in (&eps).iter().enumerate() {
-        let mut m = Member::new();
+        let mut m = Member::default();
         m.set_name(format!("pd{}", i));
         m.set_member_id(100 + i as u64);
-        m.set_client_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
-        m.set_peer_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
+        m.set_client_urls(vec![ep.to_owned()].into());
+        m.set_peer_urls(vec![ep.to_owned()].into());
         members.push(m);
     }
 
-    let mut members_resp = GetMembersResponse::new();
-    members_resp.set_members(RepeatedField::from_vec(members.clone()));
+    let mut members_resp = GetMembersResponse::default();
+    members_resp.set_members(members.clone().into());
     members_resp.set_leader(members.pop().unwrap());
     members_resp.set_header(Service::header());
 
@@ -76,12 +74,12 @@ impl PdMocker for Service {
         let store = req.get_store();
         let region = req.get_region();
 
-        let mut resp = BootstrapResponse::new();
+        let mut resp = BootstrapResponse::default();
         let mut header = Service::header();
 
         if self.is_bootstrapped.load(Ordering::SeqCst) {
-            let mut err = Error::new();
-            err.field_type = ErrorType::UNKNOWN;
+            let mut err = Error::default();
+            err.set_type(ErrorType::Unknown);
             err.set_message("cluster is already bootstrapped".to_owned());
             header.set_error(err);
             resp.set_header(header);
@@ -101,15 +99,15 @@ impl PdMocker for Service {
     }
 
     fn is_bootstrapped(&self, _: &IsBootstrappedRequest) -> Option<Result<IsBootstrappedResponse>> {
-        let mut resp = IsBootstrappedResponse::new();
+        let mut resp = IsBootstrappedResponse::default();
         let header = Service::header();
         resp.set_header(header);
         resp.set_bootstrapped(self.is_bootstrapped.load(Ordering::SeqCst));
         Some(Ok(resp))
     }
 
-    fn alloc_id(&self, _: &AllocIDRequest) -> Option<Result<AllocIDResponse>> {
-        let mut resp = AllocIDResponse::new();
+    fn alloc_id(&self, _: &AllocIdRequest) -> Option<Result<AllocIdResponse>> {
+        let mut resp = AllocIdResponse::default();
         resp.set_header(Service::header());
 
         let id = self.id_allocator.fetch_add(1, Ordering::SeqCst);
@@ -119,7 +117,7 @@ impl PdMocker for Service {
 
     // TODO: not bootstrapped error.
     fn get_store(&self, req: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
-        let mut resp = GetStoreResponse::new();
+        let mut resp = GetStoreResponse::default();
         let stores = self.stores.lock().unwrap();
         match stores.get(&req.get_store_id()) {
             Some(store) => {
@@ -129,8 +127,8 @@ impl PdMocker for Service {
             }
             None => {
                 let mut header = Service::header();
-                let mut err = Error::new();
-                err.field_type = ErrorType::UNKNOWN;
+                let mut err = Error::default();
+                err.set_type(ErrorType::Unknown);
                 err.set_message(format!("store not found {}", req.get_store_id()));
                 header.set_error(err);
                 resp.set_header(header);
@@ -140,7 +138,7 @@ impl PdMocker for Service {
     }
 
     fn get_all_stores(&self, req: &GetAllStoresRequest) -> Option<Result<GetAllStoresResponse>> {
-        let mut resp = GetAllStoresResponse::new();
+        let mut resp = GetAllStoresResponse::default();
         resp.set_header(Service::header());
         let exclude_tombstone = req.get_exclude_tombstone_stores();
         let stores = self.stores.lock().unwrap();
@@ -154,7 +152,7 @@ impl PdMocker for Service {
     }
 
     fn get_region(&self, req: &GetRegionRequest) -> Option<Result<GetRegionResponse>> {
-        let mut resp = GetRegionResponse::new();
+        let mut resp = GetRegionResponse::default();
         let key = req.get_region_key();
         let regions = self.regions.lock().unwrap();
         let leaders = self.leaders.lock().unwrap();
@@ -173,16 +171,16 @@ impl PdMocker for Service {
         }
 
         let mut header = Service::header();
-        let mut err = Error::new();
-        err.field_type = ErrorType::UNKNOWN;
+        let mut err = Error::default();
+        err.set_type(ErrorType::Unknown);
         err.set_message(format!("region not found {:?}", key));
         header.set_error(err);
         resp.set_header(header);
         Some(Ok(resp))
     }
 
-    fn get_region_by_id(&self, req: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
-        let mut resp = GetRegionResponse::new();
+    fn get_region_by_id(&self, req: &GetRegionByIdRequest) -> Option<Result<GetRegionResponse>> {
+        let mut resp = GetRegionResponse::default();
         let regions = self.regions.lock().unwrap();
         let leaders = self.leaders.lock().unwrap();
 
@@ -197,8 +195,8 @@ impl PdMocker for Service {
             }
             None => {
                 let mut header = Service::header();
-                let mut err = Error::new();
-                err.field_type = ErrorType::UNKNOWN;
+                let mut err = Error::default();
+                err.set_type(ErrorType::Unknown);
                 err.set_message(format!("region not found {}", req.region_id));
                 header.set_error(err);
                 resp.set_header(header);
@@ -221,28 +219,28 @@ impl PdMocker for Service {
             .unwrap()
             .insert(region_id, req.get_leader().clone());
 
-        let mut resp = RegionHeartbeatResponse::new();
+        let mut resp = RegionHeartbeatResponse::default();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
     }
 
     fn store_heartbeat(&self, _: &StoreHeartbeatRequest) -> Option<Result<StoreHeartbeatResponse>> {
-        let mut resp = StoreHeartbeatResponse::new();
+        let mut resp = StoreHeartbeatResponse::default();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
     }
 
     fn ask_split(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
-        let mut resp = AskSplitResponse::new();
+        let mut resp = AskSplitResponse::default();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
     }
 
     fn ask_batch_split(&self, _: &AskBatchSplitRequest) -> Option<Result<AskBatchSplitResponse>> {
-        let mut resp = AskBatchSplitResponse::new();
+        let mut resp = AskBatchSplitResponse::default();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
@@ -252,14 +250,14 @@ impl PdMocker for Service {
         &self,
         _: &ReportBatchSplitRequest,
     ) -> Option<Result<ReportBatchSplitResponse>> {
-        let mut resp = ReportBatchSplitResponse::new();
+        let mut resp = ReportBatchSplitResponse::default();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
     }
 
     fn scatter_region(&self, _: &ScatterRegionRequest) -> Option<Result<ScatterRegionResponse>> {
-        let mut resp = ScatterRegionResponse::new();
+        let mut resp = ScatterRegionResponse::default();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))

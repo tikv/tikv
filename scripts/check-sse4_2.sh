@@ -10,7 +10,7 @@ dirs="./target/release"
 errors=0
 
 # These need to check sse4.2.
-targets="tikv-server tikv-importer"
+targets="tikv-server"
 
 if [[ "`uname`" != "Linux" ]]; then
     echo "skipping sse4.2 check - not on Linux"
@@ -44,7 +44,8 @@ for dir in $dirs; do
             # f2.*0f 38 is the opcode of `crc32`, see Intel® SSE4 Programming Reference
             found=0
             for sym in $fast_crc32; do
-                if [[ `objdump --disassemble="$sym" $dirfile 2> /dev/null | grep ".*f2.*0f 38.*crc32"` ]]; then
+		read -r start stop <<<$(nm -n "$dirfile" | grep -A1 "$sym" | awk '{printf("0x"$1" ")}')
+                if [[ `objdump -d $dirfile --start-address $start --stop-address $stop 2> /dev/null | grep ".*f2.*0f 38.*crc32"` ]]; then
                     found=1
                     break
                 fi

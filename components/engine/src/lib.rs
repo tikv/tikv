@@ -2,17 +2,6 @@
 
 #![recursion_limit = "200"]
 
-#[macro_use(
-    kv,
-    slog_kv,
-    slog_error,
-    slog_warn,
-    slog_record,
-    slog_b,
-    slog_log,
-    slog_record_static
-)]
-extern crate slog;
 #[macro_use]
 extern crate slog_global;
 #[macro_use]
@@ -32,8 +21,7 @@ pub mod util;
 
 pub mod rocks;
 pub use crate::rocks::{
-    CFHandle, DBIterator, DBVector, Range, ReadOptions, Snapshot, SyncSnapshot, WriteBatch,
-    WriteOptions, DB,
+    CFHandle, DBIterator, DBVector, Range, ReadOptions, WriteBatch, WriteOptions, DB,
 };
 mod errors;
 pub use crate::errors::*;

@@ -1,26 +1,31 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::f64::INFINITY;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::compact_files_in_range;
+use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
+use engine::{name_to_cf, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
-use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;
 
-use crate::raftstore::store::Callback;
-use crate::server::transport::RaftStoreRouter;
+use crate::server::CONFIG_ROCKSDB_GAUGE;
+use engine_rocks::RocksEngine;
+use engine_traits::{SstExt, SstWriterBuilder};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::Callback;
+use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
-use tikv_util::time::Instant;
+use tikv_util::time::{Instant, Limiter};
 
-use super::import_mode::*;
-use super::metrics::*;
-use super::service::*;
-use super::{Config, Error, SSTImporter};
+use sst_importer::import_mode::*;
+use sst_importer::metrics::*;
+use sst_importer::service::*;
+use sst_importer::{error_inc, Config, Error, SSTImporter};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -34,6 +39,7 @@ pub struct ImportSSTService<Router> {
     threads: CpuPool,
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
+    limiter: Limiter,
 }
 
 impl<Router: RaftStoreRouter> ImportSSTService<Router> {
@@ -54,6 +60,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
             threads,
             importer,
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
+            limiter: Limiter::new(INFINITY),
         }
     }
 }
@@ -70,9 +77,17 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
         let res = {
             let mut switcher = self.switcher.lock().unwrap();
+            fn mf(cf: &str, name: &str, v: f64) {
+                CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
+            }
+
             match req.get_mode() {
-                SwitchMode::Normal => switcher.enter_normal_mode(&self.engine),
-                SwitchMode::Import => switcher.enter_import_mode(&self.engine),
+                SwitchMode::Normal => {
+                    switcher.enter_normal_mode(RocksEngine::from_ref(&self.engine), mf)
+                }
+                SwitchMode::Import => {
+                    switcher.enter_import_mode(RocksEngine::from_ref(&self.engine), mf)
+                }
             }
         };
         match res {
@@ -82,7 +97,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
         ctx.spawn(
             future::result(res)
-                .map(|_| SwitchModeResponse::new())
+                .map(|_| SwitchModeResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
@@ -132,10 +147,53 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                             })
                             .and_then(|mut file| file.finish())
                     })
-                    .map(|_| UploadResponse::new())
+                    .map(|_| UploadResponse::default())
                     .then(move |res| send_rpc_response!(res, sink, label, timer)),
             ),
         )
+    }
+
+    /// Downloads the file and performs key-rewrite for later ingesting.
+    fn download(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: DownloadRequest,
+        sink: UnarySink<DownloadResponse>,
+    ) {
+        let label = "download";
+        let timer = Instant::now_coarse();
+        let importer = Arc::clone(&self.importer);
+        let limiter = self.limiter.clone();
+        let engine = Arc::clone(&self.engine);
+        let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
+            .set_db(RocksEngine::from_ref(&engine))
+            .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
+            .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
+            .unwrap();
+
+        ctx.spawn(self.threads.spawn_fn(move || {
+            let res = importer.download::<RocksEngine>(
+                req.get_sst(),
+                req.get_storage_backend(),
+                req.get_name(),
+                req.get_rewrite_rule(),
+                limiter,
+                sst_writer,
+            );
+
+            future::result(res)
+                .map_err(Error::from)
+                .map(|range| {
+                    let mut resp = DownloadResponse::default();
+                    if let Some(r) = range {
+                        resp.set_range(r);
+                    } else {
+                        resp.set_is_empty(true);
+                    }
+                    resp
+                })
+                .then(move |res| send_rpc_response!(res, sink, label, timer))
+        }));
     }
 
     /// Ingest the file by sending a raft command to raftstore.
@@ -152,16 +210,25 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "ingest";
         let timer = Instant::now_coarse();
 
+        if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
+            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
+        {
+            return send_rpc_error(
+                ctx,
+                sink,
+                Error::Engine(box_err!("too many sst files are ingesting.")),
+            );
+        }
         // Make ingest command.
-        let mut ingest = Request::new();
-        ingest.set_cmd_type(CmdType::IngestSST);
+        let mut ingest = Request::default();
+        ingest.set_cmd_type(CmdType::IngestSst);
         ingest.mut_ingest_sst().set_sst(req.take_sst());
         let mut context = req.take_context();
-        let mut header = RaftRequestHeader::new();
+        let mut header = RaftRequestHeader::default();
         header.set_peer(context.take_peer());
         header.set_region_id(context.get_region_id());
         header.set_region_epoch(context.take_region_epoch());
-        let mut cmd = RaftCmdRequest::new();
+        let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.mut_requests().push(ingest);
 
@@ -175,7 +242,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 .map_err(Error::from)
                 .then(|res| match res {
                     Ok(mut res) => {
-                        let mut resp = IngestResponse::new();
+                        let mut resp = IngestResponse::default();
                         let mut header = res.response.take_header();
                         if header.has_error() {
                             resp.set_error(header.take_error());
@@ -230,9 +297,31 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             }
 
             future::result(res)
-                .map_err(Error::from)
-                .map(|_| CompactResponse::new())
+                .map_err(|e| Error::Engine(box_err!(e)))
+                .map(|_| CompactResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer))
         }))
+    }
+
+    fn set_download_speed_limit(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: SetDownloadSpeedLimitRequest,
+        sink: UnarySink<SetDownloadSpeedLimitResponse>,
+    ) {
+        let label = "set_download_speed_limit";
+        let timer = Instant::now_coarse();
+
+        let speed_limit = req.get_speed_limit();
+        self.limiter.set_speed_limit(if speed_limit > 0 {
+            speed_limit as f64
+        } else {
+            INFINITY
+        });
+
+        ctx.spawn(
+            future::ok::<_, Error>(SetDownloadSpeedLimitResponse::default())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
     }
 }

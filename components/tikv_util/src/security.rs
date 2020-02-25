@@ -3,7 +3,6 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
-use std::ptr;
 
 use grpcio::{
     Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
@@ -92,11 +91,9 @@ pub struct SecurityManager {
 
 impl Drop for SecurityManager {
     fn drop(&mut self) {
-        unsafe {
-            for b in &mut self.key {
-                ptr::write_volatile(b, 0);
-            }
-        }
+        use zeroize::Zeroize;
+
+        self.key.zeroize();
     }
 }
 
@@ -149,7 +146,7 @@ mod tests {
 
     use std::fs;
 
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_security() {
@@ -177,7 +174,7 @@ mod tests {
             false,
         );
 
-        let temp = TempDir::new("test_cred").unwrap();
+        let temp = Builder::new().prefix("test_cred").tempdir().unwrap();
         let example_ca = temp.path().join("ca");
         let example_cert = temp.path().join("cert");
         let example_key = temp.path().join("key");

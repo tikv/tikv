@@ -19,40 +19,39 @@
 //!
 //! Please refer to `Endpoint` for more details.
 
-#[macro_use]
-mod macros;
-
+mod cache;
 mod checksum;
-pub mod codec;
 pub mod dag;
 mod endpoint;
 mod error;
 pub mod local_metrics;
-mod metrics;
+pub(crate) mod metrics;
 pub mod readpool_impl;
 mod statistics;
 mod tracker;
-pub mod util;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
+pub use checksum::checksum_crc64_xor;
 
+use crate::storage::Statistics;
+use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
-
-use tikv_util::time::{Duration, Instant};
+use tikv_util::deadline::Deadline;
+use tikv_util::time::Duration;
+use txn_types::TsSet;
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;
 
-const SINGLE_GROUP: &[u8] = b"SingleGroup";
-
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 /// An interface for all kind of Coprocessor request handlers.
+#[async_trait]
 pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
-    fn handle_request(&mut self) -> Result<coppb::Response> {
+    async fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
 
@@ -61,8 +60,12 @@ pub trait RequestHandler: Send {
         panic!("streaming request is not supported for this handler");
     }
 
-    /// Collects metrics generated in this request handler so far.
-    fn collect_metrics_into(&mut self, _metrics: &mut self::dag::executor::ExecutorMetrics) {
+    fn set_execution_time_limit(&mut self, _execution_time_limit: Option<Duration>) {
+        // Execution time limit is not supported by default
+    }
+
+    /// Collects scan statistics generated in this request handler so far.
+    fn collect_scan_statistics(&mut self, _dest: &mut Statistics) {
         // Do nothing by default
     }
 
@@ -71,46 +74,6 @@ pub trait RequestHandler: Send {
         Self: 'static + Sized,
     {
         Box::new(self)
-    }
-}
-
-/// Request process dead line.
-///
-/// When dead line exceeded, the request handling should be stopped.
-// TODO: This struct can be removed.
-#[derive(Debug, Clone, Copy)]
-pub struct Deadline {
-    /// Used to construct the Error when deadline exceeded
-    tag: &'static str,
-
-    start_time: Instant,
-    deadline: Instant,
-}
-
-impl Deadline {
-    /// Initializes a deadline that counting from current.
-    pub fn from_now(tag: &'static str, after_duration: Duration) -> Self {
-        let start_time = Instant::now_coarse();
-        let deadline = start_time + after_duration;
-        Self {
-            tag,
-            start_time,
-            deadline,
-        }
-    }
-
-    /// Returns error if the deadline is exceeded.
-    pub fn check_if_exceeded(&self) -> Result<()> {
-        fail_point!("coprocessor_deadline_check_exceeded", |_| Err(
-            Error::Outdated(Duration::from_secs(60), self.tag)
-        ));
-
-        let now = Instant::now_coarse();
-        if self.deadline <= now {
-            let elapsed = now.duration_since(self.start_time);
-            return Err(Error::Outdated(elapsed, self.tag));
-        }
-        Ok(())
     }
 }
 
@@ -143,19 +106,30 @@ pub struct ReqContext {
 
     /// The transaction start_ts of the request
     pub txn_start_ts: Option<u64>,
+
+    /// The set of timestamps of locks that can be bypassed during the reading.
+    pub bypass_locks: TsSet,
+
+    /// The data version to match. If it matches the underlying data version,
+    /// request will not be processed (i.e. cache hit).
+    ///
+    /// None means don't try to hit the cache.
+    pub cache_match_version: Option<u64>,
 }
 
 impl ReqContext {
     pub fn new(
         tag: &'static str,
-        context: kvrpcpb::Context,
+        mut context: kvrpcpb::Context,
         ranges: &[coppb::KeyRange],
         max_handle_duration: Duration,
         peer: Option<String>,
         is_desc_scan: Option<bool>,
         txn_start_ts: Option<u64>,
+        cache_match_version: Option<u64>,
     ) -> Self {
-        let deadline = Deadline::from_now(tag, max_handle_duration);
+        let deadline = Deadline::from_now(max_handle_duration);
+        let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
         Self {
             tag,
             context,
@@ -165,6 +139,8 @@ impl ReqContext {
             txn_start_ts,
             first_range: ranges.first().cloned(),
             ranges_len: ranges.len(),
+            bypass_locks,
+            cache_match_version,
         }
     }
 
@@ -172,9 +148,10 @@ impl ReqContext {
     pub fn default_for_test() -> Self {
         Self::new(
             "test",
-            kvrpcpb::Context::new(),
+            kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),
+            None,
             None,
             None,
             None,

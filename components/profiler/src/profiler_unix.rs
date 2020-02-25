@@ -39,7 +39,7 @@ pub fn start(name: impl AsRef<str>) -> bool {
         CallgrindClientRequest::start();
     } else {
         *profiler = Profiler::GPerfTools;
-        cpuprofiler::PROFILER
+        gperftools::PROFILER
             .lock()
             .unwrap()
             .start(name.as_ref())
@@ -64,7 +64,7 @@ pub fn stop() -> bool {
             true
         }
         Profiler::GPerfTools => {
-            cpuprofiler::PROFILER.lock().unwrap().stop().unwrap();
+            gperftools::PROFILER.lock().unwrap().stop().unwrap();
             *profiler = Profiler::None;
             true
         }

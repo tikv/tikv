@@ -1,26 +1,24 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
-use protobuf::RepeatedField;
-use tipb::analyze;
+use tipb;
 
-/// `CMSketch` is used to estimate point queries.
+/// `CmSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
 #[derive(Clone)]
-pub struct CMSketch {
+pub struct CmSketch {
     depth: usize,
     width: usize,
     count: u32,
     table: Vec<Vec<u32>>,
 }
 
-impl CMSketch {
-    pub fn new(d: usize, w: usize) -> Option<CMSketch> {
+impl CmSketch {
+    pub fn new(d: usize, w: usize) -> Option<CmSketch> {
         if d == 0 || w == 0 {
             None
         } else {
-            Some(CMSketch {
+            Some(CmSketch {
                 depth: d,
                 width: w,
                 count: 0,
@@ -31,12 +29,8 @@ impl CMSketch {
 
     // `hash` hashes the data into two u64 using murmur hash.
     fn hash(mut bytes: &[u8]) -> (u64, u64) {
-        let mut out: [u8; 16] = [0; 16];
-        murmur3_x64_128(&mut bytes, 0, &mut out);
-        (
-            LittleEndian::read_u64(&out[0..8]),
-            LittleEndian::read_u64(&out[8..16]),
-        )
+        let out = murmur3_x64_128(&mut bytes, 0).unwrap();
+        (out as u64, (out >> 64) as u64)
     }
 
     // `insert` inserts the data into cm sketch. For each row i, the position at
@@ -44,20 +38,20 @@ impl CMSketch {
     // of data.
     pub fn insert(&mut self, bytes: &[u8]) {
         self.count = self.count.wrapping_add(1);
-        let (h1, h2) = CMSketch::hash(bytes);
+        let (h1, h2) = CmSketch::hash(bytes);
         for (i, row) in self.table.iter_mut().enumerate() {
             let j = (h1.wrapping_add(h2.wrapping_mul(i as u64)) % self.width as u64) as usize;
             row[j] = row[j].saturating_add(1);
         }
     }
 
-    pub fn into_proto(self) -> analyze::CMSketch {
-        let mut proto = analyze::CMSketch::new();
-        let mut rows = vec![analyze::CMSketchRow::default(); self.depth];
+    pub fn into_proto(self) -> tipb::CmSketch {
+        let mut proto = tipb::CmSketch::default();
+        let mut rows = vec![tipb::CmSketchRow::default(); self.depth];
         for (i, row) in self.table.iter().enumerate() {
             rows[i].set_counters(row.to_vec());
         }
-        proto.set_rows(RepeatedField::from_vec(rows));
+        proto.set_rows(rows.into());
         proto
     }
 }
@@ -65,19 +59,23 @@ impl CMSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::datum;
-    use crate::coprocessor::codec::datum::Datum;
+
+    use std::cmp::min;
+    use std::slice::from_ref;
+
     use rand::distributions::Distribution;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
-    use std::cmp::min;
-    use tikv_util::as_slice;
-    use tikv_util::collections::HashMap;
     use zipf::ZipfDistribution;
 
-    impl CMSketch {
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
+    use tidb_query::expr::EvalContext;
+    use tikv_util::collections::HashMap;
+
+    impl CmSketch {
         fn query(&self, bytes: &[u8]) -> u32 {
-            let (h1, h2) = CMSketch::hash(bytes);
+            let (h1, h2) = CmSketch::hash(bytes);
             let mut vals = vec![0u32; self.depth];
             let mut min_counter = u32::max_value();
             for (i, row) in self.table.iter().enumerate() {
@@ -100,20 +98,24 @@ mod tests {
     }
 
     fn average_error(depth: usize, width: usize, total: u32, max_value: usize, s: f64) -> u64 {
-        let mut c = CMSketch::new(depth, width).unwrap();
+        let mut c = CmSketch::new(depth, width).unwrap();
         let mut map: HashMap<u64, u32> = HashMap::default();
         let gen = ZipfDistribution::new(max_value, s).unwrap();
         let mut rng = StdRng::seed_from_u64(0x01020304);
         for _ in 0..total {
             let val = gen.sample(&mut rng) as u64;
-            let bytes = datum::encode_value(as_slice(&Datum::U64(val))).unwrap();
+            let bytes =
+                datum::encode_value(&mut EvalContext::default(), from_ref(&Datum::U64(val)))
+                    .unwrap();
             c.insert(&bytes);
             let counter = map.entry(val).or_insert(0);
             *counter += 1;
         }
         let mut total = 0u64;
         for (val, num) in &map {
-            let bytes = datum::encode_value(as_slice(&Datum::U64(*val))).unwrap();
+            let bytes =
+                datum::encode_value(&mut EvalContext::default(), from_ref(&Datum::U64(*val)))
+                    .unwrap();
             let estimate = c.query(&bytes);
             let err = if *num > estimate {
                 *num - estimate
@@ -127,11 +129,11 @@ mod tests {
 
     #[test]
     fn test_hash() {
-        let hash_result = CMSketch::hash("€".as_bytes());
+        let hash_result = CmSketch::hash("€".as_bytes());
         assert_eq!(hash_result.0, 0x59E3303A2FDD9555);
         assert_eq!(hash_result.1, 0x4F9D8BB3E4BC3164);
 
-        let hash_result = CMSketch::hash("€€€€€€€€€€".as_bytes());
+        let hash_result = CmSketch::hash("€€€€€€€€€€".as_bytes());
         assert_eq!(hash_result.0, 0xCECFEB77375EEF6F);
         assert_eq!(hash_result.1, 0xE9830BC26869E2C6);
     }

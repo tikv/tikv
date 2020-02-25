@@ -1,23 +1,26 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod kv_service;
+mod lock_manager;
 mod raft_client;
 
 use std::sync::Arc;
 
 use futures::Future;
+use grpcio::RpcStatusCode;
 use grpcio::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
-use kvproto::tikvpb::{BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage};
-use kvproto::tikvpb_grpc::{create_tikv, Tikv};
+use kvproto::tikvpb::{
+    create_tikv, BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage, Tikv,
+};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
 macro_rules! unary_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: UnarySink<$resp_name>) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -26,7 +29,7 @@ macro_rules! unary_call {
 macro_rules! sstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: ServerStreamingSink<$resp_name>) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -35,7 +38,7 @@ macro_rules! sstream_call {
 macro_rules! cstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -44,7 +47,7 @@ macro_rules! cstream_call {
 macro_rules! bstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -108,9 +111,15 @@ trait MockKvService {
         BatchRollbackRequest,
         BatchRollbackResponse
     );
+    unary_call!(kv_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse);
+    unary_call!(
+        kv_check_txn_status,
+        CheckTxnStatusRequest,
+        CheckTxnStatusResponse
+    );
     unary_call!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
-    unary_call!(kv_gc, GCRequest, GCResponse);
+    unary_call!(kv_gc, GcRequest, GcResponse);
     unary_call!(kv_delete_range, DeleteRangeRequest, DeleteRangeResponse);
     unary_call!(raw_get, RawGetRequest, RawGetResponse);
     unary_call!(raw_batch_get, RawBatchGetRequest, RawBatchGetResponse);
@@ -133,6 +142,26 @@ trait MockKvService {
         unsafe_destroy_range,
         UnsafeDestroyRangeRequest,
         UnsafeDestroyRangeResponse
+    );
+    unary_call!(
+        register_lock_observer,
+        RegisterLockObserverRequest,
+        RegisterLockObserverResponse
+    );
+    unary_call!(
+        check_lock_observer,
+        CheckLockObserverRequest,
+        CheckLockObserverResponse
+    );
+    unary_call!(
+        remove_lock_observer,
+        RemoveLockObserverRequest,
+        RemoveLockObserverResponse
+    );
+    unary_call!(
+        physical_scan_lock,
+        PhysicalScanLockRequest,
+        PhysicalScanLockResponse
     );
     unary_call!(coprocessor, Request, Response);
     sstream_call!(coprocessor_stream, Request, Response);
@@ -173,9 +202,15 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         BatchRollbackRequest,
         BatchRollbackResponse
     );
+    unary_call_dispatch!(kv_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse);
+    unary_call_dispatch!(
+        kv_check_txn_status,
+        CheckTxnStatusRequest,
+        CheckTxnStatusResponse
+    );
     unary_call_dispatch!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call_dispatch!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
-    unary_call_dispatch!(kv_gc, GCRequest, GCResponse);
+    unary_call_dispatch!(kv_gc, GcRequest, GcResponse);
     unary_call_dispatch!(kv_delete_range, DeleteRangeRequest, DeleteRangeResponse);
     unary_call_dispatch!(raw_get, RawGetRequest, RawGetResponse);
     unary_call_dispatch!(raw_batch_get, RawBatchGetRequest, RawBatchGetResponse);
@@ -198,6 +233,26 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         unsafe_destroy_range,
         UnsafeDestroyRangeRequest,
         UnsafeDestroyRangeResponse
+    );
+    unary_call_dispatch!(
+        register_lock_observer,
+        RegisterLockObserverRequest,
+        RegisterLockObserverResponse
+    );
+    unary_call_dispatch!(
+        check_lock_observer,
+        CheckLockObserverRequest,
+        CheckLockObserverResponse
+    );
+    unary_call_dispatch!(
+        remove_lock_observer,
+        RemoveLockObserverRequest,
+        RemoveLockObserverResponse
+    );
+    unary_call_dispatch!(
+        physical_scan_lock,
+        PhysicalScanLockRequest,
+        PhysicalScanLockResponse
     );
     unary_call_dispatch!(coprocessor, Request, Response);
     sstream_call_dispatch!(coprocessor_stream, Request, Response);

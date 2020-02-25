@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_speed_limit::clock::{BlockingClock, Clock, StandardClock};
 use time::{Duration as TimeDuration, Timespec};
 
 // Re-export duration.
@@ -35,13 +36,31 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     d.as_secs() * 1_000_000_000 + nanos
 }
 
-/// Gets the current timestamp in seconds.
-#[inline]
-pub fn time_now_sec() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+/// A time in seconds since the start of the Unix epoch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct UnixSecs(u64);
+
+impl UnixSecs {
+    pub fn now() -> UnixSecs {
+        UnixSecs(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+    }
+
+    pub fn zero() -> UnixSecs {
+        UnixSecs(0)
+    }
+
+    pub fn into_inner(self) -> u64 {
+        self.0
+    }
+
+    pub fn is_zero(self) -> bool {
+        self.0 == 0
+    }
 }
 
 pub struct SlowTimer {
@@ -390,6 +409,32 @@ impl Sub<Instant> for Instant {
         self.duration_since(other)
     }
 }
+
+/// A coarse clock for `async_speed_limit`.
+#[derive(Copy, Clone, Default, Debug)]
+pub struct CoarseClock;
+
+impl Clock for CoarseClock {
+    type Instant = Instant;
+    type Delay = <StandardClock as Clock>::Delay;
+
+    fn now(&self) -> Self::Instant {
+        Instant::now_coarse()
+    }
+
+    fn sleep(&self, dur: Duration) -> Self::Delay {
+        StandardClock.sleep(dur)
+    }
+}
+
+impl BlockingClock for CoarseClock {
+    fn blocking_sleep(&self, dur: Duration) {
+        StandardClock.blocking_sleep(dur);
+    }
+}
+
+/// A limiter which uses the coarse clock for measurement.
+pub type Limiter = async_speed_limit::Limiter<CoarseClock>;
 
 #[cfg(test)]
 mod tests {

@@ -4,14 +4,11 @@ use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
-
-use super::util::CheckLockResult;
 use super::ScannerConfig;
+use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
+use crate::storage::mvcc::{Error, Result};
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -27,8 +24,8 @@ const REVERSE_SEEK_BOUND: u64 = 16;
 /// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
 /// isolation level is SI, locks will be checked first.
 ///
-/// Use `ScannerBuilder` to build `BackwardScanner`.
-pub struct BackwardScanner<S: Snapshot> {
+/// Use `ScannerBuilder` to build `BackwardKvScanner`.
+pub struct BackwardKvScanner<S: Snapshot> {
     cfg: ScannerConfig<S>,
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
@@ -39,13 +36,13 @@ pub struct BackwardScanner<S: Snapshot> {
     statistics: Statistics,
 }
 
-impl<S: Snapshot> BackwardScanner<S> {
+impl<S: Snapshot> BackwardKvScanner<S> {
     pub fn new(
         cfg: ScannerConfig<S>,
         lock_cursor: Cursor<S::Iter>,
         write_cursor: Cursor<S::Iter>,
-    ) -> BackwardScanner<S> {
-        BackwardScanner {
+    ) -> BackwardKvScanner<S> {
+        BackwardKvScanner {
             cfg,
             lock_cursor,
             write_cursor,
@@ -85,7 +82,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         }
 
         // Similar to forward scanner, the general idea is to simultaneously step write
-        // cursor and lock cursor. Please refer to `ForwardScanner` for details.
+        // cursor and lock cursor. Please refer to `ForwardKvScanner` for details.
 
         loop {
             let (current_user_key, has_write, has_lock) = {
@@ -129,29 +126,28 @@ impl<S: Snapshot> BackwardScanner<S> {
             };
 
             let mut result = Ok(None);
-            let mut get_ts = self.cfg.ts;
             let mut met_prev_user_key = false;
+            let ts = self.cfg.ts;
 
             if has_lock {
                 match self.cfg.isolation_level {
-                    IsolationLevel::SI => {
+                    IsolationLevel::Si => {
                         let lock = {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.cfg.ts, &lock)? {
-                            CheckLockResult::NotLocked => {}
-                            CheckLockResult::Locked(e) => result = Err(e),
-                            CheckLockResult::Ignored(ts) => get_ts = ts,
-                        }
+                        result = lock
+                            .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
+                            .map(|_| None)
+                            .map_err(Into::into);
                     }
-                    IsolationLevel::RC => {}
+                    IsolationLevel::Rc => {}
                 }
                 self.lock_cursor.prev(&mut self.statistics.lock);
             }
             if has_write {
                 if result.is_ok() {
-                    result = self.reverse_get(&current_user_key, get_ts, &mut met_prev_user_key);
+                    result = self.reverse_get(&current_user_key, ts, &mut met_prev_user_key);
                 }
                 if !met_prev_user_key {
                     // Skip rest later versions and point to previous user key.
@@ -172,7 +168,7 @@ impl<S: Snapshot> BackwardScanner<S> {
     fn reverse_get(
         &mut self,
         user_key: &Key,
-        ts: u64,
+        ts: TimeStamp,
         met_prev_user_key: &mut bool,
     ) -> Result<Option<Value>> {
         assert!(self.write_cursor.valid()?);
@@ -182,7 +178,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         // We need to save last desired version, because when we may move to an unwanted version
         // at any time.
         let mut last_version = None;
-        let mut last_checked_commit_ts = 0;
+        let mut last_checked_commit_ts = TimeStamp::zero();
 
         for i in 0..REVERSE_SEEK_BOUND {
             if i > 0 {
@@ -214,11 +210,12 @@ impl<S: Snapshot> BackwardScanner<S> {
                 return Ok(self.handle_last_version(last_version, user_key)?);
             }
 
-            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))
+                .map_err(Error::from)?;
             self.statistics.write.processed += 1;
 
             match write.write_type {
-                WriteType::Put | WriteType::Delete => last_version = Some(write),
+                WriteType::Put | WriteType::Delete => last_version = Some(write.to_owned()),
                 WriteType::Lock | WriteType::Rollback => {}
             }
         }
@@ -259,11 +256,12 @@ impl<S: Snapshot> BackwardScanner<S> {
                 return Ok(self.handle_last_version(last_version, user_key)?);
             }
 
-            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put => {
+                    let write = write.to_owned();
                     return Ok(Some(self.reverse_load_data_by_write(write, user_key)?));
                 }
                 WriteType::Delete => return Ok(None),
@@ -311,10 +309,10 @@ impl<S: Snapshot> BackwardScanner<S> {
             None => {
                 // Value is in the default CF.
                 self.ensure_default_cursor()?;
-                let value = super::util::near_reverse_load_data_by_write(
+                let value = super::near_reverse_load_data_by_write(
                     &mut self.default_cursor.as_mut().unwrap(),
                     user_key,
-                    write,
+                    write.start_ts,
                     &mut self.statistics,
                 )?;
                 Ok(value)
@@ -370,10 +368,9 @@ impl<S: Snapshot> BackwardScanner<S> {
 mod tests {
     use super::super::ScannerBuilder;
     use super::*;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
-    use crate::storage::{Engine, Key, TestEngineBuilder};
-
     use kvproto::kvrpcpb::Context;
 
     #[test]
@@ -447,8 +444,8 @@ mod tests {
         // Assume REVERSE_SEEK_BOUND == 4, we have keys:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND, true)
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND.into(), true)
             .range(None, Some(Key::from_raw(&[11 as u8])))
             .build()
             .unwrap();
@@ -620,7 +617,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
     }
 
-    /// Check whether everything works as usual when `BackwardScanner::reverse_get()` goes
+    /// Check whether everything works as usual when `BackwardKvScanner::reverse_get()` goes
     /// out of bound.
     ///
     /// Case 1. prev out of bound, next_version is None.
@@ -642,8 +639,8 @@ mod tests {
             REVERSE_SEEK_BOUND * 2,
         );
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2, true)
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
             .range(None, None)
             .build()
             .unwrap();
@@ -688,7 +685,7 @@ mod tests {
         assert_eq!(statistics.write.prev, 0);
     }
 
-    /// Check whether everything works as usual when `BackwardScanner::reverse_get()` goes
+    /// Check whether everything works as usual when `BackwardKvScanner::reverse_get()` goes
     /// out of bound.
     ///
     /// Case 2. prev out of bound, next_version is Some.
@@ -712,8 +709,8 @@ mod tests {
             REVERSE_SEEK_BOUND * 2,
         );
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2, true)
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
             .range(None, None)
             .build()
             .unwrap();
@@ -762,7 +759,7 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `BackwardScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
     ///
     /// Case 1. prev() out of bound
     #[test]
@@ -779,8 +776,8 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 1, true)
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
             .range(None, None)
             .build()
             .unwrap();
@@ -833,7 +830,7 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `BackwardScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
     ///
     /// Case 2. seek_for_prev() out of bound
     #[test]
@@ -850,8 +847,8 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 1, true)
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
             .range(None, None)
             .build()
             .unwrap();
@@ -910,7 +907,7 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `BackwardScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
     ///
     /// Case 3. a more complicated case
     #[test]
@@ -929,8 +926,8 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND + 1, true)
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND + 1).into(), true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1014,10 +1011,10 @@ mod tests {
             must_commit(&engine, &[i], 14, 14);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build()
             .unwrap();
@@ -1032,7 +1029,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build()
             .unwrap();
@@ -1047,7 +1044,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build()
             .unwrap();
@@ -1062,7 +1059,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1100,39 +1097,38 @@ mod tests {
         // Generate RocksDB tombstones in write cf.
         let start_ts = 1;
         let safe_point = 2;
-        for i in 0..256 {
-            for y in 0..256 {
+        for i in 0..16 {
+            for y in 0..16 {
                 let pk = &[i as u8, y as u8];
                 must_prewrite_put(&engine, pk, b"", pk, start_ts);
                 must_rollback(&engine, pk, start_ts);
-                // Generate 65534 RocksDB tombstones between [0,0] and [255,255].
-                if !((i == 0 && y == 0) || (i == 255 && y == 255)) {
+                // Generate 254 RocksDB tombstones between [0,0] and [15,15].
+                if !((i == 0 && y == 0) || (i == 15 && y == 15)) {
                     must_gc(&engine, pk, safe_point);
                 }
             }
         }
 
-        // Generate 256 locks in lock cf.
+        // Generate 16 locks in lock cf.
         let start_ts = 3;
-        for i in 0..256 {
+        for i in 0..16 {
             let pk = &[i as u8];
             must_prewrite_put(&engine, pk, b"", pk, start_ts);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let row = &[255 as u8];
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let row = &[15 as u8];
         let k = Key::from_raw(row);
 
         // Call reverse scan
-        let ts = 2;
+        let ts = 2.into();
         let mut scanner = ScannerBuilder::new(snapshot, ts, true)
             .range(None, Some(k))
             .build()
             .unwrap();
         assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
-        assert_eq!(statistics.lock.prev, 255);
+        assert_eq!(statistics.lock.prev, 15);
         assert_eq!(statistics.write.prev, 1);
     }
-
 }

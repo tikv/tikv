@@ -13,15 +13,15 @@ use grpcio::{
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 
-use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
 use super::metrics::*;
-use super::transport::RaftStoreRouter;
 use super::{Config, Error, Result};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
@@ -54,7 +54,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<dyn Snapshot>,
+    snap: Box<dyn GenericSnapshot>,
     remain_bytes: usize,
 }
 
@@ -79,7 +79,7 @@ impl Stream for SnapChunk {
         match result {
             Ok(_) => {
                 self.remain_bytes -= buf.len();
-                let mut chunk = SnapshotChunk::new();
+                let mut chunk = SnapshotChunk::default();
                 chunk.set_data(buf);
                 Ok(Async::Ready(Some((
                     chunk,
@@ -131,7 +131,7 @@ fn send_snap(
     let total_size = s.total_size()?;
 
     let chunks = {
-        let mut first_chunk = SnapshotChunk::new();
+        let mut first_chunk = SnapshotChunk::default();
         first_chunk.set_message(msg);
 
         SnapChunk {
@@ -176,7 +176,7 @@ fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<dyn Snapshot>>,
+    file: Option<Box<dyn GenericSnapshot>>,
     raft_msg: RaftMessage,
 }
 
@@ -281,9 +281,9 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
         },
     );
     f.then(move |res| match res {
-        Ok(()) => sink.success(Done::new()),
+        Ok(()) => sink.success(Done::default()),
         Err(e) => {
-            let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
+            let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", e)));
             sink.fail(status)
         }
     })
@@ -329,10 +329,16 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {
-                if self.recving_count.load(Ordering::SeqCst) >= self.cfg.concurrent_recv_snap_limit
-                {
+                let task_num = self.recving_count.load(Ordering::SeqCst);
+                if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
-                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+                    let status = RpcStatus::new(
+                        RpcStatusCode::RESOURCE_EXHAUSTED,
+                        Some(format!(
+                            "the number of received snapshot tasks {} exceeded the limitation {}",
+                            task_num, self.cfg.concurrent_recv_snap_limit
+                        )),
+                    );
                     self.pool.spawn(sink.fail(status)).forget();
                     return;
                 }
@@ -352,6 +358,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 self.pool.spawn(f).forget();
             }
             Task::Send { addr, msg, cb } => {
+                fail_point!("send_snapshot");
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
                     warn!(

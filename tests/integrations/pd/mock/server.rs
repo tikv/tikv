@@ -9,11 +9,10 @@ use grpcio::{
     DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
-use tikv::pd::Error as PdError;
+use pd_client::Error as PdError;
 use tikv_util::security::*;
 
 use kvproto::pdpb::*;
-use kvproto::pdpb_grpc::{self, Pd};
 
 use super::mocker::*;
 
@@ -51,7 +50,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         let default_handler = Arc::clone(&handler);
         let mocker = PdMock {
             default_handler,
-            case: case.clone(),
+            case,
         };
         let mut server = Server {
             server: None,
@@ -62,7 +61,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
-        let service = pdpb_grpc::create_pd(self.mocker.clone());
+        let service = create_pd(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
@@ -123,7 +122,7 @@ fn hijack_unary<F, R, C: PdMocker>(
                 .map_err(move |err| error!("failed to reply: {:?}", err)),
         ),
         Some(Err(err)) => {
-            let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", err)));
+            let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)));
             ctx.spawn(
                 sink.fail(status)
                     .map_err(move |err| error!("failed to reply: {:?}", err)),
@@ -131,7 +130,7 @@ fn hijack_unary<F, R, C: PdMocker>(
         }
         _ => {
             let status = RpcStatus::new(
-                RpcStatusCode::Unimplemented,
+                RpcStatusCode::UNIMPLEMENTED,
                 Some("Unimplemented".to_owned()),
             );
             ctx.spawn(
@@ -167,8 +166,23 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         hijack_unary(self, ctx, sink, |c| c.get_members(&req))
     }
 
-    fn tso(&mut self, _: RpcContext<'_>, _: RequestStream<TsoRequest>, _: DuplexSink<TsoResponse>) {
-        unimplemented!()
+    fn tso(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RequestStream<TsoRequest>,
+        resp: DuplexSink<TsoResponse>,
+    ) {
+        let header = Service::header();
+        let fut = resp
+            .send_all(req.map(move |_| {
+                let mut r = TsoResponse::default();
+                r.set_header(header.clone());
+                r.mut_timestamp().physical = 42;
+                (r, WriteFlags::default())
+            }))
+            .map_err(|_| ())
+            .map(|_| ());
+        ctx.spawn(fut);
     }
 
     fn bootstrap(
@@ -192,8 +206,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn alloc_id(
         &mut self,
         ctx: RpcContext<'_>,
-        req: AllocIDRequest,
-        sink: UnarySink<AllocIDResponse>,
+        req: AllocIdRequest,
+        sink: UnarySink<AllocIdResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.alloc_id(&req))
     }
@@ -277,7 +291,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn get_region_by_id(
         &mut self,
         ctx: RpcContext<'_>,
-        req: GetRegionByIDRequest,
+        req: GetRegionByIdRequest,
         sink: UnarySink<GetRegionResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.get_region_by_id(&req))
@@ -353,8 +367,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn get_gc_safe_point(
         &mut self,
         ctx: RpcContext<'_>,
-        req: GetGCSafePointRequest,
-        sink: UnarySink<GetGCSafePointResponse>,
+        req: GetGcSafePointRequest,
+        sink: UnarySink<GetGcSafePointResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.get_gc_safe_point(&req))
     }
@@ -362,8 +376,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn update_gc_safe_point(
         &mut self,
         ctx: RpcContext<'_>,
-        req: UpdateGCSafePointRequest,
-        sink: UnarySink<UpdateGCSafePointResponse>,
+        req: UpdateGcSafePointRequest,
+        sink: UnarySink<UpdateGcSafePointResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.update_gc_safe_point(&req))
     }

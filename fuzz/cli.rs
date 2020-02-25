@@ -199,7 +199,10 @@ fn run_afl(target: &str) -> Result<(), Error> {
     let seed_dir = get_seed_dir(target);
     let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
 
-    pre_check(Command::new("cargo").args(&["afl"]), "cargo install afl")?;
+    pre_check(
+        Command::new("cargo").args(&["afl", "--version"]),
+        "cargo install afl",
+    )?;
 
     // 1. cargo afl build (in fuzzer-afl directory)
     let fuzzer_build = Command::new("cargo")
@@ -211,10 +214,10 @@ fn run_afl(target: &str) -> Result<(), Error> {
         .context(format!("Failed to complete building {}", fuzzer))?;
 
     if !fuzzer_build.success() {
-        Err(format_err!(
+        return Err(format_err!(
             "error building afl instrumented binary, exit code {:?}",
             fuzzer_build.code()
-        ))?;
+        ));
     }
 
     // 2. cargo afl fuzz -i {seed_dir} -o {corpus_dir} target/debug/{instrumented_binary}
@@ -233,11 +236,11 @@ fn run_afl(target: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        Err(format_err!(
+        return Err(format_err!(
             "{} exited with code {:?}",
             fuzzer,
             fuzzer_bin.code()
-        ))?;
+        ));
     }
 
     Ok(())
@@ -247,13 +250,13 @@ fn run_afl(target: &str) -> Result<(), Error> {
 fn run_honggfuzz(target: &str) -> Result<(), Error> {
     pre_check(
         Command::new("cargo").args(&["hfuzz", "version"]),
-        "cargo install hfuzz --version 0.5.34",
+        "cargo install honggfuzz --version 0.5.45",
     )?;
 
     let fuzzer = Fuzzer::Honggfuzz;
 
     let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();
-    rust_flags.push_str("-Z sanitizer=address");
+    rust_flags.push_str(" -Z sanitizer=address");
 
     let hfuzz_args = format!(
         "-f {} \
@@ -274,11 +277,11 @@ fn run_honggfuzz(target: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        Err(format_err!(
+        return Err(format_err!(
             "{} exited with code {:?}",
             fuzzer,
             fuzzer_bin.code()
-        ))?;
+        ));
     }
 
     Ok(())
@@ -336,11 +339,11 @@ fn run_libfuzzer(target: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        Err(format_err!(
+        return Err(format_err!(
             "{} exited with code {:?}",
             fuzzer,
             fuzzer_bin.code()
-        ))?;
+        ));
     }
 
     Ok(())

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use pd_client::PdClient;
 use test_raftstore::*;
-use tikv::pd::PdClient;
 use tikv_util::config::*;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {

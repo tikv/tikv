@@ -59,12 +59,6 @@ fn test_server_basic_transfer_leader() {
     test_basic_transfer_leader(&mut cluster);
 }
 
-#[test]
-fn test_node_basic_transfer_leader() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_basic_transfer_leader(&mut cluster);
-}
-
 fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -94,6 +88,9 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
             if let Some(leader) = cluster.leader_of_region(1) {
                 if leader.get_id() == id {
+                    // make sure new leader apply an entry on its term
+                    // so we can use its local reader safely
+                    cluster.must_put(b"k1", b"v1");
                     break;
                 }
             }
@@ -113,12 +110,6 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 #[test]
 fn test_server_pd_transfer_leader() {
     let mut cluster = new_server_cluster(0, 3);
-    test_pd_transfer_leader(&mut cluster);
-}
-
-#[test]
-fn test_node_pd_transfer_leader() {
-    let mut cluster = new_node_cluster(0, 3);
     test_pd_transfer_leader(&mut cluster);
 }
 
@@ -162,16 +153,11 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     let resp = cluster.call_command_on_leader(put, Duration::from_secs(5));
     // if it's transferring leader, resp will timeout.
     assert!(resp.is_ok(), "{:?}", resp);
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
 }
 
 #[test]
 fn test_server_transfer_leader_during_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
-    test_transfer_leader_during_snapshot(&mut cluster);
-}
-
-#[test]
-fn test_node_transfer_leader_during_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
     test_transfer_leader_during_snapshot(&mut cluster);
 }

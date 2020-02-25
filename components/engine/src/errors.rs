@@ -12,11 +12,11 @@ quick_error! {
             display("RocksDb {}", msg)
         }
         // FIXME: It should not know Region.
-        NotInRange( key: Vec<u8>, regoin_id: u64, start: Vec<u8>, end: Vec<u8>) {
+        NotInRange( key: Vec<u8>, region_id: u64, start: Vec<u8>, end: Vec<u8>) {
             description("Key is out of range")
             display(
                 "Key {} is out of [region {}] [{}, {})",
-                hex::encode_upper(&key), regoin_id, hex::encode_upper(&start), hex::encode_upper(&end)
+                hex::encode_upper(&key), region_id, hex::encode_upper(&start), hex::encode_upper(&end)
             )
         }
         Protobuf(err: protobuf::ProtobufError) {
@@ -24,6 +24,18 @@ quick_error! {
             cause(err)
             description(err.description())
             display("Protobuf {}", err)
+        }
+        #[cfg(feature = "prost-codec")]
+        ProstDecode(err: prost::DecodeError) {
+            cause(err)
+            description(err.description())
+            display("Prost Decode {}", err)
+        }
+        #[cfg(feature = "prost-codec")]
+        ProstEncode(err: prost::EncodeError) {
+            cause(err)
+            description(err.description())
+            display("Prost Encode {}", err)
         }
         Io(err: std::io::Error) {
             from()
@@ -49,10 +61,24 @@ impl From<Error> for raft::Error {
     }
 }
 
+#[cfg(feature = "prost-codec")]
+impl From<prost::EncodeError> for Error {
+    fn from(err: prost::EncodeError) -> Error {
+        Error::ProstEncode(err.into())
+    }
+}
+
+#[cfg(feature = "prost-codec")]
+impl From<prost::DecodeError> for Error {
+    fn from(err: prost::DecodeError) -> Error {
+        Error::ProstDecode(err.into())
+    }
+}
+
 impl From<Error> for kvproto::errorpb::Error {
     fn from(err: Error) -> kvproto::errorpb::Error {
-        let mut errorpb = kvproto::errorpb::Error::new();
-        errorpb.set_message(error::Error::description(&err).to_owned());
+        let mut errorpb = kvproto::errorpb::Error::default();
+        errorpb.set_message(format!("{}", err));
 
         if let Error::NotInRange(key, region_id, start_key, end_key) = err {
             errorpb.mut_key_not_in_region().set_key(key);

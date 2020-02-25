@@ -5,12 +5,9 @@ use super::*;
 use std::collections::BTreeMap;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::schema::{self, ColumnInfo};
+use tipb::{self, ColumnInfo};
 
-use protobuf::RepeatedField;
-
-use tikv::coprocessor;
-use tikv::coprocessor::codec::table;
+use tidb_query::codec::table;
 use tikv_util::codec::number::NumberEncoder;
 
 #[derive(Clone)]
@@ -41,11 +38,11 @@ impl Table {
         idx.map(|idx| &self.columns[*idx].1)
     }
 
-    /// Create `schema::TableInfo` from current table.
-    pub fn table_info(&self) -> schema::TableInfo {
-        let mut info = schema::TableInfo::new();
+    /// Create `tipb::TableInfo` from current table.
+    pub fn table_info(&self) -> tipb::TableInfo {
+        let mut info = tipb::TableInfo::default();
         info.set_table_id(self.id);
-        info.set_columns(RepeatedField::from_vec(self.columns_info()));
+        info.set_columns(self.columns_info().into());
         info
     }
 
@@ -57,16 +54,16 @@ impl Table {
             .collect()
     }
 
-    /// Create `schema::IndexInfo` from current table.
-    pub fn index_info(&self, index: i64, store_handle: bool) -> schema::IndexInfo {
-        let mut idx_info = schema::IndexInfo::new();
+    /// Create `tipb::IndexInfo` from current table.
+    pub fn index_info(&self, index: i64, store_handle: bool) -> tipb::IndexInfo {
+        let mut idx_info = tipb::IndexInfo::default();
         idx_info.set_table_id(self.id);
         idx_info.set_index_id(index);
         let mut has_pk = false;
         for col_id in &self.idxs[&index] {
             let col = self.column_by_id(*col_id).unwrap();
-            let mut c_info = ColumnInfo::new();
-            c_info.set_tp(col.col_type);
+            let mut c_info = ColumnInfo::default();
+            c_info.set_tp(col.col_field_type());
             c_info.set_column_id(col.id);
             if col.id == self.handle_id {
                 c_info.set_pk_handle(true);
@@ -75,7 +72,7 @@ impl Table {
             idx_info.mut_columns().push(c_info);
         }
         if !has_pk && store_handle {
-            let mut handle_info = ColumnInfo::new();
+            let mut handle_info = ColumnInfo::default();
             handle_info.set_tp(TYPE_LONG);
             handle_info.set_column_id(-1);
             handle_info.set_pk_handle(true);
@@ -86,7 +83,7 @@ impl Table {
 
     /// Create a `KeyRange` which select all records in current table.
     pub fn get_record_range_all(&self) -> KeyRange {
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         range.set_start(table::encode_row_key(self.id, std::i64::MIN));
         range.set_end(table::encode_row_key(self.id, std::i64::MAX));
         range
@@ -96,8 +93,8 @@ impl Table {
     pub fn get_record_range_one(&self, handle_id: i64) -> KeyRange {
         let start_key = table::encode_row_key(self.id, handle_id);
         let mut end_key = start_key.clone();
-        coprocessor::util::convert_to_prefix_next(&mut end_key);
-        let mut range = KeyRange::new();
+        tidb_query::util::convert_to_prefix_next(&mut end_key);
+        let mut range = KeyRange::default();
         range.set_start(start_key);
         range.set_end(end_key);
         range
@@ -105,7 +102,7 @@ impl Table {
 
     /// Create a `KeyRange` which select all index records of a specified index in current table.
     pub fn get_index_range_all(&self, idx: i64) -> KeyRange {
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(::std::i64::MIN).unwrap();
         range.set_start(table::encode_index_seek_key(self.id, idx, &buf));
@@ -138,12 +135,18 @@ impl TableBuilder {
     }
 
     pub fn add_col(mut self, name: impl std::borrow::Borrow<str>, col: Column) -> TableBuilder {
+        use std::cmp::Ordering::*;
+
         if col.index == 0 {
-            if self.handle_id > 0 {
-                self.handle_id = 0;
-            } else if self.handle_id < 0 {
-                // maybe need to check type.
-                self.handle_id = col.id;
+            match self.handle_id.cmp(&0) {
+                Greater => {
+                    self.handle_id = 0;
+                }
+                Less => {
+                    // maybe need to check type.
+                    self.handle_id = col.id;
+                }
+                Equal => {}
             }
         }
         self.columns.push((normalize_column_name(name), col));

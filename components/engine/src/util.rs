@@ -1,33 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::u64;
-
 use crate::rocks;
-use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
+use crate::rocks::{Writable, WriteBatch, DB};
 use crate::CF_LOCK;
 
-use super::{Error, Result};
+use super::Result;
 use super::{IterOption, Iterable};
 use tikv_util::keybuilder::KeyBuilder;
-
-/// Check if key in range [`start_key`, `end_key`).
-pub fn check_key_in_range(
-    key: &[u8],
-    region_id: u64,
-    start_key: &[u8],
-    end_key: &[u8],
-) -> Result<()> {
-    if key >= start_key && (end_key.is_empty() || key < end_key) {
-        Ok(())
-    } else {
-        Err(Error::NotInRange(
-            key.to_vec(),
-            region_id,
-            start_key.to_vec(),
-            end_key.to_vec(),
-        ))
-    }
-}
 
 // In our tests, we found that if the batch size is too large, running delete_all_in_range will
 // reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
@@ -58,16 +37,21 @@ pub fn delete_all_in_range_cf(
     use_delete_range: bool,
 ) -> Result<()> {
     let handle = rocks::util::get_cf_handle(db, cf)?;
-    let wb = WriteBatch::new();
+    let wb = WriteBatch::default();
     if use_delete_range && cf != CF_LOCK {
         wb.delete_range_cf(handle, start_key, end_key)?;
     } else {
         let start = KeyBuilder::from_slice(start_key, 0, 0);
         let end = KeyBuilder::from_slice(end_key, 0, 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), false);
+        let mut iter_opt = IterOption::new(Some(start), Some(end), false);
+        if db.is_titan() {
+            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
+            // to avoid referring to missing blob files.
+            iter_opt.set_key_only(true);
+        }
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
-        it.seek(start_key.into());
-        while it.valid() {
+        let mut it_valid = it.seek(start_key.into())?;
+        while it_valid {
             wb.delete_cf(handle, it.key())?;
             if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Can't use write_without_wal here.
@@ -75,12 +59,8 @@ pub fn delete_all_in_range_cf(
                 db.write(&wb)?;
                 wb.clear();
             }
-
-            if !it.next() {
-                break;
-            }
+            it_valid = it.next()?;
         }
-        it.status()?;
     }
 
     if wb.count() > 0 {
@@ -103,21 +83,9 @@ pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> R
     Ok(())
 }
 
-pub fn get_range_properties_cf(
-    db: &DB,
-    cfname: &str,
-    start_key: &[u8],
-    end_key: &[u8],
-) -> Result<TablePropertiesCollection> {
-    let cf = rocks::util::get_cf_handle(db, cfname)?;
-    let range = Range::new(start_key, end_key);
-    db.get_properties_of_tables_in_range(cf, &[range])
-        .map_err(|e| e.into())
-}
-
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use crate::rocks;
     use crate::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
@@ -131,18 +99,21 @@ mod tests {
         for cf in cfs {
             let handle = get_cf_handle(db, cf).unwrap();
             let mut iter = db.iter_cf(handle);
-            iter.seek(SeekKey::Start);
+            iter.seek(SeekKey::Start).unwrap();
             for &(k, v) in expected {
                 assert_eq!(k, iter.key());
                 assert_eq!(v, iter.value());
-                iter.next();
+                iter.next().unwrap();
             }
-            assert!(!iter.valid());
+            assert!(!iter.valid().unwrap());
         }
     }
 
     fn test_delete_all_in_range(use_delete_range: bool) {
-        let path = TempDir::new("engine_delete_all_in_range").unwrap();
+        let path = Builder::new()
+            .prefix("engine_delete_all_in_range")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         let cfs_opts = ALL_CFS
@@ -151,7 +122,7 @@ mod tests {
             .collect();
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
-        let wb = WriteBatch::new();
+        let wb = WriteBatch::default();
         let ts: u8 = 12;
         let keys: Vec<_> = vec![
             b"k1".to_vec(),
@@ -199,7 +170,10 @@ mod tests {
 
     #[test]
     fn test_delete_all_files_in_range() {
-        let path = TempDir::new("engine_delete_all_files_in_range").unwrap();
+        let path = Builder::new()
+            .prefix("engine_delete_all_files_in_range")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         let cfs_opts = ALL_CFS
@@ -234,7 +208,10 @@ mod tests {
 
     #[test]
     fn test_delete_range_prefix_bloom_case() {
-        let path = TempDir::new("engine_delete_range_prefix_bloom").unwrap();
+        let path = Builder::new()
+            .prefix("engine_delete_range_prefix_bloom")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         let mut opts = DBOptions::new();
@@ -252,7 +229,7 @@ mod tests {
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
         let cf = "default";
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
-        let wb = WriteBatch::new();
+        let wb = WriteBatch::default();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),
             (b"kabcdefg2", b"v2"),

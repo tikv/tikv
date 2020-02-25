@@ -3,21 +3,26 @@
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::Range;
 use engine::CF_WRITE;
+use keys::{data_key, DATA_MAX_KEY};
 use test_raftstore::*;
-use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};
-use tikv::storage::mvcc::{Write, WriteType};
-use tikv::storage::types::Key as MvccKey;
+use tikv::storage::mvcc::{TimeStamp, Write, WriteType};
 use tikv_util::config::*;
+use txn_types::Key;
 
-fn gen_mvcc_put_kv(k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) -> (Vec<u8>, Vec<u8>) {
-    let k = MvccKey::from_encoded(data_key(k));
+fn gen_mvcc_put_kv(
+    k: &[u8],
+    v: &[u8],
+    start_ts: TimeStamp,
+    commit_ts: TimeStamp,
+) -> (Vec<u8>, Vec<u8>) {
+    let k = Key::from_encoded(data_key(k));
     let k = k.append_ts(commit_ts);
     let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
-    (k.as_encoded().clone(), w.to_bytes())
+    (k.as_encoded().clone(), w.as_ref().to_bytes())
 }
 
-fn gen_delete_k(k: &[u8], commit_ts: u64) -> Vec<u8> {
-    let k = MvccKey::from_encoded(data_key(k));
+fn gen_delete_k(k: &[u8], commit_ts: TimeStamp) -> Vec<u8> {
+    let k = Key::from_encoded(data_key(k));
     let k = k.append_ts(commit_ts);
     k.as_encoded().clone()
 }
@@ -31,7 +36,7 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for i in 0..1000 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
-        let (k, v) = gen_mvcc_put_kv(k.as_bytes(), v.as_bytes(), 1, 2);
+        let (k, v) = gen_mvcc_put_kv(k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         cluster.must_put_cf(CF_WRITE, &k, &v);
     }
     for engines in cluster.engines.values() {
@@ -41,7 +46,7 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for i in 0..1000 {
         let k = format!("k{}", i);
-        let k = gen_delete_k(k.as_bytes(), 2);
+        let k = gen_delete_k(k.as_bytes(), 2.into());
         cluster.must_delete_cf(CF_WRITE, &k);
     }
     for engines in cluster.engines.values() {

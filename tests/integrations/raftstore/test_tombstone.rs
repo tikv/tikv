@@ -12,7 +12,6 @@ use engine::rocks::Writable;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
 use test_raftstore::*;
-use tikv::raftstore::store::keys;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -64,12 +63,12 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(existing_kvs[0].0.as_slice(), keys::STORE_IDENT_KEY);
     assert_eq!(existing_kvs[1].0, keys::region_state_key(r1));
 
-    let mut ident = StoreIdent::new();
+    let mut ident = StoreIdent::default();
     ident.merge_from_bytes(&existing_kvs[0].1).unwrap();
     assert_eq!(ident.get_store_id(), 2);
     assert_eq!(ident.get_cluster_id(), cluster.id());
 
-    let mut state = RegionLocalState::new();
+    let mut state = RegionLocalState::default();
     state.merge_from_bytes(&existing_kvs[1].1).unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
@@ -80,7 +79,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(conf_ver == 4 || conf_ver == 3);
 
     // Send a stale raft message to peer (2, 2)
-    let mut raft_msg = RaftMessage::new();
+    let mut raft_msg = RaftMessage::default();
 
     raft_msg.set_region_id(r1);
     // Use an invalid from peer to ignore gc peer message.
@@ -211,7 +210,7 @@ fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Stale gc message should be ignored.
     let epoch = pd_client.get_region_epoch(r1);
-    let mut gc_msg = RaftMessage::new();
+    let mut gc_msg = RaftMessage::default();
     gc_msg.set_region_id(r1);
     gc_msg.set_from_peer(new_peer(1, 1));
     gc_msg.set_to_peer(new_peer(2, 2));

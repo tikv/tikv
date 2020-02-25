@@ -5,7 +5,7 @@ use std::io::Read;
 
 use crate::buffer::BufferReader;
 use crate::number::{self, NumberCodec, NumberDecoder, NumberEncoder};
-use crate::{Error, Result};
+use crate::{ErrorInner, Result};
 
 const MEMCMP_GROUP_SIZE: usize = 8;
 const MEMCMP_PAD_BYTE: u8 = 0;
@@ -27,11 +27,11 @@ impl MemComparableByteCodec {
     fn get_first_encoded_len_internal<T: MemComparableCodecHelper>(encoded: &[u8]) -> usize {
         let mut idx = MEMCMP_GROUP_SIZE;
         loop {
-            if unsafe { unlikely(encoded.len() < idx + 1) } {
+            if unlikely(encoded.len() < idx + 1) {
                 return encoded.len();
             }
             let marker = encoded[idx];
-            if unsafe { unlikely(T::parse_padding_size(marker) > 0) } {
+            if unlikely(T::parse_padding_size(marker) > 0) {
                 return idx + 1;
             }
             idx += MEMCMP_GROUP_SIZE + 1
@@ -98,6 +98,52 @@ impl MemComparableByteCodec {
         }
     }
 
+    /// Encodes the bytes `src[..len]` in ascending memory-comparable format in place.
+    ///
+    /// Returns the number of bytes encoded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of `src` is not enough for writing encoded bytes.
+    pub fn encode_all_in_place(src: &mut [u8], len: usize) -> usize {
+        // Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
+        let src_len = len;
+        let dest_len = Self::encoded_len(src_len);
+        assert!(src.len() >= dest_len);
+
+        // There must be 0 or more zero padding groups and 1 non-zero padding groups
+        // in the output.
+        let zero_padding_groups = src_len / MEMCMP_GROUP_SIZE;
+
+        // To avoid overwriting un-copied bytes, we write the last group first,
+        // then write zero padding groups backward.
+
+        // First, write the last group, which should never be zero padding.
+        let last_group_size = src_len - MEMCMP_GROUP_SIZE * zero_padding_groups;
+        let padding_size = MEMCMP_GROUP_SIZE - last_group_size;
+        let padding_marker = !(padding_size as u8);
+
+        unsafe {
+            let mut src_ptr = src.as_ptr().add(src_len - last_group_size);
+            let mut dest_ptr = src.as_mut_ptr().add(dest_len - (MEMCMP_GROUP_SIZE + 1));
+
+            std::ptr::copy(src_ptr, dest_ptr, last_group_size);
+            std::ptr::write_bytes(dest_ptr.add(last_group_size), MEMCMP_PAD_BYTE, padding_size);
+            std::ptr::write(dest_ptr.add(MEMCMP_GROUP_SIZE), padding_marker);
+
+            // Then, write these zero padding groups backward.
+            for _ in 0..zero_padding_groups {
+                dest_ptr = dest_ptr.sub(1);
+                dest_ptr.write(!0);
+                src_ptr = src_ptr.sub(MEMCMP_GROUP_SIZE);
+                dest_ptr = dest_ptr.sub(MEMCMP_GROUP_SIZE);
+                std::ptr::copy(src_ptr, dest_ptr, MEMCMP_GROUP_SIZE);
+            }
+        }
+
+        dest_len
+    }
+
     /// Performs in place bitwise NOT for specified memory region.
     ///
     /// # Panics
@@ -126,6 +172,19 @@ impl MemComparableByteCodec {
     pub fn encode_all_desc(src: &[u8], dest: &mut [u8]) -> usize {
         let encoded_len = Self::encode_all(src, dest);
         Self::flip_bytes_in_place(dest, encoded_len);
+        encoded_len
+    }
+
+    /// Encodes the bytes `src[..len]` in descending memory-comparable format in place.
+    ///
+    /// Returns the number of bytes encoded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of `src` is not enough for writing encoded bytes.
+    pub fn encode_all_in_place_desc(src: &mut [u8], len: usize) -> usize {
+        let encoded_len = Self::encode_all_in_place(src, len);
+        Self::flip_bytes_in_place(src, encoded_len);
         encoded_len
     }
 
@@ -291,7 +350,7 @@ impl MemComparableByteCodec {
             loop {
                 let src_ptr_next = src_ptr.add(MEMCMP_GROUP_SIZE + 1);
                 if std::intrinsics::unlikely(src_ptr_next > src_ptr_end) {
-                    return Err(Error::eof());
+                    return Err(ErrorInner::eof().into());
                 }
 
                 // Copy `MEMCMP_GROUP_SIZE` bytes any way. However we will truncate the returned
@@ -306,7 +365,7 @@ impl MemComparableByteCodec {
                 if std::intrinsics::unlikely(padding_size > 0) {
                     // First check padding size.
                     if std::intrinsics::unlikely(padding_size > MEMCMP_GROUP_SIZE) {
-                        return Err(Error::bad_padding());
+                        return Err(ErrorInner::bad_padding().into());
                     }
 
                     // Then check padding content. Use `libc::memcmp` to compare two memory blocks
@@ -320,7 +379,7 @@ impl MemComparableByteCodec {
                         padding_size,
                     );
                     if std::intrinsics::unlikely(cmp_result != 0) {
-                        return Err(Error::bad_padding());
+                        return Err(ErrorInner::bad_padding().into());
                     }
 
                     let read_bytes = src_ptr.offset_from(src_ptr_untouched) as usize;
@@ -382,11 +441,11 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size is not enough.
-    fn write_bytes(&mut self, bs: &[u8]) -> Result<()> {
+    fn write_comparable_bytes(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
-        if unsafe { unlikely(buf.len() < len) } {
-            return Err(Error::eof());
+        if unlikely(buf.len() < len) {
+            return Err(ErrorInner::eof().into());
         }
         MemComparableByteCodec::encode_all(bs, buf);
         unsafe {
@@ -400,11 +459,11 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size is not enough.
-    fn write_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
+    fn write_comparable_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
-        if unsafe { unlikely(buf.len() < len) } {
-            return Err(Error::eof());
+        if unlikely(buf.len() < len) {
+            return Err(ErrorInner::eof().into());
         }
         MemComparableByteCodec::encode_all_desc(bs, buf);
         unsafe {
@@ -417,7 +476,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
 impl<T: NumberEncoder> MemComparableByteEncoder for T {}
 
 pub trait MemComparableByteDecoder: BufferReader {
-    fn read_bytes(&mut self) -> Result<Vec<u8>> {
+    fn read_comparable_bytes(&mut self) -> Result<Vec<u8>> {
         let mut buf = vec![0; self.bytes().len()];
         let (read, written) = MemComparableByteCodec::try_decode_first(self.bytes(), &mut buf)?;
         self.advance(read);
@@ -456,7 +515,7 @@ impl<T: NumberEncoder> CompactByteEncoder for T {
     #[inline]
     fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
         self.write_var_i64(data.len() as i64)?;
-        self.write_all_bytes(data)
+        self.write_bytes(data)
     }
 }
 
@@ -481,8 +540,8 @@ impl<T: NumberDecoder> CompactByteDecoder for T {
     fn read_compact_bytes(&mut self) -> Result<Vec<u8>> {
         let vn = self.read_var_i64()? as usize;
         let data = self.bytes();
-        if unsafe { unlikely(data.len() < vn) } {
-            return Err(Error::eof());
+        if unlikely(data.len() < vn) {
+            return Err(ErrorInner::eof().into());
         }
         let bs = data[0..vn].to_vec();
         self.advance(vn);
@@ -510,7 +569,7 @@ impl<T: Read> CompactByteDecoder for std::io::BufReader<T> {
 
 #[cfg(test)]
 mod tests {
-    use rand;
+    use rand::prelude::*;
 
     use super::*;
     use crate::number;
@@ -619,7 +678,7 @@ mod tests {
             ),
         ];
         for (src, encoded) in cases {
-            assert_eq!(encoded.as_slice().read_bytes().unwrap(), src);
+            assert_eq!(encoded.as_slice().read_comparable_bytes().unwrap(), src);
         }
     }
 
@@ -843,6 +902,20 @@ mod tests {
                         &base_buffer[output_offset + encoded_len..]
                     );
 
+                    // Test encode in-place ascending
+                    let mut encode_in_place_buffer: Vec<u8> = src.clone();
+                    encode_in_place_buffer.resize(encoded_len, 0u8);
+                    let output_len = MemComparableByteCodec::encode_all_in_place(
+                        &mut encode_in_place_buffer,
+                        src.len(),
+                    );
+                    assert_eq!(output_len, encoded_len);
+                    assert_eq!(output_len, expect_encoded_asc.len());
+                    assert_eq!(
+                        &encode_in_place_buffer.as_mut_slice()[..output_len],
+                        &output_buffer[output_offset..output_offset + encoded_len],
+                    );
+
                     // Test encode descending
                     let mut output_buffer = base_buffer.clone();
                     let output_len = MemComparableByteCodec::encode_all_desc(
@@ -864,6 +937,20 @@ mod tests {
                         &output_buffer[output_offset + encoded_len..],
                         &base_buffer[output_offset + encoded_len..]
                     );
+
+                    // Test encode in-place descending
+                    let mut encode_in_place_buffer: Vec<u8> = src.clone();
+                    encode_in_place_buffer.resize(encoded_len, 0u8);
+                    let output_len = MemComparableByteCodec::encode_all_in_place_desc(
+                        &mut encode_in_place_buffer,
+                        src.len(),
+                    );
+                    assert_eq!(output_len, encoded_len);
+                    assert_eq!(output_len, expect_encoded_asc.len());
+                    assert_eq!(
+                        &encode_in_place_buffer.as_mut_slice()[..output_len],
+                        &output_buffer[output_offset..output_offset + encoded_len],
+                    );
                 }
             }
         }
@@ -877,6 +964,15 @@ mod tests {
             let mut dest = vec![0; dest_len];
             let result = panic_hook::recover_safe(move || {
                 let _ = MemComparableByteCodec::encode_all(src.as_slice(), dest.as_mut_slice());
+            });
+            assert!(result.is_err());
+
+            let mut src_in_place = vec![0; dest_len];
+            let result = panic_hook::recover_safe(move || {
+                let _ = MemComparableByteCodec::encode_all_in_place(
+                    src_in_place.as_mut_slice(),
+                    src_len,
+                );
             });
             assert!(result.is_err());
         }
@@ -905,10 +1001,8 @@ mod tests {
             let encoded_len = MemComparableByteCodec::encoded_len(payload_len);
             let mut payload_encoded: Vec<u8> =
                 vec![0; encoded_prefix_len + encoded_len + encoded_suffix_len];
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..encoded_prefix_len {
-                payload_encoded[i] = rand::random();
-            }
+            let mut rng = thread_rng();
+            rng.fill_bytes(&mut payload_encoded[..encoded_prefix_len]);
             {
                 let src = payload_raw.as_slice();
                 let dest = &mut payload_encoded.as_mut_slice()[encoded_prefix_len..];
@@ -918,16 +1012,11 @@ mod tests {
                     MemComparableByteCodec::encode_all(src, dest);
                 }
             }
-            #[allow(clippy::needless_range_loop)]
-            for i in encoded_prefix_len + encoded_len..encoded_suffix_len {
-                payload_encoded[i] = rand::random();
-            }
+            rng.fill_bytes(&mut payload_encoded[encoded_prefix_len + encoded_len..]);
 
             let mut base_buffer: Vec<u8> =
-                Vec::with_capacity(prefix_len + encoded_len + suffix_len);
-            for _ in 0..prefix_len + encoded_len + encoded_suffix_len + suffix_len {
-                base_buffer.push(rand::random());
-            }
+                vec![0; prefix_len + encoded_len + encoded_suffix_len + suffix_len];
+            rng.fill_bytes(&mut base_buffer[..]);
 
             // Test `dest` doesn't overlap `src`
             let mut output_buffer = base_buffer.clone();
@@ -1139,7 +1228,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::Error;
+    use crate::ErrorInner;
 
     /// A naive implementation of encoding in mem-comparable format.
     /// It does not process non zero-padding groups separately.
@@ -1250,7 +1339,7 @@ mod benches {
             let chunk = if next_offset <= data.len() {
                 &data[offset..next_offset]
             } else {
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             };
             offset = next_offset;
             // the last byte in decode unit is for marker which indicates pad size
@@ -1266,7 +1355,7 @@ mod benches {
                 continue;
             }
             if pad_size > ENC_GROUP_SIZE {
-                return Err(Error::bad_padding());
+                return Err(ErrorInner::bad_padding().into());
             }
             // if has padding, split the padding pattern and push rest bytes
             let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
@@ -1274,7 +1363,7 @@ mod benches {
             let pad_byte = if desc { !0 } else { 0 };
             // check the padding pattern whether validate or not
             if padding.iter().any(|x| *x != pad_byte) {
-                return Err(Error::bad_padding());
+                return Err(ErrorInner::bad_padding().into());
             }
 
             if desc {
@@ -1295,7 +1384,7 @@ mod benches {
         loop {
             let marker_offset = read_offset + ENC_GROUP_SIZE;
             if marker_offset >= data.len() {
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             };
 
             unsafe {
@@ -1322,7 +1411,7 @@ mod benches {
 
             if pad_size > 0 {
                 if pad_size > ENC_GROUP_SIZE {
-                    return Err(Error::bad_padding());
+                    return Err(ErrorInner::bad_padding().into());
                 }
 
                 // check the padding pattern whether validate or not
@@ -1332,7 +1421,7 @@ mod benches {
                     &ENC_ASC_PADDING[..pad_size]
                 };
                 if &data[write_offset - pad_size..write_offset] != padding_slice {
-                    return Err(Error::bad_padding());
+                    return Err(ErrorInner::bad_padding().into());
                 }
                 unsafe {
                     data.set_len(write_offset - pad_size);
@@ -1362,6 +1451,23 @@ mod benches {
     }
 
     #[bench]
+    fn bench_memcmp_encode_all_in_place_asc_small(b: &mut test::Bencher) {
+        let mut src = vec![b'x'; 100];
+        let src_len = src.len();
+        let encoded_len = super::MemComparableByteCodec::encoded_len(src_len);
+        src.resize(encoded_len, 0u8);
+        b.iter(|| {
+            let mut src_clone = src.clone();
+            let encoded = super::MemComparableByteCodec::encode_all_in_place(
+                test::black_box(&mut src_clone),
+                test::black_box(src_len),
+            );
+            test::black_box(encoded);
+            test::black_box(src_clone);
+        });
+    }
+
+    #[bench]
     fn bench_memcmp_encode_all_desc_small(b: &mut test::Bencher) {
         let src = [b'x'; 100];
         let mut dest = [0; 200];
@@ -1372,6 +1478,23 @@ mod benches {
             );
             test::black_box(encoded);
             test::black_box(&dest);
+        });
+    }
+
+    #[bench]
+    fn bench_memcmp_encode_all_in_place_desc_small(b: &mut test::Bencher) {
+        let mut src: Vec<u8> = vec![b'x'; 100];
+        let src_len = src.len();
+        let encoded_len = super::MemComparableByteCodec::encoded_len(src_len);
+        src.resize(encoded_len, 0u8);
+        b.iter(|| {
+            let mut src_clone = src.clone();
+            let encoded = super::MemComparableByteCodec::encode_all_in_place_desc(
+                test::black_box(&mut src_clone),
+                test::black_box(src_len),
+            );
+            test::black_box(encoded);
+            test::black_box(src_clone);
         });
     }
 
@@ -1402,6 +1525,23 @@ mod benches {
     }
 
     #[bench]
+    fn bench_memcmp_encode_all_in_place_asc_large(b: &mut test::Bencher) {
+        let mut src = vec![b'x'; 1000];
+        let src_len = src.len();
+        let encoded_len = super::MemComparableByteCodec::encoded_len(src_len);
+        src.resize(encoded_len, 0u8);
+        b.iter(|| {
+            let mut src_clone = src.clone();
+            let encoded = super::MemComparableByteCodec::encode_all_in_place(
+                test::black_box(&mut src_clone),
+                test::black_box(src_len),
+            );
+            test::black_box(encoded);
+            test::black_box(src_clone);
+        });
+    }
+
+    #[bench]
     fn bench_memcmp_encode_all_asc_large_naive(b: &mut test::Bencher) {
         let src = [b'x'; 1000];
         let mut dest = [0; 2000];
@@ -1424,6 +1564,23 @@ mod benches {
             );
             test::black_box(encoded);
             test::black_box(&dest);
+        });
+    }
+
+    #[bench]
+    fn bench_memcmp_encode_all_in_place_desc_large(b: &mut test::Bencher) {
+        let mut src: Vec<u8> = vec![b'x'; 1000];
+        let src_len = src.len();
+        let encoded_len = super::MemComparableByteCodec::encoded_len(src_len);
+        src.resize(encoded_len, 0u8);
+        b.iter(|| {
+            let mut src_clone = src.clone();
+            let encoded = super::MemComparableByteCodec::encode_all_in_place_desc(
+                test::black_box(&mut src_clone),
+                test::black_box(src_len),
+            );
+            test::black_box(encoded);
+            test::black_box(src_clone);
         });
     }
 

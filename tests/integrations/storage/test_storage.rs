@@ -12,10 +12,11 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 
 use engine::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
-use tikv::storage::gc_worker::GC_BATCH_SIZE;
+use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
-use tikv::storage::{Engine, Key, Mutation};
+use tikv::storage::Engine;
+use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
 fn test_txn_store_get() {
@@ -64,7 +65,7 @@ fn test_txn_store_cleanup_rollback() {
     );
     store.get_err(b"secondary", 10);
     store.rollback_ok(vec![b"primary"], 5);
-    store.cleanup_ok(b"primary", 5);
+    store.cleanup_ok(b"primary", 5, 0);
 }
 
 #[test]
@@ -81,8 +82,8 @@ fn test_txn_store_cleanup_commit() {
     );
     store.get_err(b"secondary", 8);
     store.get_err(b"secondary", 12);
-    store.commit_ok(vec![b"primary"], 5, 10);
-    store.cleanup_err(b"primary", 5);
+    store.commit_ok(vec![b"primary"], 5, 10, 10);
+    store.cleanup_err(b"primary", 5, 0);
     store.rollback_err(vec![b"primary"], 5);
 }
 
@@ -103,12 +104,12 @@ fn test_txn_store_for_point_get_with_pk() {
         5,
     );
     store.get_ok(b"primary", 4, b"v1");
-    store.get_ok(b"primary", u64::MAX, b"v1");
+    store.get_ok(b"primary", TimeStamp::max(), b"v1");
     store.get_err(b"primary", 6);
 
     store.get_ok(b"secondary", 4, b"v3");
     store.get_err(b"secondary", 6);
-    store.get_err(b"secondary", u64::MAX);
+    store.get_err(b"secondary", TimeStamp::max());
 
     store.get_err(b"new_key", 6);
     store.get_ok(b"b", 6, b"v2");
@@ -420,7 +421,7 @@ fn test_txn_store_scan_key_only() {
 }
 
 fn lock(key: &[u8], primary: &[u8], ts: u64) -> LockInfo {
-    let mut lock = LockInfo::new();
+    let mut lock = LockInfo::default();
     lock.set_key(key.to_vec());
     lock.set_primary_lock(primary.to_vec());
     lock.set_lock_version(ts);
@@ -464,18 +465,18 @@ fn test_txn_store_scan_lock() {
         vec![Some((b"k1", b"v1")), None, None, None, None],
     );
 
-    store.scan_locks_ok(10, b"".to_vec(), 1, vec![lock(b"p1", b"p1", 5)]);
+    store.scan_locks_ok(10, b"", 1, vec![lock(b"p1", b"p1", 5)]);
 
     store.scan_locks_ok(
         10,
-        b"s".to_vec(),
+        b"s",
         2,
         vec![lock(b"s1", b"p1", 5), lock(b"s2", b"p2", 10)],
     );
 
     store.scan_locks_ok(
         10,
-        b"".to_vec(),
+        b"",
         0,
         vec![
             lock(b"p1", b"p1", 5),
@@ -487,7 +488,7 @@ fn test_txn_store_scan_lock() {
 
     store.scan_locks_ok(
         10,
-        b"".to_vec(),
+        b"",
         100,
         vec![
             lock(b"p1", b"p1", 5),
@@ -518,13 +519,13 @@ fn test_txn_store_resolve_lock() {
         b"p2",
         10,
     );
-    store.resolve_lock_ok(5, None);
+    store.resolve_lock_ok(5, None::<TimeStamp>);
     store.resolve_lock_ok(10, Some(20));
     store.get_none(b"p1", 20);
     store.get_none(b"s1", 30);
     store.get_ok(b"p2", 20, b"v10");
     store.get_ok(b"s2", 30, b"v10");
-    store.scan_locks_ok(30, b"".to_vec(), 100, vec![]);
+    store.scan_locks_ok(30, b"", 100, vec![]);
 }
 
 fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
@@ -571,7 +572,7 @@ fn test_txn_store_resolve_lock_in_a_batch() {
     store.get_none(b"s1", 30);
     store.get_ok(b"p2", 30, b"v10");
     store.get_ok(b"s2", 30, b"v10");
-    store.scan_locks_ok(30, b"".to_vec(), 100, vec![]);
+    store.scan_locks_ok(30, b"", 100, vec![]);
 }
 
 #[test]
@@ -637,7 +638,7 @@ fn test_txn_store_gc() {
 fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
     let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
     test_txn_store_gc_multiple_keys_cluster_storage(n, prefix.clone());
-    test_txn_store_gc_multiple_keys_single_storage(n, prefix.clone());
+    test_txn_store_gc_multiple_keys_single_storage(n, prefix);
 }
 
 pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) {
@@ -684,7 +685,7 @@ fn test_txn_store_gc2_with_less_keys() {
 
 #[test]
 fn test_txn_store_gc2_with_many_keys() {
-    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE + 1);
+    test_txn_store_gc_multiple_keys(1, DEFAULT_GC_BATCH_KEYS + 1);
 }
 
 #[test]
@@ -795,11 +796,11 @@ fn test_txn_store_lock_primary() {
         ],
         b"p",
         2,
-        vec![(b"p", b"p", 1)],
+        vec![(b"p", b"p", 1.into())],
     );
     // txn2 cleanups txn1's lock.
     store.rollback_ok(vec![b"p"], 1);
-    store.resolve_lock_ok(1, None);
+    store.resolve_lock_ok(1, None::<TimeStamp>);
 
     // txn3 wants to write "p", "s", neither of them should be locked.
     store.prewrite_ok(
@@ -841,8 +842,8 @@ impl Oracle {
         }
     }
 
-    fn get_ts(&self) -> u64 {
-        self.ts.fetch_add(1, Ordering::Relaxed) as u64
+    fn get_ts(&self) -> TimeStamp {
+        (self.ts.fetch_add(1, Ordering::Relaxed) as u64).into()
     }
 }
 
@@ -852,7 +853,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
     let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let number: i32 = match store.get(Context::new(), &key_address, start_ts) {
+        let number: i32 = match store.get(Context::default(), &key_address, start_ts) {
             Ok(Some(x)) => String::from_utf8(x).unwrap().parse().unwrap(),
             Ok(None) => 0,
             Err(_) => {
@@ -863,7 +864,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
         let next = number + 1;
         if store
             .prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((
                     Key::from_raw(key),
                     next.to_string().into_bytes(),
@@ -879,7 +880,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
         let commit_ts = oracle.get_ts();
         if store
             .commit(
-                Context::new(),
+                Context::default(),
                 vec![key_address.clone()],
                 start_ts,
                 commit_ts,
@@ -935,7 +936,7 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
         let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();
         let mut mutations = vec![];
         for key in keys.iter().take(n) {
-            let number = match store.get(Context::new(), key, start_ts) {
+            let number = match store.get(Context::default(), key, start_ts) {
                 Ok(Some(n)) => String::from_utf8(n).unwrap().parse().unwrap(),
                 Ok(None) => 0,
                 Err(_) => {
@@ -947,7 +948,7 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
             mutations.push(Mutation::Put((key.clone(), next.to_string().into_bytes())));
         }
         if store
-            .prewrite(Context::new(), mutations, b"k0".to_vec(), start_ts)
+            .prewrite(Context::default(), mutations, b"k0".to_vec(), start_ts)
             .is_err()
         {
             backoff(i);
@@ -955,7 +956,7 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
         }
         let commit_ts = oracle.get_ts();
         if store
-            .commit(Context::new(), keys, start_ts, commit_ts)
+            .commit(Context::default(), keys, start_ts, commit_ts)
             .is_err()
         {
             backoff(i);

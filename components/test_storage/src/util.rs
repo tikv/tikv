@@ -18,10 +18,10 @@ pub fn new_raft_engine(
     let region = cluster.get_region(key.as_bytes());
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     (cluster, engine, ctx)
 }
 

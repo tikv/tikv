@@ -4,28 +4,28 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use super::transport::RaftStoreRouter;
+use super::RaftKv;
 use super::Result;
 use crate::import::SSTImporter;
-use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
-use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
-use crate::raftstore::store::fsm::store::StoreMeta;
-use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use crate::raftstore::store::{
-    self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
-};
-use crate::server::readpool::ReadPool;
+use crate::read_pool::ReadPoolHandle;
+use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::server::ServerRaftStoreRouter;
-use crate::storage::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
-use crate::storage::{Config as StorageConfig, RaftKv, Storage};
-use engine::rocks::DB;
+use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use protobuf::RepeatedField;
+use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
+use raftstore::coprocessor::dispatcher::CoprocessorHost;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use raftstore::store::SplitCheckTask;
+use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
+use raftstore::store::{DynamicConfig, PdTask};
+use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
+use tikv_util::worker::Worker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -35,51 +35,40 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
-    read_pool: ReadPool,
-    local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
-    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-    detector_scheduler: Option<DetectorScheduler>,
-) -> Result<Storage<RaftKv<S>>>
+    read_pool: ReadPoolHandle,
+    lock_mgr: Option<LockManager>,
+) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let store = Storage::from_engine(
-        engine,
-        cfg,
-        read_pool,
-        local_storage,
-        raft_store_router,
-        waiter_mgr_scheduler,
-        detector_scheduler,
-    )?;
+    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr)?;
     Ok(store)
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<C: PdClient + ConfigClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
-    store_cfg: StoreConfig,
-    store_handle: Option<thread::JoinHandle<()>>,
+    store_cfg: Arc<VersionTrack<StoreConfig>>,
     system: RaftBatchSystem,
+    has_started: bool,
 
     pd_client: Arc<C>,
 }
 
 impl<C> Node<C>
 where
-    C: PdClient,
+    C: PdClient + ConfigClient,
 {
     /// Creates a new Node.
     pub fn new(
         system: RaftBatchSystem,
         cfg: &ServerConfig,
-        store_cfg: &StoreConfig,
+        store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
     ) -> Node<C> {
-        let mut store = metapb::Store::new();
+        let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
             store.set_address(cfg.addr.clone());
@@ -87,23 +76,35 @@ where
             store.set_address(cfg.advertise_addr.clone())
         }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
+        store.set_status_address(cfg.status_addr.clone());
+
+        if let Ok(path) = std::env::current_exe() {
+            store.set_binary_path(path.to_string_lossy().to_string());
+        };
+
+        store.set_start_timestamp(chrono::Local::now().timestamp());
+        store.set_git_hash(
+            option_env!("TIKV_BUILD_GIT_HASH")
+                .unwrap_or("Unknown git hash")
+                .to_string(),
+        );
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {
-            let mut label = metapb::StoreLabel::new();
+            let mut label = metapb::StoreLabel::default();
             label.set_key(k.to_owned());
             label.set_value(v.to_owned());
             labels.push(label);
         }
-        store.set_labels(RepeatedField::from_vec(labels));
+        store.set_labels(labels.into());
 
         Node {
             cluster_id: cfg.cluster_id,
             store,
-            store_cfg: store_cfg.clone(),
-            store_handle: None,
+            store_cfg,
             pd_client,
             system,
+            has_started: false,
         }
     }
 
@@ -120,6 +121,8 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
+        split_check_worker: Worker<SplitCheckTask>,
+        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -137,16 +140,13 @@ where
             meta.store_id = Some(store_id);
         }
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
-            info!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
+            info!("trying to bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
             fail_point!("node_after_prepare_bootstrap_cluster", |_| Err(box_err!(
                 "injected error: node_after_prepare_bootstrap_cluster"
             )));
             self.bootstrap_cluster(&engines, first_region)?;
         }
-
-        // Put store only if the cluster is bootstrapped.
-        self.pd_client.put_store(self.store.clone())?;
 
         self.start_store(
             store_id,
@@ -157,7 +157,14 @@ where
             store_meta,
             coprocessor_host,
             importer,
+            split_check_worker,
+            dyn_cfg,
         )?;
+
+        // Put store only if the cluster is bootstrapped.
+        info!("put store to PD"; "store" => ?&self.store);
+        self.pd_client.put_store(self.store.clone())?;
+
         Ok(())
     }
 
@@ -204,7 +211,7 @@ where
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
         let store_id = self.alloc_id()?;
-        info!("alloc store id"; "store_id" => store_id);
+        debug!("alloc store id"; "store_id" => store_id);
 
         store::bootstrap_store(engines, self.cluster_id, store_id)?;
 
@@ -219,14 +226,14 @@ where
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
-        info!(
+        debug!(
             "alloc first region id";
             "region_id" => region_id,
             "cluster_id" => self.cluster_id,
             "store_id" => store_id
         );
         let peer_id = self.alloc_id()?;
-        info!(
+        debug!(
             "alloc first peer id for first region";
             "peer_id" => peer_id,
             "region_id" => region_id,
@@ -323,16 +330,18 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
+        split_check_worker: Worker<SplitCheckTask>,
+        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
         T: Transport + 'static,
     {
         info!("start raft store thread"; "store_id" => store_id);
 
-        if self.store_handle.is_some() {
+        if self.has_started {
             return Err(box_err!("{} is already started", store_id));
         }
-
+        self.has_started = true;
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
@@ -347,6 +356,8 @@ where
             store_meta,
             coprocessor_host,
             importer,
+            split_check_worker,
+            dyn_cfg,
         )?;
         Ok(())
     }

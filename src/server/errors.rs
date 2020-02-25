@@ -5,16 +5,16 @@ use std::io::Error as IoError;
 use std::net::AddrParseError;
 use std::result;
 
-use futures::Canceled;
 use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
 use protobuf::ProtobufError;
+use tokio_sync::oneshot::error::RecvError;
 
 use super::snap::Task as SnapTask;
-use crate::pd::Error as PdError;
-use crate::raftstore::Error as RaftServerError;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::Error as StorageError;
+use pd_client::Error as PdError;
+use raftstore::Error as RaftServerError;
 use tikv_util::codec::Error as CodecError;
 use tikv_util::worker::ScheduleError;
 
@@ -94,7 +94,7 @@ quick_error! {
         Sink {
             description("failed to poll from mpsc receiver")
         }
-        Canceled(err: Canceled) {
+        RecvError(err: RecvError) {
             from()
             cause(err)
             display("{:?}", err)

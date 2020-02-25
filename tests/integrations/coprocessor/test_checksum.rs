@@ -2,29 +2,29 @@
 
 use std::u64;
 
-use crc::crc64::{self, Digest, Hasher64};
-
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
-use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
-
-use tikv::coprocessor::dag::{ScanOn, Scanner};
-use tikv::coprocessor::*;
-use tikv::storage::{Engine, SnapshotStore};
+use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
 use test_coprocessor::*;
+use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query::storage::Range;
+use tikv::coprocessor::dag::TiKVStorage;
+use tikv::coprocessor::*;
+use tikv::storage::{Engine, SnapshotStore};
+use txn_types::TimeStamp;
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
-    let mut ctx = Context::new();
-    ctx.set_isolation_level(IsolationLevel::SI);
+    let mut ctx = Context::default();
+    ctx.set_isolation_level(IsolationLevel::Si);
 
-    let mut checksum = ChecksumRequest::new();
-    checksum.set_start_ts(u64::MAX);
+    let mut checksum = ChecksumRequest::default();
     checksum.set_scan_on(scan_on);
-    checksum.set_algorithm(ChecksumAlgorithm::Crc64_Xor);
+    checksum.set_algorithm(ChecksumAlgorithm::Crc64Xor);
 
-    let mut req = Request::new();
+    let mut req = Request::default();
+    req.set_start_ts(u64::MAX);
     req.set_context(ctx);
     req.set_tp(REQ_TYPE_CHECKSUM);
     req.set_data(checksum.write_to_bytes().unwrap());
@@ -54,41 +54,37 @@ fn test_checksum() {
             (range, ChecksumScanOn::Index)
         };
         let request = new_checksum_request(range.clone(), scan_on);
-        let expected = reversed_checksum_crc64_xor(&store, range, scan_on);
+        let expected = reversed_checksum_crc64_xor(&store, range);
 
         let response = handle_request(&endpoint, request);
-        let mut resp = ChecksumResponse::new();
+        let mut resp = ChecksumResponse::default();
         resp.merge_from_bytes(response.get_data()).unwrap();
         assert_eq!(resp.get_checksum(), expected);
         assert_eq!(resp.get_total_kvs(), data.len() as u64);
     }
 }
 
-fn reversed_checksum_crc64_xor<E: Engine>(
-    store: &Store<E>,
-    range: KeyRange,
-    scan_on: ChecksumScanOn,
-) -> u64 {
-    let ctx = Context::new();
-    let snap = SnapshotStore::new(
+fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> u64 {
+    let ctx = Context::default();
+    let store = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),
-        u64::MAX,
-        IsolationLevel::SI,
+        TimeStamp::max(),
+        IsolationLevel::Si,
         true,
+        Default::default(),
     );
-    let scan_on = match scan_on {
-        ChecksumScanOn::Table => ScanOn::Table,
-        ChecksumScanOn::Index => ScanOn::Index,
-    };
-    let mut scanner = Scanner::new(
-        &snap, scan_on, true, // Scan in reversed order.
-        false, range,
-    )
-    .unwrap();
+    let mut scanner = RangesScanner::new(RangesScannerOptions {
+        storage: TiKVStorage::from(store),
+        ranges: vec![Range::from_pb_range(range, false)],
+        scan_backward_in_range: true,
+        is_key_only: false,
+        is_scanned_range_aware: false,
+    });
 
     let mut checksum = 0;
-    while let Some((k, v)) = scanner.next_row().unwrap() {
-        let mut digest = Digest::new(crc64::ECMA);
+    let digest = crc64fast::Digest::new();
+    while let Some((k, v)) = scanner.next().unwrap() {
+        let mut digest = digest.clone();
         digest.write(&k);
         digest.write(&v);
         checksum ^= digest.sum64();

@@ -1,23 +1,31 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::future::{err, ok};
-use futures::sync::oneshot::{Receiver, Sender};
-#[cfg(not(feature = "no-fail"))]
+use futures::sync::oneshot;
+#[cfg(feature = "failpoints")]
 use futures::Stream;
 use futures::{self, Future};
 use hyper::service::service_fn;
-use hyper::{self, Body, Method, Request, Response, Server, StatusCode};
-use tempdir::TempDir;
+use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+use pprof;
+use pprof::protos::Message;
+use regex::Regex;
+use std::sync::Arc;
+use tempfile::TempDir;
+use tokio_sync::oneshot::{Receiver, Sender};
 use tokio_threadpool::{Builder, ThreadPool};
 
 use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
+use crate::config::TiKvConfig;
+use raftstore::store::PdTask;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::worker::FutureScheduler;
 
 mod profiler_guard {
     use tikv_alloc::error::ProfResult;
@@ -61,11 +69,11 @@ mod profiler_guard {
     }
 }
 
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 static MISSING_NAME: &[u8] = b"Missing param name";
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 static MISSING_ACTIONS: &[u8] = b"Missing param actions";
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 
 pub struct StatusServer {
@@ -73,26 +81,28 @@ pub struct StatusServer {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
+    pd_sender: Arc<FutureScheduler<PdTask>>,
 }
 
 impl StatusServer {
-    pub fn new(status_thread_pool_size: usize) -> Self {
+    pub fn new(status_thread_pool_size: usize, pd_sender: FutureScheduler<PdTask>) -> Self {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
             .after_start(|| {
-                info!("Status server started");
+                debug!("Status server started");
             })
             .before_stop(|| {
-                info!("stopping status server");
+                debug!("stopping status server");
             })
             .build();
-        let (tx, rx) = futures::sync::oneshot::channel::<()>();
+        let (tx, rx) = tokio_sync::oneshot::channel::<()>();
         StatusServer {
             thread_pool,
             tx,
             rx: Some(rx),
             addr: None,
+            pd_sender: Arc::new(pd_sender),
         }
     }
 
@@ -109,7 +119,7 @@ impl StatusServer {
                 .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
                 .then(
                     move |_| -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
-                        let tmp_dir = match TempDir::new("") {
+                        let tmp_dir = match TempDir::new() {
                             Ok(tmp_dir) => tmp_dir,
                             Err(e) => return Box::new(err(e.into())),
                         };
@@ -146,11 +156,10 @@ impl StatusServer {
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
-                let response = Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::empty())
-                    .unwrap();
-                return Box::new(ok(response));
+                return Box::new(ok(StatusServer::err_response(
+                    StatusCode::BAD_REQUEST,
+                    "request should have the query part",
+                )));
             }
         };
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -158,11 +167,10 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(_) => {
-                    let response = Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Body::empty())
-                        .unwrap();
-                    return Box::new(ok(response));
+                    return Box::new(ok(StatusServer::err_response(
+                        StatusCode::BAD_REQUEST,
+                        "request should have seconds argument",
+                    )));
                 }
             },
             None => 10,
@@ -181,11 +189,198 @@ impl StatusServer {
                     ok(response)
                 })
                 .or_else(|err| {
-                    let response = Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::from(err.to_string()))
-                        .unwrap();
-                    ok(response)
+                    ok(StatusServer::err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        err.to_string(),
+                    ))
+                }),
+        )
+    }
+
+    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
+    where
+        T: Into<Body>,
+    {
+        Response::builder()
+            .status(status_code)
+            .body(message.into())
+            .unwrap()
+    }
+
+    fn config_handler(
+        pd_sender: &FutureScheduler<PdTask>,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        let (cfg_sender, rx) = oneshot::channel();
+        if pd_sender
+            .schedule(PdTask::GetConfig { cfg_sender })
+            .is_err()
+        {
+            error!("failed to schedule GetConfig task");
+        }
+        let res = rx.then(|res| {
+            let err_resp = || {
+                StatusServer::err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal Server Error",
+                )
+            };
+            match res {
+                Ok(cfg) => {
+                    match serde_json::to_string(&toml::from_str::<TiKvConfig>(&cfg).unwrap()) {
+                        Ok(json) => Ok(Response::builder()
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(json))
+                            .unwrap()),
+                        Err(_) => Ok(err_resp()),
+                    }
+                }
+                Err(_) => Ok(err_resp()),
+            }
+        });
+        Box::new(res)
+    }
+
+    fn extract_thread_name(thread_name: &str) -> String {
+        lazy_static! {
+            static ref THREAD_NAME_RE: Regex =
+                Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
+            static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
+        }
+
+        THREAD_NAME_RE
+            .captures(thread_name)
+            .and_then(|cap| {
+                cap.name("thread_name").map(|thread_name| {
+                    THREAD_NAME_REPLACE_SEPERATOR_RE
+                        .replace_all(thread_name.as_str(), "-")
+                        .into_owned()
+                })
+            })
+            .unwrap_or_else(|| thread_name.to_owned())
+    }
+
+    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
+        move |frames| {
+            let name = Self::extract_thread_name(&frames.thread_name);
+            frames.thread_name = name;
+        }
+    }
+
+    pub fn dump_rsprof(
+        seconds: u64,
+        frequency: i32,
+    ) -> Box<dyn Future<Item = pprof::Report, Error = pprof::Error> + Send> {
+        match pprof::ProfilerGuard::new(frequency) {
+            Ok(guard) => {
+                info!(
+                    "start profiling {} seconds with frequency {} /s",
+                    seconds, frequency
+                );
+
+                let timer = GLOBAL_TIMER_HANDLE.clone();
+                Box::new(
+                    timer
+                        .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
+                        .then(
+                            move |_| -> Box<
+                                dyn Future<Item = pprof::Report, Error = pprof::Error> + Send,
+                            > {
+                                let _ = guard;
+                                Box::new(
+                                    match guard
+                                        .report()
+                                        .frames_post_processor(Self::frames_post_processor())
+                                        .build()
+                                    {
+                                        Ok(report) => ok(report),
+                                        Err(e) => err(e),
+                                    },
+                                )
+                            },
+                        ),
+                )
+            }
+            Err(e) => Box::new(err(e)),
+        }
+    }
+
+    pub fn dump_rsperf_to_resp(
+        req: Request<Body>,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        let query = match req.uri().query() {
+            Some(query) => query,
+            None => {
+                return Box::new(ok(StatusServer::err_response(StatusCode::BAD_REQUEST, "")));
+            }
+        };
+        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+        let seconds: u64 = match query_pairs.get("seconds") {
+            Some(val) => match val.parse() {
+                Ok(val) => val,
+                Err(err) => {
+                    return Box::new(ok(StatusServer::err_response(
+                        StatusCode::BAD_REQUEST,
+                        err.to_string(),
+                    )));
+                }
+            },
+            None => 10,
+        };
+
+        let frequency: i32 = match query_pairs.get("frequency") {
+            Some(val) => match val.parse() {
+                Ok(val) => val,
+                Err(err) => {
+                    return Box::new(ok(StatusServer::err_response(
+                        StatusCode::BAD_REQUEST,
+                        err.to_string(),
+                    )));
+                }
+            },
+            None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
+        };
+
+        let prototype_content_type: hyper::http::HeaderValue =
+            hyper::http::HeaderValue::from_str("application/protobuf").unwrap();
+        Box::new(
+            Self::dump_rsprof(seconds, frequency)
+                .and_then(move |report| {
+                    let mut body: Vec<u8> = Vec::new();
+                    if req.headers().get("Content-Type") == Some(&prototype_content_type) {
+                        match report.pprof() {
+                            Ok(profile) => match profile.encode(&mut body) {
+                                Ok(()) => {
+                                    info!("write report successfully");
+                                    Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
+                                }
+                                Err(err) => Box::new(ok(StatusServer::err_response(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    err.to_string(),
+                                ))),
+                            },
+                            Err(err) => Box::new(ok(StatusServer::err_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                err.to_string(),
+                            ))),
+                        }
+                    } else {
+                        match report.flamegraph(&mut body) {
+                            Ok(_) => {
+                                info!("write report successfully");
+                                Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
+                            }
+                            Err(err) => Box::new(ok(StatusServer::err_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                err.to_string(),
+                            ))),
+                        }
+                    }
+                })
+                .or_else(|err| {
+                    ok(StatusServer::err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        err.to_string(),
+                    ))
                 }),
         )
     }
@@ -195,34 +390,40 @@ impl StatusServer {
 
         // TODO: support TLS for the status server.
         let builder = Server::try_bind(&addr)?;
-
-        // Create a status service.
-        let service = |req: Request<Body>| -> Box<dyn Future<Item=Response<Body>, Error=hyper::Error> + Send> {
-            let path = req.uri().path().to_owned();
-            let method = req.method().to_owned();
-
-            #[cfg(not(feature = "no-fail"))]
-                {
-                    if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
-                        return handle_fail_points_request(req);
-                    }
-                }
-
-            match (method, path.as_ref()) {
-                (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
-                (Method::GET, "/status") => Box::new(ok(Response::default())),
-                (Method::GET, "/pprof/profile") => Self::dump_prof_to_resp(req),
-                _ => {
-                    Box::new(ok(Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(Body::empty())
-                        .unwrap()))
-                }
-            }
-        };
+        let pd_sender = self.pd_sender.clone();
 
         // Start to serve.
-        let server = builder.serve(move || service_fn(service));
+        let server = builder.serve(move || {
+            let pd_sender = pd_sender.clone();
+            // Create a status service.
+            service_fn(
+                    move |req: Request<Body>| -> Box<
+                        dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
+                    > {
+                        let path = req.uri().path().to_owned();
+                        let method = req.method().to_owned();
+
+                        #[cfg(feature = "failpoints")]
+                        {
+                            if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
+                                return handle_fail_points_request(req);
+                            }
+                        }
+
+                        match (method, path.as_ref()) {
+                            (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
+                            (Method::GET, "/status") => Box::new(ok(Response::default())),
+                            (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
+                            (Method::GET, "/config") => Self::config_handler(&pd_sender),
+                            (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
+                            _ => Box::new(ok(StatusServer::err_response(
+                                StatusCode::NOT_FOUND,
+                                "path not found",
+                            ))),
+                        }
+                    },
+                )
+        });
         self.addr = Some(server.local_addr());
         let graceful = server
             .with_graceful_shutdown(self.rx.take().unwrap())
@@ -248,7 +449,7 @@ impl StatusServer {
 }
 
 // For handling fail points related requests
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 fn handle_fail_points_request(
     req: Request<Body>,
 ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
@@ -279,7 +480,7 @@ fn handle_fail_points_request(
             if let Err(e) = fail::cfg(name.to_owned(), &actions) {
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
-                    .body(e.to_string().into())
+                    .body(e.into())
                     .unwrap();
             }
             let body = format!("Added fail point with name: {}, actions: {}", name, actions);
@@ -325,28 +526,18 @@ fn handle_fail_points_request(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard};
-
+    use crate::config::TiKvConfig;
     use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
-    #[cfg(not(feature = "no-fail"))]
     use futures::Stream;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
-
-    lazy_static! {
-        static ref LOCK: Mutex<()> = Mutex::new(());
-    }
-
-    fn setup<'a>() -> MutexGuard<'a, ()> {
-        let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        fail::teardown();
-        fail::setup();
-        guard
-    }
+    use raftstore::store::PdTask;
+    use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
+    use tokio_core::reactor::Handle;
 
     #[test]
     fn test_status_service() {
-        let mut status_server = StatusServer::new(1);
+        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let uri = Uri::builder()
@@ -370,11 +561,57 @@ mod tests {
         status_server.stop();
     }
 
-    #[cfg(not(feature = "no-fail"))]
+    #[test]
+    fn test_config_endpoint() {
+        struct Runner;
+        impl FutureRunnable<PdTask> for Runner {
+            fn run(&mut self, t: PdTask, _: &Handle) {
+                match t {
+                    PdTask::GetConfig { cfg_sender } => cfg_sender.send(String::new()).unwrap(),
+                    _ => unreachable!(),
+                }
+            }
+        }
+        let mut worker = FutureWorker::new("test-worker");
+        worker.start(Runner).unwrap();
+
+        let mut status_server = StatusServer::new(1, worker.scheduler());
+        let _ = status_server.start("127.0.0.1:0".to_string());
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/config")
+            .build()
+            .unwrap();
+        let handle = status_server.thread_pool.spawn_handle(lazy(move || {
+            client
+                .get(uri)
+                .and_then(|resp| {
+                    assert_eq!(resp.status(), StatusCode::OK);
+                    resp.into_body().concat2()
+                })
+                .map(|body| {
+                    let v = body.to_vec();
+                    let resp_json = String::from_utf8_lossy(&v).to_string();
+                    let cfg = TiKvConfig::default();
+                    serde_json::to_string(&cfg)
+                        .map(|cfg_json| {
+                            assert_eq!(resp_json, cfg_json);
+                        })
+                        .expect("Could not convert TiKvConfig to string");
+                })
+                .map_err(|err| panic!("response status is not OK: {:?}", err))
+        }));
+        handle.wait().unwrap();
+        status_server.stop();
+    }
+
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_status_service_fail_endpoints() {
-        let _gaurd = setup();
-        let mut status_server = StatusServer::new(1);
+        let _guard = fail::FailScenario::setup();
+        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -389,7 +626,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::new(Body::from("panic"));
             *req.method_mut() = Method::PUT;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             let future_1_add_fail_point = client
                 .request(req)
@@ -417,7 +654,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::new(Body::from("panic"));
             *req.method_mut() = Method::PUT;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             let future_2_add_fail_point = client
                 .request(req)
@@ -446,7 +683,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::default();
             *req.method_mut() = Method::GET;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             let future_3_list_fail_points = client
                 .request(req)
@@ -473,7 +710,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::default();
             *req.method_mut() = Method::DELETE;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             let future_4_delete_fail_points = client
                 .request(req)
@@ -502,11 +739,11 @@ mod tests {
         status_server.stop();
     }
 
-    #[cfg(not(feature = "no-fail"))]
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
-        let _gaurd = setup();
-        let mut status_server = StatusServer::new(1);
+        let _guard = fail::FailScenario::setup();
+        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -521,7 +758,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::new(Body::from("return"));
             *req.method_mut() = Method::PUT;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             client
                 .request(req)
@@ -543,11 +780,11 @@ mod tests {
         assert!(true_only_if_fail_point_triggered());
     }
 
-    #[cfg(feature = "no-fail")]
+    #[cfg(not(feature = "failpoints"))]
     #[test]
-    fn test_status_service_fail_endpoints_should_give_404_when_feature_no_fail_exists() {
-        let _gaurd = setup();
-        let mut status_server = StatusServer::new(1);
+    fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
+        let _guard = fail::FailScenario::setup();
+        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
         let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -562,12 +799,13 @@ mod tests {
                 .unwrap();
             let mut req = Request::new(Body::from("panic"));
             *req.method_mut() = Method::PUT;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             client
                 .request(req)
                 .map(|res| {
-                    assert_eq!(res.status(), StatusCode::NOT_FOUND); // with feature no-fail, this PUT endpoint should return 404
+                    // without feature "failpoints", this PUT endpoint should return 404
+                    assert_eq!(res.status(), StatusCode::NOT_FOUND);
                 })
                 .map_err(|err| {
                     panic!("response status is not OK: {:?}", err);
@@ -576,5 +814,33 @@ mod tests {
 
         handle.wait().unwrap();
         status_server.stop();
+    }
+
+    #[test]
+    fn test_extract_thread_name() {
+        assert_eq!(
+            &StatusServer::extract_thread_name("test-name-1"),
+            "test-name"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("grpc-server-5"),
+            "grpc-server"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("rocksdb:bg1000"),
+            "rocksdb:bg"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("raftstore-1-100"),
+            "raftstore"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("snap sender1000"),
+            "snap-sender"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("snap_sender1000"),
+            "snap-sender"
+        );
     }
 }

@@ -3,7 +3,7 @@
 use futures::{Future, Sink, Stream};
 use grpcio::*;
 use kvproto::tikvpb::BatchCommandsRequest;
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
@@ -31,7 +31,7 @@ fn test_batch_commands() {
         }
         match sender.send((batch_req, WriteFlags::default())).wait() {
             Ok(s) => sender = s,
-            Err(e) => panic!("tikv cilent send fail: {:?}", e),
+            Err(e) => panic!("tikv client send fail: {:?}", e),
         }
     }
 

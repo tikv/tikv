@@ -1,23 +1,22 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
 use tikv_util::collections::HashSet;
-use tipb::analyze;
+use tipb;
 
-/// `FMSketch` is used to count the approximate number of distinct
+/// `FmSketch` is used to count the approximate number of distinct
 /// elements in multiset.
 /// Refer:[Flajolet-Martin](https://en.wikipedia.org/wiki/Flajolet%E2%80%93Martin_algorithm)
 #[derive(Clone)]
-pub struct FMSketch {
+pub struct FmSketch {
     mask: u64,
     max_size: usize,
     hash_set: HashSet<u64>,
 }
 
-impl FMSketch {
-    pub fn new(max_size: usize) -> FMSketch {
-        FMSketch {
+impl FmSketch {
+    pub fn new(max_size: usize) -> FmSketch {
+        FmSketch {
             mask: 0,
             max_size,
             hash_set: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
@@ -26,15 +25,14 @@ impl FMSketch {
 
     pub fn insert(&mut self, mut bytes: &[u8]) {
         let hash = {
-            let mut out: [u8; 16] = [0; 16];
-            murmur3_x64_128(&mut bytes, 0, &mut out);
-            LittleEndian::read_u64(&out[0..8])
+            let out = murmur3_x64_128(&mut bytes, 0).unwrap();
+            out as u64
         };
         self.insert_hash_value(hash);
     }
 
-    pub fn into_proto(self) -> analyze::FMSketch {
-        let mut proto = analyze::FMSketch::new();
+    pub fn into_proto(self) -> tipb::FmSketch {
+        let mut proto = tipb::FmSketch::default();
         proto.set_mask(self.mask);
         let hash = self.hash_set.into_iter().collect();
         proto.set_hashset(hash);
@@ -57,11 +55,14 @@ impl FMSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::datum;
-    use crate::coprocessor::codec::datum::Datum;
-    use crate::coprocessor::codec::Result;
+
     use std::iter::repeat;
-    use tikv_util::as_slice;
+    use std::slice::from_ref;
+
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
+    use tidb_query::codec::Result;
+    use tidb_query::expr::EvalContext;
 
     struct TestData {
         samples: Vec<Datum>,
@@ -102,16 +103,16 @@ mod tests {
         }
     }
 
-    pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FMSketch> {
-        let mut s = FMSketch::new(max_size);
+    pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FmSketch> {
+        let mut s = FmSketch::new(max_size);
         for value in values {
-            let bytes = datum::encode_value(as_slice(value))?;
+            let bytes = datum::encode_value(&mut EvalContext::default(), from_ref(value))?;
             s.insert(&bytes);
         }
         Ok(s)
     }
 
-    impl FMSketch {
+    impl FmSketch {
         // ndv returns the approximate number of distinct elements
         pub fn ndv(&self) -> u64 {
             (self.mask + 1) * (self.hash_set.len() as u64)
@@ -131,12 +132,11 @@ mod tests {
         assert_eq!(pk.ndv(), 100480);
 
         let max_size = 2;
-        let mut sketch = FMSketch::new(max_size);
+        let mut sketch = FmSketch::new(max_size);
         sketch.insert_hash_value(1);
         sketch.insert_hash_value(2);
         assert_eq!(sketch.hash_set.len(), max_size);
         sketch.insert_hash_value(4);
         assert_eq!(sketch.hash_set.len(), max_size);
     }
-
 }
