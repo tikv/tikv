@@ -175,6 +175,7 @@ impl BatchRaftCmdRequest {
     }
 
     fn push(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksEngine>) {
+        assert!(!req.has_admin_request());
         let req_num = req.get_requests().len();
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = req.take_requests().into();
@@ -1644,7 +1645,7 @@ impl Peer {
         None
     }
 
-    fn batch_callback(&mut self, cbs: Vec<(Callback<RocksEngine>, usize)>, term: u64, e: Error) {
+    fn batch_callback_err(&mut self, cbs: Vec<(Callback<RocksEngine>, usize)>, term: u64, e: Error) {
         let mut resp = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut resp, term);
         cmd_resp::bind_error(&mut resp, e);
@@ -1659,12 +1660,12 @@ impl Peer {
             let mut cbs = mem::replace(&mut self.batch_cmd.callbacks, vec![]);
             let term = req.get_header().get_term();
             if let Err(e) = util::check_term(&req, self.term()) {
-                self.batch_callback(cbs, term, e);
+                self.batch_callback_err(cbs, term, e);
                 return;
             }
             match self.propose_normal(ctx, req) {
                 Err(e) => {
-                    self.batch_callback(cbs, term, e);
+                    self.batch_callback_err(cbs, term, e);
                 }
                 Ok(idx) => {
                     let meta = ProposalMeta {
