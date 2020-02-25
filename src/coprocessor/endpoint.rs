@@ -1,38 +1,47 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::try_stream;
-use futures::sync::mpsc;
-use futures::{future, stream, Future, Stream};
+use futures::{future, Future, Stream};
+use futures03::channel::mpsc;
 use futures03::prelude::*;
+use rand::prelude::*;
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
+use tidb_query::metrics::*;
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
 
+use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
-use tikv_util::future_pool::FuturePool;
 
 use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 
+/// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
+/// which means they don't need a permit from the semaphore before execution.
+const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
+
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
-    read_pool_high: FuturePool,
-    read_pool_normal: FuturePool,
-    read_pool_low: FuturePool,
+    read_pool: ReadPoolHandle,
+
+    /// The concurrency limiter of the coprocessor.
+    semaphore: Option<Arc<Semaphore>>,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     ///
@@ -53,9 +62,8 @@ pub struct Endpoint<E: Engine> {
 impl<E: Engine> Clone for Endpoint<E> {
     fn clone(&self) -> Self {
         Self {
-            read_pool_high: self.read_pool_high.clone(),
-            read_pool_normal: self.read_pool_normal.clone(),
-            read_pool_low: self.read_pool_low.clone(),
+            read_pool: self.read_pool.clone(),
+            semaphore: self.semaphore.clone(),
             ..*self
         }
     }
@@ -64,15 +72,19 @@ impl<E: Engine> Clone for Endpoint<E> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    pub fn new(cfg: &Config, mut read_pool: Vec<FuturePool>) -> Self {
-        let read_pool_high = read_pool.remove(2);
-        let read_pool_normal = read_pool.remove(1);
-        let read_pool_low = read_pool.remove(0);
-
+    pub fn new(cfg: &Config, read_pool: ReadPoolHandle) -> Self {
+        // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
+        // using too much memory. However, if there are a number of large requests, small requests
+        // will still be blocked. This needs to be improved.
+        let semaphore = match &read_pool {
+            ReadPoolHandle::Yatp { .. } => {
+                Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency)))
+            }
+            _ => None,
+        };
         Self {
-            read_pool_high,
-            read_pool_normal,
-            read_pool_low,
+            read_pool,
+            semaphore,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             enable_batch_if_possible: cfg.end_point_enable_batch_if_possible,
@@ -80,14 +92,6 @@ impl<E: Engine> Endpoint<E> {
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             _phantom: Default::default(),
-        }
-    }
-
-    fn get_read_pool(&self, priority: kvrpcpb::CommandPri) -> &FuturePool {
-        match priority {
-            kvrpcpb::CommandPri::High => &self.read_pool_high,
-            kvrpcpb::CommandPri::Normal => &self.read_pool_normal,
-            kvrpcpb::CommandPri::Low => &self.read_pool_low,
         }
     }
 
@@ -200,17 +204,19 @@ impl<E: Engine> Endpoint<E> {
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
                     );
-                    dag::build_handler(
+                    dag::DagHandlerBuilder::new(
                         dag,
                         ranges,
-                        start_ts,
                         store,
-                        data_version,
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
-                        enable_batch_if_possible,
                     )
+                    .data_version(data_version)
+                    .enable_batch_if_possible(enable_batch_if_possible)
+                    .execution_time_limit(req_ctx.execution_time_limit)
+                    .semaphore(req_ctx.semaphore.clone())
+                    .build()
                 });
             }
             REQ_TYPE_ANALYZE => {
@@ -296,15 +302,44 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
+    /// Try to acquire a permit from the semaphore.
+    ///
+    /// When `is_heavy` is false, it means the request can be a light task and is allowed to
+    /// run without a permit, but the execution time should be limited by the returned `Duration`.
+    ///
+    /// When `is_heavy` is true, the function won't return until a permit is acquired successfully.
+    async fn acquire_permit(
+        semaphore: Option<&Semaphore>,
+    ) -> (Option<SemaphorePermit<'_>>, Option<Duration>) {
+        if let Some(semaphore) = semaphore {
+            // If a task fail to acquire a permit from the semaphore, it has limited
+            // execution time.
+            match semaphore.try_acquire() {
+                Ok(permit) => {
+                    COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_generic.inc();
+                    (Some(permit), None)
+                }
+                Err(_) => {
+                    COPR_ACQUIRE_SEMAPHORE_TYPE.unacquired.inc();
+                    (None, Some(LIGHT_TASK_THRESHOLD))
+                }
+            }
+        } else {
+            (None, None)
+        }
+    }
+
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
     /// the given `handler_builder`. Finally, it calls the unary request interface of the
     /// `RequestHandler` to process the request and produce a result.
     async fn handle_unary_request_impl(
+        semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
+        let (_permit, execution_time_limit) = Self::acquire_permit(semaphore.as_deref()).await;
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.req_ctx.deadline.check()?;
@@ -324,15 +359,20 @@ impl<E: Engine> Endpoint<E> {
             // Build a cached request handler instead if cache version is matching.
             CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
         } else {
+            if execution_time_limit.is_some() {
+                tracker.req_ctx.execution_time_limit = execution_time_limit;
+                tracker.req_ctx.semaphore = semaphore.clone();
+            }
             handler_builder(snapshot, &tracker.req_ctx)?
         };
 
         tracker.on_begin_all_items();
         tracker.on_begin_item();
-        // There might be errors when handling requests. In this case, we still need its
-        // execution metrics.
+
         let result = handler.handle_request().await;
 
+        // There might be errors when handling requests. In this case, we still need its
+        // execution metrics.
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
 
@@ -359,19 +399,22 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
-        let read_pool = self.get_read_pool(req_ctx.context.get_priority());
+    ) -> impl Future<Item = coppb::Response, Error = Error> {
+        let priority = req_ctx.context.get_priority();
+        let task_id = req_ctx
+            .txn_start_ts
+            .unwrap_or_else(|| thread_rng().next_u64());
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
 
-        read_pool
-            .spawn_handle(move || {
-                // FIXME: This is an unnecessary box just in order to satisfy the Unpin
-                // requirement of compat. Remove it after using a thread pool accepting
-                // !Unpin std Futures.
-                Box::pin(Self::handle_unary_request_impl(tracker, handler_builder)).compat()
-            })
+        self.read_pool
+            .spawn_handle(
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
+                priority,
+                task_id,
+            )
             .map_err(|_| Error::MaxPendingTasksExceeded)
+            .flatten()
     }
 
     /// Parses and handles a unary request. Returns a future that will never fail. If there are
@@ -383,11 +426,9 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let result_of_future =
-            self.parse_request(req, peer, false)
-                .and_then(|(handler_builder, req_ctx)| {
-                    self.handle_unary_request(req_ctx, handler_builder)
-                });
+        let result_of_future = self
+            .parse_request(req, peer, false)
+            .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         future::result(result_of_future)
             .flatten()
@@ -400,10 +441,17 @@ impl<E: Engine> Endpoint<E> {
     /// the given `handler_builder`. Finally, it calls the stream request interface of the
     /// `RequestHandler` multiple times to process the request and produce multiple results.
     fn handle_stream_request_impl(
+        semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl futures03::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
+            let _permit = if let Some(semaphore) = semaphore.as_ref() {
+                Some(semaphore.acquire().await)
+            } else {
+                None
+            };
+
             // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
             tracker.req_ctx.deadline.check()?;
@@ -461,23 +509,27 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
+    ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
-        let read_pool = self.get_read_pool(req_ctx.context.get_priority());
+        let priority = req_ctx.context.get_priority();
+        let task_id = req_ctx
+            .txn_start_ts
+            .unwrap_or_else(|| thread_rng().next_u64());
         let tracker = Box::new(Tracker::new(req_ctx));
 
-        read_pool
-            .spawn(move || {
-                // FIXME: This is an unnecessary box just in order to satisfy the Unpin
-                // requirement of compat. Remove it after using a thread pool accepting
-                // !Unpin std Futures.
-                Box::pin(Self::handle_stream_request_impl(tracker, handler_builder))
-                    .compat() // Stream<Resp, Error>
-                    .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
+        self.read_pool
+            .spawn(
+                Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .then(futures03::future::ok::<_, mpsc::SendError>)
                     .forward(tx)
-            })
+                    .unwrap_or_else(|e| {
+                        warn!("coprocessor stream send error"; "error" => %e);
+                    }),
+                priority,
+                task_id,
+            )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
-        Ok(rx.then(|r| r.unwrap()))
+        Ok(rx)
     }
 
     /// Parses and handles a stream request. Returns a stream that produce each result in a
@@ -495,9 +547,10 @@ impl<E: Engine> Endpoint<E> {
                     self.handle_stream_request(req_ctx, handler_builder)
                 }); // Result<Stream<Resp, Error>, Error>
 
-        stream::once(result_of_stream) // Stream<Stream<Resp, Error>, Error>
-            .flatten() // Stream<Resp, Error>
-            .or_else(|e| Ok(make_error_response(e))) // Stream<Resp, ()>
+        futures03::stream::once(futures03::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
+            .try_flatten() // Stream<Resp, Error>
+            .or_else(|e| futures03::future::ok(make_error_response(e))) // Stream<Resp, ()>
+            .compat()
     }
 }
 
@@ -525,8 +578,8 @@ fn make_error_response(e: Error) -> coppb::Response {
             tag = "meet_lock";
             resp.set_locked(info);
         }
-        Error::MaxExecuteTimeExceeded => {
-            tag = "max_execute_time_exceeded";
+        Error::DeadlineExceeded => {
+            tag = "deadline_exceeded";
             resp.set_other_error(e.to_string());
         }
         Error::MaxPendingTasksExceeded => {
@@ -551,15 +604,18 @@ fn make_error_response(e: Error) -> coppb::Response {
 mod tests {
     use super::*;
 
-    use std::sync::{atomic, mpsc, Arc};
+    use std::sync::{atomic, mpsc};
     use std::thread;
     use std::vec;
+
+    use futures03::executor::block_on_stream;
 
     use tipb::Executor;
     use tipb::Expr;
 
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::readpool_impl::build_read_pool_for_test;
+    use crate::read_pool::ReadPool;
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use protobuf::Message;
@@ -686,15 +742,17 @@ mod tests {
     #[test]
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         // a normal request
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
             .wait()
             .unwrap();
         assert!(resp.get_other_error().is_empty());
@@ -714,7 +772,6 @@ mod tests {
         );
         assert!(cop
             .handle_unary_request(outdated_req_ctx, handler_builder)
-            .unwrap()
             .wait()
             .is_err());
     }
@@ -722,8 +779,11 @@ mod tests {
     #[test]
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
         cop.recursion_limit = 100;
 
         let req = {
@@ -755,8 +815,11 @@ mod tests {
     #[test]
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let mut req = coppb::Request::default();
         req.set_tp(9999);
@@ -771,8 +834,11 @@ mod tests {
     #[test]
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
@@ -793,25 +859,27 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        let read_pool = CoprReadPoolConfig {
-            normal_concurrency: 1,
-            max_tasks_per_worker_normal: 2,
-            ..CoprReadPoolConfig::default_for_test()
-        }
-        .to_future_pool_configs()
-        .into_iter()
-        .map(|config| {
-            let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
-                .name_prefix("coprocessor_endpoint_test_full")
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                // Safety: we call `set_` and `destroy_` with the same engine type.
-                .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
-                .build()
-        })
-        .collect();
+        let read_pool = ReadPool::from(
+            CoprReadPoolConfig {
+                normal_concurrency: 1,
+                max_tasks_per_worker_normal: 2,
+                ..CoprReadPoolConfig::default_for_test()
+            }
+            .to_future_pool_configs()
+            .into_iter()
+            .map(|config| {
+                let engine = Arc::new(Mutex::new(engine.clone()));
+                Builder::from_config(config)
+                    .name_prefix("coprocessor_endpoint_test_full")
+                    .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                    // Safety: we call `set_` and `destroy_` with the same engine type.
+                    .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
+                    .build()
+            })
+            .collect::<Vec<_>>(),
+        );
 
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let (tx, rx) = mpsc::channel();
 
@@ -826,19 +894,11 @@ mod tests {
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed())
             });
-            let result_of_future =
-                cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
-            match result_of_future {
-                Err(full_error) => {
-                    tx.send(Err(full_error)).unwrap();
-                }
-                Ok(future) => {
-                    let tx = tx.clone();
-                    thread::spawn(move || {
-                        tx.send(future.wait()).unwrap();
-                    });
-                }
-            }
+            let future = cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
+            let tx = tx.clone();
+            thread::spawn(move || {
+                tx.send(future.wait()).unwrap();
+            });
             thread::sleep(Duration::from_millis(100));
         }
 
@@ -856,14 +916,16 @@ mod tests {
     #[test]
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
             .wait()
             .unwrap();
         assert_eq!(resp.get_data().len(), 0);
@@ -873,18 +935,21 @@ mod tests {
     #[test]
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         // Fail immediately
         let handler_builder =
             Box::new(|_, _: &_| Ok(StreamFixture::new(vec![Err(box_err!("foo"))]).into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data().len(), 0);
         assert!(!resp_vec[0].get_other_error().is_empty());
@@ -899,12 +964,12 @@ mod tests {
         responses.push(Err(box_err!("foo")));
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 6);
         for i in 0..5 {
             assert_eq!(resp_vec[i].get_data(), [1, 2, i as u8]);
@@ -916,16 +981,19 @@ mod tests {
     #[test]
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 0);
     }
 
@@ -934,8 +1002,11 @@ mod tests {
     #[test]
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -953,12 +1024,12 @@ mod tests {
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 7]);
         assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
@@ -979,12 +1050,12 @@ mod tests {
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 13]);
         assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
@@ -1005,12 +1076,12 @@ mod tests {
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 2);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 23]);
         assert!(!resp_vec[1].get_other_error().is_empty());
@@ -1020,13 +1091,16 @@ mod tests {
     #[test]
     fn test_channel_size() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
         let cop = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_stream_channel_size: 3,
                 ..Config::default()
             },
-            read_pool,
+            read_pool.handle(),
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1039,13 +1113,13 @@ mod tests {
             Ok((Some(resp), false))
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .take(7)
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .take(7)
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 7);
         assert!(counter.load(atomic::Ordering::SeqCst) < 14);
     }
@@ -1071,7 +1145,7 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        let read_pool = build_read_pool_for_test(
+        let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig {
                 low_concurrency: 1,
                 normal_concurrency: 1,
@@ -1079,13 +1153,13 @@ mod tests {
                 ..CoprReadPoolConfig::default_for_test()
             },
             engine,
-        );
+        ));
 
         let mut config = Config::default();
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::<RocksEngine>::new(&config, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.handle());
 
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -1104,9 +1178,8 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_1 = cop
-                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
-                .unwrap();
+            let resp_future_1 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1119,9 +1192,8 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 = cop
-                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
-                .unwrap();
+            let resp_future_2 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
@@ -1179,9 +1251,8 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_1 = cop
-                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
-                .unwrap();
+            let resp_future_1 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1204,13 +1275,15 @@ mod tests {
                 .into_boxed())
             });
             let resp_future_3 = cop
-                .handle_stream_request(req_with_exec_detail.clone(), handler_builder)
+                .handle_stream_request(req_with_exec_detail, handler_builder)
                 .unwrap();
-            let sender = tx.clone();
             thread::spawn(move || {
-                sender
-                    .send(resp_future_3.collect().wait().unwrap())
-                    .unwrap()
+                tx.send(
+                    block_on_stream(resp_future_3)
+                        .collect::<Result<Vec<_>>>()
+                        .unwrap(),
+                )
+                .unwrap()
             });
 
             // Response 1

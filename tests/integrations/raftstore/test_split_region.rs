@@ -12,12 +12,12 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use engine::Iterable;
-use engine::CF_WRITE;
+use engine_traits::CF_WRITE;
 use keys::data_key;
 use pd_client::PdClient;
+use raftstore::store::{Callback, WriteResponse};
+use raftstore::Result;
 use test_raftstore::*;
-use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::raftstore::Result;
 use tikv_util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
@@ -812,7 +812,7 @@ fn test_node_split_update_region_right_derive() {
     must_get_equal(&cluster.get_engine(new_leader.get_store_id()), b"k4", b"v4");
 
     // Transfer leadership to another peer.
-    cluster.must_transfer_leader(right.get_id(), new_leader.clone());
+    cluster.must_transfer_leader(right.get_id(), new_leader);
 
     // Make sure the new_leader is in lease.
     cluster.must_put(b"k4", b"v5");

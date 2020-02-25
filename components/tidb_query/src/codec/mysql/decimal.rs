@@ -291,46 +291,46 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
     let r_start = r_idx;
     let r_int_word_cnt = r_stop - r_idx;
 
-    let carry = if r_int_word_cnt > l_int_word_cnt {
-        Some(1)
-    } else if r_int_word_cnt == l_int_word_cnt {
-        let mut l_end = (l_stop + l_frac_word_cnt as usize - 1) as isize;
-        let mut r_end = (r_stop + r_frac_word_cnt as usize - 1) as isize;
-        // trims suffix 0(also trims the suffix 0 before the point
-        // when there is no digit after point).
-        while l_idx as isize <= l_end && lhs.word_buf[l_end as usize] == 0 {
-            l_end -= 1;
-        }
+    let carry = match r_int_word_cnt.cmp(&l_int_word_cnt) {
+        Ordering::Greater => Some(1),
+        Ordering::Equal => {
+            let mut l_end = (l_stop + l_frac_word_cnt as usize - 1) as isize;
+            let mut r_end = (r_stop + r_frac_word_cnt as usize - 1) as isize;
+            // trims suffix 0(also trims the suffix 0 before the point
+            // when there is no digit after point).
+            while l_idx as isize <= l_end && lhs.word_buf[l_end as usize] == 0 {
+                l_end -= 1;
+            }
 
-        // trims suffix 0(also trims the suffix 0 before the point
-        // when there is no digit after point).
-        while r_idx as isize <= r_end && rhs.word_buf[r_end as usize] == 0 {
-            r_end -= 1;
-        }
-        // here l_end is the last nonzero index in l.word_buf, attention:it may in the range of (0,l_int_word_cnt)
-        l_frac_word_cnt = cmp::max(0, l_end + 1 - l_stop as isize) as u8;
-        // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,r_int_word_cnt)
-        r_frac_word_cnt = cmp::max(0, r_end + 1 - r_stop as isize) as u8;
-        while l_idx as isize <= l_end
-            && r_idx as isize <= r_end
-            && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
-        {
-            l_idx += 1;
-            r_idx += 1;
-        }
-        if l_idx as isize <= l_end {
-            if r_idx as isize <= r_end && rhs.word_buf[r_idx] > lhs.word_buf[l_idx] {
+            // trims suffix 0(also trims the suffix 0 before the point
+            // when there is no digit after point).
+            while r_idx as isize <= r_end && rhs.word_buf[r_end as usize] == 0 {
+                r_end -= 1;
+            }
+            // here l_end is the last nonzero index in l.word_buf, attention:it may in the range of (0,l_int_word_cnt)
+            l_frac_word_cnt = cmp::max(0, l_end + 1 - l_stop as isize) as u8;
+            // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,r_int_word_cnt)
+            r_frac_word_cnt = cmp::max(0, r_end + 1 - r_stop as isize) as u8;
+            while l_idx as isize <= l_end
+                && r_idx as isize <= r_end
+                && lhs.word_buf[l_idx] == rhs.word_buf[r_idx]
+            {
+                l_idx += 1;
+                r_idx += 1;
+            }
+            if l_idx as isize <= l_end {
+                if r_idx as isize <= r_end && rhs.word_buf[r_idx] > lhs.word_buf[l_idx] {
+                    Some(1)
+                } else {
+                    Some(0)
+                }
+            } else if r_idx as isize <= r_end {
                 Some(1)
             } else {
-                Some(0)
+                None
             }
-        } else if r_idx as isize <= r_end {
-            Some(1)
-        } else {
-            None
         }
-    } else {
-        Some(0)
+        Ordering::Less => Some(0),
     };
     let l_res = (l_start, l_int_word_cnt, l_frac_word_cnt);
     let r_res = (r_start, r_int_word_cnt, r_frac_word_cnt);
@@ -493,12 +493,10 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
         cmp::max(l_int_word_cnt, r_int_word_cnt),
         cmp::max(l_frac_word_cnt, r_frac_word_cnt),
     );
-    let x = if l_int_word_cnt > r_int_word_cnt {
-        lhs.word_buf[0]
-    } else if l_int_word_cnt < r_int_word_cnt {
-        rhs.word_buf[0]
-    } else {
-        lhs.word_buf[0] + rhs.word_buf[0]
+    let x = match l_int_word_cnt.cmp(&r_int_word_cnt) {
+        Ordering::Greater => lhs.word_buf[0],
+        Ordering::Less => rhs.word_buf[0],
+        Ordering::Equal => lhs.word_buf[0] + rhs.word_buf[0],
     };
     if x > WORD_MAX - 1 {
         int_word_to += 1;
@@ -1831,9 +1829,9 @@ impl ConvertTo<Decimal> for Json {
     /// Port from TiDB's types.ConvertJSONToDecimal
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        match self {
-            Json::String(s) => {
-                Decimal::from_str(s.as_str()).or_else(|e| {
+        match self.as_ref().get_type() {
+            JsonType::String => {
+                Decimal::from_str(self.as_ref().get_str()?).or_else(|e| {
                     ctx.handle_truncate_err(e)?;
                     // FIXME: if TiDB's MyDecimal::FromString return err,
                     //  it may has res. However, if TiKV's Decimal::from_str
@@ -2080,6 +2078,7 @@ pub trait DecimalEncoder: NumberEncoder {
         Ok(res)
     }
 
+    #[inline]
     fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
         let data = unsafe {
             let p = v as *const Decimal as *const u8;
@@ -2091,6 +2090,16 @@ pub trait DecimalEncoder: NumberEncoder {
 }
 
 impl<T: BufferWriter> DecimalEncoder for T {}
+
+pub trait DecimalDatumPayloadChunkEncoder: NumberEncoder + DecimalEncoder {
+    #[inline]
+    fn write_decimal_to_chunk_by_datum_payload(&mut self, mut src_payload: &[u8]) -> Result<()> {
+        let decimal = src_payload.read_decimal()?;
+        self.write_decimal_to_chunk(&decimal)
+    }
+}
+
+impl<T: BufferWriter> DecimalDatumPayloadChunkEncoder for T {}
 
 // Mark as `#[inline]` since in many cases `size` is a constant.
 #[inline]

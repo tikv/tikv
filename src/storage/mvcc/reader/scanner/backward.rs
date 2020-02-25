@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use engine::CF_DEFAULT;
+use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
@@ -1059,7 +1059,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), true)
             .range(None, None)
             .build()
             .unwrap();

@@ -376,18 +376,24 @@ impl<'a> Iterator for Iter<'a> {
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        if n + 1 < self.offsets.len() {
-            let begin_offset = self.offsets[n];
-            let end_offset = self.offsets[n + 1];
-            self.offsets = &self.offsets[n + 1..];
-            Some(&self.data[begin_offset..end_offset])
-        } else if n + 1 == self.offsets.len() {
-            let begin_offset = self.offsets[n];
-            self.offsets = &[];
-            Some(&self.data[begin_offset..])
-        } else {
-            self.offsets = &[];
-            None
+        use std::cmp::Ordering::*;
+
+        match (n + 1).cmp(&self.offsets.len()) {
+            Less => {
+                let begin_offset = self.offsets[n];
+                let end_offset = self.offsets[n + 1];
+                self.offsets = &self.offsets[n + 1..];
+                Some(&self.data[begin_offset..end_offset])
+            }
+            Equal => {
+                let begin_offset = self.offsets[n];
+                self.offsets = &[];
+                Some(&self.data[begin_offset..])
+            }
+            Greater => {
+                self.offsets = &[];
+                None
+            }
         }
     }
 }
@@ -651,7 +657,7 @@ mod tests {
         assert_eq!(v3.total_len(), 3);
         assert_eq!(format!("{:?}", v3), "[null, null, null, AABB0C, null]");
 
-        let mut v3 = v2.clone();
+        let mut v3 = v2;
         v3.shift(2);
         v3.copy_from(&v1);
         assert_eq!(v3.len(), 4);
@@ -714,7 +720,7 @@ mod tests {
         assert_eq!(v3.total_len(), 3);
         assert_eq!(format!("{:?}", v3), "[null, AABB0C]");
 
-        let mut v3 = v1.clone();
+        let mut v3 = v1;
         v3.copy_n_from(&v2, 2);
         assert_eq!(v3.len(), 4);
         assert_eq!(v3.total_len(), 5);
@@ -813,7 +819,7 @@ mod tests {
         v2.copy_from(&v);
         assert_eq!(format!("{:?}", v2), "[null, AA00, null, null, BB00A0]");
 
-        let mut v2 = v.clone();
+        let mut v2 = v;
         v2.retain_by_array(&[false, false, false, true]);
         assert_eq!(format!("{:?}", v2), "[BB00A0]");
 

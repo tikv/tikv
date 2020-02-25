@@ -13,7 +13,7 @@ use rocksdb::DBIterator;
 use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
 use rocksdb::DB;
 use rocksdb::{ColumnFamilyOptions, SstFileReader};
-use rocksdb::{Env, EnvOptions, SstFileWriter};
+use rocksdb::{Env, EnvOptions, SequentialFile, SstFileWriter};
 use std::rc::Rc;
 use std::sync::Arc;
 // FIXME: Move RocksSeekKey into a common module since
@@ -109,10 +109,7 @@ pub struct RocksSstWriterBuilder {
     in_memory: bool,
 }
 
-impl SstWriterBuilder for RocksSstWriterBuilder {
-    type KvEngine = RocksEngine;
-    type SstWriter = RocksSstWriter;
-
+impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
     fn new() -> Self {
         RocksSstWriterBuilder {
             cf: None,
@@ -121,7 +118,7 @@ impl SstWriterBuilder for RocksSstWriterBuilder {
         }
     }
 
-    fn set_db(mut self, db: &Self::KvEngine) -> Self {
+    fn set_db(mut self, db: &RocksEngine) -> Self {
         self.db = Some(db.as_inner().clone());
         self
     }
@@ -136,14 +133,14 @@ impl SstWriterBuilder for RocksSstWriterBuilder {
         self
     }
 
-    fn build(self, path: &str) -> Result<Self::SstWriter> {
+    fn build(self, path: &str) -> Result<RocksSstWriter> {
         let mut env = None;
         let mut io_options = if let Some(db) = self.db.as_ref() {
             env = db.env();
             let handle = db
                 .cf_handle(self.cf.unwrap_or(CF_DEFAULT))
                 .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
-            db.get_options_cf(handle).clone()
+            db.get_options_cf(handle)
         } else {
             ColumnFamilyOptions::new()
         };
@@ -174,6 +171,7 @@ pub struct RocksSstWriter {
 
 impl SstWriter for RocksSstWriter {
     type ExternalSstFileInfo = RocksExternalSstFileInfo;
+    type ExternalSstFileReader = SequentialFile;
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         Ok(self.writer.put(key, val)?)
@@ -191,35 +189,20 @@ impl SstWriter for RocksSstWriter {
         Ok(RocksExternalSstFileInfo(self.writer.finish()?))
     }
 
-    fn finish_into(mut self, buf: &mut Vec<u8>) -> Result<Self::ExternalSstFileInfo> {
-        use std::io::Read;
-        if let Some(env) = self.env.take() {
-            let sst_info = self.writer.finish()?;
-            let p = sst_info.file_path();
-            let path = p.as_os_str().to_str().ok_or_else(|| {
-                Error::Engine(format!(
-                    "failed to sequential file bad path {}",
-                    sst_info.file_path().display()
-                ))
-            })?;
-            let mut seq_file = env.new_sequential_file(path, EnvOptions::new())?;
-            let len = seq_file
-                .read_to_end(buf)
-                .map_err(|e| Error::Engine(format!("failed to read sequential file {:?}", e)))?;
-            if len as u64 != sst_info.file_size() {
-                Err(Error::Engine(format!(
-                    "failed to read sequential file inconsistent length {} != {}",
-                    len,
-                    sst_info.file_size()
-                )))
-            } else {
-                Ok(RocksExternalSstFileInfo(sst_info))
-            }
-        } else {
-            Err(Error::Engine(
-                "failed to read sequential file no env provided".to_owned(),
+    fn finish_read(mut self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)> {
+        let env = self.env.take().ok_or_else(|| {
+            Error::Engine("failed to read sequential file no env provided".to_owned())
+        })?;
+        let sst_info = self.writer.finish()?;
+        let p = sst_info.file_path();
+        let path = p.as_os_str().to_str().ok_or_else(|| {
+            Error::Engine(format!(
+                "failed to sequential file bad path {}",
+                p.display()
             ))
-        }
+        })?;
+        let seq_file = env.new_sequential_file(path, EnvOptions::new())?;
+        Ok((RocksExternalSstFileInfo(sst_info), seq_file))
     }
 }
 
@@ -259,6 +242,7 @@ impl ExternalSstFileInfo for RocksExternalSstFileInfo {
 mod tests {
     use super::*;
     use crate::util::new_default_engine;
+    use std::io::Read;
     use tempfile::Builder;
 
     #[test]
@@ -290,9 +274,10 @@ mod tests {
             .unwrap();
         writer.put(k, v).unwrap();
         let mut buf = vec![];
-        let sst_file = writer.finish_into(&mut buf).unwrap();
+        let (sst_file, mut reader) = writer.finish_read().unwrap();
         assert_eq!(sst_file.num_entries(), 1);
         assert!(sst_file.file_size() > 0);
+        reader.read_to_end(&mut buf).unwrap();
         assert_eq!(buf.len() as u64, sst_file.file_size());
         // There must not be a file in disk.
         std::fs::metadata(p).unwrap_err();

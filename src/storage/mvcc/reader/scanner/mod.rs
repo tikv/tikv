@@ -3,19 +3,22 @@
 mod backward;
 mod forward;
 
-use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::IterOption;
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, TimeStamp, TsSet, Value};
 
 use self::backward::BackwardKvScanner;
-use self::forward::{ForwardKvScanner, ForwardScanner, LatestEntryPolicy, LatestKvPolicy};
+use self::forward::{
+    DeltaEntryPolicy, ForwardKvScanner, ForwardScanner, LatestEntryPolicy, LatestKvPolicy,
+};
 use crate::storage::kv::{
     CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics,
 };
 use crate::storage::mvcc::{default_not_found_error, Result};
 use crate::storage::txn::{Result as TxnResult, Scanner as StoreScanner};
 
-pub use self::forward::EntryScanner;
+pub use self::forward::{test_util, DeltaScanner, EntryScanner};
 
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 
@@ -133,6 +136,23 @@ impl<S: Snapshot> ScannerBuilder<S> {
             LatestEntryPolicy::new(after_ts, output_delete),
         ))
     }
+
+    pub fn build_delta_scanner(mut self, from_ts: TimeStamp) -> Result<DeltaScanner<S>> {
+        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
+        // Note: Create a default cf cursor will take key range, so we need to
+        //       ensure the default cursor is created after lock and write.
+        let default_cursor = self
+            .0
+            .create_cf_cursor_with_scan_mode(CF_DEFAULT, ScanMode::Mixed)?;
+        Ok(ForwardScanner::new(
+            self.0,
+            lock_cursor,
+            write_cursor,
+            Some(default_cursor),
+            DeltaEntryPolicy::new(from_ts),
+        ))
+    }
 }
 
 pub enum Scanner<S: Snapshot> {
@@ -207,6 +227,16 @@ impl<S: Snapshot> ScannerConfig<S> {
     /// Create the cursor.
     #[inline]
     fn create_cf_cursor(&mut self, cf: CfName) -> Result<Cursor<S::Iter>> {
+        self.create_cf_cursor_with_scan_mode(cf, self.scan_mode())
+    }
+
+    /// Create the cursor with specified scan_mode, instead of inferring scan_mode from the config.
+    #[inline]
+    fn create_cf_cursor_with_scan_mode(
+        &mut self,
+        cf: CfName,
+        scan_mode: ScanMode,
+    ) -> Result<Cursor<S::Iter>> {
         let (lower, upper) = if cf == CF_DEFAULT {
             (self.lower_bound.take(), self.upper_bound.take())
         } else {
@@ -221,7 +251,7 @@ impl<S: Snapshot> ScannerConfig<S> {
         let cursor = CursorBuilder::new(&self.snapshot, cf)
             .range(lower, upper)
             .fill_cache(self.fill_cache)
-            .scan_mode(self.scan_mode())
+            .scan_mode(scan_mode)
             .hint_min_ts(hint_min_ts)
             .hint_max_ts(hint_max_ts)
             .build()?;
@@ -358,7 +388,7 @@ mod tests {
             move |engine: &RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
                 let snapshot = engine.snapshot(&Context::default()).unwrap();
 
-                let scanner = ScannerBuilder::new(snapshot.clone(), SCAN_TS, desc)
+                let scanner = ScannerBuilder::new(snapshot, SCAN_TS, desc)
                     .build()
                     .unwrap();
                 check_scan_result(scanner, &expected_result);
@@ -518,7 +548,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let scanner = ScannerBuilder::new(snapshot.clone(), 65.into(), desc)
+        let scanner = ScannerBuilder::new(snapshot, 65.into(), desc)
             .bypass_locks(bypass_locks)
             .build()
             .unwrap();

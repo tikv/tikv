@@ -135,7 +135,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
-                resp.set_other_error(e.to_string());
+                resp.set_other_error(e);
                 Ok(resp)
             }
             Err(e) => Err(e),
@@ -280,7 +280,7 @@ impl SampleCollector {
         self.count += 1;
         self.fm_sketch.insert(&data);
         if let Some(c) = self.cm_sketch.as_mut() {
-            c.insert(&data)
+            c.insert(&data);
         }
         self.total_size += data.len() as u64;
         if self.samples.len() < self.max_sample_size {

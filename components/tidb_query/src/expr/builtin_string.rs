@@ -319,17 +319,23 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn upper_utf8<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        Ok(Some(Cow::Owned(s.to_uppercase().into_bytes())))
+    }
+
+    #[inline]
     pub fn upper<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        if self.children[0].field_type().is_binary_string_like() {
-            let s = try_opt!(self.children[0].eval_string(ctx, row));
-            return Ok(Some(s));
-        }
-        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        Ok(Some(Cow::Owned(s.to_uppercase().into_bytes())))
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        Ok(Some(s))
     }
 
     #[inline]
@@ -1751,8 +1757,7 @@ mod tests {
     }
 
     #[test]
-    fn test_upper() {
-        // Test non-binary string case
+    fn test_upper_utf8() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -1781,13 +1786,15 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (input, exp) in cases {
             let input = datum_expr(input);
-            let op = scalar_func_expr(ScalarFuncSig::Upper, &[input]);
+            let op = scalar_func_expr(ScalarFuncSig::UpperUtf8, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
+    }
 
-        // Test binary string case
+    #[test]
+    fn test_upper() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),

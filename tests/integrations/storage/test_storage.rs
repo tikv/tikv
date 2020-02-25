@@ -10,7 +10,7 @@ use rand::random;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 
-use engine::{CF_DEFAULT, CF_LOCK};
+use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
@@ -465,18 +465,18 @@ fn test_txn_store_scan_lock() {
         vec![Some((b"k1", b"v1")), None, None, None, None],
     );
 
-    store.scan_locks_ok(10, b"".to_vec(), 1, vec![lock(b"p1", b"p1", 5)]);
+    store.scan_locks_ok(10, b"", 1, vec![lock(b"p1", b"p1", 5)]);
 
     store.scan_locks_ok(
         10,
-        b"s".to_vec(),
+        b"s",
         2,
         vec![lock(b"s1", b"p1", 5), lock(b"s2", b"p2", 10)],
     );
 
     store.scan_locks_ok(
         10,
-        b"".to_vec(),
+        b"",
         0,
         vec![
             lock(b"p1", b"p1", 5),
@@ -488,7 +488,7 @@ fn test_txn_store_scan_lock() {
 
     store.scan_locks_ok(
         10,
-        b"".to_vec(),
+        b"",
         100,
         vec![
             lock(b"p1", b"p1", 5),
@@ -525,7 +525,7 @@ fn test_txn_store_resolve_lock() {
     store.get_none(b"s1", 30);
     store.get_ok(b"p2", 20, b"v10");
     store.get_ok(b"s2", 30, b"v10");
-    store.scan_locks_ok(30, b"".to_vec(), 100, vec![]);
+    store.scan_locks_ok(30, b"", 100, vec![]);
 }
 
 fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
@@ -572,7 +572,7 @@ fn test_txn_store_resolve_lock_in_a_batch() {
     store.get_none(b"s1", 30);
     store.get_ok(b"p2", 30, b"v10");
     store.get_ok(b"s2", 30, b"v10");
-    store.scan_locks_ok(30, b"".to_vec(), 100, vec![]);
+    store.scan_locks_ok(30, b"", 100, vec![]);
 }
 
 #[test]
@@ -638,7 +638,7 @@ fn test_txn_store_gc() {
 fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
     let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
     test_txn_store_gc_multiple_keys_cluster_storage(n, prefix.clone());
-    test_txn_store_gc_multiple_keys_single_storage(n, prefix.clone());
+    test_txn_store_gc_multiple_keys_single_storage(n, prefix);
 }
 
 pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) {

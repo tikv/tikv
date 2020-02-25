@@ -443,17 +443,17 @@ impl ToInt for Json {
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // Casts json to int has different behavior in TiDB/MySQL when the json
-        // value is a `Json::Double` and we will keep compatible with TiDB
+        // value is a `Json::from_f64` and we will keep compatible with TiDB
         // **Note**: select cast(cast('4.5' as json) as signed)
         // TiDB:  5
         // MySQL: 4
-        let val = match *self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => Ok(0),
-            Json::Boolean(true) => Ok(1),
-            Json::I64(d) => Ok(d),
-            Json::U64(d) => Ok(d as i64),
-            Json::Double(d) => d.to_int(ctx, tp),
-            Json::String(ref s) => s.as_bytes().to_int(ctx, tp),
+        let val = match self.as_ref().get_type() {
+            JsonType::Object | JsonType::Array => Ok(0),
+            JsonType::Literal => Ok(self.as_ref().get_literal().map_or(0, |x| x as i64)),
+            JsonType::I64 => Ok(self.as_ref().get_i64()),
+            JsonType::U64 => Ok(self.as_ref().get_u64() as i64),
+            JsonType::Double => self.as_ref().get_double().to_int(ctx, tp),
+            JsonType::String => self.as_ref().get_str_bytes()?.to_int(ctx, tp),
         }?;
         val.to_int(ctx, tp)
     }
@@ -461,13 +461,13 @@ impl ToInt for Json {
     // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let val = match *self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => Ok(0u64),
-            Json::Boolean(true) => Ok(1u64),
-            Json::I64(d) => Ok(d as u64),
-            Json::U64(d) => Ok(d),
-            Json::Double(d) => d.to_uint(ctx, tp),
-            Json::String(ref s) => s.as_bytes().to_uint(ctx, tp),
+        let val = match self.as_ref().get_type() {
+            JsonType::Object | JsonType::Array => Ok(0),
+            JsonType::Literal => Ok(self.as_ref().get_literal().map_or(0, |x| x as u64)),
+            JsonType::I64 => Ok(self.as_ref().get_i64() as u64),
+            JsonType::U64 => Ok(self.as_ref().get_u64()),
+            JsonType::Double => self.as_ref().get_double().to_uint(ctx, tp),
+            JsonType::String => self.as_ref().get_str_bytes()?.to_uint(ctx, tp),
         }?;
         val.to_uint(ctx, tp)
     }
@@ -768,8 +768,30 @@ impl ConvertTo<f64> for Bytes {
 }
 
 pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
-    let vs = get_valid_float_prefix(ctx, s)?;
-    float_str_to_int_string(ctx, vs)
+    if !ctx.cfg.flag.contains(Flag::IN_SELECT_STMT) {
+        let vs = get_valid_float_prefix(ctx, s)?;
+        float_str_to_int_string(ctx, vs)
+    } else {
+        let mut valid_len = 0;
+        for (i, c) in s.chars().enumerate() {
+            if (c == '+' || c == '-') && i == 0 {
+                continue;
+            }
+            if c >= '0' && c <= '9' {
+                valid_len = i + 1;
+                continue;
+            }
+            break;
+        }
+        let mut valid = &s[..valid_len];
+        if valid == "" {
+            valid = "0";
+        }
+        if valid_len == 0 || valid_len < s.len() {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("INTEGER", s))?;
+        }
+        Ok(Cow::Borrowed(valid))
+    }
 }
 
 pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a str> {
@@ -1239,7 +1261,7 @@ mod tests {
             // OVERFLOW_AS_WARNING
             let mut ctx =
                 EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-            let val = raw.clone().to_int(&mut ctx, tp);
+            let val = raw.to_int(&mut ctx, tp);
             assert_eq!(val.unwrap(), dst);
             assert_eq!(ctx.warnings.warning_cnt, 1);
         }
@@ -1939,6 +1961,26 @@ mod tests {
             assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
+            Flag::IN_SELECT_STMT | Flag::IGNORE_TRUNCATE | Flag::OVERFLOW_AS_WARNING,
+        )));
+        let cases = vec![
+            ("+0.0", "+0"),
+            ("100", "100"),
+            ("+100", "+100"),
+            ("-100", "-100"),
+            ("9e20", "9"),
+            ("+9e20", "+9"),
+            ("-9e20", "-9"),
+            ("-900e20", "-900"),
+        ];
+
+        for (i, e) in cases {
+            let o = super::get_valid_int_prefix(&mut ctx, i);
+            assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
+        }
+        assert_eq!(ctx.take_warnings().warnings.len(), 0);
     }
 
     #[test]
@@ -2479,15 +2521,22 @@ mod tests {
                 // make log
                 let rs = r.as_ref().map(|x| x.to_string());
                 let expect_str = expect.as_ref().map(|x| x.to_string());
-                let log =
-                    format!(
-                            "input: {}, origin_flen: {}, origin_decimal: {}, \
+                let log = format!(
+                    "input: {}, origin_flen: {}, origin_decimal: {}, \
                      res_flen: {}, res_decimal: {}, is_unsigned: {}, \
                      in_dml: {}, in_dml_flag(if in_dml is false, it will take no effect): {:?}, \
                      expect: {:?}, expect: {:?}",
-                            input, origin_flen, origin_decimal, res_flen, res_decimal,
-                            is_unsigned, in_dml, in_dml_flag, expect_str, rs
-                        );
+                    input,
+                    origin_flen,
+                    origin_decimal,
+                    res_flen,
+                    res_decimal,
+                    is_unsigned,
+                    in_dml,
+                    in_dml_flag,
+                    expect_str,
+                    rs
+                );
 
                 // check result
                 match &expect {

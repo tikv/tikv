@@ -4,9 +4,8 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
+use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
-use tikv::raftstore::coprocessor::RegionInfoAccessor;
-use tikv::storage::kv::RegionInfoProvider;
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 

@@ -8,7 +8,7 @@ use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
 use engine::IterOption;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -122,9 +122,9 @@ impl BTreeEngineIterator {
             None => Unbounded,
             Some(key) => Excluded(Key::from_raw(key)),
         };
-        let bounds = (lower_bound.clone(), upper_bound.clone());
+        let bounds = (lower_bound, upper_bound);
         Self {
-            tree: tree.clone(),
+            tree,
             cur_key: None,
             cur_value: None,
             valid: false,
@@ -231,10 +231,7 @@ impl Snapshot for BTreeEngineSnapshot {
     ) -> EngineResult<Cursor<Self::Iter>> {
         let tree = self.inner_engine.get_cf(cf);
 
-        Ok(Cursor::new(
-            BTreeEngineIterator::new(tree.clone(), iter_opt),
-            mode,
-        ))
+        Ok(Cursor::new(BTreeEngineIterator::new(tree, iter_opt), mode))
     }
 }
 
@@ -357,7 +354,7 @@ pub mod tests {
         }
 
         let iter_op = IterOption::default();
-        let tree = engine.get_cf(CF_DEFAULT).clone();
+        let tree = engine.get_cf(CF_DEFAULT);
         let mut iter = BTreeEngineIterator::new(tree, iter_op);
         assert!(!iter.valid().unwrap());
 
