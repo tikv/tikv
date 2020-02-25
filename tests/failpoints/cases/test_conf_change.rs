@@ -286,7 +286,7 @@ fn test_redundant_conf_change_by_snapshot() {
 #[test]
 fn test_handle_conf_change_when_apply_fsm_resume_pending_state() {
     let _guard = crate::setup();
-    let mut cluster = new_node_cluster(0, 4);
+    let mut cluster = new_node_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -301,26 +301,19 @@ fn test_handle_conf_change_when_apply_fsm_resume_pending_state() {
     let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
 
-    let apply_yield_peer_3_fp = "apply_yield_peer_3";
-    fail::cfg(apply_yield_peer_3_fp, "return()").unwrap();
+    let yield_apply_conf_change_3_fp = "yield_apply_conf_change_3";
+    fail::cfg(yield_apply_conf_change_3_fp, "return()").unwrap();
 
-    let handle_raft_ready_no_conf_change_3_fp = "handle_raft_ready_no_conf_change_3";
-    fail::cfg(handle_raft_ready_no_conf_change_3_fp, "return()").unwrap();
-
-    cluster.must_put(b"k", b"v");
+    // Make store 1 and 3 become quorum
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     pd_client.must_remove_peer(r1, new_peer(3, 3));
-    // Wait for leader to send 2 committed log(put kv and conf change) to peer 3
-    sleep_ms(100);
-    fail::remove(handle_raft_ready_no_conf_change_3_fp);
     // Wait for peer fsm to send committed entries to apply fsm
     sleep_ms(100);
-    fail::remove(apply_yield_peer_3_fp);
-
-    pd_client.must_add_peer(r1, new_peer(4, 4));
-    // add new peer 5 to store 3
-    pd_client.must_add_peer(r1, new_peer(3, 5));
-    pd_client.must_remove_peer(r1, new_peer(4, 4));
+    fail::remove(yield_apply_conf_change_3_fp);
+    cluster.clear_send_filters();
+    // Add new peer 4 to store 3
+    pd_client.must_add_peer(r1, new_peer(3, 4));
 
     for i in 0..10 {
         cluster.must_put(format!("kk{}", i).as_bytes(), b"v1");

@@ -1167,26 +1167,6 @@ impl Peer {
 
         let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
-        fail_point!(
-            "handle_raft_ready_no_conf_change_3",
-            {
-                if self.peer.get_id() != 3 || ready.committed_entries.is_none() {
-                    false
-                } else {
-                    let committed_entries = ready.committed_entries.as_ref().unwrap();
-                    let mut has_conf = false;
-                    for entry in committed_entries.iter() {
-                        if entry.get_entry_type() == EntryType::EntryConfChange {
-                            has_conf = true;
-                            break;
-                        }
-                    }
-                    !has_conf
-                }
-            },
-            |_| { None }
-        );
-
         self.on_role_changed(ctx, &ready);
 
         self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
