@@ -4,8 +4,8 @@ use std::cmp::Ordering;
 
 use tidb_query_codegen::rpn_fn;
 
+use crate::codec::collation::Collator;
 use crate::codec::data_type::*;
-use crate::expr_util::collation::Collator;
 use crate::Result;
 
 #[rpn_fn]

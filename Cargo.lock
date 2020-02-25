@@ -550,6 +550,7 @@ dependencies = [
  "chrono",
  "clap",
  "engine",
+ "engine_traits",
  "fs2",
  "futures 0.1.29",
  "futures-cpupool",
@@ -4069,6 +4070,7 @@ version = "0.0.1"
 dependencies = [
  "engine",
  "engine_rocks",
+ "engine_traits",
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",

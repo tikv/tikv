@@ -7,10 +7,10 @@ use std::{f64, i64};
 use tidb_query_datatype::{Collation, FieldTypeAccessor};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
+use crate::codec::collation::*;
 use crate::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::codec::{datum, mysql, Datum};
 use crate::expr::Expression;
-use crate::expr_util::collation::*;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum CmpOp {

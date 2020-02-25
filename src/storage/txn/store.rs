@@ -530,7 +530,8 @@ mod tests {
         TestEngineBuilder,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
-    use engine::{CfName, IterOption};
+    use engine::IterOption;
+    use engine_traits::CfName;
     use kvproto::kvrpcpb::Context;
 
     const KEY_PREFIX: &str = "key_prefix";
