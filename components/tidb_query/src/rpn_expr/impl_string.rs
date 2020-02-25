@@ -5,6 +5,7 @@ use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::Result;
+use hex::FromHex;
 use tidb_query_datatype::*;
 
 const SPACE: u8 = 0o40u8;
@@ -387,6 +388,23 @@ pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<In
     } else {
         Ok(None)
     }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn un_hex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg
+        .as_ref()
+        .map(|bytes| {
+            if bytes.len() % 2 == 1 {
+                let mut vec = vec![b'0'];
+                vec.extend_from_slice(bytes);
+                Vec::from_hex(vec)
+            } else {
+                Vec::from_hex(bytes)
+            }
+        })
+        .and_then(|hex| hex.map(Option::Some).unwrap_or(None)))
 }
 
 #[cfg(test)]
@@ -1547,6 +1565,27 @@ mod tests {
                 .evaluate::<Int>(ScalarFuncSig::InstrUtf8)
                 .unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_un_hex() {
+        let test_cases = vec![
+            (Some(b"4D7953514C".to_vec()), Some(b"MySQL".to_vec())),
+            (Some(b"1267".to_vec()), Some(vec![0x12, 0x67])),
+            (Some(b"126".to_vec()), Some(vec![0x01, 0x26])),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (Some(b"string".to_vec()), None),
+            (Some("你好".as_bytes().to_vec()), None),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::UnHex)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 }
