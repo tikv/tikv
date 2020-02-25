@@ -130,54 +130,6 @@ impl RowSlice<'_> {
             RowSlice::Small { values, .. } => values,
         }
     }
-
-    #[inline]
-    pub fn iter(&self) -> RowSliceIter {
-        RowSliceIter { row: self, idx: 0 }
-    }
-}
-
-pub struct RowSliceIter<'a> {
-    row: &'a RowSlice<'a>,
-    idx: usize,
-}
-
-impl<'a> std::iter::Iterator for RowSliceIter<'a> {
-    type Item = &'a [u8];
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        let result = match self.row {
-            RowSlice::Small {
-                offsets, values, ..
-            } => {
-                if self.idx >= offsets.len() {
-                    return None;
-                }
-                let start = offsets[self.idx] as usize;
-                let end = match offsets.get(self.idx + 1) {
-                    Some(p) => *p as usize,
-                    None => values.len(),
-                };
-                Some(&values[start..end])
-            }
-            RowSlice::Big {
-                offsets, values, ..
-            } => {
-                if self.idx >= offsets.len() {
-                    return None;
-                }
-                let start = offsets[self.idx] as usize;
-                let end = match offsets.get(self.idx + 1) {
-                    Some(p) => *p as usize,
-                    None => values.len(),
-                };
-                Some(&values[start..end])
-            }
-        };
-        self.idx += 1;
-        result
-    }
 }
 
 /// Decodes `len` number of ints from `buf` in little endian
