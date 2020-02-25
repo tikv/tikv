@@ -68,6 +68,7 @@ pub trait Collator {
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()>;
 }
 
+/// Collator for binary collation without padding.
 pub struct CollatorBinary;
 
 impl Collator for CollatorBinary {

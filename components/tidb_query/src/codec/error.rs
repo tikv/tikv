@@ -209,7 +209,7 @@ impl From<codec::Error> for Error {
 
 impl From<tidb_query_datatype::DataTypeError> for Error {
     fn from(err: tidb_query_datatype::DataTypeError) -> Self {
-        box_err!("invalid schema: {:?}", err.to_string())
+        box_err!("invalid schema: {:?}", err)
     }
 }
 

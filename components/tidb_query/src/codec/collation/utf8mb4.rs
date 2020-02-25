@@ -339,10 +339,6 @@ static GENERAL_CI_PLANE_TABLE: [Option<&[u16; 256]>; 256] = [
     Some(&GENERAL_CI_PLANE_FF),
 ];
 
-pub const TRIM_PADDING_SPACE: char = 0x20 as char;
-
-pub struct CollatorUtf8Mb4GeneralCi;
-
 #[inline]
 fn general_ci_convert(c: char) -> u16 {
     let r = c as usize;
@@ -355,6 +351,11 @@ fn general_ci_convert(c: char) -> u16 {
         r as u16
     }
 }
+
+pub const TRIM_PADDING_SPACE: char = 0x20 as char;
+
+/// Collator for utf8mb4_general_ci collation with padding behavior (trims right spaces).
+pub struct CollatorUtf8Mb4GeneralCi;
 
 impl Collator for CollatorUtf8Mb4GeneralCi {
     type Charset = CharsetUtf8mb4;
@@ -389,6 +390,7 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
     }
 }
 
+/// Collator for utf8mb4_bin collation with padding behavior (trims right spaces).
 pub struct CollatorUtf8Mb4Bin;
 
 impl Collator for CollatorUtf8Mb4Bin {
@@ -420,6 +422,7 @@ impl Collator for CollatorUtf8Mb4Bin {
     }
 }
 
+/// Collator for utf8mb4_bin collation without padding.
 pub struct CollatorUtf8Mb4BinNoPadding;
 
 impl Collator for CollatorUtf8Mb4BinNoPadding {
