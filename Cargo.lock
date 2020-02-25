@@ -1291,6 +1291,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-intrusive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9182c022da684d168ed91d214efce5ceaab36882b42b53bf2c887fac54d118b"
+dependencies = [
+ "futures-core",
+ "lock_api 0.3.3",
+ "parking_lot 0.10.0",
+]
+
+[[package]]
 name = "futures-io"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2568,6 +2579,26 @@ checksum = "29c127eea4a29ec6c85d153c59dc1213f33ec74cead30fe4730aecc88cc1fd92"
 dependencies = [
  "fixedbitset 0.2.0",
  "indexmap",
+]
+
+[[package]]
+name = "pin-project"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7804a463a8d9572f13453c516a5faea534a2403d7ced2f0c7e100eeff072772c"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "385322a45f2ecf3410c68d2a549a4a2685e8051d0f278e39743ff4e451cb9b3f"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -4279,7 +4310,6 @@ dependencies = [
  "time",
  "tipb",
  "tipb_helper",
- "tokio 0.2.9",
  "twoway",
  "uuid 0.8.1",
  "yatp",
@@ -4333,6 +4363,7 @@ dependencies = [
  "futures 0.3.1",
  "futures-cpupool",
  "futures-executor",
+ "futures-intrusive",
  "futures-locks",
  "futures-util",
  "grpcio",
@@ -4353,6 +4384,7 @@ dependencies = [
  "panic_hook",
  "parking_lot 0.10.0",
  "pd_client",
+ "pin-project",
  "pprof",
  "procinfo",
  "prometheus",

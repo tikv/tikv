@@ -78,6 +78,7 @@ futures03 = { package = "futures", version = "0.3.1", features = ["compat"] }
 futures-cpupool = "0.1"
 futures-locks = "0.1"
 futures-executor = "0.3.1"
+futures-intrusive = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 grpcio = { version = "0.5.0-alpha.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.3"
@@ -94,6 +95,7 @@ more-asserts = "0.1"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 pd_client = { path = "components/pd_client" }
+pin-project = "0.4.8"
 prost = "0.5.0"
 pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
