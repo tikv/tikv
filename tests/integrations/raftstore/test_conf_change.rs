@@ -13,6 +13,7 @@ use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine::*;
+use engine_traits::CF_RAFT;
 use pd_client::PdClient;
 use raftstore::Result;
 use test_raftstore::*;
