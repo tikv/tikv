@@ -377,8 +377,6 @@ pub mod tests {
     /// 1.5          4.5         aaaaa       5          ááá
     /// (drained)
     pub fn make_src_executor_1() -> MockExecutor {
-        let mut col4: FieldType = FieldTypeTp::VarString.into();
-        col4.set_collation(Collation::Utf8GeneralCi);
         MockExecutor::new(
             vec![
                 FieldTypeTp::Double.into(),
