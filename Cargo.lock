@@ -442,6 +442,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "failure",
  "futures 0.1.29",
  "grpcio",
@@ -453,6 +454,8 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_raftstore",
+ "test_util",
  "tikv",
  "tikv_util",
  "tokio-threadpool",
@@ -547,9 +550,11 @@ name = "cmd"
 version = "0.0.1"
 dependencies = [
  "backup",
+ "cdc",
  "chrono",
  "clap",
  "engine",
+ "engine_traits",
  "fs2",
  "futures 0.1.29",
  "futures-cpupool",
@@ -1824,7 +1829,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#528e82bf724834aad85f56808e4fa5f388a1497c"
+source = "git+https://github.com/pingcap/kvproto.git#35b65c96516ef285b412ea3cd0c43a62add63383"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -4069,6 +4074,7 @@ version = "0.0.1"
 dependencies = [
  "engine",
  "engine_rocks",
+ "engine_traits",
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
@@ -4086,6 +4092,7 @@ dependencies = [
  "tikv_util",
  "tokio-threadpool",
  "tokio-timer",
+ "txn_types",
 ]
 
 [[package]]
@@ -4131,6 +4138,7 @@ version = "0.0.1"
 dependencies = [
  "arrow",
  "byteorder",
+ "cdc",
  "configuration",
  "crc64fast",
  "criterion",
@@ -4266,6 +4274,7 @@ dependencies = [
  "time",
  "tipb",
  "tipb_helper",
+ "tokio 0.2.9",
  "twoway",
  "uuid 0.8.1",
  "yatp",

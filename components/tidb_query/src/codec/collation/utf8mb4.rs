@@ -6,7 +6,8 @@ use std::str;
 
 use codec::prelude::*;
 
-use super::{Charset, Collator, DecodeError, DecodeOrWriteError};
+use super::{Charset, Collator};
+use crate::codec::Result;
 
 pub struct CharsetUtf8mb4;
 
@@ -356,11 +357,8 @@ fn general_ci_convert(c: char) -> u16 {
 impl Collator for CollatorUtf8Mb4GeneralCi {
     type Charset = CharsetUtf8mb4;
 
-    fn write_sort_key<W: BufferWriter>(
-        bstr: &[u8],
-        writer: &mut W,
-    ) -> Result<usize, DecodeOrWriteError> {
-        let s = str::from_utf8(bstr).map_err(DecodeError::from)?;
+    fn write_sort_key<W: BufferWriter>(bstr: &[u8], writer: &mut W) -> Result<usize> {
+        let s = str::from_utf8(bstr)?;
         let mut n = 0;
         for ch in s.chars() {
             writer.write_u16_be(general_ci_convert(ch))?;
@@ -369,7 +367,13 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
         Ok(n * std::mem::size_of::<u16>())
     }
 
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering, DecodeError> {
+    #[inline]
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
+
+    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
         let sa = str::from_utf8(a)?;
         let sb = str::from_utf8(b)?;
         let sa_chars = sa.chars();
@@ -379,7 +383,7 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
         }))
     }
 
-    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError> {
+    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<()> {
         use std::hash::Hash;
 
         // We follow the `[T]::hash` implementation to hash length as well.
@@ -400,24 +404,27 @@ impl Collator for CollatorUtf8Mb4Bin {
     type Charset = CharsetUtf8mb4;
 
     #[inline]
-    fn write_sort_key<W: BufferWriter>(
-        bstr: &[u8],
-        writer: &mut W,
-    ) -> Result<usize, DecodeOrWriteError> {
-        str::from_utf8(bstr).map_err(DecodeError::from)?;
+    fn write_sort_key<W: BufferWriter>(bstr: &[u8], writer: &mut W) -> Result<usize> {
+        str::from_utf8(bstr)?;
         writer.write_bytes(bstr)?;
         Ok(bstr.len())
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering, DecodeError> {
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
         str::from_utf8(a)?;
         str::from_utf8(b)?;
         Ok(a.cmp(b))
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError> {
+    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<()> {
         use std::hash::Hash;
 
         str::from_utf8(bstr)?;

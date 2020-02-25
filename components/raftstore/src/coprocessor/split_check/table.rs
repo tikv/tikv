@@ -4,8 +4,8 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use engine::rocks::{SeekKey, DB};
-use engine::CF_WRITE;
 use engine::{IterOption, Iterable};
+use engine_traits::CF_WRITE;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
@@ -232,7 +232,7 @@ mod tests {
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine::ALL_CFS;
+    use engine_traits::ALL_CFS;
     use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;
