@@ -181,48 +181,40 @@ impl IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
         let tail_len = value[0];
-        let mut remaining = &value[1..];
-        for i in 0..self.columns_len_without_handle {
-            let (val, remain) = datum::split_datum(remaining, false)?;
-            columns[i].mut_raw().push(val);
-            remaining = remain;
+        let (columns_payload, handle_payload) = if tail_len <= 1 {
+            // unique index
+            (&value[1..], &key[key.len() - 8..])
+        } else {
+            // normal index
+            (&value[1..value.len() - 8], &value[value.len() - 8..])
+        };
+
+        let row = RowSlice::from_bytes(columns_payload)?;
+        for (idx, val) in row.iter().enumerate() {
+            let mut buffer_to_write = columns[idx].mut_raw().begin_concat_extend();
+            buffer_to_write.write_v2_as_datum(val, &self.schema[idx])?;
         }
+
         if self.decode_handle {
-            let handle_val = if tail_len <= 1 {
-                // This is a normal index. The remaining payload part is the PK handle.
-                // Let's decode it and put in the column.
+            let flag = handle_payload[0];
+            let mut val = &handle_payload[1..];
 
-                // The payload part of the key
-                let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
-                for _ in 0..self.columns_len_without_handle {
-                    let (_, remaining) = datum::split_datum(key_payload, false)?;
-                    key_payload = remaining;
+            // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
+            // receiving optional time zone first.
+            let handle_val = match flag {
+                datum::INT_FLAG => val
+                    .read_i64()
+                    .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
+                datum::UINT_FLAG => {
+                    (val.read_u64()
+                        .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
+                        as i64
                 }
-
-                let flag = key_payload[0];
-                let mut val = &key_payload[1..];
-
-                // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
-                // receiving optional time zone first.
-                match flag {
-                    datum::INT_FLAG => val
-                        .read_i64()
-                        .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
-                    datum::UINT_FLAG => {
-                        (val.read_u64()
-                            .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
-                            as i64
-                    }
-                    _ => {
-                        return Err(other_err!("Unexpected handle flag {}", flag));
-                    }
+                _ => {
+                    return Err(other_err!("Unexpected handle flag {}", flag));
                 }
-            } else {
-                ((&value[value.len() - (tail_len as usize)..])
-                    .read_u64()
-                    .map_err(|_| other_err!("Failed to decode handle in value as i64"))?)
-                    as i64
             };
             columns[self.columns_len_without_handle]
                 .mut_decoded()
