@@ -1541,7 +1541,7 @@ mod tests {
     use engine::Mutable;
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::RocksEngine;
-    use engine_traits::CFHandleExt;
+    use engine_traits::{CFHandleExt, Mutable as MutableTrait};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
@@ -2003,15 +2003,15 @@ mod tests {
     #[test]
     fn test_bad_regions() {
         let debugger = new_debugger();
-        let kv_engine = debugger.engines.kv.as_ref();
-        let raft_engine = debugger.engines.raft.as_ref();
+        let kv_engine = &debugger.engines.kv;
+        let raft_engine = &debugger.engines.raft;
         let store_id = 1; // It's a fake id.
 
-        let wb1 = WriteBatch::default();
-        let handle1 = get_cf_handle(raft_engine, CF_DEFAULT).unwrap();
+        let wb1 = raft_engine.c().write_batch();
+        let cf1 = CF_DEFAULT;
 
-        let wb2 = WriteBatch::default();
-        let handle2 = get_cf_handle(kv_engine, CF_RAFT).unwrap();
+        let wb2 = kv_engine.c().write_batch();
+        let cf2 = CF_RAFT;
 
         {
             let mock_region_state = |region_id: u64, peers: &[u64]| {
@@ -2033,7 +2033,7 @@ mod tests {
                         .collect::<Vec<_>>();
                     region.set_peers(peers.into());
                 }
-                wb2.put_msg_cf(handle2, &region_state_key, &region_state)
+                wb2.put_msg_cf(cf2, &region_state_key, &region_state)
                     .unwrap();
             };
             let mock_raft_state = |region_id: u64, last_index: u64, commit_index: u64| {
@@ -2041,14 +2041,14 @@ mod tests {
                 let mut raft_state = RaftLocalState::default();
                 raft_state.set_last_index(last_index);
                 raft_state.mut_hard_state().set_commit(commit_index);
-                wb1.put_msg_cf(handle1, &raft_state_key, &raft_state)
+                wb1.put_msg_cf(cf1, &raft_state_key, &raft_state)
                     .unwrap();
             };
             let mock_apply_state = |region_id: u64, apply_index: u64| {
                 let raft_apply_key = keys::apply_state_key(region_id);
                 let mut apply_state = RaftApplyState::default();
                 apply_state.set_applied_index(apply_index);
-                wb2.put_msg_cf(handle2, &raft_apply_key, &apply_state)
+                wb2.put_msg_cf(cf2, &raft_apply_key, &apply_state)
                     .unwrap();
             };
 
@@ -2069,8 +2069,8 @@ mod tests {
             mock_region_state(13, &[]);
         }
 
-        raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
-        kv_engine.write_opt(&wb2, &WriteOptions::new()).unwrap();
+        raft_engine.c().write_opt(&wb1, &WriteOptions::new()).unwrap();
+        kv_engine.c().write_opt(&wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
         assert_eq!(bad_regions.len(), 4);
@@ -2284,21 +2284,21 @@ mod tests {
             .collect();
         let db = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
         // Write initial KVs.
-        let wb = WriteBatch::default();
+        let wb = db.c().write_batch();
         for &(cf, ref k, ref v, _) in &kv {
             wb.put_cf(
-                get_cf_handle(&db, cf).unwrap(),
+                cf,
                 &keys::data_key(k.as_encoded()),
                 v,
             )
             .unwrap();
         }
-        db.write(&wb).unwrap();
+        db.c().write(&wb).unwrap();
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
-        let wb = WriteBatch::default();
+        let wb = db.c().write_batch();
         checker.check_mvcc(&wb, None).unwrap();
-        db.write(&wb).unwrap();
+        db.c().write(&wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
             let data = db
@@ -2336,13 +2336,13 @@ mod tests {
 
         let debugger = new_debugger();
 
-        let wb = WriteBatch::default();
+        let wb = debugger.engines.kv.c().write_batch();
         for key in keys {
             let data_key = keys::data_key(key);
             let value = key.to_vec();
             wb.put(&data_key, &value).unwrap();
         }
-        debugger.engines.kv.write(&wb).unwrap();
+        debugger.engines.kv.c().write(&wb).unwrap();
 
         let check = |result: Result<_>, expected: &[&[u8]]| {
             assert_eq!(
