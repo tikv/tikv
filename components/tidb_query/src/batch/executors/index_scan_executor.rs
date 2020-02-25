@@ -57,16 +57,17 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             .iter()
             .map(|ci| field_type_from_column_info(&ci))
             .collect();
-        let columns_len_without_handle = if decode_handle {
-            schema.len() - 1
-        } else {
-            schema.len()
-        };
+
+        let mut columns_id_without_handle: Vec<_> =
+            columns_info.iter().map(|ci| ci.get_column_id()).collect();
+        if decode_handle {
+            columns_id_without_handle.pop();
+        }
 
         let imp = IndexScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
-            columns_len_without_handle,
+            columns_id_without_handle,
             decode_handle,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
@@ -118,7 +119,7 @@ struct IndexScanExecutorImpl {
     schema: Vec<FieldType>,
 
     /// Number of interested columns (exclude PK handle column).
-    columns_len_without_handle: usize,
+    columns_id_without_handle: Vec<i64>,
 
     /// Whether PK handle column is interested. Handle will be always placed in the last column.
     decode_handle: bool,
@@ -142,7 +143,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
-        for _ in 0..self.columns_len_without_handle {
+        for _ in 0..self.columns_id_without_handle.len() {
             columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
         if self.decode_handle {
@@ -178,45 +179,71 @@ impl IndexScanExecutorImpl {
     fn process_kv_pair_new(
         &mut self,
         key: &[u8],
-        value: &[u8],
+        mut value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
         let tail_len = value[0];
-        let (columns_payload, handle_payload) = if tail_len <= 1 {
-            // unique index
-            (&value[1..], &key[key.len() - 8..])
-        } else {
-            // normal index
-            (&value[1..value.len() - 8], &value[value.len() - 8..])
-        };
+        value = &value[1..];
+        // let (columns_payload, handle_payload) = if tail_len <= 7 {
+        //     // unique index
+        //     (&value[1..], &key[key.len() - 9..])
+        // } else {
+        //     // normal index
+        //     (&value[1..], &value[value.len() - 8..])
+        // };
 
-        let row = RowSlice::from_bytes(columns_payload)?;
-        for (idx, val) in row.iter().enumerate() {
-            let mut buffer_to_write = columns[idx].mut_raw().begin_concat_extend();
-            buffer_to_write.write_v2_as_datum(val, &self.schema[idx])?;
+        let row = RowSlice::from_bytes(value)?;
+        for (idx, col_id) in self.columns_id_without_handle.iter().enumerate() {
+            if let Some((start, offset)) = row.search_in_non_null_ids(*col_id)? {
+                let mut buffer_to_write = columns[idx].mut_raw().begin_concat_extend();
+                buffer_to_write
+                    .write_v2_as_datum(&row.values()[start..offset], &self.schema[idx])?;
+            } else if row.search_in_null_ids(*col_id) {
+                columns[idx].mut_raw().push(datum::DATUM_DATA_NULL);
+            } else {
+                // This column is missing. It will be filled with default values later.
+            }
         }
 
         if self.decode_handle {
-            let flag = handle_payload[0];
-            let mut val = &handle_payload[1..];
+            // For normal index, it is placed at the end and any columns prior to it are
+            // ensured to be interested. For unique index, it is placed in the value.
 
-            // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
-            // receiving optional time zone first.
-            let handle_val = match flag {
-                datum::INT_FLAG => val
-                    .read_i64()
-                    .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
-                datum::UINT_FLAG => {
-                    (val.read_u64()
-                        .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
-                        as i64
-                }
-                _ => {
-                    return Err(other_err!("Unexpected handle flag {}", flag));
+            let handle_val = if tail_len <= 7 {
+                // This is a unique index, and we should look up PK handle in value.
+
+                // NOTE: it is not `number::decode_i64`.
+                value = &value[value.len() - 8..];
+                (value
+                    .read_u64()
+                    .map_err(|_| other_err!("Failed to decode handle in value as i64"))?)
+                    as i64
+            } else {
+                // This is a normal index. The remaining payload part is the PK handle.
+                // Let's decode it and put in the column.
+                let key_payload = &key[key.len() - 9..];
+                let flag = key_payload[0];
+                let mut val = &key_payload[1..];
+
+                // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
+                // receiving optional time zone first.
+
+                match flag {
+                    datum::INT_FLAG => val
+                        .read_i64()
+                        .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
+                    datum::UINT_FLAG => {
+                        (val.read_u64()
+                            .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
+                            as i64
+                    }
+                    _ => {
+                        return Err(other_err!("Unexpected handle flag {}", flag));
+                    }
                 }
             };
-            columns[self.columns_len_without_handle]
+            columns[self.columns_id_without_handle.len()]
                 .mut_decoded()
                 .push_int(Some(handle_val));
         }
@@ -233,7 +260,7 @@ impl IndexScanExecutorImpl {
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
 
-        for i in 0..self.columns_len_without_handle {
+        for i in 0..self.columns_id_without_handle.len() {
             let (val, remaining) = datum::split_datum(key_payload, false)?;
             columns[i].mut_raw().push(val);
             key_payload = remaining;
@@ -275,7 +302,7 @@ impl IndexScanExecutorImpl {
                 }
             };
 
-            columns[self.columns_len_without_handle]
+            columns[self.columns_id_without_handle.len()]
                 .mut_decoded()
                 .push_int(Some(handle_val));
         }
