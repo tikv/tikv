@@ -742,7 +742,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
-                    Ordering::Less,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -753,6 +753,16 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                ],
+            ),
+            (
+                "a bc",
+                "ab ",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
                 ],
             ),
             (
