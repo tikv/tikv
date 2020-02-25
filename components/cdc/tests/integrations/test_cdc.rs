@@ -17,7 +17,7 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
-use raftstore::coprocessor::{BoxCmdObserver, BoxRoleObserver, CoprocessorHost};
+use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::Worker;
@@ -63,10 +63,7 @@ impl TestSuite {
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost| {
-                    host.registry
-                        .register_cmd_observer(100, BoxCmdObserver::new(cdc_ob.clone()));
-                    host.registry
-                        .register_role_observer(100, BoxRoleObserver::new(cdc_ob.clone()));
+                    cdc_ob.register_to(host);
                 },
             ));
             endpoints.insert(id, worker);

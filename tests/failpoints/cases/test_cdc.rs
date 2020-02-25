@@ -18,9 +18,7 @@ use kvproto::cdcpb::{
 };
 
 use raft::StateRole;
-use raftstore::coprocessor::{
-    BoxCmdObserver, BoxRoleObserver, CoprocessorHost, ObserverContext, RoleObserver,
-};
+use raftstore::coprocessor::{CoprocessorHost, ObserverContext, RoleObserver};
 use test_raftstore::*;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
@@ -53,10 +51,7 @@ fn test_region_ready_after_deregister() {
     let cdc_ob1 = cdc_ob.clone();
     sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
         move |host: &mut CoprocessorHost| {
-            host.registry
-                .register_cmd_observer(100, BoxCmdObserver::new(cdc_ob1.clone()));
-            host.registry
-                .register_role_observer(100, BoxRoleObserver::new(cdc_ob1.clone()));
+            cdc_ob1.register_to(host);
         },
     ));
     // Unlock sim.

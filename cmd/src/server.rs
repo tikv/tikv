@@ -21,10 +21,7 @@ use kvproto::{
 };
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
-    coprocessor::{
-        config::SplitCheckConfigManager, BoxCmdObserver, BoxRoleObserver, CoprocessorHost,
-        RegionInfoAccessor,
-    },
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
     router::ServerRaftStoreRouter,
     store::{
         config::RaftstoreConfigManager,
@@ -473,12 +470,7 @@ impl TiKVServer {
         let mut cdc_worker = Box::new(tikv_util::worker::Worker::new("cdc"));
         let cdc_scheduler = cdc_worker.scheduler();
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
-        coprocessor_host
-            .registry
-            .register_cmd_observer(100, BoxCmdObserver::new(cdc_ob.clone()));
-        coprocessor_host
-            .registry
-            .register_role_observer(100, BoxRoleObserver::new(cdc_ob.clone()));
+        cdc_ob.register_to(&mut coprocessor_host);
 
         let server_config = Arc::new(self.config.server.clone());
 
