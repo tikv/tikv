@@ -139,7 +139,7 @@ impl Delegate {
         } else {
             self.pending.as_mut().unwrap().downstreams.push(downstream);
         }
-        return true;
+        true
     }
 
     pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
