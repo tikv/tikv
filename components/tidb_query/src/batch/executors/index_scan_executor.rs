@@ -185,13 +185,6 @@ impl IndexScanExecutorImpl {
         use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
         let tail_len = value[0];
         value = &value[1..];
-        // let (columns_payload, handle_payload) = if tail_len <= 7 {
-        //     // unique index
-        //     (&value[1..], &key[key.len() - 9..])
-        // } else {
-        //     // normal index
-        //     (&value[1..], &value[value.len() - 8..])
-        // };
 
         let row = RowSlice::from_bytes(value)?;
         for (idx, col_id) in self.columns_id_without_handle.iter().enumerate() {
