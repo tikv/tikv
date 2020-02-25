@@ -1,3 +1,4 @@
+use openssl::error::ErrorStack as CrypterError;
 use std::io::Error as IoError;
 use std::{error, result};
 
@@ -10,6 +11,8 @@ pub enum Error {
     Rocks(String),
     #[fail(display = "IO error {}", _0)]
     Io(IoError),
+    #[fail(display = "OpenSSL error {}", _0)]
+    Crypter(CrypterError),
 }
 
 macro_rules! impl_from {
@@ -28,6 +31,7 @@ impl_from! {
     Box<dyn error::Error + Sync + Send> => Other,
     String => Rocks,
     IoError => Io,
+    CrypterError => Crypter,
 }
 
 pub type Result<T> = result::Result<T, Error>;

@@ -989,7 +989,9 @@ name = "encryption"
 version = "0.0.1"
 dependencies = [
  "failure",
+ "hex 0.3.2",
  "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
+ "openssl",
  "rand 0.7.2",
  "slog",
  "slog-global",
