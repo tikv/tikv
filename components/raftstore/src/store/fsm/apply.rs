@@ -18,9 +18,9 @@ use engine::rocks;
 use engine::rocks::WriteOptions;
 use engine::Engines;
 use engine::{util as engine_util, Peekable};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
+use engine_traits::{KvEngine, Mutable as MutableTrait, WriteBatch};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch, Compat};
-use engine_traits::{WriteBatch, Mutable as MutableTrait, KvEngine};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
@@ -346,7 +346,11 @@ impl ApplyContext {
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate) {
         if self.kv_wb.is_none() {
-            let kb_wb = self.engines.kv.c().write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+            let kb_wb = self
+                .engines
+                .kv
+                .c()
+                .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
             self.kv_wb = Some(kb_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -406,7 +410,11 @@ impl ApplyContext {
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                let kv_wb = self.engines.kv.c().write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = self
+                    .engines
+                    .kv
+                    .c()
+                    .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
                 self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
@@ -790,12 +798,12 @@ impl ApplyDelegate {
             &keys::apply_state_key(self.region.get_id()),
             &self.apply_state,
         )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to save apply state to write batch, error: {:?}",
-                    self.tag, e
-                );
-            });
+        .unwrap_or_else(|e| {
+            panic!(
+                "{} failed to save apply state to write batch, error: {:?}",
+                self.tag, e
+            );
+        });
     }
 
     fn handle_raft_entry_normal(
@@ -1219,17 +1227,16 @@ impl ApplyDelegate {
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            ctx.kv_wb().put_cf(cf, &key, value)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to write ({}, {}) to cf {}: {:?}",
-                        self.tag,
-                        hex::encode_upper(&key),
-                        escape(value),
-                        cf,
-                        e
-                    )
-                });
+            ctx.kv_wb().put_cf(cf, &key, value).unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to write ({}, {}) to cf {}: {:?}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    escape(value),
+                    cf,
+                    e
+                )
+            });
         } else {
             ctx.kv_wb().put(&key, value).unwrap_or_else(|e| {
                 panic!(
@@ -1256,15 +1263,14 @@ impl ApplyDelegate {
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            ctx.kv_wb().delete_cf(cf, &key)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete {}: {}",
-                        self.tag,
-                        hex::encode_upper(&key),
-                        e
-                    )
-                });
+            ctx.kv_wb().delete_cf(cf, &key).unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete {}: {}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    e
+                )
+            });
 
             if cf == CF_LOCK {
                 // delete is a kind of write for RocksDB.
@@ -2652,10 +2658,15 @@ impl ApplyFsm {
                 apply_ctx.timer = Some(SlowTimer::new());
             }
             if apply_ctx.kv_wb.is_none() {
-                apply_ctx.kv_wb = Some(apply_ctx.engines.kv.c().write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
+                apply_ctx.kv_wb = Some(
+                    apply_ctx
+                        .engines
+                        .kv
+                        .c()
+                        .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE),
+                );
             }
-            self.delegate
-                .write_apply_state(apply_ctx.kv_wb());
+            self.delegate.write_apply_state(apply_ctx.kv_wb());
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,
@@ -3093,7 +3104,7 @@ mod tests {
     use crate::store::util::{new_learner_peer, new_peer};
     use engine::Peekable;
     use engine::DB;
-    use engine_rocks::{RocksEngine, Compat};
+    use engine_rocks::{Compat, RocksEngine};
     use engine_traits::{Peekable as PeekableTrait, WriteBatch};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;

@@ -14,7 +14,7 @@ use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use engine_rocks::{RocksSnapshot, RocksWriteBatch};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Peekable as PeekableTrait, Mutable as MutableTrait};
+use engine_traits::{KvEngine, Mutable as MutableTrait, Peekable as PeekableTrait};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1159,10 +1159,7 @@ impl PeerStorage {
                 // but not write raft_local_state to raft rocksdb in time.
                 // we write raft state to default rocksdb, with last index set to snap index,
                 // in case of recv raft log after snapshot.
-                ctx.save_snapshot_raft_state_to(
-                    snapshot_index,
-                    &mut ready_ctx.kv_wb_mut(),
-                )?;
+                ctx.save_snapshot_raft_state_to(snapshot_index, &mut ready_ctx.kv_wb_mut())?;
             }
         }
 
@@ -1522,10 +1519,7 @@ pub fn write_initial_apply_state<T: Mutable>(
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region apply state first.
 // TODO: remove the _2 and delete the other version of this function
-pub fn write_initial_apply_state_2<T: MutableTrait>(
-    kv_wb: &T,
-    region_id: u64,
-) -> Result<()> {
+pub fn write_initial_apply_state_2<T: MutableTrait>(kv_wb: &T, region_id: u64) -> Result<()> {
     let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
     apply_state
@@ -1597,8 +1591,8 @@ mod tests {
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine::rocks::util::new_engine;
     use engine::Engines;
-    use engine_traits::{ALL_CFS, CF_DEFAULT};
     use engine_rocks::{Compat, RocksWriteBatch};
+    use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
@@ -1684,8 +1678,7 @@ mod tests {
             .set_term(ents[0].get_term());
         ctx.apply_state
             .set_applied_index(ents.last().unwrap().get_index());
-        ctx.save_apply_state_to(&mut kv_wb)
-            .unwrap();
+        ctx.save_apply_state_to(&mut kv_wb).unwrap();
         store.engines.raft.c().write(&ready_ctx.raft_wb).unwrap();
         store.engines.kv.c().write(&kv_wb).unwrap();
         store.raft_state = ctx.raft_state;
@@ -1906,8 +1899,7 @@ mod tests {
             }
             if res.is_ok() {
                 let mut kv_wb = store.engines.kv.c().write_batch();
-                ctx.save_apply_state_to(&mut kv_wb)
-                    .unwrap();
+                ctx.save_apply_state_to(&mut kv_wb).unwrap();
                 store.engines.kv.c().write(&kv_wb).unwrap();
             }
         }

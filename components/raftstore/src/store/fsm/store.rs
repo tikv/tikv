@@ -5,9 +5,9 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::DB;
+use engine_rocks::{Compat, RocksEngine, RocksWriteBatch};
+use engine_traits::{KvEngine, Mutable as MutableTrait, WriteBatch, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_rocks::{RocksEngine, RocksWriteBatch, Compat};
-use engine_traits::{KvEngine, WriteBatch, Mutable as MutableTrait, WriteOptions};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -498,7 +498,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             write_opts.set_sync(true);
             self.poll_ctx
                 .engines
-                .kv.c()
+                .kv
+                .c()
                 .write_opt(&self.poll_ctx.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
@@ -516,14 +517,20 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
             self.poll_ctx
                 .engines
-                .raft.c()
+                .raft
+                .c()
                 .write_opt(&self.poll_ctx.raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
-                self.poll_ctx.raft_wb = self.poll_ctx.engines.raft.c().write_batch_with_cap(4 * 1024);
+                self.poll_ctx.raft_wb = self
+                    .poll_ctx
+                    .engines
+                    .raft
+                    .c()
+                    .write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.raft_wb.clear();
             }

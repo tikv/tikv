@@ -15,9 +15,12 @@ use engine::rocks::{
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Peekable};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::{Compat, RocksWriteBatch};
-use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteOptions, Mutable, KvEngine, WriteBatch};
+use engine_traits::{
+    KvEngine, Mutable, TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteBatch,
+    WriteOptions,
+};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
@@ -1406,7 +1409,12 @@ fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     }
 }
 
-fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &RocksWriteBatch) -> Result<()> {
+fn set_region_tombstone(
+    db: &DB,
+    store_id: u64,
+    region: Region,
+    wb: &RocksWriteBatch,
+) -> Result<()> {
     let id = region.get_id();
     let key = keys::region_state_key(id);
 
@@ -1445,12 +1453,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &RocksWriteB
         return Err(box_err!("The peer is still in target peers"));
     }
 
-    box_try!(write_peer_state_2(
-        wb,
-        &region,
-        PeerState::Tombstone,
-        None
-    ));
+    box_try!(write_peer_state_2(wb, &region, PeerState::Tombstone, None));
     Ok(())
 }
 
@@ -2041,15 +2044,13 @@ mod tests {
                 let mut raft_state = RaftLocalState::default();
                 raft_state.set_last_index(last_index);
                 raft_state.mut_hard_state().set_commit(commit_index);
-                wb1.put_msg_cf(cf1, &raft_state_key, &raft_state)
-                    .unwrap();
+                wb1.put_msg_cf(cf1, &raft_state_key, &raft_state).unwrap();
             };
             let mock_apply_state = |region_id: u64, apply_index: u64| {
                 let raft_apply_key = keys::apply_state_key(region_id);
                 let mut apply_state = RaftApplyState::default();
                 apply_state.set_applied_index(apply_index);
-                wb2.put_msg_cf(cf2, &raft_apply_key, &apply_state)
-                    .unwrap();
+                wb2.put_msg_cf(cf2, &raft_apply_key, &apply_state).unwrap();
             };
 
             for &region_id in &[10, 11, 12] {
@@ -2069,7 +2070,10 @@ mod tests {
             mock_region_state(13, &[]);
         }
 
-        raft_engine.c().write_opt(&wb1, &WriteOptions::new()).unwrap();
+        raft_engine
+            .c()
+            .write_opt(&wb1, &WriteOptions::new())
+            .unwrap();
         kv_engine.c().write_opt(&wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
@@ -2286,12 +2290,7 @@ mod tests {
         // Write initial KVs.
         let wb = db.c().write_batch();
         for &(cf, ref k, ref v, _) in &kv {
-            wb.put_cf(
-                cf,
-                &keys::data_key(k.as_encoded()),
-                v,
-            )
-            .unwrap();
+            wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
         db.c().write(&wb).unwrap();
         // Fix problems.
