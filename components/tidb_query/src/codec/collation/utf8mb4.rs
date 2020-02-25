@@ -527,7 +527,7 @@ mod tests {
         let cases = vec![
             // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
             ("a", [vec![0x61], vec![0x61], vec![0x00, 0x41]]),
-            ("A", [vec![0x41], vec![0x41], vec![0x00, 0x41]]),
+            ("A ", [vec![0x41], vec![0x41, 0x20], vec![0x00, 0x41]]),
             ("A", [vec![0x41], vec![0x41], vec![0x00, 0x41]]),
             (
                 "😃",
