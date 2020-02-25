@@ -554,6 +554,7 @@ dependencies = [
  "chrono",
  "clap",
  "engine",
+ "engine_traits",
  "fs2",
  "futures 0.1.29",
  "futures-cpupool",
@@ -4073,6 +4074,7 @@ version = "0.0.1"
 dependencies = [
  "engine",
  "engine_rocks",
+ "engine_traits",
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
@@ -4272,6 +4274,7 @@ dependencies = [
  "time",
  "tipb",
  "tipb_helper",
+ "tokio 0.2.9",
  "twoway",
  "uuid 0.8.1",
  "yatp",
