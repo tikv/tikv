@@ -37,6 +37,7 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
+use std::mem;
 use std::sync::Arc;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
@@ -119,6 +120,13 @@ pub struct ReqContext {
 
     /// The coprocessor semaphore which limits concurrent running jobs.
     pub semaphore: Option<Arc<Semaphore>>,
+
+    /// The min key in ranges of the request
+    pub min: Vec<u8>,
+
+    /// The max key in ranges of the request
+    pub max: Vec<u8>,
+
 }
 
 impl ReqContext {
@@ -134,6 +142,17 @@ impl ReqContext {
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
+        let mut min = match ranges.first().as_ref() {
+            Some(range) => range.start.clone(),
+            None => vec![],
+        };
+        let mut max = match ranges.last().as_ref() {
+            Some(range) => range.end.clone(),
+            None => vec![],
+        };
+        if min > max {
+            mem::swap(&mut min, &mut max);
+        }
         Self {
             tag,
             context,
@@ -147,6 +166,8 @@ impl ReqContext {
             cache_match_version,
             execution_time_limit: None,
             semaphore: None,
+            min,
+            max,
         }
     }
 
