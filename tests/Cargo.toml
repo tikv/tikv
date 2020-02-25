@@ -58,6 +58,7 @@ protobuf-codec = [
   "tidb_query/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
+  "cdc/protobuf-codec",
 ]
 prost-codec = [
   "engine/prost-codec",
@@ -70,6 +71,7 @@ prost-codec = [
   "tidb_query/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
+  "cdc/prost-codec",
 ]
 jemalloc = ["tikv/jemalloc"]
 sse = ["tikv/sse"]

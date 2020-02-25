@@ -6,7 +6,17 @@ use std::time::Duration;
 
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
+#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::{
+    event::{
+        row::OpType as EventRowOpType, Entries as EventEntries, Error as EventError,
+        Event as Event_oneof_event, LogType as EventLogType, Row as EventRow,
+    },
+    ChangeDataEvent, Event,
+};
+
 use raft::StateRole;
 use raftstore::coprocessor::{
     BoxCmdObserver, BoxRoleObserver, CoprocessorHost, ObserverContext, RoleObserver,

@@ -6,7 +6,14 @@ use std::time::Duration;
 
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
+#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::{
+    create_change_data,
+    event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
+    ChangeDataClient, ChangeDataRequest,
+};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
@@ -185,7 +192,7 @@ fn test_cdc_basic() {
             Event_oneof_event::Entries(es) => {
                 assert!(es.entries.len() == 1, "{:?}", es);
                 let e = &es.entries[0];
-                assert_eq!(e.r_type, EventLogType::Initialized, "{:?}", es);
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
             }
             _ => panic!("unknown event"),
         }
@@ -207,7 +214,7 @@ fn test_cdc_basic() {
     // Prewrite
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
-    mutation.op = Op::Put;
+    mutation.set_op(Op::Put);
     mutation.key = k.clone().into_bytes();
     mutation.value = v.into_bytes();
     suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
@@ -215,7 +222,7 @@ fn test_cdc_basic() {
     match event {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
-            assert_eq!(entries.entries[0].r_type, EventLogType::Prewrite);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
         }
         _ => panic!("unknown event"),
     }
@@ -239,7 +246,7 @@ fn test_cdc_basic() {
     match event {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
-            assert_eq!(entries.entries[0].r_type, EventLogType::Commit);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Commit);
         }
         _ => panic!("unknown event"),
     }
@@ -276,7 +283,7 @@ fn test_cdc_basic() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
-            assert_eq!(e.r_type, EventLogType::Initialized, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         _ => panic!("unknown event"),
@@ -359,7 +366,7 @@ fn test_cdc_not_leader() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
-            assert_eq!(e.r_type, EventLogType::Initialized, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         _ => panic!("unknown event"),
     }
@@ -463,7 +470,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
-            assert_eq!(e.r_type, EventLogType::Initialized, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         _ => panic!("unknown event"),
     }
@@ -503,7 +510,7 @@ fn test_cdc_scan() {
     // Prewrite
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
-    mutation.op = Op::Put;
+    mutation.set_op(Op::Put);
     mutation.key = k.clone();
     mutation.value = v.clone();
     suite.must_kv_prewrite(vec![mutation], k.clone(), start_ts);
@@ -514,7 +521,7 @@ fn test_cdc_scan() {
     // Prewrite again
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
-    mutation.op = Op::Put;
+    mutation.set_op(Op::Put);
     mutation.key = k.clone();
     mutation.value = v.clone();
     suite.must_kv_prewrite(vec![mutation], k.clone(), start_ts);
@@ -548,13 +555,13 @@ fn test_cdc_scan() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
-            assert_eq!(e.r_type, EventLogType::Prewrite, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
             assert_eq!(e.start_ts, 4, "{:?}", es);
             assert_eq!(e.commit_ts, 0, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);
             let e = &es.entries[1];
-            assert_eq!(e.r_type, EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
             assert_eq!(e.start_ts, 2, "{:?}", es);
             assert_eq!(e.commit_ts, 3, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
@@ -570,7 +577,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
-            assert_eq!(e.r_type, EventLogType::Initialized, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
@@ -586,7 +593,7 @@ fn test_cdc_scan() {
     // Start = 7;
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
-    mutation.op = Op::Del;
+    mutation.set_op(Op::Del);
     mutation.key = k.clone();
     suite.must_kv_prewrite(vec![mutation], k.clone(), start_ts);
 
@@ -603,15 +610,15 @@ fn test_cdc_scan() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
-            assert_eq!(e.r_type, EventLogType::Prewrite, "{:?}", es);
-            assert_eq!(e.op_type, EventRowOpType::Delete, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
+            assert_eq!(e.get_op_type(), EventRowOpType::Delete, "{:?}", es);
             assert_eq!(e.start_ts, 7, "{:?}", es);
             assert_eq!(e.commit_ts, 0, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert!(e.value.is_empty(), "{:?}", es);
             let e = &es.entries[1];
-            assert_eq!(e.r_type, EventLogType::Committed, "{:?}", es);
-            assert_eq!(e.op_type, EventRowOpType::Put, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.get_op_type(), EventRowOpType::Put, "{:?}", es);
             assert_eq!(e.start_ts, 4, "{:?}", es);
             assert_eq!(e.commit_ts, 6, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
@@ -627,7 +634,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
-            assert_eq!(e.r_type, EventLogType::Initialized, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
@@ -675,7 +682,7 @@ fn test_cdc_tso_failure() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
-            assert_eq!(e.r_type, EventLogType::Initialized, "{:?}", es);
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         _ => panic!("unknown event"),
     }
