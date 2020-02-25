@@ -442,6 +442,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "failure",
  "futures 0.1.29",
  "grpcio",
@@ -453,6 +454,8 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_raftstore",
+ "test_util",
  "tikv",
  "tikv_util",
  "tokio-threadpool",
@@ -547,6 +550,7 @@ name = "cmd"
 version = "0.0.1"
 dependencies = [
  "backup",
+ "cdc",
  "chrono",
  "clap",
  "engine",
@@ -4088,6 +4092,7 @@ dependencies = [
  "tikv_util",
  "tokio-threadpool",
  "tokio-timer",
+ "txn_types",
 ]
 
 [[package]]
@@ -4133,6 +4138,7 @@ version = "0.0.1"
 dependencies = [
  "arrow",
  "byteorder",
+ "cdc",
  "configuration",
  "crc64fast",
  "criterion",
