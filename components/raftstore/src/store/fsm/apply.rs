@@ -3087,10 +3087,10 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
-    use crate::raftstore::coprocessor::*;
-    use crate::raftstore::store::msg::WriteResponse;
-    use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
-    use crate::raftstore::store::util::{new_learner_peer, new_peer};
+    use crate::coprocessor::*;
+    use crate::store::msg::WriteResponse;
+    use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
+    use crate::store::util::{new_learner_peer, new_peer};
     use engine::Peekable;
     use engine::DB;
     use engine_rocks::{RocksEngine, Compat};
