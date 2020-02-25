@@ -808,6 +808,11 @@ mod log {
             level_flag: usize,
             patterns: Vec<regex::Regex>,
         ) -> Result<Self, Error> {
+            let end_time = if end_time > 0 {
+                end_time
+            } else {
+                std::i64::MAX
+            };
             let log_path = log_file.as_ref();
             let log_name = match log_path.file_name() {
                 Some(file_name) => match file_name.to_str() {
@@ -1337,26 +1342,29 @@ mod log {
                 log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
                 expected
             );
-            let log_iter = LogIterator::new(
-                &log_file,
-                timestamp("2019/08/23 18:09:53.387 +08:00"),
-                std::i64::MAX,
-                1 << (LogLevel::Warn as usize),
-                vec![],
-            )
-            .unwrap();
-            let expected = vec![
-                "2019/08/23 18:09:58.387 +08:00",
-                "2019/08/23 18:09:59.387 +08:00",
-                "2019/08/23 18:10:06.387 +08:00",
-            ]
-            .iter()
-            .map(|s| timestamp(s))
-            .collect::<Vec<i64>>();
-            assert_eq!(
-                log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
-                expected
-            );
+
+            for time in vec![0, std::i64::MAX].into_iter() {
+                let log_iter = LogIterator::new(
+                    &log_file,
+                    timestamp("2019/08/23 18:09:53.387 +08:00"),
+                    time,
+                    1 << (LogLevel::Warn as usize),
+                    vec![],
+                )
+                .unwrap();
+                let expected = vec![
+                    "2019/08/23 18:09:58.387 +08:00",
+                    "2019/08/23 18:09:59.387 +08:00",
+                    "2019/08/23 18:10:06.387 +08:00",
+                ]
+                .iter()
+                .map(|s| timestamp(s))
+                .collect::<Vec<i64>>();
+                assert_eq!(
+                    log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
+                    expected
+                );
+            }
 
             // filter by pattern
             let log_iter = LogIterator::new(

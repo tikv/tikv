@@ -9,11 +9,11 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::deadline::Deadline;
 use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
+use tokio::sync::Semaphore;
 use yatp::task::future::reschedule;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
-use crate::error::EvaluateError;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
 use crate::storage::Storage;
@@ -40,9 +40,11 @@ pub struct BatchExecutorsRunner<SS> {
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
 
-    /// Unlike `deadline`, `execution_time_limit` limits the time used on this handler, excluding
-    /// all waiting time.
+    /// The time allowed to be used on this handler without getting a semaphore permit.
     execution_time_limit: Option<Duration>,
+
+    /// The coprocessor semaphore which limits concurrent running jobs.
+    semaphore: Option<Arc<Semaphore>>,
 
     out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
 
@@ -307,6 +309,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
+        execution_time_limit: Option<Duration>,
+        semaphore: Option<Arc<Semaphore>>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -338,7 +342,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         Ok(Self {
             deadline,
-            execution_time_limit: None,
+            execution_time_limit,
+            semaphore,
             out_most_executor,
             output_offsets,
             config,
@@ -356,13 +361,20 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut total_execution_time = Duration::default();
         let mut time_slice_start = Instant::now();
+        let mut semaphore_permit = None;
         loop {
             let time_slice_len = time_slice_start.elapsed();
-            // Check whether we should cancel the execution because it tends to take a long time
-            // while not having a permit from the coprocessor semaphore
-            if let Some(limit) = self.execution_time_limit {
+            // If `execution_time_limit` and `semaphore` are not `None`, it means the task failed
+            // to acquire a semaphore permit so it can only execute for a short time.
+            if let (Some(limit), Some(semaphore), None) = (
+                self.execution_time_limit,
+                &self.semaphore,
+                &semaphore_permit,
+            ) {
                 if total_execution_time + time_slice_len > limit {
-                    return Err(EvaluateError::ExecutionTimeLimitExceeded.into());
+                    // If time limit exceeds, the task needs a semaphore before continue.
+                    semaphore_permit = Some(semaphore.acquire().await);
+                    COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_heavy.inc();
                 }
             }
             // Check whether we should yield from the execution
@@ -503,10 +515,11 @@ mod tests {
     use super::*;
     use crate::batch::interface::BatchExecuteResult;
     use crate::codec::batch::LazyBatchColumnVec;
-    use crate::error::{Error, ErrorInner, EvaluateError};
     use crate::expr::EvalWarnings;
     use crate::storage::IntervalRange;
     use futures::executor::block_on;
+    use std::sync::mpsc;
+    use std::thread;
 
     pub struct MockExecutor {
         left_batch_count: usize,
@@ -551,10 +564,12 @@ mod tests {
 
     #[test]
     fn test_execution_time_limit() {
+        let semaphore = Arc::new(Semaphore::new(1));
         // Exceed the limit
-        let mut runner = BatchExecutorsRunner {
+        let runner_gen = |execution_time_limit, semaphore| BatchExecutorsRunner {
             deadline: Deadline::from_now(Duration::from_secs(60)),
-            execution_time_limit: Some(Duration::from_millis(5)),
+            execution_time_limit,
+            semaphore,
             out_most_executor: Box::new(MockExecutor::new(10, Duration::from_millis(1))),
             output_offsets: vec![],
             config: Arc::new(EvalConfig::default_for_test()),
@@ -562,19 +577,36 @@ mod tests {
             exec_stats: ExecuteStats::new(1),
             encode_type: EncodeType::TypeDefault,
         };
-        match block_on(runner.handle_request()) {
-            Err(Error(box ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded))) => {}
-            _ => panic!("should return ExecutionTimeLimitExceeded error"),
-        }
+
+        let mut runner = runner_gen(Some(Duration::from_millis(5)), Some(semaphore.clone()));
+        let permit = semaphore.try_acquire().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let res = block_on(runner.handle_request());
+            tx.send(res).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        drop(permit);
+        assert!(rx.recv_timeout(Duration::from_millis(500)).unwrap().is_ok());
 
         // Not exceed the limit
-        runner.execution_time_limit = Some(Duration::from_secs(1));
+        let mut runner = runner_gen(Some(Duration::from_secs(1)), Some(semaphore.clone()));
         runner.out_most_executor = Box::new(MockExecutor::new(10, Duration::from_millis(5)));
-        assert!(block_on(runner.handle_request()).is_ok());
+        let _permit = semaphore.try_acquire().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let res = block_on(runner.handle_request());
+            tx.send(res).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(500)).unwrap().is_ok());
 
         // Unlimited
-        runner.execution_time_limit = None;
-        runner.out_most_executor = Box::new(MockExecutor::new(10, Duration::from_millis(5)));
-        assert!(block_on(runner.handle_request()).is_ok());
+        let mut runner = runner_gen(None, None);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let res = block_on(runner.handle_request());
+            tx.send(res).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(500)).unwrap().is_ok());
     }
 }
