@@ -323,7 +323,7 @@ impl CoprocessorHost {
         &self,
         cfg: &'a Config,
         region: &Region,
-        engine: &DB,
+        engine: &Arc<DB>,
         auto_split: bool,
         policy: CheckPolicy,
     ) -> SplitCheckerHost<'a> {
@@ -404,7 +404,6 @@ impl CoprocessorHost {
 mod tests {
     use crate::coprocessor::*;
     use std::sync::atomic::*;
-    use std::sync::*;
 
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{

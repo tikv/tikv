@@ -138,6 +138,34 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+fn map_rhs_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
+where
+    F: Fn(bool) -> RpnFnMeta,
+{
+    // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
+    if children.len() != 2 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    let rhs_is_unsigned = children[1]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED);
+    Ok(mapper(rhs_is_unsigned))
+}
+
+fn truncate_real_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
+    if rhs_is_unsigned {
+        truncate_real_with_uint_fn_meta()
+    } else {
+        truncate_real_with_int_fn_meta()
+    }
+}
+
 pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
     if children.len() != 1 {
         return Err(other_err!(
@@ -383,6 +411,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundReal => round_real_fn_meta(),
         ScalarFuncSig::RoundInt => round_int_fn_meta(),
         ScalarFuncSig::RoundDec => round_dec_fn_meta(),
+        ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
         // impl_miscellaneous
         ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
         ScalarFuncSig::DurationAnyValue => any_value_fn_meta::<Duration>(),
@@ -449,6 +478,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
+        ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
         ScalarFuncSig::Upper => upper_fn_meta(),
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
@@ -464,7 +494,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),
         ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
+        ScalarFuncSig::DayOfWeek => day_of_week_fn_meta(),
         ScalarFuncSig::DayOfMonth => day_of_month_fn_meta(),
+        ScalarFuncSig::WeekWithMode => week_with_mode_fn_meta(),
         ScalarFuncSig::WeekDay => week_day_fn_meta(),
         ScalarFuncSig::ToDays => to_days_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),

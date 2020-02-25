@@ -18,7 +18,7 @@ fn test_deadline() {
     fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
 
-    assert!(resp.get_other_error().contains("exceeding max time limit"));
+    assert!(resp.get_other_error().contains("exceeding the deadline"));
 }
 
 #[test]
@@ -35,7 +35,7 @@ fn test_deadline_2() {
     fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
 
-    assert!(resp.get_other_error().contains("exceeding max time limit"));
+    assert!(resp.get_other_error().contains("exceeding the deadline"));
 }
 
 /// Test deadline exceeded when request is handling
@@ -72,7 +72,7 @@ fn test_deadline_3() {
     assert!(resp
         .get_error()
         .get_msg()
-        .contains("exceeding max time limit"));
+        .contains("exceeding the deadline"));
 }
 
 #[test]
