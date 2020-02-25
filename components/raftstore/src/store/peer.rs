@@ -2011,6 +2011,7 @@ impl Peer {
                 box_err!("{} can not read index due to no leader", self.tag),
             );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
+            // The leader may be hibernated, send a message for trying to awaken the leader.
             if poll_ctx.cfg.hibernate_regions
                 && (self.bcast_wake_up_time.is_none()
                     || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
