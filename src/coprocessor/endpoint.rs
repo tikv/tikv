@@ -15,6 +15,7 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
+use tidb_query::metrics::*;
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
@@ -203,16 +204,19 @@ impl<E: Engine> Endpoint<E> {
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
                     );
-                    dag::build_handler(
+                    dag::DagHandlerBuilder::new(
                         dag,
                         ranges,
                         store,
-                        data_version,
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
-                        enable_batch_if_possible,
                     )
+                    .data_version(data_version)
+                    .enable_batch_if_possible(enable_batch_if_possible)
+                    .execution_time_limit(req_ctx.execution_time_limit)
+                    .semaphore(req_ctx.semaphore.clone())
+                    .build()
                 });
             }
             REQ_TYPE_ANALYZE => {
@@ -306,25 +310,18 @@ impl<E: Engine> Endpoint<E> {
     /// When `is_heavy` is true, the function won't return until a permit is acquired successfully.
     async fn acquire_permit(
         semaphore: Option<&Semaphore>,
-        is_heavy: bool,
     ) -> (Option<SemaphorePermit<'_>>, Option<Duration>) {
         if let Some(semaphore) = semaphore {
-            // Heavy requests must acquire a permit to avoid that too many concurrent heavy
-            // requests cause starving and OOM.
-            if is_heavy {
-                let res = (Some(semaphore.acquire().await), None);
-                COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_heavy.inc();
-                res
-            } else {
-                match semaphore.try_acquire() {
-                    Ok(permit) => {
-                        COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_generic.inc();
-                        (Some(permit), None)
-                    }
-                    Err(_) => {
-                        COPR_ACQUIRE_SEMAPHORE_TYPE.unacquired.inc();
-                        (None, Some(LIGHT_TASK_THRESHOLD))
-                    }
+            // If a task fail to acquire a permit from the semaphore, it has limited
+            // execution time.
+            match semaphore.try_acquire() {
+                Ok(permit) => {
+                    COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_generic.inc();
+                    (Some(permit), None)
+                }
+                Err(_) => {
+                    COPR_ACQUIRE_SEMAPHORE_TYPE.unacquired.inc();
+                    (None, Some(LIGHT_TASK_THRESHOLD))
                 }
             }
         } else {
@@ -342,8 +339,7 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
-        let (_permit, execution_time_limit) =
-            Self::acquire_permit(semaphore.as_deref(), false).await;
+        let (_permit, execution_time_limit) = Self::acquire_permit(semaphore.as_deref()).await;
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.req_ctx.deadline.check()?;
@@ -363,23 +359,17 @@ impl<E: Engine> Endpoint<E> {
             // Build a cached request handler instead if cache version is matching.
             CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
         } else {
+            if execution_time_limit.is_some() {
+                tracker.req_ctx.execution_time_limit = execution_time_limit;
+                tracker.req_ctx.semaphore = semaphore.clone();
+            }
             handler_builder(snapshot, &tracker.req_ctx)?
         };
 
         tracker.on_begin_all_items();
         tracker.on_begin_item();
 
-        handler.set_execution_time_limit(execution_time_limit);
-        let mut result = handler.handle_request().await;
-
-        // Retry if execution time limit exceeded, but this time a permit from the semaphore is
-        // compulsory.
-        if let Err(Error::ExecutionTimeLimitExceeded) = result {
-            // Because `is_heavy` is set to true, there must be no execution time limit.
-            let (_permit, _) = Self::acquire_permit(semaphore.as_deref(), true).await;
-            handler.set_execution_time_limit(None);
-            result = handler.handle_request().await;
-        }
+        let result = handler.handle_request().await;
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
@@ -600,11 +590,6 @@ fn make_error_response(e: Error) -> coppb::Response {
             errorpb.set_message(e.to_string());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
-        }
-        Error::ExecutionTimeLimitExceeded => {
-            debug_unreachable!("ExecutionTimeLimitExceeded should be handled in TiKV");
-            tag = "max_execute_time_exceeded";
-            resp.set_other_error(e.to_string());
         }
         Error::Other(_) => {
             tag = "other";
@@ -1373,86 +1358,5 @@ mod tests {
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
-    }
-
-    struct TimeLimitedHandler {
-        handle_duration: Duration,
-        execution_time_limit: Option<Duration>,
-        handle_times: usize,
-    }
-
-    impl TimeLimitedHandler {
-        pub fn new(handle_duration: Duration) -> TimeLimitedHandler {
-            TimeLimitedHandler {
-                handle_duration,
-                execution_time_limit: None,
-                handle_times: 0,
-            }
-        }
-    }
-
-    #[async_trait]
-    impl RequestHandler for TimeLimitedHandler {
-        async fn handle_request(&mut self) -> Result<coppb::Response> {
-            self.handle_times += 1;
-            if let Some(limit) = self.execution_time_limit {
-                if self.handle_duration > limit {
-                    return Err(Error::ExecutionTimeLimitExceeded);
-                }
-            }
-            let mut res = coppb::Response::default();
-            res.data = self.handle_times.to_le_bytes().to_vec();
-            Ok(res)
-        }
-
-        fn set_execution_time_limit(&mut self, execution_time_limit: Option<Duration>) {
-            self.execution_time_limit = execution_time_limit;
-        }
-    }
-
-    #[test]
-    fn test_endpoint_semaphore() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::from(build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
-            engine,
-        ));
-        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
-        cop.semaphore = Some(Arc::new(Semaphore::new(1)));
-
-        let handler_builder_gen = || {
-            Box::new(|_, _: &_| Ok(TimeLimitedHandler::new(LIGHT_TASK_THRESHOLD * 2).into_boxed()))
-        };
-
-        // semaphore has free permit, we only handle once
-        let resp = cop
-            .handle_unary_request(ReqContext::default_for_test(), handler_builder_gen())
-            .wait()
-            .unwrap();
-        assert_eq!(resp.data, 1usize.to_le_bytes());
-
-        // remove all permits
-        cop.semaphore
-            .as_ref()
-            .unwrap()
-            .try_acquire()
-            .unwrap()
-            .forget();
-        let resp_fut =
-            cop.handle_unary_request(ReqContext::default_for_test(), handler_builder_gen());
-
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            tx.send(resp_fut.wait()).unwrap();
-        });
-        // should block when no resource for a big request
-        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
-        // when there is free resource, the task should finish
-        cop.semaphore.as_ref().unwrap().add_permits(1);
-        let resp = rx
-            .recv_timeout(Duration::from_millis(200))
-            .unwrap()
-            .unwrap();
-        assert_eq!(resp.data, 2usize.to_le_bytes());
     }
 }
