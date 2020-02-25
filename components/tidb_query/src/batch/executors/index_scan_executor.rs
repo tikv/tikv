@@ -118,7 +118,7 @@ struct IndexScanExecutorImpl {
     /// See `TableScanExecutorImpl`'s `schema`.
     schema: Vec<FieldType>,
 
-    /// Number of interested columns (exclude PK handle column).
+    /// ID of interested columns (exclude PK handle column).
     columns_id_without_handle: Vec<i64>,
 
     /// Whether PK handle column is interested. Handle will be always placed in the last column.
@@ -203,7 +203,7 @@ impl IndexScanExecutorImpl {
             // For normal index, it is placed at the end and any columns prior to it are
             // ensured to be interested. For unique index, it is placed in the value.
 
-            let handle_val = if tail_len <= 7 {
+            let handle_val = if tail_len >= 8 {
                 // This is a unique index, and we should look up PK handle in value.
 
                 // NOTE: it is not `number::decode_i64`.
