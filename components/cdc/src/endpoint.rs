@@ -101,6 +101,7 @@ impl fmt::Debug for Task {
 }
 
 pub struct Endpoint {
+    // TODO: add RaftRouter here.
     capture_regions: HashMap<u64, Delegate>,
     scheduler: Scheduler<Task>,
     apply_router: ApplyRouter,
