@@ -176,6 +176,35 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
 }
 
 impl IndexScanExecutorImpl {
+    #[inline]
+    fn decode_handle_from_value(&self, mut value: &[u8]) -> Result<i64> {
+        // NOTE: it is not `number::decode_i64`.
+        value
+            .read_u64()
+            .map_err(|_| other_err!("Failed to decode handle in value as i64"))
+            .map(|x| x as i64)
+    }
+
+    #[inline]
+    fn decode_handle_from_key(&self, key: &[u8]) -> Result<i64> {
+        let flag = key[0];
+        let mut val = &key[1..];
+
+        // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
+        // receiving optional time zone first.
+
+        match flag {
+            datum::INT_FLAG => val
+                .read_i64()
+                .map_err(|_| other_err!("Failed to decode handle in key as i64")),
+            datum::UINT_FLAG => val
+                .read_u64()
+                .map_err(|_| other_err!("Failed to decode handle in key as u64"))
+                .map(|x| x as i64),
+            _ => Err(other_err!("Unexpected handle flag {}", flag)),
+        }
+    }
+
     fn process_kv_pair_new(
         &mut self,
         key: &[u8],
@@ -205,36 +234,11 @@ impl IndexScanExecutorImpl {
 
             let handle_val = if tail_len >= 8 {
                 // This is a unique index, and we should look up PK handle in value.
-
-                // NOTE: it is not `number::decode_i64`.
-                value = &value[value.len() - 8..];
-                (value
-                    .read_u64()
-                    .map_err(|_| other_err!("Failed to decode handle in value as i64"))?)
-                    as i64
+                self.decode_handle_from_value(&value[value.len() - 8..])?
             } else {
                 // This is a normal index. The remaining payload part is the PK handle.
                 // Let's decode it and put in the column.
-                let key_payload = &key[key.len() - 9..];
-                let flag = key_payload[0];
-                let mut val = &key_payload[1..];
-
-                // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
-                // receiving optional time zone first.
-
-                match flag {
-                    datum::INT_FLAG => val
-                        .read_i64()
-                        .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
-                    datum::UINT_FLAG => {
-                        (val.read_u64()
-                            .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
-                            as i64
-                    }
-                    _ => {
-                        return Err(other_err!("Unexpected handle flag {}", flag));
-                    }
-                }
+                self.decode_handle_from_key(&key[key.len() - 9..])?
             };
             columns[self.columns_id_without_handle.len()]
                 .mut_decoded()
@@ -246,7 +250,7 @@ impl IndexScanExecutorImpl {
     fn process_kv_pair_old(
         &mut self,
         key: &[u8],
-        mut value: &[u8],
+        value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         check_index_key(key)?;
@@ -265,34 +269,12 @@ impl IndexScanExecutorImpl {
             let handle_val = if key_payload.is_empty() {
                 // This is a unique index, and we should look up PK handle in value.
 
-                // NOTE: it is not `number::decode_i64`.
-                (value
-                    .read_u64()
-                    .map_err(|_| other_err!("Failed to decode handle in value as i64"))?)
-                    as i64
+                self.decode_handle_from_value(value)?
             } else {
                 // This is a normal index. The remaining payload part is the PK handle.
                 // Let's decode it and put in the column.
 
-                let flag = key_payload[0];
-                let mut val = &key_payload[1..];
-
-                // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
-                // receiving optional time zone first.
-
-                match flag {
-                    datum::INT_FLAG => val
-                        .read_i64()
-                        .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
-                    datum::UINT_FLAG => {
-                        (val.read_u64()
-                            .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
-                            as i64
-                    }
-                    _ => {
-                        return Err(other_err!("Unexpected handle flag {}", flag));
-                    }
-                }
+                self.decode_handle_from_key(key_payload)?
             };
 
             columns[self.columns_id_without_handle.len()]
