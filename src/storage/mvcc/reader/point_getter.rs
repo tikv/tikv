@@ -2,7 +2,7 @@
 
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
 

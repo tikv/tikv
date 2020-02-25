@@ -25,7 +25,7 @@ use protobuf::Message;
 use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use keys;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};

@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{TablePropertiesCollection, DB};
+use engine::rocks::DB;
 use engine::{self, IterOption};
 use engine_rocks::Compat;
 use engine_traits::{KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot};
@@ -139,15 +139,13 @@ where
         Ok(())
     }
 
-    pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
+    pub fn get_properties_cf(&self, cf: &str) -> Result<E::TablePropertiesCollection> {
         let start = keys::enc_start_key(&self.region);
         let end = keys::enc_end_key(&self.region);
-        let prop = engine::util::get_range_properties_cf(
-            &self.snap.get_db().bad_downcast::<Arc<DB>>(), // FIXME
-            cf,
-            &start,
-            &end,
-        )?;
+        let prop = self
+            .snap
+            .get_db()
+            .get_range_properties_cf(cf, &start, &end)?;
         Ok(prop)
     }
 
@@ -390,7 +388,7 @@ pub fn new_temp_engine(path: &tempfile::TempDir) -> engine::Engines {
             engine::rocks::util::new_engine(
                 path.path().to_str().unwrap(),
                 None,
-                engine::ALL_CFS,
+                engine_traits::ALL_CFS,
                 None,
             )
             .unwrap(),
@@ -399,7 +397,7 @@ pub fn new_temp_engine(path: &tempfile::TempDir) -> engine::Engines {
             engine::rocks::util::new_engine(
                 raft_path.to_str().unwrap(),
                 None,
-                &[engine::CF_DEFAULT],
+                &[engine_traits::CF_DEFAULT],
                 None,
             )
             .unwrap(),

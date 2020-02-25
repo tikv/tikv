@@ -12,6 +12,7 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
 use engine::*;
+use engine_traits::CF_RAFT;
 use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
@@ -759,7 +760,7 @@ fn test_node_failed_merge_before_succeed_merge() {
     // cleaning send filter. Since this method is just to check `RollbackMerge`,
     // the `PrepareMerge` may escape, but it makes the best effort.
     let before_send_rollback_merge_1003_fp = "before_send_rollback_merge_1003";
-    fail::cfg(before_send_rollback_merge_1003_fp, "pause").unwrap();
+    fail::cfg(before_send_rollback_merge_1003_fp, "return").unwrap();
     cluster.clear_send_filters();
 
     right = pd_client.get_region(b"k5").unwrap();

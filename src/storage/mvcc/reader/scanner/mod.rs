@@ -3,7 +3,8 @@
 mod backward;
 mod forward;
 
-use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::IterOption;
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, TimeStamp, TsSet, Value};
 

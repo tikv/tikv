@@ -12,5 +12,5 @@ configuration_derive = { path = "./configuration_derive" }
 serde = "1.0"
 
 [dev-dependencies]
-toml = "0.4"
 serde_derive = "1.0"
+toml = "0.4"

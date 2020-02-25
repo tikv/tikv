@@ -32,6 +32,7 @@ use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_RAFT};
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
@@ -149,6 +150,9 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
+        // Disable stats concurrency. procinfo performs too bad without optimization,
+        // disable it to save CPU for real tests.
+        stats_concurrency: 0,
         ..ServerConfig::default()
     }
 }
