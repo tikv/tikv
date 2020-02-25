@@ -195,7 +195,7 @@ impl IndexScanExecutorImpl {
             } else if row.search_in_null_ids(*col_id) {
                 columns[idx].mut_raw().push(datum::DATUM_DATA_NULL);
             } else {
-                // This column is missing. It will be filled with default values later.
+                return Err(other_err!("Unexpected missing column {}", col_id));
             }
         }
 
