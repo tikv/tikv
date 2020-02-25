@@ -1,8 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[cfg(feature = "prost-codec")]
-use prost;
-use protobuf::ProtobufError;
 use std::{error, result};
 
 quick_error! {
@@ -22,10 +19,11 @@ quick_error! {
                 hex::encode_upper(&key), region_id, hex::encode_upper(&start), hex::encode_upper(&end)
             )
         }
-        Protobuf(err: ProtobufError) {
+        Protobuf(err: protobuf::ProtobufError) {
             from()
             cause(err)
             description(err.description())
+            display("Protobuf {}", err)
         }
         #[cfg(feature = "prost-codec")]
         ProstDecode(err: prost::DecodeError) {

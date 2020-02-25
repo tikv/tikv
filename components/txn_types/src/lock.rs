@@ -173,6 +173,7 @@ impl Lock {
             LockType::Pessimistic => Op::PessimisticLock,
         };
         info.set_lock_type(lock_type);
+        info.set_lock_for_update_ts(self.for_update_ts.into_inner());
         info
     }
 
