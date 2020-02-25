@@ -281,27 +281,21 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 clippy: pre-clippy
-	@cargo clippy --all --exclude cdc --exclude backup \
+	@cargo clippy --all --exclude cdc --exclude backup --exclude tests --exclude cmd \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--all-targets --no-default-features \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
-	@for pkg in "cdc" "backup"; do \
-		cd components/$$pkg && \
-		cargo clippy -p $$pkg --all-targets --no-default-features \
+	@for pkg in "components/cdc" "components/backup" "cmd" "tests"; do \
+		cd $$pkg && \
+		cargo clippy --all-targets --no-default-features \
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-		cd ../.. ;\
+		cd - ;\
 	done
 	@for pkg in "fuzz" "fuzz/fuzzer-afl" "fuzz/fuzzer-honggfuzz" "fuzz/fuzzer-libfuzzer"; do \
 		cd $$pkg && \
 		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null; \
 	done
-
-# TODO fix tests warnings
-# @cd tests && \
-# cargo clippy -p tests --all-targets --no-default-features \
-# 	--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-# cd ..
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
