@@ -38,11 +38,12 @@ use engine::rocks::util::{
     db_exist, get_cf_handle, CFOptions, EventListener, FixedPrefixSliceTransform,
     FixedSuffixSliceTransform, NoopSliceTransform,
 };
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DB};
+use engine::DB;
 use engine_rocks::{
     RangePropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient};
 use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
