@@ -38,8 +38,8 @@ use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approxim
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
 use raftstore::store::{
-    init_apply_state, init_raft_state, write_initial_apply_state_2, write_initial_raft_state_2,
-    write_peer_state_2,
+    init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
+    write_peer_state,
 };
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
@@ -380,7 +380,7 @@ impl Debugger {
                 continue;
             }
             let region = &region_state.get_region();
-            write_peer_state_2(&wb, region, PeerState::Tombstone, None).unwrap();
+            write_peer_state(&wb, region, PeerState::Tombstone, None).unwrap();
         }
 
         let mut write_opts = WriteOptions::new();
@@ -687,14 +687,14 @@ impl Debugger {
         if box_try!(kv.get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other("Store already has the RaftApplyState".into()));
         }
-        box_try!(write_initial_apply_state_2(&kv_wb, region_id));
+        box_try!(write_initial_apply_state(&kv_wb, region_id));
 
         // RaftLocalState.
         let key = keys::raft_state_key(region_id);
         if box_try!(raft.get_msg::<RaftLocalState>(&key)).is_some() {
             return Err(Error::Other("Store already has the RaftLocalState".into()));
         }
-        box_try!(write_initial_raft_state_2(&raft_wb, region_id));
+        box_try!(write_initial_raft_state(&raft_wb, region_id));
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
@@ -1453,7 +1453,7 @@ fn set_region_tombstone(
         return Err(box_err!("The peer is still in target peers"));
     }
 
-    box_try!(write_peer_state_2(wb, &region, PeerState::Tombstone, None));
+    box_try!(write_peer_state(wb, &region, PeerState::Tombstone, None));
     Ok(())
 }
 

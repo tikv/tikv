@@ -48,7 +48,7 @@ use tikv_util::worker::Scheduler;
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
 use super::metrics::*;
-use super::peer_storage::{write_peer_state_2, ApplySnapResult, InvokeContext, PeerStorage};
+use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
@@ -448,7 +448,7 @@ impl Peer {
         let kv_wb = ctx.engines.kv.c().write_batch();
         let raft_wb = ctx.engines.raft.c().write_batch();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
-        write_peer_state_2(
+        write_peer_state(
             &kv_wb,
             &region,
             PeerState::Tombstone,

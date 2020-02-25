@@ -862,7 +862,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             Some(value) => value,
         };
 
-        peer_storage::clear_meta_2(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
+        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
             .unwrap();
         let key = keys::region_state_key(region.get_id());
         kv_wb.put_msg_cf(CF_RAFT, &key, origin_state).unwrap();

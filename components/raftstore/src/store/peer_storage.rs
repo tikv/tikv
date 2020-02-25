@@ -8,8 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
-use engine::rocks;
-use engine::rocks::{Writable, WriteBatch, DB};
+use engine::rocks::{DB};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use engine_rocks::{RocksSnapshot, RocksWriteBatch};
@@ -925,7 +924,7 @@ impl PeerStorage {
             self.clear_meta(kv_wb, raft_wb)?;
         }
 
-        write_peer_state_2(kv_wb, &region, PeerState::Applying, None)?;
+        write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
 
         let last_index = snap.get_metadata().get_index();
 
@@ -957,7 +956,7 @@ impl PeerStorage {
     /// Delete all meta belong to the region. Results are stored in `wb`.
     pub fn clear_meta(&mut self, kv_wb: &RocksWriteBatch, raft_wb: &RocksWriteBatch) -> Result<()> {
         let region_id = self.get_region_id();
-        clear_meta_2(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
+        clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
         self.cache = EntryCache::default();
         Ok(())
     }
@@ -1298,47 +1297,6 @@ pub fn fetch_entries_to(
 /// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_meta(
     engines: &Engines,
-    kv_wb: &WriteBatch,
-    raft_wb: &WriteBatch,
-    region_id: u64,
-    raft_state: &RaftLocalState,
-) -> Result<()> {
-    let t = Instant::now();
-    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
-    box_try!(kv_wb.delete_cf(handle, &keys::region_state_key(region_id)));
-    box_try!(kv_wb.delete_cf(handle, &keys::apply_state_key(region_id)));
-
-    let last_index = last_index(raft_state);
-    let mut first_index = last_index + 1;
-    let begin_log_key = keys::raft_log_key(region_id, 0);
-    let end_log_key = keys::raft_log_key(region_id, first_index);
-    engines
-        .raft
-        .scan(&begin_log_key, &end_log_key, false, |key, _| {
-            first_index = keys::raft_log_index(key).unwrap();
-            Ok(false)
-        })?;
-    for id in first_index..=last_index {
-        box_try!(raft_wb.delete(&keys::raft_log_key(region_id, id)));
-    }
-    box_try!(raft_wb.delete(&keys::raft_state_key(region_id)));
-
-    info!(
-        "finish clear peer meta";
-        "region_id" => region_id,
-        "meta_key" => 1,
-        "apply_key" => 1,
-        "raft_key" => 1,
-        "raft_logs" => last_index + 1 - first_index,
-        "takes" => ?t.elapsed(),
-    );
-    Ok(())
-}
-
-/// Delete all meta belong to the region. Results are stored in `wb`.
-/// FIXME: delete clear_meta and rename this once possible.
-pub fn clear_meta_2(
-    engines: &Engines,
     kv_wb: &RocksWriteBatch,
     raft_wb: &RocksWriteBatch,
     region_id: u64,
@@ -1473,19 +1431,7 @@ where
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.
-pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Result<()> {
-    let mut raft_state = RaftLocalState::default();
-    raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
-    raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
-    raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-
-    raft_wb.put_msg(&keys::raft_state_key(region_id), &raft_state)?;
-    Ok(())
-}
-
-// When we bootstrap the region we must call this to initialize region local state first.
-// TODO: remove the _2 and delete the other version of this function
-pub fn write_initial_raft_state_2<T: MutableTrait>(raft_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_raft_state<T: MutableTrait>(raft_wb: &T, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::default();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -1497,29 +1443,7 @@ pub fn write_initial_raft_state_2<T: MutableTrait>(raft_wb: &T, region_id: u64) 
 
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region apply state first.
-pub fn write_initial_apply_state<T: Mutable>(
-    kv_engine: &DB,
-    kv_wb: &T,
-    region_id: u64,
-) -> Result<()> {
-    let mut apply_state = RaftApplyState::default();
-    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
-    apply_state
-        .mut_truncated_state()
-        .set_index(RAFT_INIT_LOG_INDEX);
-    apply_state
-        .mut_truncated_state()
-        .set_term(RAFT_INIT_LOG_TERM);
-
-    let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
-    kv_wb.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
-    Ok(())
-}
-
-// When we bootstrap the region or handling split new region, we must
-// call this to initialize region apply state first.
-// TODO: remove the _2 and delete the other version of this function
-pub fn write_initial_apply_state_2<T: MutableTrait>(kv_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_apply_state<T: MutableTrait>(kv_wb: &T, region_id: u64) -> Result<()> {
     let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
     apply_state
@@ -1533,33 +1457,7 @@ pub fn write_initial_apply_state_2<T: MutableTrait>(kv_wb: &T, region_id: u64) -
     Ok(())
 }
 
-pub fn write_peer_state<T: Mutable>(
-    kv_engine: &DB,
-    kv_wb: &T,
-    region: &metapb::Region,
-    state: PeerState,
-    merge_state: Option<MergeState>,
-) -> Result<()> {
-    let region_id = region.get_id();
-    let mut region_state = RegionLocalState::default();
-    region_state.set_state(state);
-    region_state.set_region(region.clone());
-    if let Some(state) = merge_state {
-        region_state.set_merge_state(state);
-    }
-
-    let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
-    debug!(
-        "writing merge state";
-        "region_id" => region_id,
-        "state" => ?region_state,
-    );
-    kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
-    Ok(())
-}
-
-// TODO: remove the _2 and delete the other version of this function
-pub fn write_peer_state_2<T: MutableTrait>(
+pub fn write_peer_state<T: MutableTrait>(
     kv_wb: &T,
     region: &metapb::Region,
     state: PeerState,

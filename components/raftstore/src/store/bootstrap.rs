@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::peer_storage::{
-    write_initial_apply_state_2, write_initial_raft_state_2, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+    write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
 use super::util::new_peer;
 use crate::Result;
@@ -68,12 +68,12 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     let wb = engines.kv.c().write_batch();
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
     box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region.get_id()), &state));
-    write_initial_apply_state_2(&wb, region.get_id())?;
+    write_initial_apply_state(&wb, region.get_id())?;
     engines.kv.c().write(&wb)?;
     engines.sync_kv()?;
 
     let raft_wb = engines.raft.c().write_batch();
-    write_initial_raft_state_2(&raft_wb, region.get_id())?;
+    write_initial_raft_state(&raft_wb, region.get_id())?;
     engines.raft.c().write(&raft_wb)?;
     engines.sync_raft()?;
     Ok(())

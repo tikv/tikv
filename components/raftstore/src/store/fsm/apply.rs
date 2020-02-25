@@ -38,7 +38,7 @@ use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
-use crate::store::peer_storage::{self, write_initial_apply_state_2, write_peer_state_2};
+use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::store::util::KeysInfoFormatter;
 use crate::store::util::{check_region_epoch, compare_region_epoch};
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
@@ -1595,7 +1595,7 @@ impl ApplyDelegate {
             PeerState::Normal
         };
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        if let Err(e) = write_peer_state_2(kv_wb_mut, &region, state, None) {
+        if let Err(e) = write_peer_state(kv_wb_mut, &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -1719,8 +1719,8 @@ impl ApplyDelegate {
             {
                 peer.set_id(*peer_id);
             }
-            write_peer_state_2(kv_wb_mut, &new_region, PeerState::Normal, None)
-                .and_then(|_| write_initial_apply_state_2(kv_wb_mut, new_region.get_id()))
+            write_peer_state(kv_wb_mut, &new_region, PeerState::Normal, None)
+                .and_then(|_| write_initial_apply_state(kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} fails to save split region {:?}: {:?}",
@@ -1733,7 +1733,7 @@ impl ApplyDelegate {
             derived.set_start_key(keys.pop_front().unwrap());
             regions.push(derived.clone());
         }
-        write_peer_state_2(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
+        write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
         let mut resp = AdminResponse::default();
@@ -1785,7 +1785,7 @@ impl ApplyDelegate {
         merging_state.set_min_index(index);
         merging_state.set_target(prepare_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
-        write_peer_state_2(
+        write_peer_state(
             ctx.kv_wb.as_mut().unwrap(),
             &region,
             PeerState::Merging,
@@ -1927,12 +1927,12 @@ impl ApplyDelegate {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        write_peer_state_2(kv_wb_mut, &region, PeerState::Normal, None)
+        write_peer_state(kv_wb_mut, &region, PeerState::Normal, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
                 let mut merging_state = MergeState::default();
                 merging_state.set_target(self.region.clone());
-                write_peer_state_2(
+                write_peer_state(
                     kv_wb_mut,
                     source_region,
                     PeerState::Tombstone,
@@ -1986,7 +1986,7 @@ impl ApplyDelegate {
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        write_peer_state_2(kv_wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
+        write_peer_state(kv_wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
                 "{} failed to rollback merge {:?}: {:?}",
                 self.tag, rollback, e
