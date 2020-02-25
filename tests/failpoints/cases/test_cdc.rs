@@ -10,11 +10,7 @@ use grpcio::{ChannelBuilder, Environment};
 use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
-    event::{
-        row::OpType as EventRowOpType, Entries as EventEntries, Error as EventError,
-        Event as Event_oneof_event, LogType as EventLogType, Row as EventRow,
-    },
-    ChangeDataEvent, Event,
+    create_change_data, event::Event as Event_oneof_event, ChangeDataClient, ChangeDataRequest,
 };
 
 use raft::StateRole;
