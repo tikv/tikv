@@ -7,7 +7,7 @@ use super::util::new_peer;
 use crate::Result;
 use engine::rocks::Writable;
 use engine::{Engines, Iterable, DB};
-use engine::{CF_DEFAULT, CF_RAFT};
+use engine_traits::{CF_DEFAULT, CF_RAFT};
 use engine_rocks::Compat;
 use engine_traits::{KvEngine, Mutable};
 
@@ -110,7 +110,7 @@ mod tests {
     use engine::rocks;
     use engine::Engines;
     use engine::Peekable;
-    use engine::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
 
     #[test]
     fn test_bootstrap() {

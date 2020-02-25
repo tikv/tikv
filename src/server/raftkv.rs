@@ -5,11 +5,11 @@ use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
 
-use engine::CfName;
 use engine::IterOption;
-use engine::CF_DEFAULT;
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
+use engine_traits::CfName;
 use engine_traits::Peekable;
+use engine_traits::CF_DEFAULT;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{

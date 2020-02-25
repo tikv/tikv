@@ -15,7 +15,7 @@ use engine::rocks::{
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Peekable};
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::{Compat, RocksWriteBatch};
 use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteOptions, Mutable, KvEngine, WriteBatch};
 use kvproto::debugpb::{self, Db as DBType, Module};
@@ -1539,9 +1539,9 @@ mod tests {
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
-    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::RocksEngine;
     use engine_traits::{CFHandleExt, Mutable as MutableTrait};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();

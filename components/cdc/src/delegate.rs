@@ -18,6 +18,7 @@ use kvproto::cdcpb::{
 use futures::sync::mpsc::*;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
+use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
@@ -79,8 +80,7 @@ impl Downstream {
 #[derive(Default)]
 struct Pending {
     // Batch of RaftCommand observed from raftstore
-    // TODO add multi_batch once CDC observer is ready
-    multi_batch: (),
+    multi_batch: Vec<CmdBatch>,
     downstreams: Vec<Downstream>,
     scan: Vec<(DownstreamID, Vec<Option<TxnEntry>>)>,
 }
@@ -236,10 +236,9 @@ impl Delegate {
             for (downstream_id, entries) in pending.scan {
                 self.on_scan(downstream_id, entries);
             }
-            // TODO iter multi_batch once CDC observer is ready.
-            // for batch in pending.multi_batch {
-            //     self.on_batch(batch);
-            // }
+            for batch in pending.multi_batch {
+                self.on_batch(batch);
+            }
         }
         info!("region is ready"; "region_id" => self.region_id);
     }
@@ -267,9 +266,29 @@ impl Delegate {
         self.broadcast(change_data);
     }
 
-    // TODO fill on_batch when CDC observer is ready.
-    pub fn on_batch(&mut self, _batch: () /* CmdBatch */) {
-        unimplemented!()
+    pub fn on_batch(&mut self, batch: CmdBatch) {
+        if let Some(pending) = self.pending.as_mut() {
+            pending.multi_batch.push(batch);
+            return;
+        }
+        for cmd in batch.into_iter(self.region_id) {
+            let Cmd {
+                index,
+                mut request,
+                mut response,
+            } = cmd;
+            if !response.get_header().has_error() {
+                if !request.has_admin_request() {
+                    self.sink_data(index, request.requests.into());
+                } else {
+                    self.sink_admin(request.take_admin_request(), response.take_admin_response());
+                }
+            } else {
+                let err_header = response.mut_header().take_error();
+                let err = Error::Request(err_header);
+                self.fail(err);
+            }
+        }
     }
 
     pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {

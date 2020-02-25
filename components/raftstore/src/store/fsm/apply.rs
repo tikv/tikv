@@ -18,7 +18,7 @@ use engine::rocks;
 use engine::rocks::WriteOptions;
 use engine::Engines;
 use engine::{util as engine_util, Peekable};
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch, Compat};
 use engine_traits::{WriteBatch, Mutable as MutableTrait, KvEngine};
 use kvproto::import_sstpb::SstMeta;

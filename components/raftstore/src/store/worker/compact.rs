@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use engine::rocks;
 use engine::rocks::util::compact_range;
-use engine::CF_WRITE;
 use engine::DB;
+use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -256,7 +256,7 @@ mod tests {
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::{DB};
-    use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::Compat;
     use engine_traits::{KvEngine, Mutable};
     use tempfile::Builder;
