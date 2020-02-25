@@ -2302,7 +2302,7 @@ impl ConfigController {
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
         self.current.update(to_update);
-        match persist_config(&self.current) {
+        match persist_config(&incoming) {
             Err(e) => Err(e.into()),
             Ok(_) => Ok(Either::Right(true)),
         }
