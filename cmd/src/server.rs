@@ -9,10 +9,7 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
-use engine::{
-    rocks::util::security::encrypted_env_from_cipher_file,
-    rocks::{self},
-};
+use engine::{rocks, rocks::util::security::encrypted_env_from_cipher_file};
 use engine_rocks::{metrics_flusher::*, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
