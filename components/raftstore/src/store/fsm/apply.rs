@@ -751,6 +751,10 @@ impl ApplyDelegate {
                 EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, &entry),
             };
 
+            if self.pending_remove {
+                self.destroy(apply_ctx);
+            }
+
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => results.push_back(res),
@@ -806,6 +810,9 @@ impl ApplyDelegate {
         entry: &Entry,
     ) -> ApplyResult {
         fail_point!("apply_yield_1000", self.region_id() == 1000, |_| {
+            ApplyResult::Yield
+        });
+        fail_point!("apply_yield_peer_3", self.id() == 3, |_| {
             ApplyResult::Yield
         });
 
@@ -2497,10 +2504,6 @@ impl ApplyFsm {
             .handle_raft_committed_entries(apply_ctx, apply.entries);
         if self.delegate.yield_state.is_some() {
             return;
-        }
-
-        if self.delegate.pending_remove {
-            self.delegate.destroy(apply_ctx);
         }
     }
 
