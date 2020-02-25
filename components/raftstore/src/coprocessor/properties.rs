@@ -224,7 +224,7 @@ mod tests {
     use crate::coprocessor::properties::MvccPropertiesCollectorFactory;
     use engine::rocks;
     use engine::rocks::util::CFOptions;
-    use engine::{CF_WRITE, LARGE_CFS};
+    use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};
 
     use super::*;

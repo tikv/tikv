@@ -287,7 +287,7 @@ pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot};
     use crate::storage::types::TxnStatus;
-    use engine::CF_WRITE;
+    use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use txn_types::Key;
 
@@ -676,13 +676,19 @@ pub mod tests {
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
         lock_ttl: u64,
-        for_update_ts: TimeStamp,
+        for_update_ts: impl Into<TimeStamp>,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, lock_ttl, for_update_ts)
-            .unwrap();
+        txn.acquire_pessimistic_lock(
+            Key::from_raw(key),
+            pk,
+            false,
+            lock_ttl,
+            for_update_ts.into(),
+        )
+        .unwrap();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
             engine.write(&ctx, modifies).unwrap();
