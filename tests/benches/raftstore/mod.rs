@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
+use std::sync::Arc;
 
 use criterion::{Bencher, Criterion};
 use engine::rocks::{Writable, WriteBatch, DB};
@@ -9,7 +10,7 @@ use test_util::*;
 
 const DEFAULT_DATA_SIZE: usize = 100_000;
 
-fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
+fn enc_write_kvs(db: &Arc<DB>, kvs: &[(Vec<u8>, Vec<u8>)]) {
     let wb = WriteBatch::default();
     for &(ref k, ref v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
