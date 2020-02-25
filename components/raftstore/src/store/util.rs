@@ -1119,4 +1119,14 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_integration_on_half_fail_quorum_fn() {
+        let voters = vec![1, 2, 3, 4, 5, 6, 7];
+        let quorum = vec![2, 2, 3, 3, 4, 4, 5];
+        for (voter_count, expected_quorum) in voters.into_iter().zip(quorum) {
+            let quorum = super::integration_on_half_fail_quorum_fn(voter_count);
+            assert_eq!(quorum, expected_quorum);
+        }
+    }
 }

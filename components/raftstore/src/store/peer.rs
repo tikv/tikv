@@ -272,14 +272,12 @@ impl Peer {
             ..Default::default()
         };
 
-        match cfg.quorum_algorithm {
-            QuorumAlgorithm::IntegrationOnHalfFail => {
-                raft_cfg.quorum_fn = util::integration_on_half_fail_quorum_fn
-            }
-            QuorumAlgorithm::Majority => {}
+        if let QuorumAlgorithm::IntegrationOnHalfFail = cfg.quorum_algorithm {
+            raft_cfg.quorum_fn = util::integration_on_half_fail_quorum_fn;
         }
 
-        let raft_group = RawNode::new(&raft_cfg, ps, &slog_global::get_global())?;
+        let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
+        let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
