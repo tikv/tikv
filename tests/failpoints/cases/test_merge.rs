@@ -773,8 +773,8 @@ fn test_merge_cascade_merge_with_apply_yield() {
 
     pd_client.must_merge(r2.get_id(), r1.get_id());
     assert_eq!(r1.get_id(), 1000);
-    let apply_yield_1000_fp = "apply_yield_1000";
-    fail::cfg(apply_yield_1000_fp, "80%3*return()").unwrap();
+    let yield_apply_1000_fp = "yield_apply_1000";
+    fail::cfg(yield_apply_1000_fp, "80%3*return()").unwrap();
 
     for i in 0..10 {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v2");
