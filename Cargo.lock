@@ -555,6 +555,7 @@ dependencies = [
  "chrono",
  "clap",
  "engine",
+ "engine_rocks",
  "engine_traits",
  "fs2",
  "futures 0.1.29",
@@ -1032,6 +1033,8 @@ dependencies = [
  "engine",
  "engine_traits",
  "kvproto",
+ "lazy_static",
+ "prometheus",
  "rand 0.7.2",
  "rocksdb",
  "slog",
@@ -1039,6 +1042,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
+ "time",
 ]
 
 [[package]]
