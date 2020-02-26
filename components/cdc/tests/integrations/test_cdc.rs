@@ -1,11 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::*;
 use std::time::Duration;
 
 use futures::{Future, Stream};
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::{ChannelBuilder, ClientSStreamReceiver, Environment};
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
@@ -152,23 +153,24 @@ impl TestSuite {
     }
 }
 
-#[test]
-fn test_cdc_basic() {
-    let mut suite = TestSuite::new(1);
+fn new_event_feed(
+    client: &ChangeDataClient,
+    req: &ChangeDataRequest,
+) -> (
+    Rc<Cell<Option<ClientSStreamReceiver<ChangeDataEvent>>>>,
+    impl Fn(bool) -> Event_oneof_event,
+) {
+    let event_feed = client.event_feed(&req).unwrap();
+    let event_feed_wrap = Rc::new(Cell::new(Some(event_feed)));
+    let event_feed_wrap_clone = event_feed_wrap.clone();
 
-    let mut req = ChangeDataRequest::default();
-    req.region_id = 1;
-    req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
+    let receive_event = move |keep_resolved_ts: bool| loop {
+        let event_feed = event_feed_wrap_clone.as_ref();
+        let (change_data, events) = match event_feed.replace(None).unwrap().into_future().wait() {
+            Ok(res) => res,
+            Err(e) => panic!("receive failed {:?}", e.0),
+        };
+        event_feed.set(Some(events));
         let mut change_data = change_data.unwrap();
         assert_eq!(change_data.events.len(), 1);
         let change_data_event = &mut change_data.events[0];
@@ -178,6 +180,17 @@ fn test_cdc_basic() {
             other => return other,
         }
     };
+    (event_feed_wrap, receive_event)
+}
+
+#[test]
+fn test_cdc_basic() {
+    let mut suite = TestSuite::new(1);
+
+    let mut req = ChangeDataRequest::default();
+    req.region_id = 1;
+    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let (event_feed_wrap, receive_event) = new_event_feed(&suite.cdc_cli, &req);
     for _ in 0..2 {
         let event = receive_event(true);
         match event {
@@ -273,7 +286,7 @@ fn test_cdc_basic() {
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let event_feed2 = suite.cdc_cli.event_feed(&req).unwrap();
-    event_feed_wrap.replace(Some(event_feed2));
+    event_feed_wrap.as_ref().replace(Some(event_feed2));
     let event = receive_event(false);
 
     match event {
@@ -296,7 +309,7 @@ fn test_cdc_basic() {
         .unwrap();
 
     // Drop event_feed2 and cancel its server streaming.
-    event_feed_wrap.replace(None);
+    event_feed_wrap.as_ref().replace(None);
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
     scheduler
@@ -313,7 +326,7 @@ fn test_cdc_basic() {
     req.region_id = 1;
     req.set_region_epoch(Default::default()); // Zero region epoch.
     let event_feed3 = suite.cdc_cli.event_feed(&req).unwrap();
-    event_feed_wrap.replace(Some(event_feed3));
+    event_feed_wrap.as_ref().replace(Some(event_feed3));
     let event = receive_event(false);
     match event {
         Event_oneof_event::Error(err) => {
@@ -335,25 +348,7 @@ fn test_cdc_not_leader() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
-        }
-    };
+    let (event_feed_wrap, receive_event) = new_event_feed(&suite.cdc_cli, &req);
 
     // Make sure region 1 is registered.
     let event = receive_event(false);
@@ -428,7 +423,7 @@ fn test_cdc_not_leader() {
         .unwrap();
     rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
-    event_feed_wrap.replace(None);
+    event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
 
@@ -439,26 +434,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
-        }
-    };
-
+    let (event_feed_wrap, receive_event) = new_event_feed(&suite.cdc_cli, &req);
     // Make sure region 1 is registered.
     let event = receive_event(false);
     match event {
@@ -476,7 +452,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
     req.region_id = 1;
     req.set_region_epoch(Default::default()); // zero epoch is always stale.
     let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-    let feed1_holder = event_feed_wrap.replace(Some(event_feed));
+    let feed1_holder = event_feed_wrap.as_ref().replace(Some(event_feed));
     // Must receive epoch not match error.
     let event = receive_event(false);
     match event {
@@ -487,7 +463,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
     }
 
     // Must not receive any error on event feed 1.
-    event_feed_wrap.replace(feed1_holder);
+    event_feed_wrap.as_ref().replace(feed1_holder);
     let event = receive_event(true);
     match event {
         Event_oneof_event::ResolvedTs(ts) => assert_ne!(0, ts),
@@ -495,7 +471,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
     }
 
     // Cancel event feed before finishing test.
-    event_feed_wrap.replace(None);
+    event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
 
@@ -526,25 +502,7 @@ fn test_cdc_scan() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
-        }
-    };
+    let (event_feed_wrap, receive_event) = new_event_feed(&suite.cdc_cli, &req);
 
     let event = receive_event(false);
     match event {
@@ -599,7 +557,7 @@ fn test_cdc_scan() {
     req.checkpoint_ts = checkpoint_ts.into_inner();
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let event_feed2 = suite.cdc_cli.event_feed(&req).unwrap();
-    let event_feed1 = event_feed_wrap.replace(Some(event_feed2));
+    let event_feed1 = event_feed_wrap.as_ref().replace(Some(event_feed2));
 
     let event = receive_event(false);
     match event {
@@ -638,7 +596,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
     }
 
-    event_feed_wrap.replace(None);
+    event_feed_wrap.as_ref().replace(None);
     drop(event_feed1);
 
     suite.stop();
@@ -651,25 +609,7 @@ fn test_cdc_tso_failure() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
-        }
-    };
+    let (event_feed_wrap, receive_event) = new_event_feed(&suite.cdc_cli, &req);
 
     // Make sure region 1 is registered.
     let event = receive_event(false);
@@ -695,6 +635,6 @@ fn test_cdc_tso_failure() {
         }
     }
 
-    event_feed_wrap.replace(None);
+    event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
