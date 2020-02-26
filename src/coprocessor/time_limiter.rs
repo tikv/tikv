@@ -73,14 +73,14 @@ where
                     *this.permit = Some(permit);
                     COPR_ACQUIRE_SEMAPHORE_TYPE.acquired.inc();
                     if *this.waiting {
-                        COPR_WAITING_SEMAPHORE.dec();
+                        COPR_WAITING_FOR_SEMAPHORE.dec();
                         *this.waiting = false; // not necessary, but keep its meaning valid
                     }
                 }
                 Poll::Pending => {
                     if !*this.waiting {
                         *this.waiting = true;
-                        COPR_WAITING_SEMAPHORE.inc();
+                        COPR_WAITING_FOR_SEMAPHORE.inc();
                     }
                     return Poll::Pending;
                 }
@@ -97,6 +97,74 @@ where
             Poll::Pending => {
                 *this.execution_time += now.elapsed();
                 Poll::Pending
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures03::future::FutureExt;
+    use std::sync::Arc;
+    use std::thread;
+    use tokio::task::yield_now;
+    use tokio::time::{delay_for, timeout};
+
+    #[tokio::test(basic_scheduler)]
+    async fn test_limit_time() {
+        async fn work(iter: i32) {
+            for i in 0..iter {
+                thread::sleep(Duration::from_millis(50));
+                if i < iter - 1 {
+                    yield_now().await;
+                }
+            }
+        }
+
+        let smp = Arc::new(Semaphore::new(0));
+
+        // Light tasks should run without any semaphore permit
+        let smp2 = smp.clone();
+        assert!(
+            tokio::spawn(timeout(Duration::from_millis(250), async move {
+                limit_time(work(2), &*smp2, Duration::from_millis(500)).await
+            }))
+            .await
+            .is_ok()
+        );
+
+        // Both t1 and t2 need a semaphore permit to finish. Although t2 is much shorter than t1,
+        // it starts with t1
+        smp.add_permits(1);
+        let smp2 = smp.clone();
+        let mut t1 =
+            tokio::spawn(async move { limit_time(work(8), &*smp2, Duration::default()).await })
+                .fuse();
+
+        delay_for(Duration::from_millis(100)).await;
+        let smp2 = smp.clone();
+        let mut t2 =
+            tokio::spawn(async move { limit_time(work(2), &*smp2, Duration::default()).await })
+                .fuse();
+
+        let mut deadline = delay_for(Duration::from_millis(1500)).fuse();
+        let mut t1_finished = false;
+        loop {
+            futures_util::select! {
+                _ = t1 => {
+                    t1_finished = true;
+                },
+                _ = t2 => {
+                    if t1_finished {
+                        return;
+                    } else {
+                        panic!("t2 should finish later than t1");
+                    }
+                },
+                _ = deadline => {
+                    panic!("test timeout");
+                }
             }
         }
     }

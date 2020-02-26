@@ -76,8 +76,8 @@ lazy_static! {
             &["type"],
         )
         .unwrap();
-    pub static ref COPR_WAITING_SEMAPHORE: IntGauge = register_int_gauge!(
-        "tikv_coprocessor_waiting_semaphore",
+    pub static ref COPR_WAITING_FOR_SEMAPHORE: IntGauge = register_int_gauge!(
+        "tikv_coprocessor_waiting_for_semaphore",
         "The number of tasks waiting for the semaphore"
     )
     .unwrap();
