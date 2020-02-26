@@ -55,8 +55,8 @@ fn test_region_ready_after_deregister() {
 
     cluster.run();
 
-    let apply_router = (*cluster.sim.rl()).get_apply_router(id);
-    let cdc_endpoint = Endpoint::new(pd_cli, worker.scheduler(), apply_router, cdc_ob.clone());
+    let raft_router = (*cluster.sim.rl()).get_router(id).unwrap();
+    let cdc_endpoint = Endpoint::new(pd_cli, worker.scheduler(), raft_router, cdc_ob.clone());
     worker.start(cdc_endpoint).unwrap();
     let region = cluster.get_region(&[]);
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
