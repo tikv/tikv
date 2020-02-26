@@ -3,6 +3,7 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::u64;
+use std::sync::Arc;
 
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory, DB,
@@ -184,7 +185,7 @@ impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
 }
 
 pub fn get_range_entries_and_versions(
-    engine: &DB,
+    engine: &Arc<DB>,
     cf: &CFHandle,
     start: &[u8],
     end: &[u8],
@@ -216,6 +217,8 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::rocks::{DBEntryType, TablePropertiesCollector};
     use tempfile::Builder;
@@ -245,7 +248,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = ["a", "b", "c"];
         for &key in &cases {

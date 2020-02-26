@@ -192,7 +192,7 @@ fn need_compact(
 }
 
 fn collect_ranges_need_compact(
-    engine: &DB,
+    engine: &Arc<DB>,
     ranges: Vec<Key>,
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
@@ -335,7 +335,7 @@ mod tests {
         db.delete_cf(cf, k.as_encoded()).unwrap();
     }
 
-    fn open_db(path: &str) -> DB {
+    fn open_db(path: &str) -> Arc<DB> {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
@@ -347,7 +347,7 @@ mod tests {
             CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
-        new_engine_opt(path, db_opts, cfs_opts).unwrap()
+        Arc::new(new_engine_opt(path, db_opts, cfs_opts).unwrap())
     }
 
     #[test]
