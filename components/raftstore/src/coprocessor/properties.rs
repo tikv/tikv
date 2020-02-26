@@ -3,15 +3,17 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::u64;
-use std::sync::Arc;
 
 use engine::rocks::{
-    CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory, DB,
+    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
 };
 pub use engine_rocks::{
-    DecodeProperties, IndexHandle, IndexHandles, RangeOffsets, RangeProperties,
+    RangeOffsets, RangeProperties,
     RangePropertiesCollector, RangePropertiesCollectorFactory, UserProperties,
 };
+use engine_traits::{KvEngine};
+use engine_traits::{DecodeProperties, IndexHandle, IndexHandles, TablePropertiesCollection, TableProperties};
+use engine_traits::Range;
 use tikv_util::codec::Result;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
@@ -184,12 +186,13 @@ impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
     }
 }
 
-pub fn get_range_entries_and_versions(
-    engine: &Arc<DB>,
-    cf: &CFHandle,
+pub fn get_range_entries_and_versions<E>(
+    engine: &E,
+    cf: &E::CFHandle,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)> {
+) -> Option<(u64, u64)>
+where E: KvEngine {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -203,8 +206,8 @@ pub fn get_range_entries_and_versions(
     // Aggregate total MVCC properties and total number entries.
     let mut props = MvccProperties::new();
     let mut num_entries = 0;
-    for (_, v) in &*collection {
-        let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
+    for (_, v) in collection.iter() {
+        let mvcc = match MvccProperties::decode(&v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };
@@ -227,6 +230,8 @@ mod tests {
     use crate::coprocessor::properties::MvccPropertiesCollectorFactory;
     use engine::rocks;
     use engine::rocks::util::CFOptions;
+    use engine_rocks::Compat;
+    use engine_traits::CFHandleExt;
     use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};
 
@@ -271,9 +276,9 @@ mod tests {
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let cf = rocks::util::get_cf_handle(&db, CF_WRITE).unwrap();
+        let cf = db.c().cf_handle(CF_WRITE).unwrap();
         let (entries, versions) =
-            get_range_entries_and_versions(&db, cf, &start_keys, &end_keys).unwrap();
+            get_range_entries_and_versions(db.c(), cf, &start_keys, &end_keys).unwrap();
         assert_eq!(entries, (cases.len() * 2) as u64);
         assert_eq!(versions, cases.len() as u64);
     }

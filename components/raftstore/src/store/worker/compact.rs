@@ -10,6 +10,8 @@ use engine::rocks;
 use engine::rocks::util::compact_range;
 use engine::DB;
 use engine_traits::CF_WRITE;
+use engine_traits::CFHandleExt;
+use engine_rocks::Compat;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -201,13 +203,13 @@ fn collect_ranges_need_compact(
     // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
-    let cf = box_try!(rocks::util::get_cf_handle(engine, CF_WRITE));
+    let cf = box_try!(engine.c().cf_handle(CF_WRITE));
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and checks if it needs to be compacted.
         if let Some((num_ent, num_ver)) =
-            get_range_entries_and_versions(engine, cf, &range[0], &range[1])
+            get_range_entries_and_versions(engine.c(), cf, &range[0], &range[1])
         {
             if need_compact(
                 num_ent,
@@ -257,6 +259,8 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::{WriteBatch, DB};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::CFHandleExt;
+    use engine_rocks::Compat;
     use tempfile::Builder;
 
     use crate::coprocessor::properties::get_range_entries_and_versions;
@@ -355,6 +359,7 @@ mod tests {
         let p = Builder::new().prefix("test").tempdir().unwrap();
         let engine = open_db(p.path().to_str().unwrap());
         let cf = get_cf_handle(&engine, CF_WRITE).unwrap();
+        let cf2 = engine.c().cf_handle(CF_WRITE).unwrap();
 
         // mvcc_put 0..5
         for i in 0..5 {
@@ -371,7 +376,7 @@ mod tests {
         engine.flush_cf(cf, true).unwrap();
 
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
+        let (entries, version) = get_range_entries_and_versions(engine.c(), cf2, &s, &e).unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
@@ -383,7 +388,7 @@ mod tests {
         engine.flush_cf(cf, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
+        let (entries, version) = get_range_entries_and_versions(engine.c(), cf2, &s, &e).unwrap();
         assert_eq!(entries, 5);
         assert_eq!(version, 5);
 
@@ -407,7 +412,7 @@ mod tests {
         engine.flush_cf(cf, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-        let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
+        let (entries, version) = get_range_entries_and_versions(engine.c(), cf2, &s, &e).unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 

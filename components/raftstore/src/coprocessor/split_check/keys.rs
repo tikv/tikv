@@ -5,7 +5,7 @@ use engine::rocks::DB;
 use engine::rocks::{self, Range};
 use engine_rocks::Compat;
 use engine_traits::CF_WRITE;
-use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt, CFHandleExt};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::{Arc, Mutex};
@@ -177,8 +177,8 @@ pub fn get_region_approximate_keys(db: &Arc<DB>, region: &Region) -> Result<u64>
 
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
-    let cf = box_try!(rocks::util::get_cf_handle(db, CF_WRITE));
-    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
+    let cf = box_try!(db.c().cf_handle(CF_WRITE));
+    let (_, keys) = get_range_entries_and_versions(db.c(), cf, &start, &end).unwrap_or_default();
     Ok(keys)
 }
 
