@@ -20,7 +20,7 @@ use crate::store::{
     RequestPolicy,
 };
 use crate::Result;
-use engine_rocks::{RocksEngine};
+use engine_traits::KvEngine;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 
@@ -80,12 +80,12 @@ impl ReadDelegate {
     }
 
     // TODO: return ReadResponse once we remove batch snapshot.
-    fn handle_read(
+    fn handle_read<E: KvEngine>(
         &self,
         req: &RaftCmdRequest,
-        executor: &mut ReadExecutor<RocksEngine>,
+        executor: &mut ReadExecutor<E>,
         metrics: &mut ReadMetrics,
-    ) -> Option<ReadResponse<RocksEngine>> {
+    ) -> Option<ReadResponse<E>> {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
@@ -155,10 +155,11 @@ impl Progress {
     }
 }
 
-pub struct LocalReader<C: ProposalRouter<RocksEngine>> {
+pub struct LocalReader<C, E>
+where C: ProposalRouter<E>, E: KvEngine {
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    kv_engine: RocksEngine,
+    kv_engine: E,
     metrics: RefCell<ReadMetrics>,
     // region id -> ReadDelegate
     delegates: RefCell<HashMap<u64, Option<ReadDelegate>>>,
@@ -167,8 +168,8 @@ pub struct LocalReader<C: ProposalRouter<RocksEngine>> {
     tag: String,
 }
 
-impl LocalReader<RaftRouter<RocksEngine>> {
-    pub fn new(kv_engine: RocksEngine, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter<RocksEngine>) -> Self {
+impl<E: KvEngine> LocalReader<RaftRouter<E>, E> {
+    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter<E>) -> Self {
         LocalReader {
             store_meta,
             kv_engine,
@@ -181,8 +182,9 @@ impl LocalReader<RaftRouter<RocksEngine>> {
     }
 }
 
-impl<C: ProposalRouter<RocksEngine>> LocalReader<C> {
-    fn redirect(&self, mut cmd: RaftCommand<RocksEngine>) {
+impl<C, E> LocalReader<C, E>
+where C: ProposalRouter<E>, E: KvEngine {
+    fn redirect(&self, mut cmd: RaftCommand<E>) {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
@@ -287,7 +289,7 @@ impl<C: ProposalRouter<RocksEngine>> LocalReader<C> {
     }
 
     // It can only handle read command.
-    pub fn propose_raft_command(&self, cmd: RaftCommand<RocksEngine>) {
+    pub fn propose_raft_command(&self, cmd: RaftCommand<E>) {
         let region_id = cmd.request.get_header().get_region_id();
         let mut executor = ReadExecutor::new(
             self.kv_engine.clone(),
@@ -349,7 +351,7 @@ impl<C: ProposalRouter<RocksEngine>> LocalReader<C> {
     }
 
     #[inline]
-    pub fn execute_raft_command(&self, cmd: RaftCommand<RocksEngine>) {
+    pub fn execute_raft_command(&self, cmd: RaftCommand<E>) {
         self.propose_raft_command(cmd);
         self.metrics.borrow_mut().maybe_flush();
     }
@@ -379,7 +381,8 @@ impl<C: ProposalRouter<RocksEngine>> LocalReader<C> {
     }
 }
 
-impl<C: ProposalRouter<RocksEngine> + Clone> Clone for LocalReader<C> {
+impl<C, E> Clone for LocalReader<C, E>
+where C: ProposalRouter<E> + Clone, E: KvEngine {
     fn clone(&self) -> Self {
         LocalReader {
             store_meta: self.store_meta.clone(),
@@ -549,6 +552,7 @@ mod tests {
     use crate::store::Callback;
     use engine::rocks;
     use engine_traits::ALL_CFS;
+    use engine_rocks::RocksEngine;
     use tikv_util::time::monotonic_raw_now;
 
     use super::*;
@@ -559,7 +563,7 @@ mod tests {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
-        LocalReader<SyncSender<RaftCommand<RocksEngine>>>,
+        LocalReader<SyncSender<RaftCommand<RocksEngine>>, RocksEngine>,
         Receiver<RaftCommand<RocksEngine>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
@@ -591,7 +595,7 @@ mod tests {
     }
 
     fn must_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<RocksEngine>>>,
+        reader: &mut LocalReader<SyncSender<RaftCommand<RocksEngine>>, RocksEngine>,
         rx: &Receiver<RaftCommand<RocksEngine>>,
         cmd: RaftCmdRequest,
     ) {
@@ -611,7 +615,7 @@ mod tests {
     }
 
     fn must_not_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<RocksEngine>>>,
+        reader: &mut LocalReader<SyncSender<RaftCommand<RocksEngine>>, RocksEngine>,
         rx: &Receiver<RaftCommand<RocksEngine>>,
         task: RaftCommand<RocksEngine>,
     ) {
