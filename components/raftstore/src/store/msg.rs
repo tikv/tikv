@@ -274,15 +274,15 @@ impl fmt::Debug for CasualMessage {
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
 #[derive(Debug)]
-pub struct RaftCommand {
+pub struct RaftCommand<E: KvEngine> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
-    pub callback: Callback<RocksEngine>,
+    pub callback: Callback<E>,
 }
 
-impl RaftCommand {
+impl<E: KvEngine> RaftCommand<E> {
     #[inline]
-    pub fn new(request: RaftCmdRequest, callback: Callback<RocksEngine>) -> RaftCommand {
+    pub fn new(request: RaftCmdRequest, callback: Callback<E>) -> RaftCommand<E> {
         RaftCommand {
             request,
             callback,
@@ -300,7 +300,7 @@ pub enum PeerMsg {
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
-    RaftCommand(RaftCommand),
+    RaftCommand(RaftCommand<RocksEngine>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
     Tick(PeerTicks),

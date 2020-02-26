@@ -176,8 +176,8 @@ impl RaftRouter {
     #[inline]
     pub fn send_raft_command(
         &self,
-        cmd: RaftCommand,
-    ) -> std::result::Result<(), TrySendError<RaftCommand>> {
+        cmd: RaftCommand<RocksEngine>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>> {
         let region_id = cmd.request.get_header().get_region_id();
         match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),

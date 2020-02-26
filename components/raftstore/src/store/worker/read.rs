@@ -182,7 +182,7 @@ impl LocalReader<RaftRouter> {
 }
 
 impl<C: ProposalRouter> LocalReader<C> {
-    fn redirect(&self, mut cmd: RaftCommand) {
+    fn redirect(&self, mut cmd: RaftCommand<RocksEngine>) {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
@@ -287,7 +287,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     // It can only handle read command.
-    pub fn propose_raft_command(&self, cmd: RaftCommand) {
+    pub fn propose_raft_command(&self, cmd: RaftCommand<RocksEngine>) {
         let region_id = cmd.request.get_header().get_region_id();
         let mut executor = ReadExecutor::new(
             self.kv_engine.clone(),
@@ -349,7 +349,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     #[inline]
-    pub fn execute_raft_command(&self, cmd: RaftCommand) {
+    pub fn execute_raft_command(&self, cmd: RaftCommand<RocksEngine>) {
         self.propose_raft_command(cmd);
         self.metrics.borrow_mut().maybe_flush();
     }
@@ -559,8 +559,8 @@ mod tests {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
-        LocalReader<SyncSender<RaftCommand>>,
-        Receiver<RaftCommand>,
+        LocalReader<SyncSender<RaftCommand<RocksEngine>>>,
+        Receiver<RaftCommand<RocksEngine>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db =
@@ -591,8 +591,8 @@ mod tests {
     }
 
     fn must_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand>>,
-        rx: &Receiver<RaftCommand>,
+        reader: &mut LocalReader<SyncSender<RaftCommand<RocksEngine>>>,
+        rx: &Receiver<RaftCommand<RocksEngine>>,
         cmd: RaftCmdRequest,
     ) {
         let task = RaftCommand::new(
@@ -611,9 +611,9 @@ mod tests {
     }
 
     fn must_not_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand>>,
-        rx: &Receiver<RaftCommand>,
-        task: RaftCommand,
+        reader: &mut LocalReader<SyncSender<RaftCommand<RocksEngine>>>,
+        rx: &Receiver<RaftCommand<RocksEngine>>,
+        task: RaftCommand<RocksEngine>,
     ) {
         reader.propose_raft_command(task);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
@@ -693,13 +693,13 @@ mod tests {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
-        let task = RaftCommand::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
+        let task = RaftCommand::<RocksEngine>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
 
         // Let's read.
         let region = region1;
-        let task = RaftCommand::new(
+        let task = RaftCommand::<RocksEngine>::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let snap = resp.snapshot.unwrap();
@@ -722,7 +722,7 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_store_id(store_id + 1);
-        let task = RaftCommand::new(
+        let task = RaftCommand::<RocksEngine>::new(
             cmd_store_id,
             Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let err = resp.response.get_header().get_error();
@@ -740,7 +740,7 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_id(leader2.get_id() + 1);
-        let task = RaftCommand::new(
+        let task = RaftCommand::<RocksEngine>::new(
             cmd_peer_id,
             Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 assert!(
@@ -764,7 +764,7 @@ mod tests {
         // Term mismatch.
         let mut cmd_term = cmd.clone();
         cmd_term.mut_header().set_term(term6 - 2);
-        let task = RaftCommand::new(
+        let task = RaftCommand::<RocksEngine>::new(
             cmd_term,
             Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let err = resp.response.get_header().get_error();
@@ -797,8 +797,8 @@ mod tests {
         assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 8);
 
         // Channel full.
-        let task1 = RaftCommand::new(cmd.clone(), Callback::None);
-        let task_full = RaftCommand::new(
+        let task1 = RaftCommand::<RocksEngine>::new(cmd.clone(), Callback::None);
+        let task_full = RaftCommand::<RocksEngine>::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let err = resp.response.get_header().get_error();
@@ -816,7 +816,7 @@ mod tests {
         let previous_term_rejection = reader.metrics.borrow().rejected_by_term_mismatch;
         let mut cmd9 = cmd;
         cmd9.mut_header().set_term(term6 + 3);
-        let task = RaftCommand::new(
+        let task = RaftCommand::<RocksEngine>::new(
             cmd9.clone(),
             Callback::Read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
