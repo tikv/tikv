@@ -13,7 +13,7 @@ use raft::SnapshotStatus;
 
 use super::*;
 use engine::*;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, Compat};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
@@ -213,7 +213,7 @@ impl Simulator for NodeCluster {
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
         let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default());
 
         let mut split_check_worker = Worker::new("split-check");

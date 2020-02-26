@@ -197,7 +197,7 @@ impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
         self.ch.send_command(req, cb)
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {
         self.ch.casual_send(region_id, msg)
     }
 

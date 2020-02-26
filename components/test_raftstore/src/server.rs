@@ -15,7 +15,7 @@ use tempfile::{Builder, TempDir};
 
 use super::*;
 use engine::Engines;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, Compat};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
@@ -141,7 +141,7 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
