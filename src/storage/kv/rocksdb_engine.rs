@@ -9,14 +9,12 @@ use std::time::Duration;
 
 use engine::rocks;
 use engine::rocks::util::CFOptions;
-use engine::rocks::{
-    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB,
-};
+use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine::Engines;
 use engine::IterOption;
-use engine_rocks::{RocksEngineIterator, Compat};
+use engine_rocks::{Compat, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_traits::{Iterable, Iterator, Peekable, SeekKey, KvEngine, Mutable};
+use engine_traits::{Iterable, Iterator, KvEngine, Mutable, Peekable, SeekKey};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};

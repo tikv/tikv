@@ -8,9 +8,9 @@ use super::{IterOption, Iterable};
 use engine_traits::CF_LOCK;
 use tikv_util::keybuilder::KeyBuilder;
 
-use rocksdb::WriteBatch;
 use crate::Mutable;
-impl Mutable for WriteBatch { }
+use rocksdb::WriteBatch;
+impl Mutable for WriteBatch {}
 
 // In our tests, we found that if the batch size is too large, running delete_all_in_range will
 // reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.

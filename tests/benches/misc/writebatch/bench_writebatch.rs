@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine::rocks::{DB};
+use engine::rocks::DB;
 use engine_rocks::{Compat, RocksWriteBatch};
 use engine_traits::{KvEngine, Mutable, WriteBatch};
 use tempfile::Builder;

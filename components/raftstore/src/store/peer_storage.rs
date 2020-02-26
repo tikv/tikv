@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
-use engine::rocks::{DB};
+use engine::rocks::DB;
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use engine_rocks::{RocksSnapshot, RocksWriteBatch};

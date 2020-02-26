@@ -4,8 +4,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use criterion::{Bencher, Criterion};
-use engine::rocks::{DB};
-use engine_rocks::{Compat};
+use engine::rocks::DB;
+use engine_rocks::Compat;
 use engine_traits::{KvEngine, Mutable};
 use test_raftstore::*;
 use test_util::*;
