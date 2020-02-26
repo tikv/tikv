@@ -318,9 +318,9 @@ mod tests {
     use crate::storage::TestEngineBuilder;
     use futures03::channel::oneshot;
     use raftstore::store::FlowStatistics;
+    use raftstore::store::SplitInfo;
     use std::thread;
     use tikv_util::collections::HashMap;
-    use raftstore::store::SplitInfo;
 
     #[derive(Clone)]
     struct DummyReporter;

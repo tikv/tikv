@@ -139,6 +139,10 @@
 ## Max allowed recursion level when decoding Coprocessor DAG expression.
 # end-point-recursion-limit = 1000
 
+## QPS threshold for Coprocessor auto split
+
+split-qps-threshold = 1000
+
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 

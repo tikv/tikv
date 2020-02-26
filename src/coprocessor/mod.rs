@@ -126,7 +126,6 @@ pub struct ReqContext {
 
     /// The max key in ranges of the request
     pub max: Vec<u8>,
-
 }
 
 impl ReqContext {

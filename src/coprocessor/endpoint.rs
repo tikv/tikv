@@ -82,6 +82,7 @@ impl<E: Engine> Endpoint<E> {
             }
             _ => None,
         };
+        tls_update_qps_threshold(cfg.split_qps_threshold);
         Self {
             read_pool,
             semaphore,

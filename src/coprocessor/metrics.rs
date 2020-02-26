@@ -191,7 +191,15 @@ pub fn tls_collect_qps(region_id: u64, peer: &metapb::Peer, start_key: &[u8], en
     });
 }
 
-const QPS_THRESHOLD: u64 = 100;
+pub fn tls_update_qps_threshold(qps_threshold:u32){
+    TLS_COP_METRICS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.hub.qps_threshold=qps_threshold;
+        info!("qps_threshold";"qps_threshold"=>qps_threshold);
+    });
+}
+
+const DEFAULT_QPS_THRESHOLD: u32 = 100;
 const DETECT_TIMES: u32 = 10;
 const TOP_N: u32 = 10;
 const DETECT_INTERVAL: Duration = Duration::from_secs(1);
@@ -302,7 +310,7 @@ impl Recorder {
 
 pub struct RegionInfo {
     pub peer: metapb::Peer,
-    pub qps: u64,
+    pub qps: u32,
 }
 
 fn build_region_info() -> RegionInfo {
@@ -325,6 +333,7 @@ pub struct Hub {
     pub region_qps: HashMap<u64, RegionInfo>,
     pub region_keys: HashMap<u64, Vec<KeyRange>>,
     pub region_recorder: HashMap<u64, Recorder>,
+    pub qps_threshold: u32,
 }
 
 fn build_hub() -> Hub {
@@ -332,6 +341,7 @@ fn build_hub() -> Hub {
         region_qps: HashMap::default(),
         region_keys: HashMap::default(),
         region_recorder: HashMap::default(),
+        qps_threshold:DEFAULT_QPS_THRESHOLD,
     }
 }
 
@@ -354,12 +364,12 @@ impl Hub {
         });
     }
 
-    fn flush(&mut self) -> (Vec<u64>, Vec<SplitInfo>) {
+    fn flush(&mut self) -> (Vec<u32>, Vec<SplitInfo>) {
         let mut split_infos = Vec::default();
         let mut top = BinaryHeap::with_capacity(TOP_N as usize);
         for (region_id, region_info) in self.region_qps.iter() {
             let qps = (*region_info).qps;
-            if qps > QPS_THRESHOLD {
+            if qps > self.qps_threshold {
                 let recorder = self
                     .region_recorder
                     .entry(*region_id)
