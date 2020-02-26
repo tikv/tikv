@@ -135,13 +135,13 @@ impl StoreMeta {
 
 #[derive(Clone)]
 pub struct RaftRouter {
-    pub router: BatchRouter<PeerFsm, StoreFsm>,
+    pub router: BatchRouter<PeerFsm<RocksEngine>, StoreFsm>,
 }
 
 impl Deref for RaftRouter {
-    type Target = BatchRouter<PeerFsm, StoreFsm>;
+    type Target = BatchRouter<PeerFsm<RocksEngine>, StoreFsm>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm, StoreFsm> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<RocksEngine>, StoreFsm> {
         &self.router
     }
 }
@@ -462,7 +462,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 pub struct RaftPoller<T: 'static, C: 'static> {
     tag: String,
     store_msg_buf: Vec<StoreMsg>,
-    peer_msg_buf: Vec<PeerMsg>,
+    peer_msg_buf: Vec<PeerMsg<RocksEngine>>,
     previous_metrics: RaftMetrics,
     timer: SlowTimer,
     poll_ctx: PollContext<T, C>,
@@ -472,7 +472,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm>]) {
+    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -573,7 +573,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T, C> {
+impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for RaftPoller<T, C> {
     fn begin(&mut self, batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
@@ -629,7 +629,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm) -> Option<usize> {
+    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksEngine>) -> Option<usize> {
         let mut expected_msg_count = None;
 
         fail_point!(
@@ -672,7 +672,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         expected_msg_count
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm>]) {
+    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -726,7 +726,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn init(&mut self) -> Result<Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>> {
+    fn init(&mut self) -> Result<Vec<(LooseBoundedSender<PeerMsg<RocksEngine>>, Box<PeerFsm<RocksEngine>>)>> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
@@ -888,7 +888,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     }
 }
 
-impl<T, C> HandlerBuilder<PeerFsm, StoreFsm> for RaftPollerBuilder<T, C>
+impl<T, C> HandlerBuilder<PeerFsm<RocksEngine>, StoreFsm> for RaftPollerBuilder<T, C>
 where
     T: Transport + 'static,
     C: PdClient + 'static,
@@ -958,7 +958,7 @@ struct Workers {
 }
 
 pub struct RaftBatchSystem {
-    system: BatchSystem<PeerFsm, StoreFsm>,
+    system: BatchSystem<PeerFsm<RocksEngine>, StoreFsm>,
     apply_router: ApplyRouter,
     apply_system: ApplyBatchSystem,
     router: RaftRouter,
@@ -1041,7 +1041,7 @@ impl RaftBatchSystem {
     fn start_system<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
         &mut self,
         mut workers: Workers,
-        region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
+        region_peers: Vec<(LooseBoundedSender<PeerMsg<RocksEngine>>, Box<PeerFsm<RocksEngine>>)>,
         builder: RaftPollerBuilder<T, C>,
         dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()> {

@@ -343,6 +343,7 @@ pub mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_rocks::RocksEngine;
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
@@ -357,7 +358,7 @@ pub mod tests {
     use super::*;
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {

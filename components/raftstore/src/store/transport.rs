@@ -19,7 +19,7 @@ pub trait Transport: Send + Clone {
 ///
 /// Messages are not guaranteed to be delivered by this trait.
 pub trait CasualRouter {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()>;
+    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
@@ -36,7 +36,7 @@ pub trait StoreRouter {
 
 impl CasualRouter for RaftRouter {
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -65,8 +65,8 @@ impl StoreRouter for RaftRouter {
     }
 }
 
-impl CasualRouter for mpsc::SyncSender<(u64, CasualMessage)> {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+impl CasualRouter for mpsc::SyncSender<(u64, CasualMessage<RocksEngine>)> {
+    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {

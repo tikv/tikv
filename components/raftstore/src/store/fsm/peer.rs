@@ -11,6 +11,7 @@ use engine::Engines;
 use engine::Peekable;
 use engine_rocks::{RocksEngine, RocksSnapshot, Compat};
 use engine_traits::CF_RAFT;
+use engine_traits::KvEngine;
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -80,7 +81,7 @@ pub enum GroupState {
     Idle,
 }
 
-pub struct PeerFsm {
+pub struct PeerFsm<E: KvEngine> {
     pub peer: Peer,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
@@ -95,11 +96,11 @@ pub struct PeerFsm {
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
-    mailbox: Option<BasicMailbox<PeerFsm>>,
-    pub receiver: Receiver<PeerMsg>,
+    mailbox: Option<BasicMailbox<PeerFsm<E>>>,
+    pub receiver: Receiver<PeerMsg<E>>,
 }
 
-impl Drop for PeerFsm {
+impl<E: KvEngine> Drop for PeerFsm<E> {
     fn drop(&mut self) {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
@@ -119,7 +120,7 @@ impl Drop for PeerFsm {
     }
 }
 
-impl PeerFsm {
+impl<E: KvEngine> PeerFsm<E> {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
@@ -129,7 +130,7 @@ impl PeerFsm {
         sched: Scheduler<RegionTask>,
         engines: Engines,
         region: &metapb::Region,
-    ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {
+    ) -> Result<(LooseBoundedSender<PeerMsg<E>>, Box<PeerFsm<E>>)> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -172,7 +173,7 @@ impl PeerFsm {
         engines: Engines,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {
+    ) -> Result<(LooseBoundedSender<PeerMsg<E>>, Box<PeerFsm<E>>)> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
@@ -228,8 +229,8 @@ impl PeerFsm {
     }
 }
 
-impl Fsm for PeerFsm {
-    type Message = PeerMsg;
+impl<E: KvEngine> Fsm for PeerFsm<E> {
+    type Message = PeerMsg<E>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -257,16 +258,16 @@ impl Fsm for PeerFsm {
 }
 
 pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
-    fsm: &'a mut PeerFsm,
+    fsm: &'a mut PeerFsm<RocksEngine>,
     ctx: &'a mut PollContext<T, C>,
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    pub fn new(fsm: &'a mut PeerFsm, ctx: &'a mut PollContext<T, C>) -> PeerFsmDelegate<'a, T, C> {
+    pub fn new(fsm: &'a mut PeerFsm<RocksEngine>, ctx: &'a mut PollContext<T, C>) -> PeerFsmDelegate<'a, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksEngine>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -304,7 +305,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<RocksEngine>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,

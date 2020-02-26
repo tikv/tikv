@@ -182,14 +182,14 @@ pub enum SignificantMsg {
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage {
+pub enum CasualMessage<E: KvEngine> {
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
-        callback: Callback<RocksEngine>,
+        callback: Callback<E>,
     },
 
     /// Hash result of ComputeHash command.
@@ -228,10 +228,10 @@ pub enum CasualMessage {
 
     /// A test only message, it is useful when we want to access
     /// peer's internal state.
-    Test(Box<dyn FnOnce(&mut PeerFsm) + Send + 'static>),
+    Test(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
 }
 
-impl fmt::Debug for CasualMessage {
+impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
@@ -292,7 +292,7 @@ impl<E: KvEngine> RaftCommand<E> {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg {
+pub enum PeerMsg<E: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -300,7 +300,7 @@ pub enum PeerMsg {
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
-    RaftCommand(RaftCommand<RocksEngine>),
+    RaftCommand(RaftCommand<E>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
@@ -314,12 +314,12 @@ pub enum PeerMsg {
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage),
+    CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
 }
 
-impl fmt::Debug for PeerMsg {
+impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
@@ -399,6 +399,6 @@ impl fmt::Debug for StoreMsg {
 // TODO: remove this enum and utilize the actual message instead.
 #[derive(Debug)]
 pub enum Msg {
-    PeerMsg(PeerMsg),
+    PeerMsg(PeerMsg<RocksEngine>),
     StoreMsg(StoreMsg),
 }
