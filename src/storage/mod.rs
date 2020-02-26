@@ -166,6 +166,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         config: &Config,
         read_pool: ReadPoolHandle,
         lock_mgr: Option<L>,
+        pipelined_pessimistic_lock: bool,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
         let sched = TxnScheduler::new(
@@ -174,6 +175,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
+            pipelined_pessimistic_lock,
         );
 
         info!("Storage started.");
@@ -1122,6 +1124,7 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
 pub struct TestStorageBuilder<E: Engine> {
     engine: E,
     config: Config,
+    pipelined_pessimistic_lock: bool,
 }
 
 impl TestStorageBuilder<RocksEngine> {
@@ -1130,6 +1133,7 @@ impl TestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: Config::default(),
+            pipelined_pessimistic_lock: false,
         }
     }
 }
@@ -1139,6 +1143,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         Self {
             engine,
             config: Config::default(),
+            pipelined_pessimistic_lock: false,
         }
     }
 
@@ -1152,15 +1157,21 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, DummyLockManager>> {
-        let read_pool = build_read_pool_for_test(
+        let read_pool = ReadPool::from(build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
-        );
+        ));
+        let lock_manager = if self.pipelined_pessimistic_lock {
+            Some(DummyLockManager {})
+        } else {
+            None
+        };
         Storage::from_engine(
             self.engine,
             &self.config,
-            ReadPool::from(read_pool).handle(),
-            None,
+            read_pool.handle(),
+            lock_manager,
+            self.pipelined_pessimistic_lock,
         )
     }
 }
@@ -3840,4 +3851,6 @@ mod tests {
         assert_eq!(cmd.key.into_encoded(), raw_key);
         assert_eq!(cmd.ts, None);
     }
+
+    // TODO: test_pipelined_pessimistic_lock
 }

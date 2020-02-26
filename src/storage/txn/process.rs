@@ -90,15 +90,18 @@ pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
     // If the task releases some locks, we wake up waiters waiting for them.
     lock_mgr: Option<L>,
 
+    pipelined_pessimistic_lock: bool,
+
     _phantom: PhantomData<E>,
 }
 
 impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
-    pub fn new(scheduler: S, pool: SchedPool, lock_mgr: Option<L>) -> Self {
+    pub fn new(scheduler: S, pool: SchedPool, lock_mgr: Option<L>, pipelined_pessimistic_lock: bool) -> Self {
         Executor {
             sched_pool: Some(pool),
             scheduler: Some(scheduler),
             lock_mgr,
+            pipelined_pessimistic_lock,
             _phantom: Default::default(),
         }
     }
@@ -225,6 +228,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
         let lock_mgr = self.take_lock_mgr();
+        let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_pipelined();
         let msg = match process_write_impl(task.cmd, snapshot, lock_mgr, &mut statistics) {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
@@ -252,11 +256,14 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         cid,
                         pr,
                         result: Ok(()),
+                        pipelined: false,
                         tag,
                     }
                 } else {
                     let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
+                    // TODO: clone errors from pr
+                    let pipelined_write_pr = ProcessResult::MultiRes { results: vec![] };
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
                         sched_pool
@@ -268,6 +275,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                                         cid,
                                         pr,
                                         result,
+                                        pipelined,
                                         tag,
                                     },
                                 );
@@ -285,6 +293,14 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
+                    } else if pipelined {
+                        // The write task is scheduled to engine successfully.
+                        // Respond to client early.
+                        Msg::PipelinedWrite {
+                            cid,
+                            pr: pipelined_write_pr,
+                            tag,
+                        }
                     } else {
                         return statistics;
                     }
