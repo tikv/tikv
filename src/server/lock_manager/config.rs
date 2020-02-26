@@ -2,9 +2,7 @@
 
 use super::deadlock::Scheduler as DeadlockScheduler;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use configuration::ConfigManager;
-
-use configuration::{ConfigChange, Configuration};
+use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
 
 use std::error::Error;
 
@@ -30,8 +28,17 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        self.validate_or_rollback(None)
+    }
+
+    pub fn validate_or_rollback(
+        &self,
+        mut rb_collector: Option<RollbackCollector<Config>>,
+    ) -> Result<(), Box<dyn Error>> {
         if self.wait_for_lock_timeout == 0 {
-            return Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into());
+            rollback_or!(rb_collector, wait_for_lock_timeout, {
+                Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into())
+            })
         }
         Ok(())
     }
