@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use fail;
 use futures::Future;
 use raft::eraftpb::ConfChangeType;
