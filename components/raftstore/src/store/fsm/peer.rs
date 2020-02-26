@@ -3,14 +3,13 @@
 use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
 use engine::Peekable;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot, Compat};
 use engine_traits::CF_RAFT;
 use futures::Future;
 use kvproto::errorpb;
@@ -1476,7 +1475,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let task = RaftlogGcTask {
-            raft_engine: Arc::clone(&self.fsm.peer.get_store().get_raft_engine()),
+            raft_engine: self.fsm.peer.get_store().get_raft_engine().c().clone(),
             region_id: self.fsm.peer.get_store().get_region_id(),
             start_idx: self.fsm.peer.last_compacted_idx,
             end_idx: state.get_index() + 1,
