@@ -110,6 +110,11 @@ pub enum Collation {
 }
 
 impl Collation {
+    /// Parse from collation id.
+    /// 
+    /// These are magic numbers defined in tidb, where positive numbers are for legacy
+    /// compatibility, and all new clusters with padding configuration enabled will
+    /// use negative numbers to indicate the padding behavior.
     pub fn from_i32(n: i32) -> Result<Self, DataTypeError> {
         match n {
             -33 | -45 => Ok(Collation::Utf8Mb4GeneralCi),
