@@ -25,7 +25,6 @@ impl TablePropertiesExt for PanicEngine {
 
 pub struct PanicTablePropertiesCollection;
 
-
 impl
     TablePropertiesCollection<
         PanicTablePropertiesCollectionIter,

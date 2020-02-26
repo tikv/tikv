@@ -2389,7 +2389,9 @@ mod tests {
                     expected_lock_info.get_primary_lock(),
                     expected_lock_info.get_lock_version(),
                     expected_lock_info.get_lock_ttl(),
-                    expected_lock_info.get_lock_for_update_ts(),
+                    expected_lock_info.get_lock_for_update_ts().into(),
+                    false,
+                    false,
                 );
             }
 
@@ -2412,18 +2414,6 @@ mod tests {
                 &expected_lock_info,
             );
 
-//        // Write a pessimistic lock.
-//        must_rollback(&engine, k, 10);
-//        must_acquire_pessimistic_lock_impl(&engine, k, k, 50, lock_ttl, 50.into(), false, false);
-//
-//        expected_lock_info.set_lock_version(50);
-//        expected_lock_info.set_lock_ttl(lock_ttl);
-//        expected_lock_info.set_lock_type(Op::PessimisticLock);
-//        expected_lock_info.set_txn_size(0);
-//        assert_lock_info_eq(
-//            must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60),
-//            &expected_lock_info,
-//        );
             // Delete the lock
             if *is_optimistic {
                 must_rollback(&engine, k, expected_lock_info.get_lock_version());
