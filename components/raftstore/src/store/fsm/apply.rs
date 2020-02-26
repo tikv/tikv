@@ -260,7 +260,7 @@ impl ApplyCallback {
 
 #[derive(Clone)]
 pub enum Notifier {
-    Router(RaftRouter),
+    Router(RaftRouter<RocksEngine>),
     #[cfg(test)]
     Sender(Sender<PeerMsg<RocksEngine>>),
 }

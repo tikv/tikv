@@ -7,6 +7,7 @@ use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine_rocks::RocksEngine;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::KvEngine;
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -134,19 +135,19 @@ impl StoreMeta {
 }
 
 #[derive(Clone)]
-pub struct RaftRouter {
-    pub router: BatchRouter<PeerFsm<RocksEngine>, StoreFsm>,
+pub struct RaftRouter<E: KvEngine> {
+    pub router: BatchRouter<PeerFsm<E>, StoreFsm>,
 }
 
-impl Deref for RaftRouter {
-    type Target = BatchRouter<PeerFsm<RocksEngine>, StoreFsm>;
+impl<E: KvEngine> Deref for RaftRouter<E> {
+    type Target = BatchRouter<PeerFsm<E>, StoreFsm>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<RocksEngine>, StoreFsm> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<E>, StoreFsm> {
         &self.router
     }
 }
 
-impl RaftRouter {
+impl<E: KvEngine> RaftRouter<E> {
     pub fn send_raft_message(
         &self,
         mut msg: RaftMessage,
@@ -176,8 +177,8 @@ impl RaftRouter {
     #[inline]
     pub fn send_raft_command(
         &self,
-        cmd: RaftCommand<RocksEngine>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>> {
+        cmd: RaftCommand<E>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<E>>> {
         let region_id = cmd.request.get_header().get_region_id();
         match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
@@ -207,7 +208,7 @@ pub struct PollContext<T, C: 'static> {
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
     pub region_scheduler: Scheduler<RegionTask>,
     pub apply_router: ApplyRouter,
-    pub router: RaftRouter,
+    pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
@@ -709,7 +710,7 @@ pub struct RaftPollerBuilder<T, C> {
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
     pub region_scheduler: Scheduler<RegionTask>,
     apply_router: ApplyRouter,
-    pub router: RaftRouter,
+    pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
@@ -961,12 +962,12 @@ pub struct RaftBatchSystem {
     system: BatchSystem<PeerFsm<RocksEngine>, StoreFsm>,
     apply_router: ApplyRouter,
     apply_system: ApplyBatchSystem,
-    router: RaftRouter,
+    router: RaftRouter<RocksEngine>,
     workers: Option<Workers>,
 }
 
 impl RaftBatchSystem {
-    pub fn router(&self) -> RaftRouter {
+    pub fn router(&self) -> RaftRouter<RocksEngine> {
         self.router.clone()
     }
 
@@ -1175,7 +1176,7 @@ impl RaftBatchSystem {
     }
 }
 
-pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter, RaftBatchSystem) {
+pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter<RocksEngine>, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
     let (router, system) = batch_system::create_system(
@@ -2016,7 +2017,7 @@ fn size_change_filter(info: &CompactionJobInfo) -> bool {
     true
 }
 
-pub fn new_compaction_listener(ch: RaftRouter) -> CompactionListener {
+pub fn new_compaction_listener(ch: RaftRouter<RocksEngine>) -> CompactionListener {
     let ch = Mutex::new(ch);
     let compacted_handler = Box::new(move |compacted_event: CompactedEvent| {
         let ch = ch.lock().unwrap();

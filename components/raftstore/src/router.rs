@@ -85,13 +85,13 @@ impl RaftStoreRouter for RaftStoreBlackHole {
 /// A router that routes messages to the raftstore
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
-    router: RaftRouter,
-    local_reader: LocalReader<RaftRouter>,
+    router: RaftRouter<RocksEngine>,
+    local_reader: LocalReader<RaftRouter<RocksEngine>>,
 }
 
 impl ServerRaftStoreRouter {
     /// Creates a new router.
-    pub fn new(router: RaftRouter, local_reader: LocalReader<RaftRouter>) -> ServerRaftStoreRouter {
+    pub fn new(router: RaftRouter<RocksEngine>, local_reader: LocalReader<RaftRouter<RocksEngine>>) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
             router,
             local_reader,
@@ -126,7 +126,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
-        if LocalReader::<RaftRouter>::acceptable(&cmd.request) {
+        if LocalReader::<RaftRouter<RocksEngine>>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd);
             Ok(())
         } else {
