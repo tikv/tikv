@@ -202,7 +202,9 @@ impl<T: CasualRouter> Endpoint<T> {
             batch_size,
             build_resolver: enabled.is_some(),
         };
-        delegate.subscribe(downstream);
+        if !delegate.subscribe(downstream) {
+            return;
+        }
         let change_cmd = if let Some(enabled) = enabled {
             // The region has never been registered.
             // Subscribe region role change events.
