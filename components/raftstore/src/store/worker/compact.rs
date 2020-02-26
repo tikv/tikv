@@ -10,7 +10,7 @@ use engine::rocks;
 use engine::rocks::util::compact_range;
 use engine::DB;
 use engine_traits::CF_WRITE;
-use engine_traits::CFHandleExt;
+use engine_traits::KvEngine;
 use engine_rocks::Compat;
 use tikv_util::worker::Runnable;
 
@@ -151,7 +151,7 @@ impl Runnable<Task> for Runner {
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
             } => match collect_ranges_need_compact(
-                &self.engine,
+                self.engine.c(),
                 ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
@@ -194,7 +194,7 @@ fn need_compact(
 }
 
 fn collect_ranges_need_compact(
-    engine: &Arc<DB>,
+    engine: &impl KvEngine,
     ranges: Vec<Key>,
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
@@ -203,13 +203,13 @@ fn collect_ranges_need_compact(
     // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
-    let cf = box_try!(engine.c().cf_handle(CF_WRITE));
+    let cf = box_try!(engine.cf_handle(CF_WRITE));
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and checks if it needs to be compacted.
         if let Some((num_ent, num_ver)) =
-            get_range_entries_and_versions(engine.c(), cf, &range[0], &range[1])
+            get_range_entries_and_versions(engine, cf, &range[0], &range[1])
         {
             if need_compact(
                 num_ent,
@@ -393,7 +393,7 @@ mod tests {
         assert_eq!(version, 5);
 
         let ranges_need_to_compact = collect_ranges_need_compact(
-            &engine,
+            engine.c(),
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
@@ -417,7 +417,7 @@ mod tests {
         assert_eq!(version, 5);
 
         let ranges_need_to_compact = collect_ranges_need_compact(
-            &engine,
+            engine.c(),
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
