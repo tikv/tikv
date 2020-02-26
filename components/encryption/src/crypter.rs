@@ -23,22 +23,22 @@ impl From<EncryptionMethod> for Cipher {
 // IV as an AES input, the length must be 16 btyes.
 const IV_LEN: usize = 16;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Iv {
     iv: [u8; IV_LEN],
 }
 
 impl Iv {
-    fn as_slice(&self) -> &[u8; IV_LEN] {
+    pub fn as_slice(&self) -> &[u8; IV_LEN] {
         &self.iv
     }
 }
 
-impl From<Vec<u8>> for Iv {
-    fn from(src: Vec<u8>) -> Iv {
+impl<'a> From<&'a [u8]> for Iv {
+    fn from(src: &'a [u8]) -> Iv {
         assert_eq!(src.len(), IV_LEN, "Nonce + Counter must be 16 bytes");
         let mut iv = [0; IV_LEN];
-        iv.copy_from_slice(&src);
+        iv.copy_from_slice(src);
         Iv { iv }
     }
 }
@@ -95,11 +95,26 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn test_iv() {
+        let mut ivs = Vec::with_capacity(100);
+        for _ in 0..100 {
+            ivs.push(Iv::new());
+        }
+        ivs.dedup_by(|a, b| a.as_slice() == b.as_slice());
+        assert_eq!(ivs.len(), 100);
+
+        for iv in ivs {
+            let iv1 = Iv::from(&iv.as_slice()[..]);
+            assert_eq!(iv.as_slice(), iv1.as_slice());
+        }
+    }
+
     fn aes_ctr_test(method: EncryptionMethod, pt: &str, ct: &str, key: &str, iv: &str) {
         let pt = Vec::from_hex(pt).unwrap();
         let ct = Vec::from_hex(ct).unwrap();
         let key = Vec::from_hex(key).unwrap();
-        let iv = Vec::from_hex(iv).unwrap().into();
+        let iv = Vec::from_hex(iv).unwrap().as_slice().into();
 
         let crypter = AesCtrCtypter::new(method, &key, iv);
         let ciphertext = crypter.encrypt(&pt).unwrap();

@@ -9,7 +9,9 @@ mod errors;
 mod file;
 mod manager;
 mod master_key;
+mod metadata;
 
 pub use self::crypter::{AesCtrCtypter, Iv};
 pub use self::errors::{Error, Result};
 pub use self::file::File;
+pub use metadata::*;

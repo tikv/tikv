@@ -1,3 +1,5 @@
+use kvproto::encryptionpb::EncryptedContent;
+
 use crate::Result;
 
 /// Provide API to encrypt/decrypt key dictionary content.
@@ -6,9 +8,9 @@ use crate::Result;
 /// prefix the result with the IV (nonce + initial counter) on encrypt,
 /// and decode the IV on decrypt.
 pub trait Backend {
-    fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>>;
-    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>>;
+    fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent>;
+    fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>>;
 }
 
-mod cfg;
+mod filebase;
 // TODO support KMS
