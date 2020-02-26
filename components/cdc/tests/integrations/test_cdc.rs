@@ -654,3 +654,113 @@ fn test_cdc_tso_failure() {
     event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
+
+#[test]
+fn test_region_split() {
+    let mut suite = TestSuite::new(3);
+
+    let region = suite.cluster.get_region(&[]);
+    let mut req = ChangeDataRequest::default();
+    req.region_id = region.get_id();
+    req.set_region_epoch(region.get_region_epoch().clone());
+    let (event_feed_wrap, receive_event) = new_event_feed(&suite.cdc_cli, &req);
+
+    // Make sure region 1 is registered.
+    let event = receive_event(false);
+    match event {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+    // Split region.
+    suite.cluster.must_split(&region, b"k0");
+    let event = receive_event(false);
+    match event {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_epoch_not_match(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+    // Try to subscribe region again.
+    let region = suite.cluster.get_region(b"k0");
+    // Ensure it is old region.
+    assert_eq!(req.get_region_id(), region.get_id());
+    req.set_region_epoch(region.get_region_epoch().clone());
+    let event_feed2 = suite.cdc_cli.event_feed(&req).unwrap();
+    event_feed_wrap.as_ref().replace(Some(event_feed2));
+    let event = receive_event(false);
+    match event {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_failed_pending_batch() {
+    let _guard = super::setup_fail();
+    let mut suite = TestSuite::new(3);
+
+    let incremental_scan_fp = "before_schedule_incremental_scan";
+    fail::cfg(incremental_scan_fp, "pause").unwrap();
+
+    let region = suite.cluster.get_region(&[]);
+    let mut req = ChangeDataRequest::default();
+    req.region_id = region.get_id();
+    req.set_region_epoch(region.get_region_epoch().clone());
+    let (event_feed_wrap, receive_event) = new_event_feed(&suite.cdc_cli, &req);
+
+    // Split region.
+    suite.cluster.must_split(&region, b"k0");
+    // Wait for receiving split cmd.
+    sleep_ms(200);
+    fail::remove(incremental_scan_fp);
+
+    let event = receive_event(false);
+    match event {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+    let event = receive_event(false);
+    match event {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_epoch_not_match(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    // Try to subscribe region again.
+    let region = suite.cluster.get_region(b"k0");
+    // Ensure it is old region.
+    assert_eq!(req.get_region_id(), region.get_id());
+    req.set_region_epoch(region.get_region_epoch().clone());
+    let event_feed2 = suite.cdc_cli.event_feed(&req).unwrap();
+    event_feed_wrap.as_ref().replace(Some(event_feed2));
+    let event = receive_event(false);
+    match event {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}

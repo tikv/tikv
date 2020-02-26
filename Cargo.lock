@@ -447,6 +447,7 @@ dependencies = [
  "futures 0.1.29",
  "grpcio",
  "kvproto",
+ "panic_hook",
  "pd_client",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
  "raftstore",

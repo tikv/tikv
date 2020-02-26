@@ -267,6 +267,11 @@ impl<T: CasualRouter> Endpoint<T> {
     fn on_region_ready(&mut self, region_id: u64, resolver: Resolver, region: Region) {
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             delegate.on_region_ready(resolver, region);
+            println!("region ready: has_failed({})", delegate.has_failed());
+            // Delegate may fail during handling pending batch.
+            if delegate.has_failed() {
+                self.capture_regions.remove(&region_id);
+            }
         } else {
             warn!("region not found on region ready (finish building resolver)"; "region_id" => region_id);
         }
@@ -389,6 +394,7 @@ impl Initializer {
                         done = true;
                     }
                     debug!("cdc scan entries"; "len" => entries.len());
+                    fail_point!("before_schedule_incremental_scan");
                     let scanned = Task::IncrementalScan {
                         region_id,
                         downstream_id,
