@@ -4,6 +4,7 @@ use crate::errors::Result;
 use crate::range::Range;
 use crate::CFHandleExt;
 use std::ops::Deref;
+use crate::properties::DecodeProperties;
 
 pub trait TablePropertiesExt: CFHandleExt {
     type TablePropertiesCollection: TablePropertiesCollection<
@@ -74,7 +75,7 @@ where
     fn user_collected_properties(&self) -> UCP;
 }
 
-pub trait UserCollectedProperties {
+pub trait UserCollectedProperties: DecodeProperties {
     fn get(&self, index: &[u8]) -> Option<&[u8]>;
 
     fn len(&self) -> usize;

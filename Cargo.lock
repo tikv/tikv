@@ -1023,6 +1023,7 @@ version = "0.0.1"
 dependencies = [
  "engine_traits",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
