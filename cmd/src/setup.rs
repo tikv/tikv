@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Local;
 use clap::ArgMatches;
-use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
+use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
 
@@ -162,7 +162,7 @@ pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
     }
 
     if persist {
-        if let Err(e) = persist_critical_config(&config) {
+        if let Err(e) = persist_config(&config) {
             fatal!("persist critical config failed: {}", e);
         }
     }

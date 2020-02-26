@@ -65,6 +65,7 @@ const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
 const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
@@ -2130,21 +2131,26 @@ impl TiKvConfig {
 pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
-    let store_path = Path::new(&config.storage.data_dir);
-    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
-
-    if last_cfg_path.exists() {
-        let last_cfg = TiKvConfig::from_file(&last_cfg_path);
-        config.check_critical_cfg_with(&last_cfg)?;
+    if let Some(cfg) = get_last_config(&config.storage.data_dir) {
+        config.check_critical_cfg_with(&cfg)?;
     }
-
     Ok(())
 }
 
-/// Persists critical config to `last_tikv.toml`
-pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
+    let store_path = Path::new(data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+    if last_cfg_path.exists() {
+        return Some(TiKvConfig::from_file(&last_cfg_path));
+    }
+    None
+}
+
+/// Persists config to `last_tikv.toml`
+pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     let store_path = Path::new(&config.storage.data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+    let tmp_cfg_path = store_path.join(TMP_CONFIG_FILE);
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
@@ -2155,10 +2161,20 @@ pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
         ));
     }
 
-    // Persist current critical configurations to file.
-    if let Err(e) = config.write_to_file(&last_cfg_path) {
+    // Persist current configurations to temporary file.
+    if let Err(e) = config.write_to_file(&tmp_cfg_path) {
         return Err(format!(
-            "persist critical config to '{}' failed: {}",
+            "persist config to '{}' failed: {}",
+            tmp_cfg_path.to_str().unwrap(),
+            e
+        ));
+    }
+
+    // Rename temporary file to last config file.
+    if let Err(e) = fs::rename(&tmp_cfg_path, &last_cfg_path) {
+        return Err(format!(
+            "rename config file from '{}' to '{}' failed: {}",
+            tmp_cfg_path.to_str().unwrap(),
             last_cfg_path.to_str().unwrap(),
             e
         ));
@@ -2341,7 +2357,10 @@ impl ConfigController {
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
         self.current.update(to_update);
-        Ok(Either::Right(true))
+        match persist_config(&incoming) {
+            Err(e) => Err(e.into()),
+            Ok(_) => Ok(Either::Right(true)),
+        }
     }
 
     pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
@@ -2420,7 +2439,8 @@ impl ConfigHandler {
                         "error" => ?e,
                     );
                     version = configpb::Version::default();
-                    incoming = local_config;
+                    incoming =
+                        get_last_config(&local_config.storage.data_dir).unwrap_or(local_config);
                 }
                 info!("register config success"; "version" => ?version);
                 Ok((version, incoming))
@@ -2591,7 +2611,7 @@ mod tests {
 
         let mut tikv_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = path.as_path().to_str().unwrap().to_owned();
-        assert!(persist_critical_config(&tikv_cfg).is_ok());
+        assert!(persist_config(&tikv_cfg).is_ok());
     }
 
     #[test]
