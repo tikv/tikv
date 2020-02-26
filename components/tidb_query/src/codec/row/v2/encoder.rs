@@ -49,7 +49,6 @@ pub struct Column {
     ft: FieldType,
 }
 
-// TODO: refactor
 impl Column {
     pub fn new(id: i64, value: impl Into<ScalarValue>) -> Self {
         Column {
