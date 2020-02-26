@@ -6,6 +6,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 
 use crate::store::{CasualMessage, CasualRouter};
+use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{Iterable, KvEngine, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
@@ -51,11 +52,11 @@ where
     }
 }
 
-pub struct Runner<C: CasualRouter> {
+pub struct Runner<C: CasualRouter<RocksEngine>> {
     router: C,
 }
 
-impl<C: CasualRouter> Runner<C> {
+impl<C: CasualRouter<RocksEngine>> Runner<C> {
     pub fn new(router: C) -> Runner<C> {
         Runner { router }
     }
@@ -140,7 +141,7 @@ impl<C: CasualRouter> Runner<C> {
 }
 
 impl<C, E> Runnable<Task<E>> for Runner<C>
-    where C: CasualRouter, E: KvEngine {
+    where C: CasualRouter<RocksEngine>, E: KvEngine {
     fn run(&mut self, task: Task<E>) {
         match task {
             Task::ComputeHash {

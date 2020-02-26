@@ -3,7 +3,7 @@
 use crate::store::{CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
-use engine_rocks::Compat;
+use engine_rocks::{RocksEngine, Compat};
 use engine_traits::CF_WRITE;
 use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt, CFHandleExt};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
@@ -87,7 +87,7 @@ pub struct KeysCheckObserver<C> {
     router: Arc<Mutex<C>>,
 }
 
-impl<C: CasualRouter> KeysCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine>> KeysCheckObserver<C> {
     pub fn new(router: C) -> KeysCheckObserver<C> {
         KeysCheckObserver {
             router: Arc::new(Mutex::new(router)),
@@ -97,7 +97,7 @@ impl<C: CasualRouter> KeysCheckObserver<C> {
 
 impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
 
-impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
