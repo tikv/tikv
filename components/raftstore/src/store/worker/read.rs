@@ -20,8 +20,7 @@ use crate::store::{
     RequestPolicy,
 };
 use crate::Result;
-use engine::DB;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{RocksEngine};
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 
@@ -159,7 +158,7 @@ impl Progress {
 pub struct LocalReader<C: ProposalRouter> {
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    kv_engine: Arc<DB>,
+    kv_engine: RocksEngine,
     metrics: RefCell<ReadMetrics>,
     // region id -> ReadDelegate
     delegates: RefCell<HashMap<u64, Option<ReadDelegate>>>,
@@ -169,7 +168,7 @@ pub struct LocalReader<C: ProposalRouter> {
 }
 
 impl LocalReader<RaftRouter> {
-    pub fn new(kv_engine: Arc<DB>, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter) -> Self {
+    pub fn new(kv_engine: RocksEngine, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter) -> Self {
         LocalReader {
             store_meta,
             kv_engine,
@@ -291,7 +290,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     pub fn propose_raft_command(&self, cmd: RaftCommand) {
         let region_id = cmd.request.get_header().get_region_id();
         let mut executor = ReadExecutor::new(
-            self.kv_engine.c().clone(),
+            self.kv_engine.clone(),
             false, /* dont check region epoch */
             true,  /* we need snapshot time */
         );
@@ -571,7 +570,7 @@ mod tests {
             store_meta,
             store_id: Cell::new(Some(store_id)),
             router: ch,
-            kv_engine: Arc::new(db),
+            kv_engine: RocksEngine::from_db(Arc::new(db)),
             delegates: RefCell::new(HashMap::default()),
             metrics: Default::default(),
             tag: "foo".to_owned(),
