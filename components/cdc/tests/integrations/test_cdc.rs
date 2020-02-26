@@ -423,6 +423,22 @@ fn test_cdc_not_leader() {
         .unwrap();
     rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
+    let event_feed2 = suite.cdc_cli.event_feed(&req).unwrap();
+    event_feed_wrap.as_ref().replace(Some(event_feed2));
+    let event = receive_event(false);
+    // Should failed with not leader error.
+    match event {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_not_leader(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+    assert!(!suite
+        .obs
+        .get(&leader.get_store_id())
+        .unwrap()
+        .is_subscribed(1));
+
     event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
