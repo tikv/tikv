@@ -4,16 +4,16 @@ use std::cmp;
 use std::collections::HashMap;
 use std::u64;
 
-use engine::rocks::{
-    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
-};
+use engine::rocks::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 pub use engine_rocks::{
-    RangeOffsets, RangeProperties,
-    RangePropertiesCollector, RangePropertiesCollectorFactory, UserProperties,
+    RangeOffsets, RangeProperties, RangePropertiesCollector, RangePropertiesCollectorFactory,
+    UserProperties,
 };
-use engine_traits::{KvEngine};
-use engine_traits::{DecodeProperties, IndexHandle, IndexHandles, TablePropertiesCollection, TableProperties};
+use engine_traits::KvEngine;
 use engine_traits::Range;
+use engine_traits::{
+    DecodeProperties, IndexHandle, IndexHandles, TableProperties, TablePropertiesCollection,
+};
 use tikv_util::codec::Result;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
@@ -192,7 +192,9 @@ pub fn get_range_entries_and_versions<E>(
     start: &[u8],
     end: &[u8],
 ) -> Option<(u64, u64)>
-where E: KvEngine {
+where
+    E: KvEngine,
+{
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,

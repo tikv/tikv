@@ -2,13 +2,13 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
+use engine_traits::DecodeProperties;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
 use engine_traits::{
     TableProperties, TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
 };
 use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
-use engine_traits::DecodeProperties;
 use rocksdb::table_properties_rc as raw;
 use std::ops::Deref;
 

@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use engine::rocks::DBIterator;
 use engine::{IterOption, Iterable, DB};
-use engine_traits::{CfName, CF_WRITE, LARGE_CFS};
 use engine_rocks::RocksEngine;
+use engine_traits::{CfName, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -325,7 +325,10 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
     }
 }
 
-fn new_split_region(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage<RocksEngine> {
+fn new_split_region(
+    region_epoch: RegionEpoch,
+    split_keys: Vec<Vec<u8>>,
+) -> CasualMessage<RocksEngine> {
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

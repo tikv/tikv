@@ -1,10 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
-use std::collections::{BTreeMap};
 use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::{Result};
+use tikv_util::codec::Result;
 
 #[derive(Clone, Debug, Default)]
 pub struct IndexHandle {

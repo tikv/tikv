@@ -1,10 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::{HashMap};
+use engine_traits::{DecodeProperties, IndexHandles};
+use std::collections::HashMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
-use engine_traits::{IndexHandles, DecodeProperties};
 
 use engine::rocks::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,

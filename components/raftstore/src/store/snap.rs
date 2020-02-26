@@ -13,9 +13,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
+use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
-use engine_rocks::RocksEngine;
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::metapb::Region;
@@ -1402,7 +1402,11 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter<RocksEngine>>) -> SnapManager {
+    pub fn build<T: Into<String>>(
+        &self,
+        path: T,
+        router: Option<RaftRouter<RocksEngine>>,
+    ) -> SnapManager {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
         } else {

@@ -91,7 +91,10 @@ pub struct ServerRaftStoreRouter {
 
 impl ServerRaftStoreRouter {
     /// Creates a new router.
-    pub fn new(router: RaftRouter<RocksEngine>, local_reader: LocalReader<RaftRouter<RocksEngine>, RocksEngine>) -> ServerRaftStoreRouter {
+    pub fn new(
+        router: RaftRouter<RocksEngine>,
+        local_reader: LocalReader<RaftRouter<RocksEngine>, RocksEngine>,
+    ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
             router,
             local_reader,

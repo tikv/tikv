@@ -9,9 +9,9 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
 use engine::Peekable;
-use engine_rocks::{RocksEngine, RocksSnapshot, Compat};
-use engine_traits::CF_RAFT;
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::KvEngine;
+use engine_traits::CF_RAFT;
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -263,7 +263,10 @@ pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    pub fn new(fsm: &'a mut PeerFsm<RocksEngine>, ctx: &'a mut PollContext<T, C>) -> PeerFsmDelegate<'a, T, C> {
+    pub fn new(
+        fsm: &'a mut PeerFsm<RocksEngine>,
+        ctx: &'a mut PollContext<T, C>,
+    ) -> PeerFsmDelegate<'a, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }
 

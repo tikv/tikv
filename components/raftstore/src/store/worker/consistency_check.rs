@@ -141,7 +141,10 @@ impl<C: CasualRouter<RocksEngine>> Runner<C> {
 }
 
 impl<C, E> Runnable<Task<E>> for Runner<C>
-    where C: CasualRouter<RocksEngine>, E: KvEngine {
+where
+    C: CasualRouter<RocksEngine>,
+    E: KvEngine,
+{
     fn run(&mut self, task: Task<E>) {
         match task {
             Task::ComputeHash {
@@ -159,7 +162,7 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine_rocks::{RocksSnapshot, RocksEngine};
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};

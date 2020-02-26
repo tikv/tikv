@@ -6,8 +6,8 @@ use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine_rocks::RocksEngine;
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::KvEngine;
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -727,7 +727,14 @@ impl<T, C> RaftPollerBuilder<T, C> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn init(&mut self) -> Result<Vec<(LooseBoundedSender<PeerMsg<RocksEngine>>, Box<PeerFsm<RocksEngine>>)>> {
+    fn init(
+        &mut self,
+    ) -> Result<
+        Vec<(
+            LooseBoundedSender<PeerMsg<RocksEngine>>,
+            Box<PeerFsm<RocksEngine>>,
+        )>,
+    > {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
@@ -1042,7 +1049,10 @@ impl RaftBatchSystem {
     fn start_system<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
         &mut self,
         mut workers: Workers,
-        region_peers: Vec<(LooseBoundedSender<PeerMsg<RocksEngine>>, Box<PeerFsm<RocksEngine>>)>,
+        region_peers: Vec<(
+            LooseBoundedSender<PeerMsg<RocksEngine>>,
+            Box<PeerFsm<RocksEngine>>,
+        )>,
         builder: RaftPollerBuilder<T, C>,
         dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()> {

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use engine::rocks;
 use engine::rocks::DB;
 use engine::Range;
-use engine_rocks::{RocksEngine, Compat};
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::LARGE_CFS;
 use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
@@ -342,8 +342,8 @@ pub mod tests {
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use engine_rocks::RocksEngine;
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;

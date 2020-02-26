@@ -1,10 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::errors::Result;
+use crate::properties::DecodeProperties;
 use crate::range::Range;
 use crate::CFHandleExt;
 use std::ops::Deref;
-use crate::properties::DecodeProperties;
 
 pub trait TablePropertiesExt: CFHandleExt {
     type TablePropertiesCollection: TablePropertiesCollection<

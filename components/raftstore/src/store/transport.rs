@@ -3,10 +3,10 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
-use kvproto::raft_serverpb::RaftMessage;
-use std::sync::mpsc;
 use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
+use kvproto::raft_serverpb::RaftMessage;
+use std::sync::mpsc;
 
 /// Transports messages between different Raft peers.
 pub trait Transport: Send + Clone {
@@ -78,7 +78,10 @@ impl<E: KvEngine> CasualRouter<E> for mpsc::SyncSender<(u64, CasualMessage<E>)> 
 }
 
 impl ProposalRouter<RocksEngine> for mpsc::SyncSender<RaftCommand<RocksEngine>> {
-    fn send(&self, cmd: RaftCommand<RocksEngine>) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>> {
+    fn send(
+        &self,
+        cmd: RaftCommand<RocksEngine>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>> {
         match self.try_send(cmd) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(cmd)) => Err(TrySendError::Disconnected(cmd)),

@@ -156,7 +156,10 @@ impl Progress {
 }
 
 pub struct LocalReader<C, E>
-where C: ProposalRouter<E>, E: KvEngine {
+where
+    C: ProposalRouter<E>,
+    E: KvEngine,
+{
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
     kv_engine: E,
@@ -183,7 +186,10 @@ impl<E: KvEngine> LocalReader<RaftRouter<E>, E> {
 }
 
 impl<C, E> LocalReader<C, E>
-where C: ProposalRouter<E>, E: KvEngine {
+where
+    C: ProposalRouter<E>,
+    E: KvEngine,
+{
     fn redirect(&self, mut cmd: RaftCommand<E>) {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
@@ -382,7 +388,10 @@ where C: ProposalRouter<E>, E: KvEngine {
 }
 
 impl<C, E> Clone for LocalReader<C, E>
-where C: ProposalRouter<E> + Clone, E: KvEngine {
+where
+    C: ProposalRouter<E> + Clone,
+    E: KvEngine,
+{
     fn clone(&self) -> Self {
         LocalReader {
             store_meta: self.store_meta.clone(),
@@ -551,8 +560,8 @@ mod tests {
     use crate::store::util::Lease;
     use crate::store::Callback;
     use engine::rocks;
-    use engine_traits::ALL_CFS;
     use engine_rocks::RocksEngine;
+    use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
 
     use super::*;
@@ -697,7 +706,8 @@ mod tests {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
-        let task = RaftCommand::<RocksEngine>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
+        let task =
+            RaftCommand::<RocksEngine>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
 

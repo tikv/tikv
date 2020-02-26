@@ -4,8 +4,8 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
-use engine_traits::{KvEngine, WriteBatch, Mutable};
 use engine::util::MAX_DELETE_BATCH_SIZE;
+use engine_traits::{KvEngine, Mutable, WriteBatch};
 use tikv_util::worker::Runnable;
 
 pub struct Task<E: KvEngine> {
@@ -128,9 +128,9 @@ impl<E: KvEngine> Runnable<Task<E>> for Runner {
 mod tests {
     use super::*;
     use engine::rocks::util::new_engine;
-    use engine_traits::{CF_DEFAULT, KvEngine};
     use engine_rocks::RocksEngine;
-    use std::sync::{Arc, mpsc};
+    use engine_traits::{KvEngine, CF_DEFAULT};
+    use std::sync::{mpsc, Arc};
     use std::time::Duration;
     use tempfile::Builder;
 
@@ -209,14 +209,24 @@ mod tests {
         }
     }
 
-    fn raft_log_must_not_exist(raft_engine: &impl KvEngine, region_id: u64, start_idx: u64, end_idx: u64) {
+    fn raft_log_must_not_exist(
+        raft_engine: &impl KvEngine,
+        region_id: u64,
+        start_idx: u64,
+        end_idx: u64,
+    ) {
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
             assert!(raft_engine.get_value(&k).unwrap().is_none());
         }
     }
 
-    fn raft_log_must_exist(raft_engine: &impl KvEngine, region_id: u64, start_idx: u64, end_idx: u64) {
+    fn raft_log_must_exist(
+        raft_engine: &impl KvEngine,
+        region_id: u64,
+        start_idx: u64,
+        end_idx: u64,
+    ) {
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
             assert!(raft_engine.get_value(&k).unwrap().is_some());

@@ -9,9 +9,9 @@ use std::time::Instant;
 use engine::rocks;
 use engine::rocks::util::compact_range;
 use engine::DB;
-use engine_traits::CF_WRITE;
-use engine_traits::KvEngine;
 use engine_rocks::Compat;
+use engine_traits::KvEngine;
+use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -258,9 +258,9 @@ mod tests {
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::{WriteBatch, DB};
-    use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use engine_traits::CFHandleExt;
     use engine_rocks::Compat;
+    use engine_traits::CFHandleExt;
+    use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
     use crate::coprocessor::properties::get_range_entries_and_versions;

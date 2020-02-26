@@ -3,9 +3,9 @@
 use crate::store::{CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
-use engine_rocks::{RocksEngine, Compat};
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::CF_WRITE;
-use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt, CFHandleExt};
+use engine_traits::{CFHandleExt, TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::{Arc, Mutex};

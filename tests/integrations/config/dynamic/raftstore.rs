@@ -59,7 +59,12 @@ fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
 
 fn start_raftstore(
     cfg: TiKvConfig,
-) -> (ConfigController, RaftRouter<RocksEngine>, ApplyRouter, RaftBatchSystem) {
+) -> (
+    ConfigController,
+    RaftRouter<RocksEngine>,
+    ApplyRouter,
+    RaftBatchSystem,
+) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
     let (_, engines) = create_tmp_engine("store-config");
     let host = CoprocessorHost::default();

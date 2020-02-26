@@ -230,7 +230,6 @@ pub use crate::write_batch::*;
 mod properties;
 pub use crate::properties::*;
 
-
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
 

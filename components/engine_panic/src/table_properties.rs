@@ -2,9 +2,8 @@
 
 use crate::engine::PanicEngine;
 use engine_traits::{
-    Range, Result, TableProperties, TablePropertiesCollection, TablePropertiesCollectionIter,
-    TablePropertiesExt, TablePropertiesKey, UserCollectedProperties,
-    DecodeProperties,
+    DecodeProperties, Range, Result, TableProperties, TablePropertiesCollection,
+    TablePropertiesCollectionIter, TablePropertiesExt, TablePropertiesKey, UserCollectedProperties,
 };
 use std::ops::Deref;
 
