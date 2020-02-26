@@ -34,6 +34,29 @@ const I64_TEN_POWS: [i64; 19] = [
     1_000_000_000_000_000_000,
 ];
 
+const U64_TEN_POWS: [u64; 20] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+    10_000_000_000_000_000_000,
+];
+
 impl ScalarFunc {
     #[inline]
     pub fn abs_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -386,6 +409,23 @@ impl ScalarFunc {
             }
             let shift = I64_TEN_POWS[-d as usize];
             Ok(Some(x / shift * shift))
+        }
+    }
+
+    #[inline]
+    pub fn truncate_uint(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let x = try_opt!(self.children[0].eval_int(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        let d = if self.children[1].is_unsigned() { 0 } else { d };
+        if d >= 0 {
+            Ok(Some(x))
+        } else {
+            if d <= -(U64_TEN_POWS.len() as i64) {
+                return Ok(Some(0));
+            }
+            let x = x as u64;
+            let shift = U64_TEN_POWS[-d as usize];
+            Ok(Some((x / shift * shift) as i64))
         }
     }
 
@@ -1265,6 +1305,41 @@ mod tests {
                         .as_mut_accessor()
                         .set_flag(FieldTypeFlag::UNSIGNED);
                 }
+            })
+            .unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_truncate_uint() {
+        let tests = vec![
+            (
+                Datum::U64(18446744073709551615),
+                Datum::U64(u64::max_value()),
+                Datum::U64(18446744073709551615),
+            ),
+            (
+                Datum::U64(18446744073709551615),
+                Datum::I64(-2),
+                Datum::U64(18446744073709551600),
+            ),
+            (
+                Datum::U64(18446744073709551615),
+                Datum::I64(-20),
+                Datum::U64(0),
+            ),
+            (
+                Datum::U64(18446744073709551615),
+                Datum::I64(2),
+                Datum::U64(18446744073709551615),
+            ),
+        ];
+        for (x, d, exp) in tests {
+            let got = eval_func_with(ScalarFuncSig::TruncateUint, &[x, d], |op, _args| {
+                op.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             })
             .unwrap();
             assert_eq!(got, exp);
