@@ -155,7 +155,7 @@ impl Progress {
     }
 }
 
-pub struct LocalReader<C: ProposalRouter> {
+pub struct LocalReader<C: ProposalRouter<RocksEngine>> {
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
     kv_engine: RocksEngine,
@@ -181,7 +181,7 @@ impl LocalReader<RaftRouter> {
     }
 }
 
-impl<C: ProposalRouter> LocalReader<C> {
+impl<C: ProposalRouter<RocksEngine>> LocalReader<C> {
     fn redirect(&self, mut cmd: RaftCommand<RocksEngine>) {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
@@ -379,7 +379,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 }
 
-impl<C: ProposalRouter + Clone> Clone for LocalReader<C> {
+impl<C: ProposalRouter<RocksEngine> + Clone> Clone for LocalReader<C> {
     fn clone(&self) -> Self {
         LocalReader {
             store_meta: self.store_meta.clone(),

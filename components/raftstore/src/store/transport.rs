@@ -6,6 +6,7 @@ use crossbeam::TrySendError;
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
 use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 
 /// Transports messages between different Raft peers.
 pub trait Transport: Send + Clone {
@@ -22,8 +23,8 @@ pub trait CasualRouter {
 }
 
 /// Routes proposal to target region.
-pub trait ProposalRouter {
-    fn send(&self, cmd: RaftCommand<RocksEngine>) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>>;
+pub trait ProposalRouter<E: KvEngine> {
+    fn send(&self, cmd: RaftCommand<E>) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>>;
 }
 
 /// Routes message to store FSM.
@@ -44,7 +45,7 @@ impl CasualRouter for RaftRouter {
     }
 }
 
-impl ProposalRouter for RaftRouter {
+impl ProposalRouter<RocksEngine> for RaftRouter {
     #[inline]
     fn send(&self, cmd: RaftCommand<RocksEngine>) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>> {
         self.send_raft_command(cmd)
@@ -76,7 +77,7 @@ impl CasualRouter for mpsc::SyncSender<(u64, CasualMessage)> {
     }
 }
 
-impl ProposalRouter for mpsc::SyncSender<RaftCommand<RocksEngine>> {
+impl ProposalRouter<RocksEngine> for mpsc::SyncSender<RaftCommand<RocksEngine>> {
     fn send(&self, cmd: RaftCommand<RocksEngine>) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>> {
         match self.try_send(cmd) {
             Ok(()) => Ok(()),
