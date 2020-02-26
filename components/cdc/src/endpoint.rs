@@ -10,8 +10,9 @@ use kvproto::cdcpb::*;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::coprocessor::{Cmd, CmdBatch, CmdObserver, ObserverContext, RoleObserver};
-use raftstore::store::fsm::{ApplyRouter, ApplyTask, ChangeCmd};
-use raftstore::store::msg::{Callback, ReadResponse};
+use raftstore::store::fsm::ChangeCmd;
+use raftstore::store::msg::{Callback, CasualMessage, ReadResponse};
+use raftstore::store::transport::CasualRouter;
 use resolved_ts::Resolver;
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
@@ -100,11 +101,10 @@ impl fmt::Debug for Task {
     }
 }
 
-pub struct Endpoint {
-    // TODO: add RaftRouter here.
+pub struct Endpoint<T> {
     capture_regions: HashMap<u64, Delegate>,
     scheduler: Scheduler<Task>,
-    apply_router: ApplyRouter,
+    casual_router: T,
     observer: CdcObserver,
 
     pd_client: Arc<dyn PdClient>,
@@ -115,13 +115,13 @@ pub struct Endpoint {
     workers: ThreadPool,
 }
 
-impl Endpoint {
+impl<T: CasualRouter> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
-        apply_router: ApplyRouter,
+        casual_router: T,
         observer: CdcObserver,
-    ) -> Endpoint {
+    ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let ep = Endpoint {
             capture_regions: HashMap::default(),
@@ -129,7 +129,7 @@ impl Endpoint {
             pd_client,
             timer: SteadyTimer::default(),
             workers,
-            apply_router,
+            casual_router,
             observer,
             scan_batch_size: 1024,
             min_ts_interval: Duration::from_secs(10),
@@ -208,24 +208,33 @@ impl Endpoint {
             // Subscribe region role change events.
             self.observer.subscribe_region(region_id);
 
-            ApplyTask::Change(ChangeCmd::RegisterObserver {
+            ChangeCmd::RegisterObserver {
                 region_id,
                 region_epoch: request.take_region_epoch(),
                 enabled,
-                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
-                    init.on_change_cmd(resp);
-                })),
-            })
+            }
         } else {
-            ApplyTask::Change(ChangeCmd::Snapshot {
+            ChangeCmd::Snapshot {
                 region_id,
                 region_epoch: request.take_region_epoch(),
-                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
+            }
+        };
+        if let Err(e) = self.casual_router.send(
+            region_id,
+            CasualMessage::CaptureChange {
+                cmd: change_cmd,
+                callback: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
                     init.on_change_cmd(resp);
                 })),
-            })
-        };
-        self.apply_router.schedule_task(region_id, change_cmd);
+            },
+        ) {
+            let deregister = Task::Deregister {
+                region_id,
+                downstream_id: Some(downstream_id),
+                err: Some(Error::Request(e.into())),
+            };
+            self.scheduler.schedule(deregister).unwrap();
+        }
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
@@ -461,7 +470,7 @@ impl Initializer {
     }
 }
 
-impl Runnable<Task> for Endpoint {
+impl<T: CasualRouter> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {

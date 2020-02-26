@@ -72,10 +72,10 @@ impl TestSuite {
         cluster.run();
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.rl();
-            let apply_router = (*sim).get_apply_router(*id);
+            let raft_router = (*sim).get_router(*id).unwrap();
             let cdc_ob = obs.get(&id).unwrap().clone();
             let mut cdc_endpoint =
-                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), apply_router, cdc_ob);
+                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), raft_router, cdc_ob);
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();
