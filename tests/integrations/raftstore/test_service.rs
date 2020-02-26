@@ -15,7 +15,7 @@ use raft::eraftpb;
 
 use engine::rocks::Writable;
 use engine::*;
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::SnapManager;
@@ -548,7 +548,7 @@ fn test_physical_scan_lock() {
         &[],
     );
     check_result(
-        &must_physical_scan_lock(&client, ctx, 30, &[b'k', 3], 5),
+        &must_physical_scan_lock(&client, ctx, 30, &[b'k', 13], 5),
         &all_locks[3..8],
     );
 }

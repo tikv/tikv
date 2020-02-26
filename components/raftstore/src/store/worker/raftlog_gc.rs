@@ -131,7 +131,7 @@ impl Runnable<Task> for Runner {
 mod tests {
     use super::*;
     use engine::rocks::util::new_engine;
-    use engine::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;

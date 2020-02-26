@@ -13,7 +13,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
@@ -1439,9 +1439,9 @@ pub mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
     use engine::{Engines, Mutable, Peekable};
-    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::Iterable;
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,

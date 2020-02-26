@@ -15,8 +15,8 @@ use raftstore::store::msg::{Callback, ReadResponse};
 use resolved_ts::Resolver;
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
+use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
-use tikv::storage::txn::{EntryBatch, TxnEntry};
 use tikv_util::collections::HashMap;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
@@ -50,7 +50,7 @@ pub enum Task {
     IncrementalScan {
         region_id: u64,
         downstream_id: DownstreamID,
-        entries: EntryBatch,
+        entries: Vec<Option<TxnEntry>>,
     },
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
@@ -122,7 +122,7 @@ impl Endpoint {
         observer: CdcObserver,
     ) -> Endpoint {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
-        Endpoint {
+        let ep = Endpoint {
             capture_regions: HashMap::default(),
             scheduler,
             pd_client,
@@ -132,7 +132,17 @@ impl Endpoint {
             observer,
             scan_batch_size: 1024,
             min_ts_interval: Duration::from_secs(10),
-        }
+        };
+        ep.register_min_ts_event();
+        ep
+    }
+
+    pub fn set_min_ts_interval(&mut self, dur: Duration) {
+        self.min_ts_interval = dur;
+    }
+
+    pub fn set_scan_batch_size(&mut self, scan_batch_size: usize) {
+        self.scan_batch_size = scan_batch_size;
     }
 
     fn on_deregister(&mut self, region_id: u64, id: Option<DownstreamID>, err: Option<Error>) {
@@ -140,34 +150,145 @@ impl Endpoint {
             "region_id" => region_id,
             "id" => ?id,
             "error" => ?err);
-        unimplemented!()
+        let mut is_last = false;
+        match (id, err) {
+            (Some(id), err) => {
+                // The peer wants to deregister
+                if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+                    is_last = delegate.unsubscribe(id, err);
+                }
+                if is_last {
+                    self.capture_regions.remove(&region_id);
+                }
+            }
+            (None, Some(err)) => {
+                // Something went wrong, deregister all downstreams.
+                if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
+                    delegate.fail(err);
+                    is_last = true;
+                }
+            }
+            (None, None) => panic!("none id none error?"),
+        }
+        if is_last {
+            // Unsubscribe region role change events.
+            self.observer.unsubscribe_region(region_id);
+        }
     }
 
-    pub fn on_register(&mut self, request: ChangeDataRequest, _downstream: Downstream) {
+    pub fn on_register(&mut self, mut request: ChangeDataRequest, downstream: Downstream) {
         let region_id = request.region_id;
         info!("cdc register region"; "region_id" => region_id);
-        unimplemented!()
+        let mut enabled = None;
+        let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
+            let d = Delegate::new(region_id);
+            enabled = Some(d.enabled());
+            d
+        });
+
+        let downstream_id = downstream.id;
+        let checkpoint_ts = request.checkpoint_ts;
+        let sched = self.scheduler.clone();
+        let workers = self.workers.sender().clone();
+        let batch_size = self.scan_batch_size;
+
+        let init = Initializer {
+            workers,
+            sched,
+            region_id,
+            downstream_id,
+            checkpoint_ts: checkpoint_ts.into(),
+            batch_size,
+            build_resolver: enabled.is_some(),
+        };
+        delegate.subscribe(downstream);
+        let change_cmd = if let Some(enabled) = enabled {
+            // The region has never been registered.
+            // Subscribe region role change events.
+            self.observer.subscribe_region(region_id);
+
+            ApplyTask::Change(ChangeCmd::RegisterObserver {
+                region_id,
+                region_epoch: request.take_region_epoch(),
+                enabled,
+                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
+                    init.on_change_cmd(resp);
+                })),
+            })
+        } else {
+            ApplyTask::Change(ChangeCmd::Snapshot {
+                region_id,
+                region_epoch: request.take_region_epoch(),
+                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
+                    init.on_change_cmd(resp);
+                })),
+            })
+        };
+        self.apply_router.schedule_task(region_id, change_cmd);
     }
 
-    pub fn on_multi_batch(&mut self, _multi: Vec<CmdBatch>) {
-        unimplemented!()
+    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
+        for batch in multi {
+            let mut has_failed = false;
+            let region_id = batch.region_id;
+            if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+                delegate.on_batch(batch);
+                has_failed = delegate.has_failed();
+            }
+            if has_failed {
+                self.capture_regions.remove(&region_id);
+            }
+        }
     }
 
     pub fn on_incremental_scan(
         &mut self,
-        _region_id: u64,
-        _downstream_id: DownstreamID,
-        _entries: EntryBatch,
+        region_id: u64,
+        downstream_id: DownstreamID,
+        entries: Vec<Option<TxnEntry>>,
     ) {
-        unimplemented!();
+        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+            delegate.on_scan(downstream_id, entries);
+        } else {
+            warn!("region not found on incremental scan"; "region_id" => region_id);
+        }
     }
 
-    fn on_region_ready(&mut self, _region_id: u64, _resolver: Resolver, _region: Region) {
-        unimplemented!();
+    fn on_region_ready(&mut self, region_id: u64, resolver: Resolver, region: Region) {
+        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+            delegate.on_region_ready(resolver, region);
+        } else {
+            warn!("region not found on region ready (finish building resolver)"; "region_id" => region_id);
+        }
     }
 
-    fn on_min_ts(&mut self, _min_ts: TimeStamp) {
-        unimplemented!();
+    fn on_min_ts(&mut self, min_ts: TimeStamp) {
+        for delegate in self.capture_regions.values_mut() {
+            delegate.on_min_ts(min_ts);
+        }
+        self.register_min_ts_event();
+    }
+
+    fn register_min_ts_event(&self) {
+        let timeout = self.timer.delay(self.min_ts_interval);
+        let tso = self.pd_client.get_tso();
+        let scheduler = self.scheduler.clone();
+        let fut = tso.join(timeout.map_err(|_| unreachable!())).then(
+            move |tso: pd_client::Result<(TimeStamp, ())>| {
+                // Ignore get tso errors since we will retry every `min_ts_interval`.
+                let (min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
+                match scheduler.schedule(Task::MinTS { min_ts }) {
+                    Ok(_) | Err(ScheduleError::Stopped(_)) => Ok(()),
+                    // Must schedule `MinTS` event otherwise resolved ts can not
+                    // advance normally.
+                    err => panic!(
+                        "failed to schedule min_ts event, min_ts: {}, error: {:?}",
+                        min_ts, err
+                    ),
+                }
+            },
+        );
+        self.pd_client.spawn(Box::new(fut) as _);
     }
 }
 
@@ -216,6 +337,8 @@ impl Initializer {
             "downstream_id" => ?downstream_id);
 
         // spawn the task to a thread pool.
+        // TODO: Add a cancellation mechanism so that the scanning can be canceled if it doesn't
+        // finish when the region is deregistered.
         let region_id = region.get_id();
         self.workers
             .spawn(lazy(move || {
@@ -224,6 +347,8 @@ impl Initializer {
                 } else {
                     None
                 };
+
+                fail_point!("cdc_incremental_scan_start");
 
                 // Time range: (checkpoint_ts, current]
                 let current = TimeStamp::max();
@@ -250,7 +375,7 @@ impl Initializer {
                             }
                         };
                     // If the last element is None, it means scanning is finished.
-                    if entries.is_empty() {
+                    if let Some(None) = entries.last() {
                         done = true;
                     }
                     debug!("cdc scan entries"; "len" => entries.len());
@@ -278,14 +403,24 @@ impl Initializer {
         scanner: &mut DeltaScanner<S>,
         batch_size: usize,
         resolver: Option<&mut Resolver>,
-    ) -> Result<EntryBatch> {
-        let mut entry_batch = EntryBatch::with_capacity(batch_size);
-        scanner.scan_entries(&mut entry_batch)?;
+    ) -> Result<Vec<Option<TxnEntry>>> {
+        let mut entries = Vec::with_capacity(batch_size);
+        while entries.len() < entries.capacity() {
+            match scanner.next_entry()? {
+                Some(entry) => {
+                    entries.push(Some(entry));
+                }
+                None => {
+                    entries.push(None);
+                    break;
+                }
+            }
+        }
 
         if let Some(resolver) = resolver {
             // Track the locks.
-            for entry in entry_batch.iter() {
-                if let TxnEntry::Prewrite { lock, .. } = entry {
+            for entry in &entries {
+                if let Some(TxnEntry::Prewrite { lock, .. }) = entry {
                     let (encoded_key, value) = lock;
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
@@ -294,7 +429,7 @@ impl Initializer {
             }
         }
 
-        Ok(entry_batch)
+        Ok(entries)
     }
 
     fn finish_building_resolver(mut resolver: Resolver, region: Region, sched: Scheduler<Task>) {
