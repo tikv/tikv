@@ -8,6 +8,7 @@ use engine_traits::{
     TableProperties, TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
 };
 use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::DecodeProperties;
 use rocksdb::table_properties_rc as raw;
 use std::ops::Deref;
 
@@ -114,11 +115,6 @@ impl UserCollectedProperties for RocksUserCollectedProperties {
         self.0.len()
     }
 }
-
-// FIXME: DecodeProperties doesn't belong in this crate,
-// and it looks like the properties module has functional overlap
-// with this module.
-use crate::properties::DecodeProperties;
 
 impl DecodeProperties for RocksUserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
