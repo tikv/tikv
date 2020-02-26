@@ -2131,7 +2131,9 @@ impl TiKvConfig {
 pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
-    if let Some(cfg) = get_last_config(&config.storage.data_dir) {
+    if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
+        cfg.compatible_adjust();
+        let _ = cfg.validate();
         config.check_critical_cfg_with(&cfg)?;
     }
     Ok(())
