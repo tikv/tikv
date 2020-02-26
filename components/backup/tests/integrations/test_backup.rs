@@ -13,9 +13,9 @@ use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
-use engine::CF_DEFAULT;
 use engine::*;
 use engine_traits::IterOptions;
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use external_storage::*;
 use kvproto::backup::*;
 use kvproto::import_sstpb::*;
@@ -303,7 +303,7 @@ impl TestSuite {
 }
 
 // Extrat CF name from sst name.
-fn name_to_cf(name: &str) -> engine::CfName {
+fn name_to_cf(name: &str) -> CfName {
     if name.contains(CF_DEFAULT) {
         CF_DEFAULT
     } else if name.contains(CF_WRITE) {

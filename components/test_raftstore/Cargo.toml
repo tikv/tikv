@@ -30,6 +30,7 @@ prost-codec = [
 
 [dependencies]
 engine = { path = "../engine" }
+engine_traits = { path = "../engine_traits" }
 engine_rocks = { path = "../engine_rocks" }
 futures = "0.1"
 futures-cpupool = "0.1"
@@ -49,3 +50,4 @@ tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 tokio-timer = "0.2"
+txn_types = { path = "../txn_types" }
