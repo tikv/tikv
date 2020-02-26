@@ -24,7 +24,7 @@ pub trait CasualRouter {
 
 /// Routes proposal to target region.
 pub trait ProposalRouter<E: KvEngine> {
-    fn send(&self, cmd: RaftCommand<E>) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>>;
+    fn send(&self, cmd: RaftCommand<E>) -> std::result::Result<(), TrySendError<RaftCommand<E>>>;
 }
 
 /// Routes message to store FSM.
@@ -45,9 +45,9 @@ impl CasualRouter for RaftRouter<RocksEngine> {
     }
 }
 
-impl ProposalRouter<RocksEngine> for RaftRouter<RocksEngine> {
+impl<E: KvEngine> ProposalRouter<E> for RaftRouter<E> {
     #[inline]
-    fn send(&self, cmd: RaftCommand<RocksEngine>) -> std::result::Result<(), TrySendError<RaftCommand<RocksEngine>>> {
+    fn send(&self, cmd: RaftCommand<E>) -> std::result::Result<(), TrySendError<RaftCommand<E>>> {
         self.send_raft_command(cmd)
     }
 }
