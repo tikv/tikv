@@ -287,7 +287,7 @@ pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot};
     use crate::storage::types::{PessimisticLockRes, TxnStatus};
-    use engine::CF_WRITE;
+    use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use txn_types::Key;
 

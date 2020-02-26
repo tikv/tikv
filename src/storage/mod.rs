@@ -43,7 +43,8 @@ use crate::storage::{
     },
     types::StorageCallbackType,
 };
-use engine::{CfName, IterOption, ALL_CFS, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use futures::Future;
 use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
