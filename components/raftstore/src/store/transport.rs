@@ -34,9 +34,9 @@ pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
 
-impl CasualRouter<RocksEngine> for RaftRouter<RocksEngine> {
+impl<E: KvEngine> CasualRouter<E> for RaftRouter<E> {
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<E>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -65,8 +65,8 @@ impl StoreRouter for RaftRouter<RocksEngine> {
     }
 }
 
-impl CasualRouter<RocksEngine> for mpsc::SyncSender<(u64, CasualMessage<RocksEngine>)> {
-    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {
+impl<E: KvEngine> CasualRouter<E> for mpsc::SyncSender<(u64, CasualMessage<E>)> {
+    fn send(&self, region_id: u64, msg: CasualMessage<E>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {
