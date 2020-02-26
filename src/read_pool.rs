@@ -320,12 +320,14 @@ mod tests {
     use raftstore::store::FlowStatistics;
     use std::thread;
     use tikv_util::collections::HashMap;
+    use raftstore::store::SplitInfo;
 
     #[derive(Clone)]
     struct DummyReporter;
 
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: HashMap<u64, FlowStatistics>) {}
+        fn split(&self, _: std::vec::Vec<SplitInfo>) {}
     }
 
     #[test]

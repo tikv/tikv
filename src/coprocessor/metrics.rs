@@ -196,6 +196,7 @@ const DETECT_TIMES: u32 = 10;
 const TOP_N: u32 = 10;
 const DETECT_INTERVAL: Duration = Duration::from_secs(1);
 const MIN_SAMPLE_NUM: i32 = 100;
+const DEFAULT_SPLIT_SCORE: f64 = 0.9;
 
 pub struct Sample {
     pub key: Vec<u8>,
@@ -279,7 +280,7 @@ impl Recorder {
             return vec![];
         }
         let mut best_index: i32 = -1;
-        let mut best_score = 1.0;
+        let mut best_score = DEFAULT_SPLIT_SCORE;
         for index in 0..self.samples.len() {
             let sample = &self.samples[index];
             if sample.contained + sample.left + sample.right < MIN_SAMPLE_NUM {
