@@ -5,7 +5,6 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
   "grpcio/protobuf-codec",
@@ -50,8 +49,15 @@ tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 txn_types = { path = "../txn_types" }
+fail = "0.3"
 
 [dev-dependencies]
 engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
 tempfile = "3.0"
+test_raftstore = { path = "../test_raftstore" }
+test_util = { path = "../test_util" }
+
+[[test]]
+name = "integrations"
+path = "tests/integrations/mod.rs"

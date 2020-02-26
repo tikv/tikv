@@ -246,7 +246,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             for group_by_result in &self.group_by_results_unsafe {
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
-                        value.as_ref().encode(
+                        value.as_ref().encode_sort_key(
                             value.logical_rows()[logical_row_idx],
                             field_type,
                             context,
@@ -403,11 +403,11 @@ mod tests {
         // - COUNT(1)
         // - AVG(col_0 + 5.0)
         // And group by:
-        // - col_3
+        // - col_4
         // - col_0 + 1
 
         let group_by_exps = vec![
-            RpnExpressionBuilder::new().push_column_ref(3).build(),
+            RpnExpressionBuilder::new().push_column_ref(4).build(),
             RpnExpressionBuilder::new()
                 .push_column_ref(0)
                 .push_constant(1.0)
@@ -447,11 +447,11 @@ mod tests {
         assert!(!r.is_drained.unwrap());
 
         let mut r = exec.next_batch(1);
-        // col_3, col_0 + 1 can result in:
-        // 1,     NULL
-        // NULL,  8
-        // NULL,  NULL
-        // 5,     2.5
+        // col_4 (sort_key),    col_0 + 1 can result in:
+        // \0A\0A\0A,           8
+        // \0A\0A,              NULL
+        // \0A\0A\0A,           2.5
+        // NULL,                NULL
         // Thus there are 4 groups.
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3]);
         assert_eq!(r.physical_columns.rows_len(), 4);
@@ -463,20 +463,25 @@ mod tests {
             .ensure_all_decoded(&mut ctx, &exec.schema()[3])
             .unwrap();
         assert_eq!(
-            r.physical_columns[3].decoded().as_int_slice(),
-            &[Some(5), Some(1), None, None]
+            r.physical_columns[3].decoded().as_bytes_slice(),
+            &[
+                Some(b"\0A\0A\0A".to_vec()),
+                Some(b"\0A\0A".to_vec()),
+                Some(b"\0A\0A\0A".to_vec()),
+                None,
+            ]
         );
         r.physical_columns[4]
             .ensure_all_decoded(&mut ctx, &exec.schema()[4])
             .unwrap();
         assert_eq!(
             r.physical_columns[4].decoded().as_real_slice(),
-            &[Real::new(2.5).ok(), None, Real::new(8.0).ok(), None]
+            &[Real::new(8.0).ok(), None, Real::new(2.5).ok(), None]
         );
 
         assert_eq!(
             r.physical_columns[0].decoded().as_int_slice(),
-            &[Some(1), Some(1), Some(1), Some(2)]
+            &[Some(1), Some(2), Some(1), Some(1)]
         );
         assert_eq!(
             r.physical_columns[1].decoded().as_int_slice(),
@@ -484,7 +489,7 @@ mod tests {
         );
         assert_eq!(
             r.physical_columns[2].decoded().as_real_slice(),
-            &[Real::new(6.5).ok(), None, Real::new(12.0).ok(), None]
+            &[Real::new(12.0).ok(), None, Real::new(6.5).ok(), None]
         );
     }
 }
