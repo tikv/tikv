@@ -2,7 +2,7 @@
 
 use std::option::Option;
 
-use super::{util, DBIterator, DBVector, WriteBatch, DB};
+use super::{util, DBIterator, DBVector, DB};
 use crate::iterable::IterOptionsExt;
 use crate::{IterOption, Iterable, Mutable, Peekable, Result};
 
@@ -32,4 +32,3 @@ impl Iterable for DB {
 }
 
 impl Mutable for DB {}
-impl Mutable for WriteBatch {}
