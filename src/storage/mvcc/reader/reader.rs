@@ -2,8 +2,10 @@
 
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine::rocks::TablePropertiesCollection;
-use engine::{IterOption, CF_LOCK, CF_WRITE};
+use engine::IterOption;
+use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::{TableProperties, TablePropertiesCollection};
+use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::coprocessor::properties::MvccProperties;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
@@ -412,7 +414,7 @@ impl<S: Snapshot> MvccReader<S> {
 pub fn check_need_gc(
     safe_point: TimeStamp,
     ratio_threshold: f64,
-    write_properties: TablePropertiesCollection,
+    write_properties: RocksTablePropertiesCollection,
 ) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
@@ -447,15 +449,15 @@ pub fn check_need_gc(
 
 fn get_mvcc_properties(
     safe_point: TimeStamp,
-    collection: TablePropertiesCollection,
+    collection: RocksTablePropertiesCollection,
 ) -> Option<MvccProperties> {
     if collection.is_empty() {
         return None;
     }
     // Aggregate MVCC properties.
     let mut props = MvccProperties::new();
-    for (_, v) in &*collection {
-        let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
+    for (_, v) in collection.iter() {
+        let mvcc = match MvccProperties::decode(&v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };
@@ -477,8 +479,9 @@ mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
-    use engine::{IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine::IterOption;
     use engine_rocks::RocksEngine;
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;

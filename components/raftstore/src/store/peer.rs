@@ -299,7 +299,7 @@ impl Peer {
             max_election_tick: cfg.raft_max_election_timeout_ticks,
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
-            applied: applied_index,
+            applied: cmp::min(applied_index, ps.committed_index()),
             check_quorum: true,
             tag: tag.clone(),
             skip_bcast_commit: true,
@@ -1410,6 +1410,9 @@ impl Peer {
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
+        } else if self.get_store().applied_index() > self.get_store().committed_index() {
+            self.raft_group
+                .advance_apply(self.get_store().committed_index());
         }
         self.proposals.gc();
     }

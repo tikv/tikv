@@ -22,8 +22,8 @@ pub use self::types::*;
 use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeFlag};
 use tipb::{Expr, FieldType, ScalarFuncSig};
 
+use crate::codec::collation::*;
 use crate::codec::data_type::*;
-use crate::expr_util::collation::*;
 use crate::Result;
 
 use self::impl_arithmetic::*;
@@ -135,6 +135,34 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
         (false, true) => arithmetic_fn_meta::<IntDivideUint>(),
         (true, false) => arithmetic_fn_meta::<UintDivideInt>(),
         (true, true) => arithmetic_fn_meta::<UintDivideUint>(),
+    }
+}
+
+fn map_rhs_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
+where
+    F: Fn(bool) -> RpnFnMeta,
+{
+    // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
+    if children.len() != 2 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    let rhs_is_unsigned = children[1]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED);
+    Ok(mapper(rhs_is_unsigned))
+}
+
+fn truncate_real_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
+    if rhs_is_unsigned {
+        truncate_real_with_uint_fn_meta()
+    } else {
+        truncate_real_with_int_fn_meta()
     }
 }
 
@@ -381,6 +409,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundReal => round_real_fn_meta(),
         ScalarFuncSig::RoundInt => round_int_fn_meta(),
         ScalarFuncSig::RoundDec => round_dec_fn_meta(),
+        ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
         // impl_miscellaneous
         ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
         ScalarFuncSig::DurationAnyValue => any_value_fn_meta::<Duration>(),
@@ -447,6 +476,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
+        ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
         ScalarFuncSig::Upper => upper_fn_meta(),
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
@@ -458,6 +488,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
+        ScalarFuncSig::FindInSet => find_in_set_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),

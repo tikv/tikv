@@ -4,7 +4,6 @@ use std::str;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
-use crate::rpn_expr::types::RpnFnCallExtra;
 use crate::Result;
 use tidb_query_datatype::*;
 
@@ -236,22 +235,22 @@ pub fn right_utf8(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes
     }
 }
 
-#[rpn_fn(capture = [extra])]
+#[rpn_fn]
 #[inline]
-pub fn upper(extra: &RpnFnCallExtra, arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+pub fn upper_utf8(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     match arg.as_ref() {
-        Some(bytes) => {
-            if extra.ret_field_type.as_accessor().is_binary_string_like() {
-                return Ok(Some(bytes.to_vec()));
-            }
-
-            match str::from_utf8(bytes) {
-                Ok(s) => Ok(Some(s.to_uppercase().into_bytes())),
-                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-            }
-        }
+        Some(bytes) => match str::from_utf8(bytes) {
+            Ok(s) => Ok(Some(s.to_uppercase().into_bytes())),
+            Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+        },
         _ => Ok(None),
     }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn upper(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|b| b.to_vec()))
 }
 
 #[rpn_fn]
@@ -390,12 +389,32 @@ pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<In
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn find_in_set(s: &Option<Bytes>, str_list: &Option<Bytes>) -> Result<Option<Int>> {
+    Ok(match (s, str_list) {
+        (Some(s), Some(str_list)) => {
+            if str_list.is_empty() {
+                Some(0)
+            } else {
+                let s = String::from_utf8_lossy(s);
+                String::from_utf8_lossy(str_list)
+                    .split(',')
+                    .position(|str_in_set| str_in_set == s)
+                    .map(|p| p as i64 + 1)
+                    .or(Some(0))
+            }
+        }
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use std::{f64, i64};
-    use tipb::{FieldType, ScalarFuncSig};
+    use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
@@ -1079,7 +1098,7 @@ mod tests {
     }
 
     #[test]
-    fn test_upper() {
+    fn test_upper_utf8() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"HELLO".to_vec())),
             (Some(b"123".to_vec()), Some(b"123".to_vec())),
@@ -1103,24 +1122,44 @@ mod tests {
         ];
 
         for (arg, exp) in cases {
-            // Test binary string case
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::UpperUtf8)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_upper() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"hello".to_vec())),
+            (Some(b"123".to_vec()), Some(b"123".to_vec())),
+            (
+                Some("café".as_bytes().to_vec()),
+                Some("café".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("ночь на окраине москвы".as_bytes().to_vec()),
+                Some("ночь на окраине москвы".as_bytes().to_vec()),
+            ),
+            (
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, exp) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
                 .evaluate(ScalarFuncSig::Upper)
                 .unwrap();
             assert_eq!(output, exp);
-
-            // Test non-binary string case
-            let mut ft = FieldType::default();
-            ft.as_mut_accessor()
-                .set_tp(FieldTypeTp::String)
-                .set_collation(Collation::Binary);
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
-                .return_field_type(ft)
-                .evaluate(ScalarFuncSig::Upper)
-                .unwrap();
-            assert_eq!(output, arg);
         }
     }
 
@@ -1526,6 +1565,43 @@ mod tests {
                 .push_param(s)
                 .push_param(substr)
                 .evaluate::<Int>(ScalarFuncSig::InstrUtf8)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_find_in_set() {
+        let cases = vec![
+            ("foo", "foo,bar", 1),
+            ("foo", "foobar,bar", 0),
+            (" foo ", "foo, foo ", 2),
+            ("", "foo,bar,", 3),
+            ("", "", 0),
+            ("a,b", "a,b,c", 0),
+        ];
+
+        for (s, str_list, exp) in cases {
+            let s = Some(s.as_bytes().to_vec());
+            let str_list = Some(str_list.as_bytes().to_vec());
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(str_list)
+                .evaluate::<Int>(ScalarFuncSig::FindInSet)
+                .unwrap();
+            assert_eq!(got, Some(exp))
+        }
+
+        let null_cases = vec![
+            (Some(b"foo".to_vec()), None, None),
+            (None, Some(b"bar".to_vec()), None),
+            (None, None, None),
+        ];
+        for (s, str_list, exp) in null_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(str_list)
+                .evaluate::<Int>(ScalarFuncSig::FindInSet)
                 .unwrap();
             assert_eq!(got, exp);
         }
