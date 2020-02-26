@@ -3,9 +3,9 @@
 use regex::{bytes::Regex as BytesRegex, Regex};
 
 use super::{EvalContext, Result, ScalarFunc};
+use crate::codec::collation::*;
 use crate::codec::Datum;
 use crate::expr_util;
-use crate::expr_util::collation::*;
 use tidb_query_datatype::{Collation, FieldTypeAccessor};
 
 impl ScalarFunc {

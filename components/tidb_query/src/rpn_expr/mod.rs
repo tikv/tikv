@@ -22,8 +22,8 @@ pub use self::types::*;
 use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeFlag};
 use tipb::{Expr, FieldType, ScalarFuncSig};
 
+use crate::codec::collation::*;
 use crate::codec::data_type::*;
-use crate::expr_util::collation::*;
 use crate::Result;
 
 use self::impl_arithmetic::*;
