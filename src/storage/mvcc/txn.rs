@@ -3,7 +3,7 @@
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use crate::storage::types::TxnStatus;
-use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
 use txn_types::{

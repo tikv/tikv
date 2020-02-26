@@ -15,7 +15,7 @@ use raft::eraftpb;
 
 use engine::rocks::Writable;
 use engine::*;
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::SnapManager;

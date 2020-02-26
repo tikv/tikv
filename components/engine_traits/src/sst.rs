@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cfdefs::CfName;
+use crate::cf_defs::CfName;
 use crate::errors::Result;
 use crate::iterable::Iterable;
 use std::path::PathBuf;

@@ -33,7 +33,7 @@ use crate::storage::{
     types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
-use engine::CF_WRITE;
+use engine_traits::CF_WRITE;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
 

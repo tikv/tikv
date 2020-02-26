@@ -2,10 +2,10 @@
 
 use crate::rocks;
 use crate::rocks::{Writable, WriteBatch, DB};
-use crate::CF_LOCK;
 
 use super::Result;
 use super::{IterOption, Iterable};
+use engine_traits::CF_LOCK;
 use tikv_util::keybuilder::KeyBuilder;
 
 // In our tests, we found that if the batch size is too large, running delete_all_in_range will
@@ -90,10 +90,10 @@ mod tests {
     use crate::rocks;
     use crate::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
     use crate::rocks::{ColumnFamilyOptions, DBOptions, SeekKey, Writable};
-    use crate::ALL_CFS;
     use crate::DB;
 
     use super::*;
+    use engine_traits::ALL_CFS;
 
     fn check_data(db: &DB, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
