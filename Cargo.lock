@@ -988,10 +988,12 @@ dependencies = [
 name = "encryption"
 version = "0.0.1"
 dependencies = [
+ "byteorder",
  "failure",
  "hex 0.3.2",
  "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "openssl",
+ "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.2",
  "slog",
  "slog-global",
@@ -1839,7 +1841,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=encryption#06bc867b6b7c7b35669a5e189e5dcffa8f62caef"
+source = "git+https://github.com/pingcap/kvproto.git?branch=encryption#15387ced603860e7f507e20894288b5fbdae52cf"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -2878,7 +2880,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#4df576feca3b10c01d55b0e7c634bfab30982087"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5#b67d432c1b74350b38a5d96ddf885ac6c3ff46f5"
 dependencies = [
  "heck",
  "hex 0.3.2",
@@ -2889,7 +2891,7 @@ name = "protobuf"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8aefcec9f142b524d98fc81d07827743be89dd6586a1ba6ab21fa66a500b3fa5"
-replace = "protobuf 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)"
+replace = "protobuf 2.8.0 (git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5)"
 
 [[package]]
 name = "protobuf-build"
@@ -2916,10 +2918,10 @@ replace = "protobuf-build 0.10.0 (git+https://github.com/tikv/protobuf-build?rev
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#4df576feca3b10c01d55b0e7c634bfab30982087"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5#b67d432c1b74350b38a5d96ddf885ac6c3ff46f5"
 dependencies = [
  "heck",
- "protobuf 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)",
+ "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2927,7 +2929,7 @@ name = "protobuf-codegen"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31539be8028d6b9e8e1b3b7c74e2fa3555302e27b2cc20dbaee6ffba648f75e2"
-replace = "protobuf-codegen 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)"
+replace = "protobuf-codegen 2.8.0 (git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5)"
 
 [[package]]
 name = "publicsuffix"
