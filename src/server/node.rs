@@ -13,6 +13,7 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
 use engine::Peekable;
+use engine_rocks::RocksEngine;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
@@ -175,7 +176,7 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter {
+    pub fn get_router(&self) -> RaftRouter<RocksEngine> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.

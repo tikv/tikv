@@ -96,7 +96,7 @@ struct TiKVServer {
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter,
+    router: RaftRouter<RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
     store_path: PathBuf,
