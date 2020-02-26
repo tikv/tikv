@@ -31,8 +31,6 @@ mod iterable;
 pub use crate::iterable::*;
 mod mutable;
 pub use crate::mutable::*;
-mod cf;
-pub use crate::cf::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
 

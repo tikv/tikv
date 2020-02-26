@@ -22,6 +22,7 @@
 #![allow(redundant_semicolon)]
 // FIXME: ditto. probably a result of the above
 #![allow(clippy::no_effect)]
+#![feature(box_patterns)]
 
 #[macro_use]
 extern crate failure;

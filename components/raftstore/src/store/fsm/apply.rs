@@ -19,8 +19,8 @@ use engine::rocks::Writable;
 use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
@@ -2608,11 +2608,6 @@ impl ApplyFsm {
             return false;
         }
 
-        info!(
-            "all pending logs are applied";
-            "region_id" => self.delegate.region_id(),
-            "peer_id" => self.delegate.id(),
-        );
         true
     }
 

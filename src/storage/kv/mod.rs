@@ -11,9 +11,9 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
-use engine::{CfName, CF_DEFAULT};
+use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::{CfName, CF_DEFAULT};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
@@ -25,7 +25,7 @@ pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
-use crate::into_other::IntoOther;
+use into_other::IntoOther;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -120,10 +120,10 @@ pub trait Snapshot: Send + Clone {
         iter_opt: IterOption,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>>;
-    fn get_properties(&self) -> Result<TablePropertiesCollection> {
+    fn get_properties(&self) -> Result<RocksTablePropertiesCollection> {
         self.get_properties_cf(CF_DEFAULT)
     }
-    fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
+    fn get_properties_cf(&self, _: CfName) -> Result<RocksTablePropertiesCollection> {
         Err(box_err!("no user properties"))
     }
     // The minimum key this snapshot can retrieve.

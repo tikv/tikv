@@ -5,9 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks;
 use engine::rocks::DB;
-use engine::LARGE_CFS;
-use engine::{util, Range};
-use engine::{CF_DEFAULT, CF_WRITE};
+use engine::Range;
+use engine_rocks::Compat;
+use engine_traits::LARGE_CFS;
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -86,7 +88,11 @@ impl SplitChecker for Checker {
         self.policy
     }
 
-    fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(
+        &mut self,
+        region: &Region,
+        engine: &Arc<DB>,
+    ) -> Result<Vec<Vec<u8>>> {
         Ok(box_try!(get_approximate_split_keys(
             engine,
             region,
@@ -117,7 +123,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
         &self,
         ctx: &mut ObserverContext<'_>,
         host: &mut Host,
-        engine: &DB,
+        engine: &Arc<DB>,
         mut policy: CheckPolicy,
     ) {
         let region = ctx.region();
@@ -183,7 +189,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
 }
 
 /// Get the approximate size of the range.
-pub fn get_region_approximate_size(db: &DB, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_size(db: &Arc<DB>, region: &Region) -> Result<u64> {
     let mut size = 0;
     for cfname in LARGE_CFS {
         size += get_region_approximate_size_cf(db, cfname, &region)?
@@ -191,18 +197,16 @@ pub fn get_region_approximate_size(db: &DB, region: &Region) -> Result<u64> {
     Ok(size)
 }
 
-pub fn get_region_approximate_size_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_size_cf(db: &Arc<DB>, cfname: &str, region: &Region) -> Result<u64> {
     let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
 
-    let collection = box_try!(util::get_range_properties_cf(
-        db, cfname, &start_key, &end_key
-    ));
-    for (_, v) in &*collection {
-        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
+    for (_, v) in collection.iter() {
+        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
         size += props.get_approximate_size_in_range(&start_key, &end_key);
     }
     Ok(size)
@@ -210,7 +214,7 @@ pub fn get_region_approximate_size_cf(db: &DB, cfname: &str, region: &Region) ->
 
 /// Get region approximate split keys based on default and write cf.
 fn get_approximate_split_keys(
-    db: &DB,
+    db: &Arc<DB>,
     region: &Region,
     split_size: u64,
     max_size: u64,
@@ -241,7 +245,7 @@ fn get_approximate_split_keys(
 }
 
 fn get_approximate_split_keys_cf(
-    db: &DB,
+    db: &Arc<DB>,
     cfname: &str,
     region: &Region,
     split_size: u64,
@@ -250,14 +254,12 @@ fn get_approximate_split_keys_cf(
 ) -> Result<Vec<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let collection = box_try!(util::get_range_properties_cf(
-        db, cfname, &start_key, &end_key
-    ));
+    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
 
     let mut keys = vec![];
     let mut total_size = 0;
-    for (_, v) in &*collection {
-        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+    for (_, v) in collection.iter() {
+        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
         total_size += props.get_approximate_size_in_range(&start_key, &end_key);
 
         keys.extend(
@@ -340,7 +342,7 @@ pub mod tests {
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
@@ -554,7 +556,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let region = make_region(1, vec![], vec![]);
         assert_eq!(
@@ -594,7 +596,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         let mut big_value = Vec::with_capacity(256);
@@ -710,7 +712,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         let cf_size = 2 + 1024 + 2 + 2048 + 2 + 4096;
@@ -750,7 +752,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut cf_size = 0;
         for i in 0..100 {
@@ -791,7 +793,7 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut cf_size = 0;
         let cf = db.cf_handle("default").unwrap();

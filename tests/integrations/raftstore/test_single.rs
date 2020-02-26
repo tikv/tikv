@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use engine::{CfName, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use test_raftstore::*;
 use tikv_util::config::*;
 

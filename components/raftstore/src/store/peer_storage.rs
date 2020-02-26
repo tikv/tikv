@@ -11,9 +11,9 @@ use std::{cmp, error, u64};
 use engine::rocks;
 use engine::rocks::{Writable, WriteBatch, DB};
 use engine::Engines;
-use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
 use engine_rocks::RocksSnapshot;
+use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, Peekable as PeekableTrait};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
@@ -24,11 +24,11 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
-use crate::into_other::into_other;
 use crate::store::fsm::GenSnapTask;
 use crate::store::util::conf_state_from_region;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
+use into_other::into_other;
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
@@ -1506,7 +1506,7 @@ mod tests {
     use engine::rocks::util::new_engine;
     use engine::rocks::WriteBatch;
     use engine::Engines;
-    use engine::{ALL_CFS, CF_DEFAULT};
+    use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};

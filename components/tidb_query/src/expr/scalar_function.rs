@@ -111,6 +111,7 @@ impl ScalarFunc {
             | ScalarFuncSig::DateFormatSig
             | ScalarFuncSig::Sha2
             | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::TruncateUint
             | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::TruncateReal
@@ -254,6 +255,7 @@ impl ScalarFunc {
             | ScalarFuncSig::ReverseUtf8
             | ScalarFuncSig::Reverse
             | ScalarFuncSig::Quote
+            | ScalarFuncSig::UpperUtf8
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -293,6 +295,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
+            | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
@@ -389,8 +392,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Pi => (0, 0),
 
             // unimplemented signature
-            ScalarFuncSig::TruncateUint
-            | ScalarFuncSig::AesDecryptIv
+            ScalarFuncSig::AesDecryptIv
             | ScalarFuncSig::AesEncryptIv
             | ScalarFuncSig::Encode
             | ScalarFuncSig::Decode
@@ -504,7 +506,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TimeStringTimeDiff
             | ScalarFuncSig::TimeTimeTimeDiff
             | ScalarFuncSig::TimeToSec
-            | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -788,6 +789,7 @@ dispatch_call! {
         WeekOfYear => week_of_year,
         Year => year,
         ToDays => to_days,
+        ToSeconds => to_seconds,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
@@ -827,6 +829,8 @@ dispatch_call! {
         RoundWithFracInt => round_with_frac_int,
 
         TruncateInt => truncate_int,
+        TruncateUint => truncate_uint,
+
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -988,6 +992,7 @@ dispatch_call! {
         RightUtf8 => right_utf8,
         Left => left,
         Right => right,
+        UpperUtf8 => upper_utf8,
         Upper => upper,
         Lower => lower,
         DateFormatSig => date_format,
@@ -1216,6 +1221,7 @@ mod tests {
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::TruncateInt,
+                    ScalarFuncSig::TruncateUint,
                     ScalarFuncSig::TruncateReal,
                     ScalarFuncSig::TruncateDecimal,
                     ScalarFuncSig::Atan2Args,
@@ -1377,6 +1383,7 @@ mod tests {
                     ScalarFuncSig::ReverseUtf8,
                     ScalarFuncSig::Reverse,
                     ScalarFuncSig::Lower,
+                    ScalarFuncSig::UpperUtf8,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
                     ScalarFuncSig::IsIPv4Compat,
@@ -1541,7 +1548,6 @@ mod tests {
 
         // unimplemented signature
         let cases = vec![
-            ScalarFuncSig::TruncateUint,
             ScalarFuncSig::AesDecryptIv,
             ScalarFuncSig::AesEncryptIv,
             ScalarFuncSig::Encode,
@@ -1656,7 +1662,6 @@ mod tests {
             ScalarFuncSig::TimeStringTimeDiff,
             ScalarFuncSig::TimeTimeTimeDiff,
             ScalarFuncSig::TimeToSec,
-            ScalarFuncSig::ToSeconds,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
