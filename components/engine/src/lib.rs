@@ -50,24 +50,8 @@ impl Engines {
         }
     }
 
-    pub fn write_kv(&self, wb: &WriteBatch) -> Result<()> {
-        self.kv.write(wb).map_err(Error::RocksDb)
-    }
-
-    pub fn write_kv_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.kv.write_opt(wb, opts).map_err(Error::RocksDb)
-    }
-
     pub fn sync_kv(&self) -> Result<()> {
         self.kv.sync_wal().map_err(Error::RocksDb)
-    }
-
-    pub fn write_raft(&self, wb: &WriteBatch) -> Result<()> {
-        self.raft.write(wb).map_err(Error::RocksDb)
-    }
-
-    pub fn write_raft_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.raft.write_opt(wb, opts).map_err(Error::RocksDb)
     }
 
     pub fn sync_raft(&self) -> Result<()> {
