@@ -5,10 +5,10 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use engine::rocks::Writable;
+use engine_rocks::Compat;
+use engine_traits::{KvEngine, WriteBatch, Mutable, Iterable};
 use engine::util::MAX_DELETE_BATCH_SIZE;
-use engine::Iterable;
-use engine::{WriteBatch, DB};
+use engine::DB;
 use tikv_util::worker::Runnable;
 
 pub struct Task {
@@ -61,6 +61,7 @@ impl Runner {
         start_idx: u64,
         end_idx: u64,
     ) -> Result<u64, Error> {
+        let raft_engine = raft_engine.c();
         let mut first_idx = start_idx;
         if first_idx == 0 {
             let start_key = keys::raft_log_key(region_id, 0);
@@ -73,7 +74,7 @@ impl Runner {
             info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
-        let raft_wb = WriteBatch::default();
+        let raft_wb = raft_engine.write_batch();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
@@ -131,6 +132,8 @@ impl Runnable<Task> for Runner {
 mod tests {
     use super::*;
     use engine::rocks::util::new_engine;
+    use engine::rocks::Writable;
+    use engine::WriteBatch;
     use engine_traits::CF_DEFAULT;
     use std::sync::mpsc;
     use std::time::Duration;
