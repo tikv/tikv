@@ -5,7 +5,7 @@ mod utf8mb4;
 pub use self::utf8mb4::*;
 
 use std::cmp::Ordering;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 
 use codec::prelude::*;
 
@@ -91,7 +91,8 @@ impl Collator for CollatorBinary {
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(_state: &mut H, _bstr: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        bstr.hash(state);
+        Ok(())
     }
 }
