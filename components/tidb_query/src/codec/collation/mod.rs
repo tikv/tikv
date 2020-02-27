@@ -122,6 +122,14 @@ where
     }
 
     #[inline]
+    pub unsafe fn new_unchecked(inner: T) -> Result<Self> {
+        Ok(Self {
+            inner,
+            _phantom: PhantomData,
+        })
+    }
+
+    #[inline]
     pub fn into_inner(self) -> T {
         self.inner
     }
