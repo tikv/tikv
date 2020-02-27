@@ -14,6 +14,93 @@ use crate::codec::data_type::*;
 use crate::codec::mysql::{Decimal, MAX_FSP};
 use crate::{Error, Result};
 
+pub trait InByHash {
+    type Key: Evaluable + Extract + Eq;
+    type StoreKey: 'static + Hash + Eq + Sized + std::marker::Send;
+
+    fn eq(arg1: &Self::Key, arg2: &Self::Key) -> Result<bool>;
+    fn insert(hashset: &mut HashSet<Self::StoreKey>, key: Self::Key) -> Result<()>;
+    fn contains(hashset: &HashSet<Self::StoreKey>, key: &Self::Key) -> Result<bool>;
+}
+
+pub struct NormalInByHash<K: Evaluable + Extract + Hash + Eq + Sized + std::marker::Send>(PhantomData<K>);
+
+impl<K: Evaluable + Extract + Hash + Eq + Sized> InByHash for NormalInByHash<K> {
+    type Key = K;
+    type StoreKey = K;
+
+    #[inline]
+    fn eq(arg1: &Self::Key, arg2: &Self::Key) -> Result<bool> {
+        Ok(arg1 == arg2)
+    }
+
+    #[inline]
+    fn insert(hashset: &mut HashSet<Self::StoreKey>, key: Self::Key) -> Result<()> {
+        hashset.insert(key);
+        Ok(())
+    }
+
+    #[inline]
+    fn contains(hashset: &HashSet<Self::StoreKey>, key: &Self::Key) -> Result<bool> {
+        Ok(hashset.contains(key))
+    }
+}
+
+
+pub struct CollationAwareBytes<C: Collator>(Bytes, PhantomData<C>);
+
+impl<C: Collator> std::ops::Deref for CollationAwareBytes<C> {
+    type Target = Bytes;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<C: Collator> Hash for CollationAwareBytes<C> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(&C::sort_key(&self.0).unwrap());
+    }
+}
+
+impl<C: Collator> PartialEq for CollationAwareBytes<C> {
+    fn eq(&self, other: &Self) -> bool {
+        C::sort_compare(&self.0, &other.0).unwrap() == std::cmp::Ordering::Equal
+    }
+}
+
+impl<C: Collator> Eq for CollationAwareBytes<C> {}
+
+pub struct CollationAwareBytesInByHash<C: Collator> (PhantomData<C>);
+
+impl<C: Collator> InByHash for CollationAwareBytesInByHash<C> {
+    type Key = Bytes;
+    type StoreKey = CollationAwareBytes<C>;
+
+    #[inline]
+    fn eq(arg1: &Self::Key, arg2: &Self::Key) -> Result<bool> {
+        match C::sort_compare(&arg1, &arg2)? {
+            std::cmp::Ordering::Equal => Ok(true),
+            _ => Ok(false),
+        }
+    }
+
+    #[inline]
+    fn insert(hashset: &mut HashSet<Self::StoreKey>, key: Self::Key) -> Result<()> {
+        C::validate(&key)?;
+        let store_key = unsafe { std::mem::transmute::<Self::Key, Self::StoreKey>(key) };
+        hashset.insert(store_key);
+        Ok(())
+    }
+
+    #[inline]
+    fn contains(hashset: &HashSet<Self::StoreKey>, key: &Self::Key) -> Result<bool> {
+        C::validate(key)?;
+        let store_key = unsafe { std::mem::transmute::<&Self::Key, &Self::StoreKey>(key) };
+        Ok(hashset.contains(store_key))
+    }
+}
+
 pub trait Extract: std::marker::Sized {
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self>;
 }
@@ -103,14 +190,8 @@ impl Extract for Duration {
     }
 }
 
-pub trait InByHash: Evaluable + Hash + Eq {}
+// pub trait InByHash: Evaluable + Hash + Eq {}
 pub trait InByCompare: Evaluable + Eq {}
-
-impl InByHash for Int {}
-impl InByHash for Real {}
-impl InByHash for Bytes {}
-impl InByHash for Decimal {}
-impl InByHash for Duration {}
 
 impl InByCompare for Int {}
 impl InByCompare for Real {}
@@ -131,16 +212,16 @@ pub struct CompareInMeta<T: Eq + Hash> {
 
 #[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<T>)]
 #[inline]
-pub fn compare_in_by_hash<T: InByHash + Extract>(
-    metadata: &CompareInMeta<T>,
-    args: &[&Option<T>],
+pub fn compare_in_by_hash<T: InByHash>(
+    metadata: &CompareInMeta<T::StoreKey>,
+    args: &[&Option<T::Key>],
 ) -> Result<Option<Int>> {
     assert!(!args.is_empty());
     let base_val = args[0];
     match base_val {
         None => Ok(None),
         Some(base_val) => {
-            if metadata.lookup_set.contains(base_val) {
+            if T::contains(&metadata.lookup_set, base_val)? {
                 return Ok(Some(1));
             }
             let mut default_ret = if metadata.has_null { None } else { Some(0) };
@@ -150,7 +231,7 @@ pub fn compare_in_by_hash<T: InByHash + Extract>(
                         default_ret = None;
                     }
                     Some(v) => {
-                        if v == base_val {
+                        if T::eq(base_val, v)? {
                             return Ok(Some(1));
                         }
                     }
@@ -161,7 +242,7 @@ pub fn compare_in_by_hash<T: InByHash + Extract>(
     }
 }
 
-fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<CompareInMeta<T>> {
+fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T::StoreKey>> {
     let mut lookup_set = HashSet::new();
     let mut has_null = false;
     let children = expr.mut_children();
@@ -181,107 +262,8 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
                 has_null = true;
             }
             expr_type => {
-                let val = T::extract(expr_type, tree_node.take_val())?;
-                lookup_set.insert(val);
-            }
-        }
-        if is_constant {
-            children.as_mut_slice().swap(i, tail_index);
-            tail_index -= 1;
-        }
-    }
-    children.truncate(tail_index + 1);
-
-    Ok(CompareInMeta {
-        lookup_set,
-        has_null,
-    })
-}
-
-pub struct CollationAwareBytes<C: Collator>(Bytes, PhantomData<C>);
-
-impl<C: Collator> std::ops::Deref for CollationAwareBytes<C> {
-    type Target = Bytes;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<C: Collator> Hash for CollationAwareBytes<C> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write(&C::sort_key(&self.0).unwrap());
-    }
-}
-
-impl<C: Collator> PartialEq for CollationAwareBytes<C> {
-    fn eq(&self, other: &Self) -> bool {
-        C::sort_compare(&self.0, &other.0).unwrap() == std::cmp::Ordering::Equal
-    }
-}
-
-impl<C: Collator> Eq for CollationAwareBytes<C> {}
-
-#[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_string_data::<C>)]
-#[inline]
-pub fn compare_in_string_by_hash<C: Collator>(
-    metadata: &CompareInMeta<CollationAwareBytes<C>>,
-    args: &[&Option<Bytes>],
-) -> Result<Option<Int>> {
-    assert!(!args.is_empty());
-    let base_val = args[0];
-    match base_val {
-        None => Ok(None),
-        Some(base_val) => {
-            C::validate(&base_val)?;
-            let key = unsafe { std::mem::transmute::<&Bytes, &CollationAwareBytes<C>>(base_val) };
-            if metadata.lookup_set.contains(key) {
-                return Ok(Some(1));
-            }
-            let mut default_ret = if metadata.has_null { None } else { Some(0) };
-            for arg in &args[1..] {
-                match arg {
-                    None => {
-                        default_ret = None;
-                    }
-                    Some(v) => {
-                        if C::sort_compare(&v, &base_val)? == std::cmp::Ordering::Equal {
-                            return Ok(Some(1));
-                        }
-                    }
-                }
-            }
-            Ok(default_ret)
-        }
-    }
-}
-
-fn init_compare_in_string_data<C: Collator>(
-    expr: &mut Expr,
-) -> Result<CompareInMeta<CollationAwareBytes<C>>> {
-    let mut lookup_set: HashSet<CollationAwareBytes<C>> = HashSet::new();
-    let mut has_null = false;
-    let children = expr.mut_children();
-    assert!(!children.is_empty());
-
-    let n = children.len();
-    let mut tail_index = n - 1;
-    // try to evaluate and remove all constant nodes except args[0].
-    for i in (1..n).rev() {
-        let tree_node = &mut children[i];
-        let mut is_constant = true;
-        match tree_node.get_tp() {
-            ExprType::ScalarFunc | ExprType::ColumnRef => {
-                is_constant = false;
-            }
-            ExprType::Null => {
-                has_null = true;
-            }
-            expr_type => {
-                let val = Bytes::extract(expr_type, tree_node.take_val())?;
-                C::validate(&val)?;
-                let key = unsafe { std::mem::transmute::<Bytes, CollationAwareBytes<C>>(val) };
-                lookup_set.insert(key);
+                let val = T::Key::extract(expr_type, tree_node.take_val())?;
+                T::insert(&mut lookup_set, val)?;
             }
         }
         if is_constant {
