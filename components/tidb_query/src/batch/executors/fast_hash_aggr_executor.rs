@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::TryFrom;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
@@ -163,7 +164,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             states: Vec::with_capacity(1024),
             groups,
             group_by_exp,
-            group_by_field_type: Some(group_by_field_type),
+            group_by_field_type: group_by_field_type,
             states_offset_each_logical_row: Vec::with_capacity(
                 crate::batch::runner::BATCH_MAX_SIZE,
             ),
@@ -218,16 +219,14 @@ pub struct FastHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
     groups: Groups,
     group_by_exp: RpnExpression,
-    group_by_field_type: Option<FieldType>,
+    group_by_field_type: FieldType,
     states_offset_each_logical_row: Vec<usize>,
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImpl {
     #[inline]
     fn prepare_entities(&mut self, entities: &mut Entities<Src>) {
-        entities
-            .schema
-            .push(self.group_by_field_type.take().unwrap());
+        entities.schema.push(self.group_by_field_type.clone());
     }
 
     #[inline]
@@ -256,14 +255,15 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
             TT, match group_by_physical_vec {
                 VectorValue::TT(v) => {
                     if let Groups::TT(group) = &mut self.groups {
-                        calc_groups_each_row(
+                        GroupCollectorImpl::<TT>::calc_groups_each_row(
                             v,
                             group_by_logical_rows,
                             &entities.each_aggr_fn,
                             group,
                             &mut self.states,
-                            &mut self.states_offset_each_logical_row
-                        );
+                            &mut self.states_offset_each_logical_row,
+                            &self.group_by_field_type
+                        )?;
                     } else {
                         panic!();
                     }
@@ -329,33 +329,102 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 }
 
-fn calc_groups_each_row<T: Evaluable + Eq + std::hash::Hash>(
-    physical_column: &[Option<T>],
-    logical_rows: &[usize],
-    aggr_fns: &[Box<dyn AggrFunction>],
-    group: &mut HashMap<Option<T>, usize>,
-    states: &mut Vec<Box<dyn AggrFunctionState>>,
-    states_offset_each_logical_row: &mut Vec<usize>,
-) {
-    for physical_idx in logical_rows {
-        let val = &physical_column[*physical_idx];
+trait GroupCollector<T: Evaluable + Eq + std::hash::Hash> {
+    fn calc_groups_each_row(
+        physical_column: &[Option<T>],
+        logical_rows: &[usize],
+        aggr_fns: &[Box<dyn AggrFunction>],
+        group: &mut HashMap<Option<T>, usize>,
+        states: &mut Vec<Box<dyn AggrFunctionState>>,
+        states_offset_each_logical_row: &mut Vec<usize>,
+        field_type: &FieldType,
+    ) -> Result<()>;
+}
 
-        // Not using the entry API so that when entry exists there is no clone.
-        match group.get(val) {
-            Some(offset) => {
-                // Group exists, use the offset of existing group.
-                states_offset_each_logical_row.push(*offset);
-            }
-            None => {
-                // Group does not exist, prepare groups.
-                let offset = states.len();
-                states_offset_each_logical_row.push(offset);
-                group.insert(val.clone(), offset);
-                for aggr_fn in aggr_fns {
-                    states.push(aggr_fn.create_state());
+struct GroupCollectorImpl<T> {
+    marker: PhantomData<T>,
+}
+
+impl<T: Evaluable + Eq + std::hash::Hash> GroupCollector<T> for GroupCollectorImpl<T> {
+    default fn calc_groups_each_row(
+        physical_column: &[Option<T>],
+        logical_rows: &[usize],
+        aggr_fns: &[Box<dyn AggrFunction>],
+        group: &mut HashMap<Option<T>, usize>,
+        states: &mut Vec<Box<dyn AggrFunctionState>>,
+        states_offset_each_logical_row: &mut Vec<usize>,
+        _field_type: &FieldType,
+    ) -> Result<()> {
+        for physical_idx in logical_rows {
+            let val = &physical_column[*physical_idx];
+
+            // Not using the entry API so that when entry exists there is no clone.
+            match group.get(val) {
+                Some(offset) => {
+                    // Group exists, use the offset of existing group.
+                    states_offset_each_logical_row.push(*offset);
+                }
+                None => {
+                    // Group does not exist, prepare groups.
+                    let offset = states.len();
+                    states_offset_each_logical_row.push(offset);
+                    group.insert(val.clone(), offset);
+                    for aggr_fn in aggr_fns {
+                        states.push(aggr_fn.create_state());
+                    }
                 }
             }
         }
+
+        Ok(())
+    }
+}
+
+impl GroupCollector<Bytes> for GroupCollectorImpl<Bytes> {
+    fn calc_groups_each_row(
+        physical_column: &[Option<Bytes>],
+        logical_rows: &[usize],
+        aggr_fns: &[Box<dyn AggrFunction>],
+        group: &mut HashMap<Option<Bytes>, usize>,
+        states: &mut Vec<Box<dyn AggrFunctionState>>,
+        states_offset_each_logical_row: &mut Vec<usize>,
+        field_type: &FieldType,
+    ) -> Result<()> {
+        use crate::codec::collation::{match_template_collator, Collator};
+        use tidb_query_datatype::Collation;
+
+        match_template_collator!(
+            TT,
+            match field_type.collation().map_err(crate::codec::Error::from)? {
+                Collation::TT => {
+                    for physical_idx in logical_rows {
+                        let val = match &physical_column[*physical_idx] {
+                            Some(bytes) => Some(TT::sort_key(&bytes)?),
+                            None => None,
+                        };
+
+                        // Not using the entry API so that when entry exists there is no clone.
+                        match group.get(&val) {
+                            Some(offset) => {
+                                // Group exists, use the offset of existing group.
+                                states_offset_each_logical_row.push(*offset);
+                            }
+                            None => {
+                                // Group does not exist, prepare groups.
+                                let offset = states.len();
+                                states_offset_each_logical_row.push(offset);
+                                group.insert(val, offset);
+                                for aggr_fn in aggr_fns {
+                                    states.push(aggr_fn.create_state());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        );
+
+        Ok(())
     }
 }
 
