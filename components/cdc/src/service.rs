@@ -7,10 +7,70 @@ use futures::sync::mpsc;
 use futures::{Future, Sink, Stream};
 use grpcio::*;
 use kvproto::cdcpb::*;
+use tikv_util::collections::HashSet;
+use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender};
 use tikv_util::worker::*;
 
-use crate::delegate::Downstream;
+use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::Task;
+
+static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+
+const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
+const CDC_MSG_NOTIFY_SIZE: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct ConnID(usize);
+
+impl ConnID {
+    pub fn new() -> ConnID {
+        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+pub struct Conn {
+    id: ConnID,
+    sink: BatchSender<Event>,
+    downstreams: HashSet<(u64, DownstreamID)>,
+}
+
+impl Conn {
+    pub fn new(sink: BatchSender<Event>) -> Conn {
+        Conn {
+            id: ConnID::new(),
+            sink,
+            downstreams: HashSet::default(),
+        }
+    }
+
+    pub fn get_id(&self) -> ConnID {
+        self.id
+    }
+
+    pub fn take_downstreams(self) -> HashSet<(u64, DownstreamID)> {
+        self.downstreams
+    }
+
+    pub fn get_sink(&self) -> BatchSender<Event> {
+        self.sink.clone()
+    }
+
+    pub fn subscribe(&mut self, region_id: u64, downstream_id: DownstreamID) -> bool {
+        self.downstreams.insert((region_id, downstream_id))
+    }
+
+    pub fn unsubscribe(&mut self, region_id: u64, downstream_id: DownstreamID) {
+        self.downstreams.remove(&(region_id, downstream_id));
+    }
+
+    pub fn flush(&self) {
+        if !self.sink.is_empty() {
+            if let Some(notifier) = self.sink.get_notifier() {
+                notifier.notify();
+            }
+        }
+    }
+}
 
 /// Service implements the `ChangeData` service.
 ///
@@ -33,33 +93,52 @@ impl ChangeData for Service {
     fn event_feed(
         &mut self,
         ctx: RpcContext,
-        request: ChangeDataRequest,
-        sink: ServerStreamingSink<ChangeDataEvent>,
+        stream: RequestStream<ChangeDataRequest>,
+        sink: DuplexSink<ChangeDataEvent>,
     ) {
-        let region_id = request.region_id;
-        let peer = ctx.peer();
-        let region_epoch = request.get_region_epoch().clone();
         // TODO: make it a bounded channel.
-        let (tx, rx) = mpsc::unbounded();
-        let downstream = Downstream::new(peer, region_epoch, tx);
-        let downstream_id = Some(downstream.id);
+        let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_SIZE);
+        let conn = Conn::new(tx);
+        let conn_id = conn.get_id();
+
         if let Err(status) = self
             .scheduler
-            .schedule(Task::Register {
-                request,
-                downstream,
-            })
+            .schedule(Task::OpenConn { conn })
             .map_err(|e| RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e))))
         {
-            error!("cdc task initiate failed"; "error" => ?status);
+            error!("cdc connection initiate failed"; "error" => ?status);
             ctx.spawn(sink.fail(status).map_err(|e| {
                 error!("cdc failed to send error"; "error" => ?e);
             }));
             return;
         }
 
-        let send_resp = sink.send_all(rx.then(|resp| match resp {
-            Ok(resp) => Ok((resp, WriteFlags::default())),
+        let peer = ctx.peer();
+        let scheduler = self.scheduler.clone();
+        let recv_req = stream.for_each(move |request| {
+            let region_epoch = request.get_region_epoch().clone();
+            let downstream = Downstream::new(peer.clone(), region_epoch);
+            scheduler
+                .schedule(Task::Register {
+                    request,
+                    downstream,
+                    conn_id,
+                })
+                .map_err(|e| {
+                    Error::RpcFailure(RpcStatus::new(
+                        RpcStatusCode::INVALID_ARGUMENT,
+                        Some(format!("{:?}", e)),
+                    ))
+                })
+        });
+
+        let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, |v, e| v.push(e));
+        let send_resp = sink.send_all(rx.then(|events| match events {
+            Ok(events) => {
+                let mut resp = ChangeDataEvent::default();
+                resp.set_events(events.into());
+                Ok((resp, WriteFlags::default()))
+            }
             Err(e) => {
                 error!("cdc send failed"; "error" => ?e);
                 Err(Error::RpcFailure(RpcStatus::new(
@@ -68,12 +147,37 @@ impl ChangeData for Service {
                 )))
             }
         }));
+
+        let scheduler = self.scheduler.clone();
+        ctx.spawn(recv_req.then(move |res| {
+            // Unregister this downstream only.
+            // Unregister this downstream only.
+            if let Err(e) = scheduler.schedule(Task::Deregister {
+                region_id: 0,
+                downstream_id: None,
+                conn_id: Some(conn_id),
+                err: None,
+            }) {
+                error!("cdc deregister failed"; "error" => ?e);
+            }
+            match res {
+                Ok(_s) => {
+                    info!("cdc send half closed");
+                }
+                Err(e) => {
+                    error!("cdc send failed"; "error" => ?e);
+                }
+            }
+            Ok(())
+        }));
+
         let scheduler = self.scheduler.clone();
         ctx.spawn(send_resp.then(move |res| {
             // Unregister this downstream only.
             if let Err(e) = scheduler.schedule(Task::Deregister {
-                region_id,
-                downstream_id,
+                region_id: 0,
+                downstream_id: None,
+                conn_id: Some(conn_id),
                 err: None,
             }) {
                 error!("cdc deregister failed"; "error" => ?e);

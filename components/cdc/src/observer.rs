@@ -101,6 +101,7 @@ impl RoleObserver for CdcObserver {
                 if let Err(e) = self.sched.schedule(Task::Deregister {
                     region_id,
                     downstream_id: None,
+                    conn_id: None,
                     err: Some(CdcError::Request(store_err.into())),
                 }) {
                     warn!("schedule cdc task failed"; "error" => ?e);

@@ -24,17 +24,23 @@ use tokio_threadpool::{Builder, Sender as PoolSender, ThreadPool};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID};
+use crate::service::{Conn, ConnID};
 use crate::{CdcObserver, Error, Result};
 
 pub enum Task {
     Register {
         request: ChangeDataRequest,
         downstream: Downstream,
+        conn_id: ConnID,
     },
     Deregister {
         region_id: u64,
         downstream_id: Option<DownstreamID>,
+        conn_id: Option<ConnID>,
         err: Option<Error>,
+    },
+    OpenConn {
+        conn: Conn,
     },
     MultiBatch {
         multi: Vec<CmdBatch>,
@@ -67,22 +73,27 @@ impl fmt::Debug for Task {
             Task::Register {
                 ref request,
                 ref downstream,
+                ref conn_id,
                 ..
             } => de
                 .field("register request", request)
                 .field("request", request)
-                .field("id", &downstream.id)
+                .field("id", &downstream.get_id())
+                .field("conn_id", conn_id)
                 .finish(),
             Task::Deregister {
                 ref region_id,
                 ref downstream_id,
+                ref conn_id,
                 ref err,
             } => de
                 .field("deregister", &"")
                 .field("region_id", region_id)
                 .field("err", err)
                 .field("downstream_id", downstream_id)
+                .field("conn_id", conn_id)
                 .finish(),
+            Task::OpenConn { ref conn } => de.field("conn_id", &conn.get_id()).finish(),
             Task::MultiBatch { multi } => de.field("multibatch", &multi.len()).finish(),
             Task::MinTS { ref min_ts } => de.field("min_ts", min_ts).finish(),
             Task::ResolverReady { ref region_id, .. } => de.field("region_id", region_id).finish(),
@@ -102,6 +113,7 @@ impl fmt::Debug for Task {
 
 pub struct Endpoint {
     capture_regions: HashMap<u64, Delegate>,
+    connections: HashMap<ConnID, Conn>,
     scheduler: Scheduler<Task>,
     apply_router: ApplyRouter,
     observer: CdcObserver,
@@ -124,6 +136,7 @@ impl Endpoint {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let ep = Endpoint {
             capture_regions: HashMap::default(),
+            connections: HashMap::default(),
             scheduler,
             pd_client,
             timer: SteadyTimer::default(),
@@ -145,30 +158,55 @@ impl Endpoint {
         self.scan_batch_size = scan_batch_size;
     }
 
-    fn on_deregister(&mut self, region_id: u64, id: Option<DownstreamID>, err: Option<Error>) {
+    fn on_deregister(
+        &mut self,
+        region_id: u64,
+        id: Option<DownstreamID>,
+        conn_id: Option<ConnID>,
+        err: Option<Error>,
+    ) {
         info!("cdc deregister region";
             "region_id" => region_id,
             "id" => ?id,
             "error" => ?err);
         let mut is_last = false;
-        match (id, err) {
-            (Some(id), err) => {
+        match (id, err, conn_id) {
+            (Some(id), err, Some(conn_id)) => {
                 // The peer wants to deregister
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                     is_last = delegate.unsubscribe(id, err);
+                }
+                if let Some(conn) = self.connections.get_mut(&conn_id) {
+                    conn.unsubscribe(region_id, id);
                 }
                 if is_last {
                     self.capture_regions.remove(&region_id);
                 }
             }
-            (None, Some(err)) => {
+            (None, Some(err), None) => {
                 // Something went wrong, deregister all downstreams.
                 if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                     delegate.fail(err);
                     is_last = true;
                 }
             }
-            (None, None) => panic!("none id none error?"),
+            (None, None, Some(conn_id)) => {
+                if let Some(conn) = self.connections.remove(&conn_id) {
+                    conn.take_downstreams()
+                        .into_iter()
+                        .for_each(|(region_id, downstream_id)| {
+                            if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+                                if delegate.unsubscribe(downstream_id, None) {
+                                    self.capture_regions.remove(&region_id);
+                                    self.observer.unsubscribe_region(region_id);
+                                }
+                            }
+                        });
+                }
+            }
+            _ => {
+                unreachable!();
+            }
         }
         if is_last {
             // Unsubscribe region role change events.
@@ -176,7 +214,21 @@ impl Endpoint {
         }
     }
 
-    pub fn on_register(&mut self, mut request: ChangeDataRequest, downstream: Downstream) {
+    pub fn on_register(
+        &mut self,
+        mut request: ChangeDataRequest,
+        mut downstream: Downstream,
+        conn_id: ConnID,
+    ) {
+        let conn = match self.connections.get_mut(&conn_id) {
+            Some(conn) => conn,
+            None => return,
+        };
+        if !conn.subscribe(request.get_region_id(), downstream.get_id()) {
+            return;
+        }
+        downstream.set_sink(conn.get_sink());
+
         let region_id = request.region_id;
         info!("cdc register region"; "region_id" => region_id);
         let mut enabled = None;
@@ -186,7 +238,7 @@ impl Endpoint {
             d
         });
 
-        let downstream_id = downstream.id;
+        let downstream_id = downstream.get_id();
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
         let workers = self.workers.sender().clone();
@@ -197,6 +249,7 @@ impl Endpoint {
             sched,
             region_id,
             downstream_id,
+            conn_id,
             checkpoint_ts: checkpoint_ts.into(),
             batch_size,
             build_resolver: enabled.is_some(),
@@ -239,6 +292,7 @@ impl Endpoint {
                 self.capture_regions.remove(&region_id);
             }
         }
+        self.flush_all();
     }
 
     pub fn on_incremental_scan(
@@ -290,6 +344,14 @@ impl Endpoint {
         );
         self.pd_client.spawn(Box::new(fut) as _);
     }
+
+    fn on_open_conn(&mut self, conn: Conn) {
+        self.connections.insert(conn.get_id(), conn);
+    }
+
+    fn flush_all(&self) {
+        self.connections.iter().for_each(|(_, conn)| conn.flush());
+    }
 }
 
 struct Initializer {
@@ -298,6 +360,7 @@ struct Initializer {
 
     region_id: u64,
     downstream_id: DownstreamID,
+    conn_id: ConnID,
     checkpoint_ts: TimeStamp,
     batch_size: usize,
 
@@ -320,6 +383,7 @@ impl Initializer {
             let deregister = Task::Deregister {
                 region_id: self.region_id,
                 downstream_id: Some(self.downstream_id),
+                conn_id: Some(self.conn_id),
                 err: Some(Error::Request(err)),
             };
             self.sched.schedule(deregister).unwrap();
@@ -328,6 +392,7 @@ impl Initializer {
 
     fn async_incremental_scan<S: Snapshot + 'static>(&self, snap: S, region: Region) {
         let downstream_id = self.downstream_id;
+        let conn_id = self.conn_id;
         let sched = self.sched.clone();
         let batch_size = self.batch_size;
         let checkpoint_ts = self.checkpoint_ts;
@@ -367,6 +432,7 @@ impl Initializer {
                                 if let Err(e) = sched.schedule(Task::Deregister {
                                     region_id,
                                     downstream_id: Some(downstream_id),
+                                    conn_id: Some(conn_id),
                                     err: Some(e),
                                 }) {
                                     error!("schedule task failed"; "error" => ?e);
@@ -468,7 +534,8 @@ impl Runnable<Task> for Endpoint {
             Task::Register {
                 request,
                 downstream,
-            } => self.on_register(request, downstream),
+                conn_id,
+            } => self.on_register(request, downstream, conn_id),
             Task::ResolverReady {
                 region_id,
                 resolver,
@@ -477,8 +544,9 @@ impl Runnable<Task> for Endpoint {
             Task::Deregister {
                 region_id,
                 downstream_id,
+                conn_id,
                 err,
-            } => self.on_deregister(region_id, downstream_id, err),
+            } => self.on_deregister(region_id, downstream_id, conn_id, err),
             Task::IncrementalScan {
                 region_id,
                 downstream_id,
@@ -487,6 +555,7 @@ impl Runnable<Task> for Endpoint {
                 self.on_incremental_scan(region_id, downstream_id, entries);
             }
             Task::MultiBatch { multi } => self.on_multi_batch(multi),
+            Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
             }
@@ -541,6 +610,7 @@ mod tests {
 
             region_id: 1,
             downstream_id: DownstreamID::new(),
+            conn_id: ConnID::new(),
             checkpoint_ts: 1.into(),
             batch_size: 1,
 

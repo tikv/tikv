@@ -25,14 +25,16 @@ use resolved_ts::Resolver;
 use tikv::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 use tikv::storage::txn::TxnEntry;
 use tikv_util::collections::HashMap;
+use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, TimeStamp};
 
+use crate::service::ConnID;
 use crate::Error;
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct DownstreamID(usize);
 
 impl DownstreamID {
@@ -45,11 +47,11 @@ impl DownstreamID {
 pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
-    pub id: DownstreamID,
+    id: DownstreamID,
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
-    sink: UnboundedSender<ChangeDataEvent>,
+    sink: Option<BatchSender<Event>>,
 }
 
 impl Downstream {
@@ -57,23 +59,27 @@ impl Downstream {
     ///
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
-    pub fn new(
-        peer: String,
-        region_epoch: RegionEpoch,
-        sink: UnboundedSender<ChangeDataEvent>,
-    ) -> Downstream {
+    pub fn new(peer: String, region_epoch: RegionEpoch) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
             peer,
-            sink,
             region_epoch,
+            sink: None,
         }
     }
 
-    fn sink(&self, change_data: ChangeDataEvent) {
-        if self.sink.unbounded_send(change_data).is_err() {
+    pub fn sink_event(&self, change_data_event: Event) {
+        if self.sink.as_ref().unwrap().send(change_data_event).is_err() {
             error!("send event failed"; "downstream" => %self.peer);
         }
+    }
+
+    pub fn set_sink(&mut self, sink: BatchSender<Event>) {
+        self.sink = Some(sink);
+    }
+
+    pub fn get_id(&self) -> DownstreamID {
+        self.id
     }
 }
 
@@ -131,7 +137,7 @@ impl Delegate {
             ) {
                 let err = Error::Request(e.into());
                 let change_data_error = self.error_event(err);
-                downstream.sink(change_data_error);
+                downstream.sink_event(change_data_error);
                 return;
             }
             self.downstreams.push(downstream);
@@ -150,7 +156,7 @@ impl Delegate {
         downstreams.retain(|d| {
             if d.id == id {
                 if let Some(change_data_error) = change_data_error.clone() {
-                    d.sink(change_data_error);
+                    d.sink_event(change_data_error);
                 }
             }
             d.id != id
@@ -162,7 +168,7 @@ impl Delegate {
         is_last
     }
 
-    fn error_event(&self, err: Error) -> ChangeDataEvent {
+    fn error_event(&self, err: Error) -> Event {
         let mut change_data_event = Event::default();
         let mut cdc_err = EventError::default();
         let mut err = err.extract_error_header();
@@ -183,9 +189,7 @@ impl Delegate {
         }
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = self.region_id;
-        let mut change_data = ChangeDataEvent::default();
-        change_data.mut_events().push(change_data_event);
-        change_data
+        change_data_event
     }
 
     /// Fail the delegate
@@ -198,8 +202,8 @@ impl Delegate {
 
         info!("region met error";
             "region_id" => self.region_id, "error" => ?err);
-        let change_data = self.error_event(err);
-        self.broadcast(change_data);
+        let change_data_err = self.error_event(err);
+        self.broadcast(change_data_err);
 
         // Mark this delegate has failed.
         self.failed = true;
@@ -209,15 +213,16 @@ impl Delegate {
         self.failed
     }
 
-    fn broadcast(&self, change_data: ChangeDataEvent) {
+    fn broadcast(&self, change_data_event: Event) {
         let downstreams = if self.pending.is_some() {
             &self.pending.as_ref().unwrap().downstreams
         } else {
             &self.downstreams
         };
-        for d in downstreams {
-            d.sink(change_data.clone());
+        for i in 0..downstreams.len() - 1 {
+            downstreams[i].sink_event(change_data_event.clone());
         }
+        downstreams.last().unwrap().sink_event(change_data_event);
     }
 
     /// Install a resolver and notify downstreams this region if ready to serve.
@@ -261,9 +266,7 @@ impl Delegate {
         let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
-        let mut change_data = ChangeDataEvent::default();
-        change_data.mut_events().push(change_data_event);
-        self.broadcast(change_data);
+        self.broadcast(change_data_event);
     }
 
     pub fn on_batch(&mut self, batch: CmdBatch) {
@@ -352,9 +355,7 @@ impl Delegate {
         let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        let mut change_data = ChangeDataEvent::default();
-        change_data.mut_events().push(change_data_event);
-        d.sink(change_data);
+        d.sink_event(change_data_event);
     }
 
     fn sink_data(&mut self, index: u64, requests: Vec<Request>) {
@@ -443,9 +444,7 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.index = index;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        let mut change_data = ChangeDataEvent::default();
-        change_data.mut_events().push(change_data_event);
-        self.broadcast(change_data);
+        self.broadcast(change_data_event);
     }
 
     fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) {
