@@ -108,6 +108,28 @@ impl TxnStatus {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum PessimisticLockRes {
+    Values(Vec<Option<Value>>),
+    Empty,
+}
+
+impl PessimisticLockRes {
+    pub fn push(&mut self, value: Option<Value>) {
+        match self {
+            PessimisticLockRes::Values(v) => v.push(value),
+            _ => panic!("unexpected PessimisticLockRes"),
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<Value> {
+        match self {
+            PessimisticLockRes::Values(v) => v.into_iter().map(Option::unwrap_or_default).collect(),
+            PessimisticLockRes::Empty => vec![],
+        }
+    }
+}
+
 macro_rules! storage_callback {
     ($($variant: ident ( $cb_ty: ty ) $result_variant: pat => $result: expr,)*) => {
         pub enum StorageCallback {
@@ -142,6 +164,7 @@ storage_callback! {
     MvccInfoByStartTs(Option<(Key, MvccInfo)>) ProcessResult::MvccStartTs { mvcc } => mvcc,
     Locks(Vec<kvrpcpb::LockInfo>) ProcessResult::Locks { locks } => locks,
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
+    PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
 }
 
 pub trait StorageCallbackType: Sized {
