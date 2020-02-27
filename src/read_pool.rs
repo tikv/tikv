@@ -6,6 +6,8 @@ use futures03::prelude::*;
 use kvproto::kvrpcpb::CommandPri;
 use std::cell::Cell;
 use std::future::Future as StdFuture;
+use std::sync::mpsc;
+use std::thread::Builder;
 use std::time::Duration;
 use tikv_util::future_pool::{self, FuturePool};
 use tikv_util::time::Instant;
@@ -18,6 +20,8 @@ use self::metrics::*;
 use crate::config::UnifiedReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use prometheus::IntGauge;
+
+use crate::coprocessor::metrics as cop_m;
 
 pub enum ReadPool {
     FuturePools {
@@ -155,6 +159,7 @@ pub struct ReadPoolRunner<E: Engine, R: FlowStatsReporter> {
     engine: Option<E>,
     reporter: R,
     inner: FutureRunner,
+    sender: mpsc::Sender<cop_m::Hub>,
 }
 
 impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
@@ -189,11 +194,17 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
 }
 
 impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
-    pub fn new(engine: E, inner: FutureRunner, reporter: R) -> Self {
+    pub fn new(
+        engine: E,
+        inner: FutureRunner,
+        reporter: R,
+        sender: mpsc::Sender<cop_m::Hub>,
+    ) -> Self {
         ReadPoolRunner {
             engine: Some(engine),
             reporter,
             inner,
+            sender,
         }
     }
 
@@ -218,7 +229,7 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
 
     fn flush_metrics(&self) {
         crate::storage::metrics::tls_flush(&self.reporter);
-        crate::coprocessor::metrics::tls_flush(&self.reporter);
+        cop_m::tls_flush(&self.reporter, Some(&self.sender));
     }
 }
 
@@ -252,10 +263,46 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .max_thread_count(config.max_thread_count);
     let multilevel_builder =
         multilevel::Builder::new(multilevel::Config::default().name(Some(&unified_read_pool_name)));
-    let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter);
+
+    let (tx, rx) = mpsc::channel();
+    let reporter2 = reporter.clone();
+    let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter, tx);
     let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
     let pool = builder
         .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
+
+    let _h = Builder::new()
+        .name("collect-qps".to_owned())
+        .spawn(move || {
+            let mut unify_hub = cop_m::Hub::new();
+            let mut last_tick = Instant::now_coarse();
+            const TICK_INTERVAL: Duration = Duration::from_secs(1);
+            loop {
+                while let Ok(mut other_hub) = rx.try_recv() {
+                    unify_hub.update(&mut other_hub);
+                }
+                let now = Instant::now_coarse();
+                if now.duration_since(last_tick) < TICK_INTERVAL {
+                    continue;
+                }
+                last_tick = now;
+                let (top, split_infos) = unify_hub.flush();
+                reporter2.split(split_infos);
+                for i in 0..cop_m::TOP_N {
+                    if i < top.len() {
+                        cop_m::READ_QPS_TOPN
+                            .with_label_values(&[&i.to_string()])
+                            .set(top[i] as f64);
+                    } else {
+                        cop_m::READ_QPS_TOPN
+                            .with_label_values(&[&i.to_string()])
+                            .set(0.0);
+                    }
+                }
+            }
+        });
+
+    //self.handle = Some(h);//todo
     ReadPool::Yatp {
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
