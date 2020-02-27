@@ -230,6 +230,7 @@ impl<T: CasualRouter> Endpoint<T> {
                 })),
             },
         ) {
+            error!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
             let deregister = Task::Deregister {
                 region_id,
                 downstream_id: Some(downstream_id),
