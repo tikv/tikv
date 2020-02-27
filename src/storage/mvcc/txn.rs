@@ -340,31 +340,38 @@ impl<S: Snapshot> MvccTxn<S> {
         let (key, value) = mutation.into_key_value();
         let mut last_lock_ttl = 0;
         if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                // Abort on lock belonging to other transaction if
-                // prewrites a pessimistic lock.
-                if is_pessimistic_lock {
+            if is_pessimistic_lock {
+                if lock.ts > self.start_ts {
+                    // Abort on lock belonging to other transaction if
+                    // prewrites a pessimistic lock.
                     warn!(
-                        "prewrite failed (pessimistic lock not found)";
+                        "prewrite failed (pessimistic lock had been modified)";
                         "start_ts" => self.start_ts,
                         "key" => %key,
                         "lock_ts" => lock.ts
                     );
-                    return Err(ErrorInner::PessimisticLockNotFound {
+                    return Err(ErrorInner::PessimisticLockModified {
                         start_ts: self.start_ts,
                         key: key.into_raw()?,
                     }
                     .into());
+                } else if lock.ts < self.start_ts {
+                    // Used pipelined pessimistic lock acquiring in this txn but failed
+                    // Luckily no other txn modified this lock, repair it by overwriting.
+                    MVCC_CONFLICT_COUNTER.pipelined_acquire_pessimistic_lock_repair.inc();
+                    last_lock_ttl = lock.ttl;
+                } else {
+                    // The lock is pessimistic and owned by this txn, go through to overwrite it.
+                    last_lock_ttl = lock.ttl;
                 }
-                return self.handle_non_pessimistic_lock_conflict(key, lock);
             } else {
-                if lock.lock_type != LockType::Pessimistic {
+                if lock.ts != self.start_ts {
+                    return self.handle_non_pessimistic_lock_conflict(key, lock);
+                } else {
                     // Duplicated command. No need to overwrite the lock and data.
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
                     return Ok(());
                 }
-                // The lock is pessimistic and owned by this txn, go through to overwrite it.
-                last_lock_ttl = lock.ttl;
             }
         } else if is_pessimistic_lock {
             // Pessimistic lock does not exist, the transaction should be aborted.
@@ -373,7 +380,6 @@ impl<S: Snapshot> MvccTxn<S> {
                 "start_ts" => self.start_ts,
                 "key" => %key
             );
-
             return Err(ErrorInner::PessimisticLockNotFound {
                 start_ts: self.start_ts,
                 key: key.into_raw()?,
