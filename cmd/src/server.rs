@@ -69,8 +69,9 @@ pub fn run_tikv(config: TiKvConfig) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
-    // TODO: currently the logger config has to be provided
-    // through command line. Consider remove this constraint.
+    // TODO: currently the logger config can not be managed
+    // by PD and has to be provided when starting (or default
+    // config will be use). Consider remove this constraint.
     initial_logger(&config);
 
     // Print version information.
