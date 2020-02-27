@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::TryFrom;
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -329,7 +330,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 }
 
-trait GroupCollector<T: Evaluable + Eq + std::hash::Hash> {
+trait GroupCollector<T: Evaluable + Eq + Hash> {
     fn calc_groups_each_row(
         physical_column: &[Option<T>],
         logical_rows: &[usize],
@@ -345,7 +346,7 @@ struct GroupCollectorImpl<T> {
     marker: PhantomData<T>,
 }
 
-impl<T: Evaluable + Eq + std::hash::Hash> GroupCollector<T> for GroupCollectorImpl<T> {
+impl<T: Evaluable + Eq + Hash> GroupCollector<T> for GroupCollectorImpl<T> {
     default fn calc_groups_each_row(
         physical_column: &[Option<T>],
         logical_rows: &[usize],
@@ -380,6 +381,7 @@ impl<T: Evaluable + Eq + std::hash::Hash> GroupCollector<T> for GroupCollectorIm
     }
 }
 
+/// Bytes is specialized to be aware of collation.
 impl GroupCollector<Bytes> for GroupCollectorImpl<Bytes> {
     fn calc_groups_each_row(
         physical_column: &[Option<Bytes>],
@@ -533,7 +535,6 @@ mod tests {
                 .as_real_slice()
                 .iter()
                 .map(|v| {
-                    use std::hash::{Hash, Hasher};
                     let mut s = std::collections::hash_map::DefaultHasher::new();
                     v.hash(&mut s);
                     s.finish()
@@ -573,6 +574,122 @@ mod tests {
             assert_eq!(
                 &ordered_column,
                 &[Real::new(7.0).ok(), Real::new(1.5).ok(), None]
+            );
+        }
+    }
+
+    #[test]
+    fn test_collation() {
+        use tipb::ExprType;
+        use tipb_helper::ExprDefBuilder;
+
+        // This test creates a hash aggregation executor with the following aggregate functions:
+        // - COUNT(col_0)
+        // - AVG(col_1)
+        // And group by:
+        // - col_4
+
+        let group_by_exp = || RpnExpressionBuilder::new().push_column_ref(4).build();
+
+        let aggr_definitions = vec![
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
+                .build(),
+            ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+                .build(),
+        ];
+
+        let exec_fast = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                group_by_exp(),
+                aggr_definitions.clone(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![group_by_exp()],
+                aggr_definitions.clone(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
+            vec![Box::new(exec_fast), Box::new(exec_slow)];
+
+        for exec_builder in executor_builders {
+            let src_exec = make_src_executor_1();
+            let mut exec = exec_builder(src_exec);
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let mut r = exec.next_batch(1);
+            // col_4 can result in [NULL, "\0A\0A", "\0A\0A\0A"], thus there will be three groups.
+            assert_eq!(&r.logical_rows, &[0, 1, 2]);
+            assert_eq!(r.physical_columns.rows_len(), 3);
+            assert_eq!(r.physical_columns.columns_len(), 4); // 3 result column, 1 group by column
+
+            // Let's check group by column first. Group by column is decoded in fast hash agg,
+            // but not decoded in slow hash agg. So decode it anyway.
+            r.physical_columns[3]
+                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[3])
+                .unwrap();
+
+            // The row order is not defined. Let's sort it by the group by column before asserting.
+            let mut sort_column: Vec<(usize, _)> = r.physical_columns[3]
+                .decoded()
+                .as_bytes_slice()
+                .iter()
+                .enumerate()
+                .collect();
+            sort_column.sort_by(|a, b| a.1.cmp(&b.1));
+
+            // Use the order of the sorted column to sort other columns
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.physical_columns[3].decoded().as_bytes_slice()[*idx].clone())
+                .collect();
+            assert_eq!(
+                &ordered_column,
+                &[
+                    None,
+                    Some("\0A\0A".as_bytes().to_vec()),
+                    Some("\0A\0A\0A".as_bytes().to_vec())
+                ]
+            );
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
+                .collect();
+            assert_eq!(&ordered_column, &[Some(0), Some(0), Some(2)]);
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
+                .collect();
+            assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2)]);
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.physical_columns[2].decoded().as_real_slice()[*idx])
+                .collect();
+            assert_eq!(
+                &ordered_column,
+                &[
+                    Real::new(4.5).ok(),
+                    Real::new(1.0).ok(),
+                    Real::new(6.5).ok()
+                ]
             );
         }
     }

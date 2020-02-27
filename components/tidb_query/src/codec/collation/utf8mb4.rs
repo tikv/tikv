@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::hash::Hasher;
 use std::str;
 
 use codec::prelude::*;
@@ -360,12 +359,6 @@ pub struct CollatorUtf8Mb4GeneralCi;
 impl Collator for CollatorUtf8Mb4GeneralCi {
     type Charset = CharsetUtf8mb4;
 
-    #[inline]
-    fn validate(bstr: &[u8]) -> Result<()> {
-        str::from_utf8(bstr)?;
-        Ok(())
-    }
-
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
         let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
         let mut n = 0;
@@ -384,10 +377,6 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
             .map(general_ci_convert)
             .cmp(sb.chars().map(general_ci_convert)))
     }
-
-    fn sort_hash<H: Hasher>(_state: &mut H, _bstr: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
 }
 
 /// Collator for utf8mb4_bin collation with padding behavior (trims right spaces).
@@ -395,12 +384,6 @@ pub struct CollatorUtf8Mb4Bin;
 
 impl Collator for CollatorUtf8Mb4Bin {
     type Charset = CharsetUtf8mb4;
-
-    #[inline]
-    fn validate(bstr: &[u8]) -> Result<()> {
-        str::from_utf8(bstr)?;
-        Ok(())
-    }
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
@@ -415,11 +398,6 @@ impl Collator for CollatorUtf8Mb4Bin {
         let sb = str::from_utf8(b)?.trim_end_matches(TRIM_PADDING_SPACE);
         Ok(sa.as_bytes().cmp(sb.as_bytes()))
     }
-
-    #[inline]
-    fn sort_hash<H: Hasher>(_state: &mut H, _bstr: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
 }
 
 /// Collator for utf8mb4_bin collation without padding.
@@ -427,12 +405,6 @@ pub struct CollatorUtf8Mb4BinNoPadding;
 
 impl Collator for CollatorUtf8Mb4BinNoPadding {
     type Charset = CharsetUtf8mb4;
-
-    #[inline]
-    fn validate(bstr: &[u8]) -> Result<()> {
-        str::from_utf8(bstr)?;
-        Ok(())
-    }
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
@@ -446,11 +418,6 @@ impl Collator for CollatorUtf8Mb4BinNoPadding {
         str::from_utf8(a)?;
         str::from_utf8(b)?;
         Ok(a.cmp(b))
-    }
-
-    #[inline]
-    fn sort_hash<H: Hasher>(_state: &mut H, _bstr: &[u8]) -> Result<()> {
-        unimplemented!()
     }
 }
 
