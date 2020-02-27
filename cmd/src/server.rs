@@ -9,15 +9,14 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
-use engine::{
-    rocks::util::{metrics_flusher::MetricsFlusher, security::encrypted_env_from_cipher_file},
-    rocks::{self, util::metrics_flusher::DEFAULT_FLUSHER_INTERVAL},
-};
+use engine::{rocks, rocks::util::security::encrypted_env_from_cipher_file};
+use engine_rocks::{metrics_flusher::*, RocksEngine};
+use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
 use kvproto::{
-    backup::create_backup, deadlock::create_deadlock, debugpb::create_debug,
-    diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
+    backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
+    debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
@@ -121,6 +120,7 @@ struct Servers {
     server: Server<ServerRaftStoreRouter, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
+    cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
 }
 
 impl TiKVServer {
@@ -465,6 +465,12 @@ impl TiKVServer {
             cop_read_pools.handle()
         };
 
+        // Create and register cdc.
+        let mut cdc_worker = Box::new(tikv_util::worker::Worker::new("cdc"));
+        let cdc_scheduler = cdc_worker.scheduler();
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        cdc_ob.register_to(&mut coprocessor_host);
+
         let server_config = Arc::new(self.config.server.clone());
 
         // Create server
@@ -519,6 +525,9 @@ impl TiKVServer {
             raft_store,
             self.pd_client.clone(),
         );
+
+        let apply_router = node.get_apply_router();
+
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -544,12 +553,25 @@ impl TiKVServer {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 
+        // Start CDC.
+        let cdc_endpoint = cdc::Endpoint::new(
+            self.pd_client.clone(),
+            cdc_worker.scheduler(),
+            apply_router,
+            cdc_ob,
+        );
+        cdc_worker
+            .start(cdc_endpoint)
+            .unwrap_or_else(|e| fatal!("failed to start cdc: {}", e));
+        self.to_stop.push(cdc_worker);
+
         self.servers = Some(Servers {
             pd_sender,
             lock_mgr,
             server,
             node,
             importer,
+            cdc_scheduler,
         });
 
         server_config
@@ -650,12 +672,25 @@ impl TiKVServer {
             .start_with_timer(backup_endpoint, backup_timer)
             .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
+        let cdc_service = cdc::Service::new(servers.cdc_scheduler.clone());
+        if servers
+            .server
+            .register_service(create_change_data(cdc_service))
+            .is_some()
+        {
+            fatal!("failed to register cdc service");
+        }
+
         self.to_stop.push(backup_worker);
     }
 
     fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(MetricsFlusher::new(
-            self.engines.as_ref().unwrap().engines.clone(),
+        let mut metrics_flusher = Box::new(RocksMetricsFlusher::new(
+            KvEngines::new(
+                RocksEngine::from_db(self.engines.as_ref().unwrap().engines.kv.clone()),
+                RocksEngine::from_db(self.engines.as_ref().unwrap().engines.raft.clone()),
+                self.engines.as_ref().unwrap().engines.shared_block_cache,
+            ),
             Duration::from_millis(DEFAULT_FLUSHER_INTERVAL),
         ));
 
@@ -800,7 +835,7 @@ impl Stop for StatusServer {
     }
 }
 
-impl Stop for MetricsFlusher {
+impl Stop for RocksMetricsFlusher {
     fn stop(mut self: Box<Self>) {
         (*self).stop()
     }

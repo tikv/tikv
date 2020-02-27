@@ -25,6 +25,7 @@ protobuf-codec = [
   "raftstore/protobuf-codec",
   "tikv/protobuf-codec",
   "txn_types/protobuf-codec",
+  "cdc/protobuf-codec",
 ]
 prost-codec = [
   "backup/prost-codec",
@@ -37,6 +38,7 @@ prost-codec = [
   "raftstore/prost-codec",
   "tikv/prost-codec",
   "txn_types/prost-codec",
+  "cdc/prost-codec",
 ]
 
 [lib]
@@ -53,6 +55,7 @@ backup = { path = "../components/backup", default-features = false }
 chrono = "0.4"
 clap = "2.32"
 engine = { path = "../components/engine" }
+engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
 fs2 = "0.4"
 futures = "0.1"
@@ -77,6 +80,7 @@ tikv_util = { path = "../components/tikv_util" }
 toml = "0.4"
 txn_types = { path = "../components/txn_types" }
 vlog = "0.1.4"
+cdc = { path = "../components/cdc" }
 
 [dependencies.prometheus]
 git = "https://github.com/tikv/rust-prometheus.git"
