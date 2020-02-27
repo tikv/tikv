@@ -65,8 +65,8 @@ impl<S: Snapshot> MvccReader<S> {
         if self.key_only {
             return Ok(vec![]);
         }
-        if write.short_value.is_some() {
-            return Ok(write.short_value.unwrap());
+        if let Some(val) = write.short_value {
+            return Ok(val);
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
             let iter_opt = IterOption::new(None, None, self.fill_cache);
@@ -1354,8 +1354,12 @@ mod tests {
         let db = open_db(path, true);
         let mut engine = RegionEngine::new(&db, &region);
 
-        let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let (k, short_value, long_value) = (
+            b"k",
+            b"v",
+            "v".repeat(txn_types::SHORT_VALUE_MAX_LEN + 1).into_bytes(),
+        );
+        let m = Mutation::Put((Key::from_raw(k), short_value.to_vec()));
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 2);
 
@@ -1365,29 +1369,40 @@ mod tests {
 
         engine.delete(k, 8, 9);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), long_value.to_vec()));
         engine.prewrite(m, k, 10);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.clone(), region.clone());
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let key = Key::from_raw(k);
 
         for &skip_lock_check in &[false, true] {
             assert_eq!(
                 reader.get(&key, 2.into(), skip_lock_check).unwrap(),
-                Some(v.to_vec())
+                Some(short_value.to_vec())
             );
             assert_eq!(
                 reader.get(&key, 5.into(), skip_lock_check).unwrap(),
-                Some(v.to_vec())
+                Some(short_value.to_vec())
             );
             assert_eq!(
                 reader.get(&key, 7.into(), skip_lock_check).unwrap(),
-                Some(v.to_vec())
+                Some(short_value.to_vec())
             );
             assert_eq!(reader.get(&key, 9.into(), skip_lock_check).unwrap(), None);
         }
         assert!(reader.get(&key, 11.into(), false).is_err());
         assert_eq!(reader.get(&key, 9.into(), true).unwrap(), None);
+
+        // Commit the long value
+        engine.commit(k, 10, 11);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+        for &skip_lock_check in &[false, true] {
+            assert_eq!(
+                reader.get(&key, 11.into(), skip_lock_check).unwrap(),
+                Some(long_value.to_vec())
+            );
+        }
     }
 }
