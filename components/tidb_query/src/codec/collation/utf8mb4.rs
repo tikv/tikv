@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 use std::str;
 
 use codec::prelude::*;
@@ -359,6 +360,12 @@ pub struct CollatorUtf8Mb4GeneralCi;
 impl Collator for CollatorUtf8Mb4GeneralCi {
     type Charset = CharsetUtf8mb4;
 
+    #[inline]
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
+
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
         let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
         let mut n = 0;
@@ -377,6 +384,14 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
             .map(general_ci_convert)
             .cmp(sb.chars().map(general_ci_convert)))
     }
+
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        for ch in s.chars().map(general_ci_convert) {
+            state.write_u16(ch);
+        }
+        Ok(())
+    }
 }
 
 /// Collator for utf8mb4_bin collation with padding behavior (trims right spaces).
@@ -384,6 +399,12 @@ pub struct CollatorUtf8Mb4Bin;
 
 impl Collator for CollatorUtf8Mb4Bin {
     type Charset = CharsetUtf8mb4;
+
+    #[inline]
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
@@ -398,6 +419,13 @@ impl Collator for CollatorUtf8Mb4Bin {
         let sb = str::from_utf8(b)?.trim_end_matches(TRIM_PADDING_SPACE);
         Ok(sa.as_bytes().cmp(sb.as_bytes()))
     }
+
+    #[inline]
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        s.hash(state);
+        Ok(())
+    }
 }
 
 /// Collator for utf8mb4_bin collation without padding.
@@ -405,6 +433,12 @@ pub struct CollatorUtf8Mb4BinNoPadding;
 
 impl Collator for CollatorUtf8Mb4BinNoPadding {
     type Charset = CharsetUtf8mb4;
+
+    #[inline]
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
@@ -419,6 +453,13 @@ impl Collator for CollatorUtf8Mb4BinNoPadding {
         str::from_utf8(b)?;
         Ok(a.cmp(b))
     }
+
+    #[inline]
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        bstr.hash(state);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -430,6 +471,7 @@ mod tests {
     #[allow(clippy::string_lit_as_bytes)]
     fn test_compare() {
         use std::cmp::Ordering;
+        use std::collections::hash_map::DefaultHasher;
 
         let collations = [
             (Collation::Utf8Mb4Bin, 0),
@@ -445,8 +487,13 @@ mod tests {
             ),
             (
                 "a".as_bytes(),
-                "A\t".as_bytes(),
-                [Ordering::Greater, Ordering::Greater, Ordering::Less],
+                "a ".as_bytes(),
+                [Ordering::Equal, Ordering::Less, Ordering::Equal],
+            ),
+            (
+                "a".as_bytes(),
+                "A ".as_bytes(),
+                [Ordering::Greater, Ordering::Greater, Ordering::Equal],
             ),
             (
                 "aa ".as_bytes(),
@@ -472,9 +519,20 @@ mod tests {
 
         for (sa, sb, expected) in cases {
             for (collation, order_in_expected) in &collations {
-                let cmp = match_template_collator! {
+                let (cmp, ha, hb) = match_template_collator! {
                     TT, match collation {
-                        Collation::TT => TT::sort_compare(sa, sb).unwrap()
+                        Collation::TT => {
+                            let eval_hash = |s| {
+                                let mut hasher = DefaultHasher::default();
+                                TT::sort_hash(&mut hasher, s).unwrap();
+                                hasher.finish()
+                            };
+
+                            let cmp = TT::sort_compare(sa, sb).unwrap();
+                            let ha = eval_hash(sa);
+                            let hb = eval_hash(sb);
+                            (cmp, ha, hb)
+                        }
                     }
                 };
 
@@ -483,6 +541,20 @@ mod tests {
                     "when comparing {:?} and {:?} by {:?}",
                     sa, sb, collation
                 );
+
+                if expected[*order_in_expected] == Ordering::Equal {
+                    assert_eq!(
+                        ha, hb,
+                        "when comparing the hash of {:?} and {:?} by {:?}, which should be equal",
+                        sa, sb, collation
+                    );
+                } else {
+                    assert_ne!(
+                        ha, hb,
+                        "when comparing the hash of {:?} and {:?} by {:?}, which should not be equal",
+                        sa, sb, collation
+                    );
+                }
             }
         }
     }
