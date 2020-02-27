@@ -745,6 +745,10 @@ impl ApplyDelegate {
         }
 
         apply_ctx.finish_for(self, results);
+
+        if self.pending_remove {
+            self.destroy(apply_ctx);
+        }
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
@@ -775,7 +779,7 @@ impl ApplyDelegate {
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
     ) -> ApplyResult {
-        fail_point!("apply_yield_1000", self.region_id() == 1000, |_| {
+        fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
             ApplyResult::Yield
         });
 
@@ -822,6 +826,11 @@ impl ApplyDelegate {
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
     ) -> ApplyResult {
+        // Although conf change can't yield in normal case, it is convenient to
+        // simulate yield before applying a conf change log.
+        fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
+            ApplyResult::Yield
+        });
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
@@ -2394,10 +2403,6 @@ impl ApplyFsm {
         if self.delegate.yield_state.is_some() {
             return;
         }
-
-        if self.delegate.pending_remove {
-            self.delegate.destroy(apply_ctx);
-        }
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
@@ -2502,11 +2507,6 @@ impl ApplyFsm {
             return false;
         }
 
-        info!(
-            "all pending logs are applied";
-            "region_id" => self.delegate.region_id(),
-            "peer_id" => self.delegate.id(),
-        );
         true
     }
 
