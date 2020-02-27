@@ -392,18 +392,20 @@ impl GroupCollector<Bytes> for GroupCollectorImpl<Bytes> {
         states_offset_each_logical_row: &mut Vec<usize>,
         field_type: &FieldType,
     ) -> Result<()> {
-        use crate::codec::collation::{match_template_collator, Collator};
+        use crate::codec::collation::{match_template_collator, SortKey};
         use tidb_query_datatype::Collation;
 
         match_template_collator!(
             TT,
             match field_type.collation().map_err(crate::codec::Error::from)? {
                 Collation::TT => {
+                    #[allow(clippy::transmute_ptr_to_ptr)]
+                    let group: &mut HashMap<Option<SortKey<Bytes, TT>>, usize> =
+                        unsafe { std::mem::transmute(group) };
+
                     for physical_idx in logical_rows {
-                        let val = match &physical_column[*physical_idx] {
-                            Some(bytes) => Some(TT::sort_key(&bytes)?),
-                            None => None,
-                        };
+                        let val: &Option<SortKey<Bytes, TT>> =
+                            SortKey::new_option(&physical_column[*physical_idx])?;
 
                         // Not using the entry API so that when entry exists there is no clone.
                         match group.get(&val) {
@@ -415,7 +417,7 @@ impl GroupCollector<Bytes> for GroupCollectorImpl<Bytes> {
                                 // Group does not exist, prepare groups.
                                 let offset = states.len();
                                 states_offset_each_logical_row.push(offset);
-                                group.insert(val, offset);
+                                group.insert(val.clone(), offset);
                                 for aggr_fn in aggr_fns {
                                     states.push(aggr_fn.create_state());
                                 }
@@ -637,7 +639,7 @@ mod tests {
             assert!(!r.is_drained.unwrap());
 
             let mut r = exec.next_batch(1);
-            // col_4 can result in [NULL, "\0A\0A", "\0A\0A\0A"], thus there will be three groups.
+            // col_4 can result in [NULL, "aa", "aaa"], thus there will be three groups.
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 4); // 3 result column, 1 group by column
@@ -664,7 +666,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 &ordered_column,
-                &[None, Some(b"\0A\0A".to_vec()), Some(b"\0A\0A\0A".to_vec())]
+                &[None, Some(b"aa".to_vec()), Some(b"aaa".to_vec())]
             );
             let ordered_column: Vec<_> = sort_column
                 .iter()

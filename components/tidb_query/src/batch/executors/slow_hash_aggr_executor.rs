@@ -1,9 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
 use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::collections::HashMap;
 use tikv_util::collections::HashMapEntry;
 use tipb::Aggregation;
@@ -132,13 +134,27 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
-        let group_by_len = group_by_exps.len();
         let mut group_key_offsets = Vec::with_capacity(1024);
         group_key_offsets.push(0);
+        let group_by_exprs_field_type: Vec<FieldType> = group_by_exps
+            .iter()
+            .map(|expr| expr.ret_field_type(src.schema()).clone())
+            .collect();
+        let group_by_bytes_len = group_by_exprs_field_type
+            .iter()
+            .filter(|field_type| {
+                EvalType::try_from(field_type.tp())
+                    .map(|eval_type| eval_type == EvalType::Bytes)
+                    .unwrap_or(false)
+            })
+            .count();
+        let group_by_len = group_by_exps.len() + group_by_bytes_len;
         let aggr_impl = SlowHashAggregationImpl {
             states: Vec::with_capacity(1024),
             groups: HashMap::default(),
             group_by_exps,
+            group_by_exprs_field_type,
+            group_by_len,
             group_key_buffer: Box::new(Vec::with_capacity(8192)),
             group_key_offsets,
             states_offset_each_logical_row: Vec::with_capacity(
@@ -164,6 +180,8 @@ pub struct SlowHashAggregationImpl {
     /// the order of group index.
     groups: HashMap<GroupKeyRefUnsafe, usize>,
     group_by_exps: Vec<RpnExpression>,
+    group_by_exprs_field_type: Vec<FieldType>,
+    group_by_len: usize,
 
     /// Encoded group keys are stored in this buffer sequentially. Offsets of each encoded
     /// element are stored in `group_key_offsets`.
@@ -175,8 +193,7 @@ pub struct SlowHashAggregationImpl {
     /// The offsets of encoded keys in `group_key_buffer`. This `Vec` always has a leading `0`
     /// element. Then, the begin and end offsets of the "i"-th column of the group key whose group
     /// index is "j" are `group_key_offsets[j * group_by_len + i]` and
-    /// `group_key_offsets[j * group_by_len + i + 1]`. (group_by_len is the count of group by
-    /// expressions)
+    /// `group_key_offsets[j * group_by_len + i + 1]`.
     group_key_offsets: Vec<usize>,
 
     states_offset_each_logical_row: Vec<usize>,
@@ -213,7 +230,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         let context = &mut entities.context;
         let src_schema = entities.src.schema();
         let logical_rows_len = input_logical_rows.len();
-        let group_by_len = self.group_by_exps.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
         // Decode columns with mutable input first, so subsequent access to input can be immutable
@@ -258,10 +274,28 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     _ => unreachable!(),
                 }
             }
+            let group_key_ref_end = self.group_key_buffer.len();
+            for group_by_result in &self.group_by_results_unsafe {
+                match group_by_result {
+                    RpnStackNode::Vector { value, field_type } => {
+                        if value.as_ref().eval_type() == EvalType::Bytes {
+                            value.as_ref().encode(
+                                value.logical_rows()[logical_row_idx],
+                                field_type,
+                                context,
+                                &mut self.group_key_buffer,
+                            )?;
+                            self.group_key_offsets.push(self.group_key_buffer.len());
+                        }
+                    }
+                    // we have checked that group by cannot be a scalar
+                    _ => unreachable!(),
+                }
+            }
             let group_key_ref_unsafe = GroupKeyRefUnsafe {
                 buffer_ptr,
                 begin: offset_begin,
-                end: self.group_key_buffer.len(),
+                end: group_key_ref_end,
             };
 
             let group_len = self.groups.len();
@@ -278,7 +312,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     // remove the duplicated group key
                     self.group_key_buffer.truncate(offset_begin);
                     self.group_key_offsets
-                        .truncate(self.group_key_offsets.len() - group_by_len);
+                        .truncate(self.group_key_offsets.len() - self.group_by_len);
                     *entry.get()
                 }
             };
@@ -317,7 +351,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         assert!(src_is_drained);
 
         let number_of_groups = self.groups.len();
-        let group_by_exps_len = self.group_by_exps.len();
         let mut group_by_columns: Vec<_> = self
             .group_by_exps
             .iter()
@@ -334,10 +367,22 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             )?;
 
             // Extract group column from group key for each group
-            let group_key_offsets = &self.group_key_offsets[group_index * group_by_exps_len..];
-            for group_index in 0..group_by_exps_len {
-                let offset_begin = group_key_offsets[group_index];
-                let offset_end = group_key_offsets[group_index + 1];
+            let group_key_offsets = &self.group_key_offsets[group_index * self.group_by_len..];
+            let mut group_by_bytes_index = 0;
+            for group_index in 0..self.group_by_exps.len() {
+                let buffer_group_index =
+                    if EvalType::try_from(self.group_by_exprs_field_type[group_index].tp())
+                        .map(|eval_type| eval_type == EvalType::Bytes)
+                        .unwrap_or(false)
+                    {
+                        let group_index = self.group_by_exps.len() + group_by_bytes_index;
+                        group_by_bytes_index += 1;
+                        group_index
+                    } else {
+                        group_index
+                    };
+                let offset_begin = group_key_offsets[buffer_group_index];
+                let offset_end = group_key_offsets[buffer_group_index + 1];
                 group_by_columns[group_index]
                     .mut_raw()
                     .push(&self.group_key_buffer[offset_begin..offset_end]);
@@ -395,6 +440,7 @@ mod tests {
     use crate::rpn_expr::RpnExpressionBuilder;
 
     #[test]
+    #[allow(clippy::string_lit_as_bytes)]
     fn test_it_works_integration() {
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
@@ -448,9 +494,9 @@ mod tests {
 
         let mut r = exec.next_batch(1);
         // col_4 (sort_key),    col_0 + 1 can result in:
-        // \0A\0A\0A,           8
-        // \0A\0A,              NULL
-        // \0A\0A\0A,           2.5
+        // aaa,                 8
+        // aa,                  NULL
+        // ááá,                 2.5
         // NULL,                NULL
         // Thus there are 4 groups.
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3]);
@@ -465,9 +511,9 @@ mod tests {
         assert_eq!(
             r.physical_columns[3].decoded().as_bytes_slice(),
             &[
-                Some(b"\0A\0A\0A".to_vec()),
-                Some(b"\0A\0A".to_vec()),
-                Some(b"\0A\0A\0A".to_vec()),
+                Some("aaa".as_bytes().to_vec()),
+                Some("aa".as_bytes().to_vec()),
+                Some("ááá".as_bytes().to_vec()),
                 None,
             ]
         );
