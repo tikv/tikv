@@ -23,7 +23,9 @@ pub trait InByHash {
     fn contains(hashset: &HashSet<Self::StoreKey>, key: &Self::Key) -> Result<bool>;
 }
 
-pub struct NormalInByHash<K: Evaluable + Extract + Hash + Eq + Sized + std::marker::Send>(PhantomData<K>);
+pub struct NormalInByHash<K: Evaluable + Extract + Hash + Eq + Sized + std::marker::Send>(
+    PhantomData<K>,
+);
 
 impl<K: Evaluable + Extract + Hash + Eq + Sized> InByHash for NormalInByHash<K> {
     type Key = K;
@@ -45,7 +47,6 @@ impl<K: Evaluable + Extract + Hash + Eq + Sized> InByHash for NormalInByHash<K> 
         Ok(hashset.contains(key))
     }
 }
-
 
 pub struct CollationAwareBytes<C: Collator>(Bytes, PhantomData<C>);
 
@@ -71,7 +72,7 @@ impl<C: Collator> PartialEq for CollationAwareBytes<C> {
 
 impl<C: Collator> Eq for CollationAwareBytes<C> {}
 
-pub struct CollationAwareBytesInByHash<C: Collator> (PhantomData<C>);
+pub struct CollationAwareBytesInByHash<C: Collator>(PhantomData<C>);
 
 impl<C: Collator> InByHash for CollationAwareBytesInByHash<C> {
     type Key = Bytes;
