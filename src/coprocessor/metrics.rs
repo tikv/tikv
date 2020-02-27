@@ -14,6 +14,8 @@ use raftstore::store::SplitInfo;
 use rand::Rng;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, SystemTime};
 use txn_types::Key;
 
@@ -58,12 +60,8 @@ lazy_static! {
         &["req", "cf", "tag"]
     )
     .unwrap();
-    pub static ref COPR_QPS_TOPN: GaugeVec = register_gauge_vec!(
-        "tikv_coprocessor_qps_topn",
-        "tikv_coprocessor_qps_topn",
-        &["order"]
-    )
-    .unwrap();
+    pub static ref READ_QPS_TOPN: GaugeVec =
+        register_gauge_vec!("tikv_read_qps_topn", "tikv_read_qps_topn", &["order"]).unwrap();
     pub static ref COPR_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_rocksdb_perf",
         "Total number of RocksDB internal operations from PerfContext",
@@ -112,12 +110,12 @@ thread_local! {
             local_cop_flow_stats:
                 HashMap::default(),
             hub:
-                build_hub(),
+                Hub::new(),
         }
     );
 }
 
-pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
+pub fn tls_flush<R: FlowStatsReporter>(reporter: &R, sender: Option<&mpsc::Sender<Hub>>) {
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
         let mut m = m.borrow_mut();
@@ -136,30 +134,18 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                 }
             }
         }
-        {
-            let (top, split_infos) = m.hub.flush();
-            reporter.split(split_infos);
-            for i in 0..10 {
-                if i < top.len() {
-                    COPR_QPS_TOPN
-                        .with_label_values(&[&i.to_string()])
-                        .set(top[i] as f64);
-                } else {
-                    COPR_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
-                }
-            }
-        }
 
         // Report PD metrics
-        if m.local_cop_flow_stats.is_empty() {
-            // Stats to report to PD is empty, ignore.
-            return;
+        if !m.local_cop_flow_stats.is_empty() {
+            let mut read_stats = HashMap::default();
+            mem::swap(&mut read_stats, &mut m.local_cop_flow_stats);
+            reporter.report_read_stats(read_stats);
         }
-
-        let mut read_stats = HashMap::default();
-        mem::swap(&mut read_stats, &mut m.local_cop_flow_stats);
-
-        reporter.report_read_stats(read_stats);
+        if let Some(sender) = sender {
+            let mut hub = Hub::new();
+            mem::swap(&mut hub, &mut m.hub);
+            sender.send(hub).unwrap();
+        }
     });
 }
 
@@ -191,17 +177,17 @@ pub fn tls_collect_qps(region_id: u64, peer: &metapb::Peer, start_key: &[u8], en
     });
 }
 
-pub fn tls_update_qps_threshold(qps_threshold:u32){
+pub fn tls_update_qps_threshold(qps_threshold: u32) {
     TLS_COP_METRICS.with(|m| {
         let mut m = m.borrow_mut();
-        m.hub.qps_threshold=qps_threshold;
+        m.hub.qps_threshold = qps_threshold;
         info!("qps_threshold";"qps_threshold"=>qps_threshold);
     });
 }
 
 const DEFAULT_QPS_THRESHOLD: u32 = 100;
 const DETECT_TIMES: u32 = 10;
-const TOP_N: u32 = 10;
+pub const TOP_N: usize = 10;
 const DETECT_INTERVAL: Duration = Duration::from_secs(1);
 const MIN_SAMPLE_NUM: i32 = 100;
 const DEFAULT_SPLIT_SCORE: f64 = 0.9;
@@ -321,11 +307,11 @@ fn build_region_info() -> RegionInfo {
 }
 
 impl RegionInfo {
-    fn update(&mut self, peer: &metapb::Peer) {
+    fn add(&mut self, peer: &metapb::Peer, num: u32) {
         if self.peer != *peer {
             self.peer = peer.clone();
         }
-        self.qps += 1
+        self.qps += num;
     }
 }
 
@@ -336,24 +322,42 @@ pub struct Hub {
     pub qps_threshold: u32,
 }
 
-fn build_hub() -> Hub {
-    Hub {
-        region_qps: HashMap::default(),
-        region_keys: HashMap::default(),
-        region_recorder: HashMap::default(),
-        qps_threshold:DEFAULT_QPS_THRESHOLD,
-    }
-}
-
 impl Hub {
-    fn add(&mut self, region_id: u64, peer: &metapb::Peer, start_key: &[u8], end_key: &[u8]) {
+    pub fn new() -> Hub {
+        Hub {
+            region_qps: HashMap::default(),
+            region_keys: HashMap::default(),
+            region_recorder: HashMap::default(),
+            qps_threshold: DEFAULT_QPS_THRESHOLD,
+        }
+    }
+
+    fn add_qps(&mut self, region_id: &u64, peer: &metapb::Peer, num: u32) {
         let region_info = self
             .region_qps
-            .entry(region_id)
+            .entry(*region_id)
             .or_insert_with(build_region_info);
-        region_info.update(peer);
-        let key_ranges = self.region_keys.entry(region_id).or_insert_with(|| vec![]);
+        region_info.add(peer, num);
+    }
+
+    fn add_key_range(&mut self, region_id: &u64, start_key: &[u8], end_key: &[u8]) {
+        let key_ranges = self.region_keys.entry(*region_id).or_insert_with(|| vec![]);
         (*key_ranges).push(build_key_range(start_key, end_key));
+    }
+
+    fn add(&mut self, region_id: u64, peer: &metapb::Peer, start_key: &[u8], end_key: &[u8]) {
+        self.add_qps(&region_id, peer, 1);
+        self.add_key_range(&region_id, start_key, end_key);
+    }
+
+    pub fn update(&mut self, other: &mut Hub) {
+        for (region_id, region_info) in other.region_qps.iter() {
+            self.add_qps(region_id, &(*region_info).peer, (*region_info).qps);
+        }
+        for (region_id, other_key_ranges) in other.region_keys.iter_mut() {
+            let key_ranges = self.region_keys.entry(*region_id).or_insert_with(|| vec![]);
+            (*key_ranges).append(other_key_ranges);
+        }
     }
 
     fn clear(&mut self) {
@@ -364,7 +368,7 @@ impl Hub {
         });
     }
 
-    fn flush(&mut self) -> (Vec<u32>, Vec<SplitInfo>) {
+    pub fn flush(&mut self) -> (Vec<u32>, Vec<SplitInfo>) {
         let mut split_infos = Vec::default();
         let mut top = BinaryHeap::with_capacity(TOP_N as usize);
         for (region_id, region_info) in self.region_qps.iter() {
@@ -384,7 +388,7 @@ impl Hub {
                     };
                     split_infos.push(split_info);
                     self.region_recorder.remove(region_id);
-                    info!("reporter_key";"region_id"=>*region_id);
+                    info!("reporter_key";"region_id"=>*region_id,"thread_id"=>format!("{:?}",thread::current().id()));
                 }
             } else {
                 self.region_recorder.remove_entry(region_id);
@@ -429,10 +433,8 @@ mod tests {
         let mut hub = build_hub();
 
         for i in 0..100 {
-            for _ in 0..100 {
-                hub.add(1, &metapb::Peer::default(), b"a", b"b");
-                hub.add(1, &metapb::Peer::default(), b"b", b"");
-            }
+            hub.add(1, &metapb::Peer::default(), b"a", b"b");
+            hub.add(1, &metapb::Peer::default(), b"b", b"");
             let (_, split_infos) = hub.flush();
             if (i + 1) % DETECT_TIMES == 0 {
                 assert_eq!(split_infos.len(), 1);
