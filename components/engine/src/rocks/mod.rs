@@ -6,10 +6,11 @@ pub mod util;
 
 pub use rocksdb::rocksdb_options::UnsafeSnap;
 pub use rocksdb::{
-    load_latest_options, rocksdb::supported_compression, run_ldb_tool,
+    load_latest_options, new_compaction_filter_raw, rocksdb::supported_compression, run_ldb_tool,
     set_external_sst_file_global_seq_no, BlockBasedOptions, CColumnFamilyDescriptor, CFHandle,
-    Cache, ColumnFamilyOptions, CompactOptions, CompactionJobInfo, CompactionOptions,
-    CompactionPriority, DBBackgroundErrorReason, DBBottommostLevelCompaction, DBCompactionStyle,
+    Cache, ColumnFamilyOptions, CompactOptions, CompactionFilter, CompactionFilterContext,
+    CompactionFilterFactory, CompactionJobInfo, CompactionOptions, CompactionPriority,
+    DBBackgroundErrorReason, DBBottommostLevelCompaction, DBCompactionFilter, DBCompactionStyle,
     DBCompressionType, DBEntryType, DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode,
     DBStatisticsHistogramType, DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env,
     EnvOptions, EventListener, ExternalSstFileInfo, FlushJobInfo, HistogramData,
