@@ -8,7 +8,7 @@ publish = false
 failpoints = ["fail/failpoints"]
 
 [dependencies]
-async-speed-limit = "0.2"
+async-speed-limit = "0.3"
 backtrace = "0.3.9"
 byteorder = "1.2"
 coarsetime = "0.1"

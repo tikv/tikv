@@ -388,7 +388,7 @@ pub fn new_temp_engine(path: &tempfile::TempDir) -> engine::Engines {
             engine::rocks::util::new_engine(
                 path.path().to_str().unwrap(),
                 None,
-                engine::ALL_CFS,
+                engine_traits::ALL_CFS,
                 None,
             )
             .unwrap(),
@@ -397,7 +397,7 @@ pub fn new_temp_engine(path: &tempfile::TempDir) -> engine::Engines {
             engine::rocks::util::new_engine(
                 raft_path.to_str().unwrap(),
                 None,
-                &[engine::CF_DEFAULT],
+                &[engine_traits::CF_DEFAULT],
                 None,
             )
             .unwrap(),

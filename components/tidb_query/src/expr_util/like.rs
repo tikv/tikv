@@ -10,8 +10,8 @@
 //! 2. It should support non-binary mode (and binary mode) and do case insensitive comparing
 //!    in non-binary mode.
 
+use crate::codec::collation::{Charset, Collator};
 use crate::expr::Result;
-use crate::expr_util::collation::{Charset, Collator};
 
 pub fn like<C: Collator>(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
     // current search positions in pattern and target.
