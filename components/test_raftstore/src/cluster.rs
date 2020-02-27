@@ -17,6 +17,7 @@ use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
+use engine::{CF_DEFAULT, CF_RAFT};
 use engine_rocks::RocksEngine;
 use engine_traits::CF_DEFAULT;
 use pd_client::PdClient;

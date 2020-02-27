@@ -20,7 +20,8 @@ use kvproto::raft_cmdpb::{
     TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
-    ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
+    ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
+    RaftSnapshotData,
 };
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
