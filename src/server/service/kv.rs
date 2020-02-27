@@ -18,7 +18,7 @@ use crate::storage::{
     },
     kv::Engine,
     lock_manager::LockManager,
-    PessimisticLockRes, PointGetCommand, Storage, TxnStatus,
+    PointGetCommand, Storage, TxnStatus,
 };
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
@@ -1461,13 +1461,7 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
 });
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
     match v {
-        Ok(Ok(res)) => match res {
-            PessimisticLockRes::Values(values) => {
-                let values = values.into_iter().map(Option::unwrap_or_default).collect();
-                resp.set_values(values);
-            },
-            PessimisticLockRes::Empty => (),
-        }
+        Ok(Ok(res)) => resp.set_values(res.into_vec().into()),
         Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
     }
 });

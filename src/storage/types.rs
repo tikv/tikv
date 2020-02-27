@@ -121,6 +121,13 @@ impl PessimisticLockRes {
             _ => panic!("unexpected PessimisticLockRes"),
         }
     }
+
+    pub fn into_vec(self) -> Vec<Value> {
+        match self {
+            PessimisticLockRes::Values(v) => v.into_iter().map(Option::unwrap_or_default).collect(),
+            PessimisticLockRes::Empty => vec![],
+        }
+    }
 }
 
 macro_rules! storage_callback {

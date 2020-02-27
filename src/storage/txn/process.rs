@@ -611,10 +611,10 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let rows = keys.len();
-            let mut res = if !return_values {
-                Ok(PessimisticLockRes::Empty)
-            } else {
+            let mut res = if return_values {
                 Ok(PessimisticLockRes::Values(vec![]))
+            } else {
+                Ok(PessimisticLockRes::Empty)
             };
             for (k, should_not_exist) in keys {
                 match txn.acquire_pessimistic_lock(
