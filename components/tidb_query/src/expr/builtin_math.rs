@@ -12,6 +12,28 @@ use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::codec::Datum;
 use crate::expr_util::rand::MySQLRng;
 
+const I64_TEN_POWS: [i64; 19] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+];
+
 const U64_TEN_POWS: [u64; 20] = [
     1,
     10,
@@ -381,18 +403,11 @@ impl ScalarFunc {
         let d = if self.children[1].is_unsigned() { 0 } else { d };
         if d >= 0 {
             Ok(Some(x))
-        } else if self.children[0].is_unsigned() {
-            if d < -19 {
-                return Ok(Some(0));
-            }
-            let x = x as u64;
-            let shift = 10_u64.pow(-d as u32);
-            Ok(Some((x / shift * shift) as i64))
         } else {
-            if d < -18 {
+            if d <= -(I64_TEN_POWS.len() as i64) {
                 return Ok(Some(0));
             }
-            let shift = 10_i64.pow(-d as u32);
+            let shift = I64_TEN_POWS[-d as usize];
             Ok(Some(x / shift * shift))
         }
     }
@@ -1276,21 +1291,6 @@ mod tests {
                 Datum::I64(1028),
                 Datum::U64(u64::max_value()),
                 Datum::I64(1028),
-            ),
-            (
-                Datum::U64(18446744073709551615),
-                Datum::I64(-2),
-                Datum::U64(18446744073709551600),
-            ),
-            (
-                Datum::U64(18446744073709551615),
-                Datum::I64(-20),
-                Datum::U64(0),
-            ),
-            (
-                Datum::U64(18446744073709551615),
-                Datum::I64(2),
-                Datum::U64(18446744073709551615),
             ),
         ];
         for (x, d, exp) in tests {
