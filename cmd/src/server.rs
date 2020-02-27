@@ -66,6 +66,9 @@ use tikv_util::{
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
 pub fn run_tikv(config: TiKvConfig) {
+    // Print version information.
+    tikv::log_tikv_info();
+
     // Do some prepare works before start.
     pre_start(&config);
 
@@ -208,8 +211,6 @@ impl TiKVServer {
 
         tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
-        // Print version information.
-        tikv::log_tikv_info();
         info!(
             "using config";
             "version" => ?version,
