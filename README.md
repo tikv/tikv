@@ -81,7 +81,7 @@ We provide multiple deployment methods, but it is recommended to use our Ansible
 
 ### Testing deployment
 
-- [Try TiKV and TiDB](./docs/how-to/get-started/deploy-using-docker-compose.md)
+- [Try TiKV and TiDB](https://tikv.org/docs/3.0/tasks/try/)
 
     You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://pingcap.com/docs/).
 
