@@ -170,7 +170,7 @@ pub trait Evaluator {
 pub struct ArgConstructor<A: Evaluable, E: Evaluator> {
     arg_index: usize,
     inner: E,
-    _marker: PhantomData<A>,
+    _phantom: PhantomData<A>,
 }
 
 impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
@@ -179,7 +179,7 @@ impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
         ArgConstructor {
             arg_index,
             inner,
-            _marker: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }

@@ -343,7 +343,7 @@ trait GroupCollector<T: Evaluable + Eq + Hash> {
 }
 
 struct GroupCollectorImpl<T> {
-    marker: PhantomData<T>,
+    _phantom: PhantomData<T>,
 }
 
 impl<T: Evaluable + Eq + Hash> GroupCollector<T> for GroupCollectorImpl<T> {
