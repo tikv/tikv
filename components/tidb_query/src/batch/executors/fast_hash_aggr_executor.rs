@@ -664,11 +664,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 &ordered_column,
-                &[
-                    None,
-                    Some("\0A\0A".as_bytes().to_vec()),
-                    Some("\0A\0A\0A".as_bytes().to_vec())
-                ]
+                &[None, Some(b"\0A\0A".to_vec()), Some(b"\0A\0A\0A".to_vec())]
             );
             let ordered_column: Vec<_> = sort_column
                 .iter()
