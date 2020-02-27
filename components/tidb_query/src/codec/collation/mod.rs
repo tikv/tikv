@@ -44,7 +44,7 @@ impl Charset for CharsetBinary {
     }
 }
 
-pub trait Collator {
+pub trait Collator: 'static + std::marker::Send + std::marker::Sync {
     type Charset: Charset;
 
     fn validate(bstr: &[u8]) -> Result<()>;

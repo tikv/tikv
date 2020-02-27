@@ -49,6 +49,14 @@ fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> Result<RpnF
     })
 }
 
+fn map_compare_in_string_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(crate::codec::Error::from)? {
+            Collation::TT => compare_in_string_by_hash_fn_meta::<TT>()
+        }
+    })
+}
+
 fn map_like_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
         TT, match ret_field_type.as_accessor().collation().map_err(crate::codec::Error::from)? {
@@ -318,7 +326,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         // impl_compare_in
         ScalarFuncSig::InInt => compare_in_by_hash_fn_meta::<Int>(),
         ScalarFuncSig::InReal => compare_in_by_hash_fn_meta::<Real>(),
-        ScalarFuncSig::InString => compare_in_by_hash_fn_meta::<Bytes>(),
+        ScalarFuncSig::InString => map_compare_in_string_sig(ft)?,
         ScalarFuncSig::InDecimal => compare_in_by_hash_fn_meta::<Decimal>(),
         ScalarFuncSig::InTime => compare_in_by_compare_fn_meta::<DateTime>(),
         ScalarFuncSig::InDuration => compare_in_by_hash_fn_meta::<Duration>(),

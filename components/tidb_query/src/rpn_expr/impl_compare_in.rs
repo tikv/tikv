@@ -1,13 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::HashSet;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 
 use codec::prelude::NumberDecoder;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::EvalType;
 use tipb::{Expr, ExprType};
 
+use crate::codec::collation::*;
 use crate::codec::data_type::*;
 use crate::codec::mysql::{Decimal, MAX_FSP};
 use crate::{Error, Result};
@@ -196,6 +198,105 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
     })
 }
 
+pub struct CollationAwareBytes<C: Collator>(Bytes, PhantomData<C>);
+
+impl<C: Collator> std::ops::Deref for CollationAwareBytes<C> {
+    type Target = Bytes;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<C: Collator> Hash for CollationAwareBytes<C> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(&C::sort_key(&self.0).unwrap());
+    }
+}
+
+impl<C: Collator> PartialEq for CollationAwareBytes<C> {
+    fn eq(&self, other: &Self) -> bool {
+        C::sort_compare(&self.0, &other.0).unwrap() == std::cmp::Ordering::Equal
+    }
+}
+
+impl<C: Collator> Eq for CollationAwareBytes<C> {}
+
+#[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_string_data::<C>)]
+#[inline]
+pub fn compare_in_string_by_hash<C: Collator>(
+    metadata: &CompareInMeta<CollationAwareBytes<C>>,
+    args: &[&Option<Bytes>],
+) -> Result<Option<Int>> {
+    assert!(!args.is_empty());
+    let base_val = args[0];
+    match base_val {
+        None => Ok(None),
+        Some(base_val) => {
+            C::validate(&base_val)?;
+            let key = unsafe { std::mem::transmute::<&Bytes, &CollationAwareBytes<C>>(base_val) };
+            if metadata.lookup_set.contains(key) {
+                return Ok(Some(1));
+            }
+            let mut default_ret = if metadata.has_null { None } else { Some(0) };
+            for arg in &args[1..] {
+                match arg {
+                    None => {
+                        default_ret = None;
+                    }
+                    Some(v) => {
+                        if C::sort_compare(&v, &base_val)? == std::cmp::Ordering::Equal {
+                            return Ok(Some(1));
+                        }
+                    }
+                }
+            }
+            Ok(default_ret)
+        }
+    }
+}
+
+fn init_compare_in_string_data<C: Collator>(
+    expr: &mut Expr,
+) -> Result<CompareInMeta<CollationAwareBytes<C>>> {
+    let mut lookup_set: HashSet<CollationAwareBytes<C>> = HashSet::new();
+    let mut has_null = false;
+    let children = expr.mut_children();
+    assert!(!children.is_empty());
+
+    let n = children.len();
+    let mut tail_index = n - 1;
+    // try to evaluate and remove all constant nodes except args[0].
+    for i in (1..n).rev() {
+        let tree_node = &mut children[i];
+        let mut is_constant = true;
+        match tree_node.get_tp() {
+            ExprType::ScalarFunc | ExprType::ColumnRef => {
+                is_constant = false;
+            }
+            ExprType::Null => {
+                has_null = true;
+            }
+            expr_type => {
+                let val = Bytes::extract(expr_type, tree_node.take_val())?;
+                C::validate(&val)?;
+                let key = unsafe { std::mem::transmute::<Bytes, CollationAwareBytes<C>>(val) };
+                lookup_set.insert(key);
+            }
+        }
+        if is_constant {
+            children.as_mut_slice().swap(i, tail_index);
+            tail_index -= 1;
+        }
+    }
+    children.truncate(tail_index + 1);
+
+    Ok(CompareInMeta {
+        lookup_set,
+        has_null,
+    })
+}
+
 #[rpn_fn(varg, min_args = 1)]
 #[inline]
 pub fn compare_in_by_compare<T: InByCompare>(args: &[&Option<T>]) -> Result<Option<Int>> {
@@ -228,7 +329,8 @@ mod tests {
     use super::*;
 
     use test::{black_box, Bencher};
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::{Collation, FieldTypeTp};
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
@@ -293,6 +395,71 @@ mod tests {
 
         test_with_mapper(map_expr_node_to_rpn_func, true);
         test_with_mapper(by_compare_mapper, false);
+    }
+
+    #[test]
+    fn test_in_string() {
+        let cases = vec![
+            (
+                vec![Some("breeswish"), Some("breezewish")],
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+            (
+                vec![Some("codeworm96"), Some("CODEWORM96"), Some("CoDeWorm99")],
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+            (
+                vec![
+                    Some("扩散性百万甜🍞"),
+                    Some("扩散性百万辣🍞"),
+                    Some("扩散性百万咸🍞"),
+                ],
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+            (
+                vec![Some("🐰"), Some("🐇"), Some("🐻"), Some("🐰")],
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+        ];
+
+        for (args, collation, expected) in cases {
+            let ft = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .collation(collation)
+                .build();
+            let mut builder = ExprDefBuilder::scalar_func(ScalarFuncSig::InString, ft);
+            for arg in args {
+                builder = builder.push_child(match arg {
+                    Some(v) => ExprDefBuilder::constant_bytes(String::from(v).into_bytes()),
+                    None => ExprDefBuilder::constant_null(FieldTypeTp::String),
+                });
+            }
+            let node = builder.build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+                node,
+                map_expr_node_to_rpn_func,
+                1,
+            )
+            .unwrap();
+            if let RpnExpressionNode::FnCall { args_len, .. } = exp[0] {
+                // all constant args except base_val should be removed.
+                assert_eq!(args_len, 1);
+            }
+            let mut ctx = EvalContext::default();
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+            let result = exp.eval(&mut ctx, schema, &mut columns, &[], 1);
+            let val = result.unwrap();
+            assert!(val.is_vector());
+            assert_eq!(
+                val.vector_value().unwrap().as_ref().as_int_slice(),
+                &[expected]
+            );
+        }
     }
 
     #[test]
