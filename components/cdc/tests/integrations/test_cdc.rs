@@ -13,7 +13,7 @@ use kvproto::cdcpb::*;
 use kvproto::cdcpb::{
     create_change_data,
     event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataClient, ChangeDataRequest,
+    ChangeDataClient, ChangeDataEvent, ChangeDataRequest,
 };
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
