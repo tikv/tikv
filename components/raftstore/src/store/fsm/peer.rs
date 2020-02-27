@@ -22,7 +22,8 @@ use kvproto::raft_cmdpb::{
     StatusResponse,
 };
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+    ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
+    RegionLocalState,
 };
 use pd_client::PdClient;
 use protobuf::Message;
@@ -802,6 +803,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_merge_target() {
+            fail_point!("on_has_merge_target", |_| Ok(()));
             if self.need_gc_merge(&msg)? {
                 self.on_stale_merge();
             }
@@ -809,7 +811,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_extra_msg() {
-            // now noop
+            self.on_extra_message(&msg);
             return Ok(());
         }
 
@@ -850,6 +852,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         self.fsm.has_ready = true;
         Ok(())
+    }
+
+    fn on_extra_message(&mut self, msg: &RaftMessage) {
+        let extra_msg = msg.get_extra_msg();
+        match extra_msg.get_type() {
+            ExtraMessageType::MsgRegionWakeUp => {
+                //TODO
+            }
+            ExtraMessageType::MsgWantRollbackMerge => {
+                self.fsm
+                    .peer
+                    .maybe_add_want_rollback_merge_peer(msg.get_from_peer().get_id(), &extra_msg);
+            }
+        }
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
@@ -1804,13 +1820,47 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         self.register_merge_check_tick();
         if let Err(e) = self.schedule_merge() {
-            info!(
-                "failed to schedule merge, rollback";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-            self.rollback_merge();
+            if self.fsm.peer.is_leader() {
+                self.fsm
+                    .peer
+                    .add_want_rollback_merge_peer(self.fsm.peer_id());
+                if self
+                    .fsm
+                    .peer
+                    .want_rollback_merge_peers
+                    .as_ref()
+                    .unwrap()
+                    .len()
+                    >= raft::majority(
+                        self.fsm
+                            .peer
+                            .get_raft_status()
+                            .progress
+                            .unwrap()
+                            .voter_ids()
+                            .len(),
+                    )
+                {
+                    info!(
+                        "failed to schedule merge, rollback";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                    );
+                    self.rollback_merge();
+                }
+            } else if !self.fsm.peer.peer.get_is_learner() {
+                self.ctx.need_flush_trans = true;
+                self.fsm.peer.send_want_rollback_merge(
+                    self.fsm
+                        .peer
+                        .pending_merge_state
+                        .as_ref()
+                        .unwrap()
+                        .get_commit(),
+                    &mut self.ctx.trans,
+                );
+            }
         }
     }
 
