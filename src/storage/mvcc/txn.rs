@@ -1,9 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::metrics::*;
-use crate::storage::mvcc::reader::MvccReader;
-use crate::storage::mvcc::{ErrorInner, Result};
+use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
@@ -227,7 +225,8 @@ impl<S: Snapshot> MvccTxn<S> {
         should_not_exist: bool,
         lock_ttl: u64,
         for_update_ts: TimeStamp,
-    ) -> Result<()> {
+        need_value: bool,
+    ) -> Result<Option<Value>> {
         fn pessimistic_lock(
             primary: &[u8],
             start_ts: TimeStamp,
@@ -246,6 +245,7 @@ impl<S: Snapshot> MvccTxn<S> {
             )
         }
 
+        let mut val = None;
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
@@ -258,6 +258,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
                 .into());
             }
+            if need_value {
+                val = self.reader.get(&key, for_update_ts, true)?;
+            }
             // Overwrite the lock with small for_update_ts
             if for_update_ts > lock.for_update_ts {
                 let lock = pessimistic_lock(primary, self.start_ts, lock_ttl, for_update_ts);
@@ -267,7 +270,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     .acquire_pessimistic_lock
                     .inc();
             }
-            return Ok(());
+            return Ok(val);
         }
 
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
@@ -318,12 +321,23 @@ impl<S: Snapshot> MvccTxn<S> {
 
             // Check data constraint when acquiring pessimistic lock.
             self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+
+            if need_value {
+                val = match write.write_type {
+                    // If it's a valid Write, no need to read again.
+                    WriteType::Put => Some(self.reader.load_data(&key, write)?),
+                    WriteType::Delete => None,
+                    WriteType::Lock | WriteType::Rollback => {
+                        self.reader.get(&key, commit_ts.prev(), true)?
+                    }
+                };
+            }
         }
 
         let lock = pessimistic_lock(primary, self.start_ts, lock_ttl, for_update_ts);
         self.put_lock(key, &lock);
 
-        Ok(())
+        Ok(val)
     }
 
     pub fn pessimistic_prewrite(
@@ -2330,6 +2344,7 @@ mod tests {
                     expected_lock_info.get_lock_version(),
                     expected_lock_info.get_lock_ttl(),
                     expected_lock_info.get_lock_for_update_ts(),
+                    false,
                 );
             }
 
@@ -2424,5 +2439,76 @@ mod tests {
         must_commit_err(&engine, k, 20, 30);
         must_commit(&engine, k, 10, 20);
         must_seek_write(&engine, k, 30, 10, 20, WriteType::Lock);
+    }
+
+    #[test]
+    fn test_pessimistic_lock_return_value() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k, v) = (b"k", b"v");
+
+        assert_eq!(
+            must_acquire_pessimistic_lock_return_value(&engine, k, k, 10, 10),
+            None
+        );
+        must_pessimistic_locked(&engine, k, 10, 10);
+        must_pessimistic_rollback(&engine, k, 10, 10);
+
+        // Put
+        must_prewrite_put(&engine, k, v, k, 10);
+        // KeyIsLocked
+        match must_acquire_pessimistic_lock_return_value_err(&engine, k, k, 20, 20) {
+            Error(box ErrorInner::KeyIsLocked(_)) => (),
+            e => panic!("unexpected error: {}", e),
+        };
+        must_commit(&engine, k, 10, 20);
+        // WriteConflict
+        match must_acquire_pessimistic_lock_return_value_err(&engine, k, k, 15, 15) {
+            Error(box ErrorInner::WriteConflict { .. }) => (),
+            e => panic!("unexpected error: {}", e),
+        };
+        assert_eq!(
+            must_acquire_pessimistic_lock_return_value(&engine, k, k, 25, 25),
+            Some(v.to_vec())
+        );
+        must_pessimistic_locked(&engine, k, 25, 25);
+        must_pessimistic_rollback(&engine, k, 25, 25);
+
+        // Skip Write::Lock
+        must_prewrite_lock(&engine, k, k, 30);
+        must_commit(&engine, k, 30, 40);
+        assert_eq!(
+            must_acquire_pessimistic_lock_return_value(&engine, k, k, 45, 45),
+            Some(v.to_vec())
+        );
+        must_pessimistic_locked(&engine, k, 45, 45);
+        must_pessimistic_rollback(&engine, k, 45, 45);
+
+        // Skip Write::Rollback
+        must_rollback(&engine, k, 50);
+        assert_eq!(
+            must_acquire_pessimistic_lock_return_value(&engine, k, k, 55, 55),
+            Some(v.to_vec())
+        );
+        must_pessimistic_locked(&engine, k, 55, 55);
+        must_pessimistic_rollback(&engine, k, 55, 55);
+
+        // Delete
+        must_prewrite_delete(&engine, k, k, 60);
+        must_commit(&engine, k, 60, 70);
+        assert_eq!(
+            must_acquire_pessimistic_lock_return_value(&engine, k, k, 75, 75),
+            None
+        );
+        // Duplicated command
+        assert_eq!(
+            must_acquire_pessimistic_lock_return_value(&engine, k, k, 75, 75),
+            None
+        );
+        assert_eq!(
+            must_acquire_pessimistic_lock_return_value(&engine, k, k, 75, 55),
+            Some(v.to_vec())
+        );
+        must_pessimistic_locked(&engine, k, 75, 75);
+        must_pessimistic_rollback(&engine, k, 75, 75);
     }
 }
