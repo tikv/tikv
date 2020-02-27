@@ -6,6 +6,7 @@ pub use self::utf8mb4::*;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 
 use codec::prelude::*;
 
@@ -94,5 +95,77 @@ impl Collator for CollatorBinary {
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
         bstr.hash(state);
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct SortKey<T, C: Collator>
+where
+    T: AsRef<[u8]>,
+{
+    inner: T,
+    _phantom: PhantomData<C>,
+}
+
+impl<T, C: Collator> SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    pub fn new(inner: T) -> Result<Self> {
+        C::validate(inner.as_ref())?;
+        Ok(Self {
+            inner,
+            _phantom: PhantomData,
+        })
+    }
+
+    #[inline]
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+}
+
+impl<T, C: Collator> Hash for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        C::sort_hash(state, self.inner.as_ref()).unwrap()
+    }
+}
+
+impl<T, C: Collator> PartialEq for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).unwrap()
+            == std::cmp::Ordering::Equal
+    }
+}
+
+impl<T, C: Collator> Eq for SortKey<T, C> where T: AsRef<[u8]> {}
+
+impl<T, C: Collator> PartialOrd for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).ok()
+    }
+}
+
+impl<T, C: Collator> Ord for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).unwrap()
     }
 }
