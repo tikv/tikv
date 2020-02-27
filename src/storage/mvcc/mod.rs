@@ -312,7 +312,10 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert_eq!(
-            reader.get(&Key::from_raw(key), ts.into()).unwrap().unwrap(),
+            reader
+                .get(&Key::from_raw(key), ts.into(), false)
+                .unwrap()
+                .unwrap(),
             expect
         );
     }
@@ -322,7 +325,10 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Rc);
         assert_eq!(
-            reader.get(&Key::from_raw(key), ts.into()).unwrap().unwrap(),
+            reader
+                .get(&Key::from_raw(key), ts.into(), false)
+                .unwrap()
+                .unwrap(),
             expect
         );
     }
@@ -332,7 +338,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert!(reader
-            .get(&Key::from_raw(key), ts.into())
+            .get(&Key::from_raw(key), ts.into(), false)
             .unwrap()
             .is_none());
     }
@@ -341,7 +347,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-        assert!(reader.get(&Key::from_raw(key), ts.into()).is_err());
+        assert!(reader.get(&Key::from_raw(key), ts.into(), false).is_err());
     }
 
     // Insert has a constraint that key should not exist
@@ -687,22 +693,26 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         lock_ttl: u64,
         for_update_ts: impl Into<TimeStamp>,
-    ) {
+        need_value: bool,
+    ) -> Option<Value> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.acquire_pessimistic_lock(
-            Key::from_raw(key),
-            pk,
-            false,
-            lock_ttl,
-            for_update_ts.into(),
-        )
-        .unwrap();
+        let res = txn
+            .acquire_pessimistic_lock(
+                Key::from_raw(key),
+                pk,
+                false,
+                lock_ttl,
+                for_update_ts.into(),
+                need_value,
+            )
+            .unwrap();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
             engine.write(&ctx, modifies).unwrap();
         }
+        res
     }
 
     pub fn must_acquire_pessimistic_lock<E: Engine>(
@@ -715,6 +725,16 @@ pub mod tests {
         must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, 0);
     }
 
+    pub fn must_acquire_pessimistic_lock_return_value<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+    ) -> Option<Value> {
+        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, 0, for_update_ts.into(), true)
+    }
+
     pub fn must_acquire_pessimistic_lock_with_ttl<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -723,7 +743,16 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
         ttl: u64,
     ) {
-        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, ttl, for_update_ts.into());
+        assert!(must_acquire_pessimistic_lock_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            ttl,
+            for_update_ts.into(),
+            false,
+        )
+        .is_none());
     }
 
     pub fn must_acquire_pessimistic_lock_for_large_txn<E: Engine>(
@@ -744,11 +773,39 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
     ) -> Error {
+        must_acquire_pessimistic_lock_err_impl(engine, key, pk, start_ts, for_update_ts, false)
+    }
+
+    pub fn must_acquire_pessimistic_lock_return_value_err<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+    ) -> Error {
+        must_acquire_pessimistic_lock_err_impl(engine, key, pk, start_ts, for_update_ts, true)
+    }
+
+    pub fn must_acquire_pessimistic_lock_err_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        need_value: bool,
+    ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, 0, for_update_ts.into())
-            .unwrap_err()
+        txn.acquire_pessimistic_lock(
+            Key::from_raw(key),
+            pk,
+            false,
+            0,
+            for_update_ts.into(),
+            need_value,
+        )
+        .unwrap_err()
     }
 
     pub fn must_pessimistic_rollback<E: Engine>(

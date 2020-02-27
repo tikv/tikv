@@ -28,7 +28,7 @@ pub use self::{
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
-    types::{StorageCallback, TxnStatus},
+    types::{PessimisticLockRes, StorageCallback, TxnStatus},
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
@@ -1124,6 +1124,7 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
 pub struct TestStorageBuilder<E: Engine> {
     engine: E,
     config: Config,
+    pessimistic_txn_enabled: bool,
     pipelined_pessimistic_lock: bool,
 }
 
@@ -1133,6 +1134,7 @@ impl TestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: Config::default(),
+            pessimistic_txn_enabled: false,
             pipelined_pessimistic_lock: false,
         }
     }
@@ -1143,6 +1145,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         Self {
             engine,
             config: Config::default(),
+            pessimistic_txn_enabled: false,
             pipelined_pessimistic_lock: false,
         }
     }
@@ -1155,13 +1158,18 @@ impl<E: Engine> TestStorageBuilder<E> {
         self
     }
 
+    pub fn enable_pessimistic_txn(mut self) -> Self {
+        self.pessimistic_txn_enabled = true;
+        self
+    }
+
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, DummyLockManager>> {
-        let read_pool = ReadPool::from(build_read_pool_for_test(
+        let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
-        ));
-        let lock_manager = if self.pipelined_pessimistic_lock {
+        );
+        let lock_manager = if self.pessimistic_txn_enabled || self.pipelined_pessimistic_lock {
             Some(DummyLockManager {})
         } else {
             None
@@ -1169,7 +1177,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         Storage::from_engine(
             self.engine,
             &self.config,
-            read_pool.handle(),
+            ReadPool::from(read_pool).handle(),
             lock_manager,
             self.pipelined_pessimistic_lock,
         )
@@ -3853,71 +3861,144 @@ mod tests {
     }
 
     #[test]
-    fn test_pipelined_pessimistic_lock() {
-        type PessimisticLockCommand = TypedCommand<Result<Option<(Option<Value>, TimeStamp)>>>;
+    fn test_pessimistic_lock() {
+        type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
         fn new_acquire_pessimistic_lock_command(
-            key: Key,
+            keys: Vec<(Key, bool)>,
             start_ts: impl Into<TimeStamp>,
             for_update_ts: impl Into<TimeStamp>,
-            force: bool,
+            return_values: bool,
         ) -> PessimisticLockCommand {
+            let primary = keys[0].0.clone().to_raw().unwrap();
             commands::AcquirePessimisticLock::new(
-                vec![(key.clone(), false)],
-                key.to_raw().unwrap(),
+                keys,
+                primary,
                 start_ts.into(),
                 3000,
                 false,
                 for_update_ts.into(),
                 None,
-                force,
+                return_values,
                 Context::default(),
             )
         }
 
+        fn delete_pessimistic_lock<E: Engine, L: LockManager>(
+            storage: &Storage<E, L>,
+            key: Key,
+            start_ts: u64,
+            for_update_ts: u64,
+        ) {
+            let (tx, rx) = channel();
+            storage
+                .sched_txn_command(
+                    commands::PessimisticRollback::new(
+                        vec![key],
+                        start_ts.into(),
+                        for_update_ts.into(),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx, 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        }
+
+        fn expect_pessimistic_lock_res_callback(
+            done: Sender<i32>,
+            pessimistic_lock_res: PessimisticLockRes,
+        ) -> Callback<Result<PessimisticLockRes>> {
+            Box::new(move |res: Result<Result<PessimisticLockRes>>| {
+                assert_eq!(res.unwrap().unwrap(), pessimistic_lock_res);
+                done.send(0).unwrap();
+            })
+        }
+
         let storage = TestStorageBuilder::new()
-            .enable_pipelined_pessimistic_lock()
+            .enable_pessimistic_txn()
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let (key, val) = (Key::from_raw(b"key"), b"val".to_vec());
+        let (key2, val2) = (Key::from_raw(b"key2"), b"val2".to_vec());
+
+        // Key not exist
+        for &return_values in &[false, true] {
+            let pessimistic_lock_res = if return_values {
+                PessimisticLockRes::Values(vec![None])
+            } else {
+                PessimisticLockRes::Empty
+            };
+
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![(key.clone(), false)],
+                        10,
+                        10,
+                        return_values,
+                    ),
+                    expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            // Duplicated command
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![(key.clone(), false)],
+                        10,
+                        10,
+                        return_values,
+                    ),
+                    expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            delete_pessimistic_lock(&storage, key.clone(), 10, 10);
+        }
 
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key.clone(), 10, 10, false),
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-
-        // Duplicated command
-        storage
-            .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key.clone(), 10, 10, false),
-                expect_ok_callback(tx.clone(), 0),
+                new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, false),
+                expect_pessimistic_lock_res_callback(tx.clone(), PessimisticLockRes::Empty),
             )
             .unwrap();
         rx.recv().unwrap();
 
         // KeyIsLocked
-        storage
-            .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key.clone(), 20, 20, false),
-                expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                        box mvcc::ErrorInner::KeyIsLocked(_),
-                    ))))) => (),
-                    e => panic!("unexpected error chain: {:?}", e),
-                }),
-            )
-            .unwrap();
-        // The DummyLockManager consumes the Msg::WaitForLock.
-        rx.recv_timeout(std::time::Duration::from_millis(100))
-            .unwrap_err();
+        for &return_values in &[false, true] {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![(key.clone(), false)],
+                        20,
+                        20,
+                        return_values,
+                    ),
+                    expect_fail_callback(tx.clone(), 0, |e| match e {
+                        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            mvcc::Error(box mvcc::ErrorInner::KeyIsLocked(_)),
+                        )))) => (),
+                        e => panic!("unexpected error chain: {:?}", e),
+                    }),
+                )
+                .unwrap();
+            // The DummyLockManager consumes the Msg::WaitForLock.
+            rx.recv_timeout(std::time::Duration::from_millis(100))
+                .unwrap_err();
+        }
 
+        // Put key and key2.
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::Put((key.clone(), val.clone())), true)],
+                    vec![
+                        (Mutation::Put((key.clone(), val.clone())), true),
+                        (Mutation::Put((key2.clone(), val2.clone())), false),
+                    ],
                     key.to_raw().unwrap(),
                     10.into(),
                     3000,
@@ -3932,36 +4013,63 @@ mod tests {
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                commands::Commit::new(vec![key.clone()], 10.into(), 20.into(), Context::default()),
+                commands::Commit::new(
+                    vec![key.clone(), key2.clone()],
+                    10.into(),
+                    20.into(),
+                    Context::default(),
+                ),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
 
         // WriteConflict
-        storage
-            .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key.clone(), 15, 15, false),
-                expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                        box mvcc::ErrorInner::WriteConflict { .. },
-                    ))))) => (),
-                    e => panic!("unexpected error chain: {:?}", e),
-                }),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        for &return_values in &[false, true] {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![(key.clone(), false)],
+                        15,
+                        15,
+                        return_values,
+                    ),
+                    expect_fail_callback(tx.clone(), 0, |e| match e {
+                        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            mvcc::Error(box mvcc::ErrorInner::WriteConflict { .. }),
+                        )))) => (),
+                        e => panic!("unexpected error chain: {:?}", e),
+                    }),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        }
 
-        // Force pessimistic lock
-        storage
-            .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key, 30, 30, true),
-                Box::new(move |res: Result<Result<_>>| {
-                    assert_eq!(res.unwrap().unwrap(), Some((Some(val), TimeStamp::new(20))));
-                    tx.send(0).unwrap();
-                }),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        // Return multiple values
+        for &return_values in &[false, true] {
+            let pessimistic_lock_res = if return_values {
+                PessimisticLockRes::Values(vec![Some(val.clone()), Some(val2.clone()), None])
+            } else {
+                PessimisticLockRes::Empty
+            };
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![
+                            (key.clone(), false),
+                            (key2.clone(), false),
+                            (Key::from_raw(b"key3"), false),
+                        ],
+                        30,
+                        30,
+                        return_values,
+                    ),
+                    expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            delete_pessimistic_lock(&storage, key.clone(), 30, 30);
+        }
     }
 }

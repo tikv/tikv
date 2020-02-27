@@ -329,8 +329,8 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
 #[cfg(test)]
 pub mod tests {
     use tidb_query_codegen::AggrFunction;
-    use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeTp};
-    use tipb::FieldType;
+    use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::{Collation, FieldTypeTp};
 
     use crate::aggr_fn::*;
     use crate::batch::executors::util::mock_executor::MockExecutor;
@@ -377,15 +377,16 @@ pub mod tests {
     /// 1.5          4.5         aaaaa       5          ááá
     /// (drained)
     pub fn make_src_executor_1() -> MockExecutor {
-        let mut col4: FieldType = FieldTypeTp::VarString.into();
-        col4.set_collation(Collation::Utf8GeneralCi);
         MockExecutor::new(
             vec![
                 FieldTypeTp::Double.into(),
                 FieldTypeTp::Double.into(),
                 FieldTypeTp::VarString.into(),
                 FieldTypeTp::LongLong.into(),
-                col4,
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarString)
+                    .collation(Collation::Utf8Mb4GeneralCi)
+                    .into(),
             ],
             vec![
                 BatchExecuteResult {

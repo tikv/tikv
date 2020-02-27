@@ -3,10 +3,10 @@
 use std::cmp::Ordering;
 
 use match_template::match_template;
-use tidb_query_datatype::{Collation, EvalType};
+use tidb_query_datatype::EvalType;
+use tipb::FieldType;
 
 use super::*;
-use crate::codec::collation::{match_template_collator, Collator};
 
 /// A scalar value container, a.k.a. datum, for all concrete eval types.
 ///
@@ -178,7 +178,14 @@ impl<'a> ScalarValueRef<'a> {
     }
 
     #[inline]
-    pub fn cmp_sort_key(&self, other: &ScalarValueRef, collation: Collation) -> Result<Ordering> {
+    pub fn cmp_sort_key(
+        &self,
+        other: &ScalarValueRef,
+        field_type: &FieldType,
+    ) -> crate::codec::Result<Ordering> {
+        use crate::codec::collation::{match_template_collator, Collator};
+        use tidb_query_datatype::{Collation, FieldTypeAccessor};
+
         Ok(match_template! {
             TT = [Int, Real, Decimal, DateTime, Duration, Json],
             match (self, other) {
@@ -188,7 +195,7 @@ impl<'a> ScalarValueRef<'a> {
                 (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(Some(_))) => Ordering::Less,
                 (ScalarValueRef::Bytes(Some(v1)), ScalarValueRef::Bytes(Some(v2))) => {
                     match_template_collator! {
-                        TT, match collation {
+                        TT, match field_type.collation()? {
                             Collation::TT => TT::sort_compare(v1, v2)?
                         }
                     }

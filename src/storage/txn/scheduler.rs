@@ -575,6 +575,7 @@ mod tests {
                 false,
                 TimeStamp::default(),
                 Some(WaitTimeout::Default),
+                false,
                 Context::default(),
             )
             .into(),

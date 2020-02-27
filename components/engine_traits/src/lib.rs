@@ -251,6 +251,8 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+pub mod metrics_flusher;
 pub mod util;
+pub use crate::metrics_flusher::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
