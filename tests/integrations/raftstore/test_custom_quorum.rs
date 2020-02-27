@@ -1,5 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use futures::future::Future;
+use std::time::Duration;
+
+use crate::pd_client::PdClient;
 use raftstore::store::QuorumAlgorithm;
 use test_raftstore::*;
 
@@ -21,4 +25,37 @@ fn test_integration_on_half_fail_quorum_fn() {
         }
     }
     panic!("region 1 must lost leader because quorum fail");
+}
+
+#[test]
+fn test_check_conf_change() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.quorum_algorithm = QuorumAlgorithm::IntegrationOnHalfFail;
+    let rid = cluster.run_conf_change();
+    let r1 = cluster
+        .pd_client
+        .get_region_by_id(rid)
+        .wait()
+        .unwrap()
+        .unwrap();
+
+    cluster.pd_client.must_add_peer(rid, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(rid, new_learner_peer(3, 3));
+
+    // Stop peer 3 and compact logs on peer 1 and 2, so that peer 3 can't become voter.
+    cluster.stop_node(3);
+    for _ in 0..100 {
+        cluster.must_put(b"k1", b"v1");
+    }
+    let compact_log = new_compact_log_request(100, 10);
+    let req = new_admin_request(rid, r1.get_region_epoch(), compact_log);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(!res.get_header().has_error());
+
+    // Peer 3 can't be promoted.
+    cluster.pd_client.add_peer(rid, new_peer(3, 3));
+    sleep_ms(1000);
+    cluster.pd_client.must_none_peer(rid, new_peer(3, 3));
 }

@@ -1785,7 +1785,12 @@ impl Peer {
             }
         }
         let healthy = self.count_healthy_node(progress.voters());
-        let quorum_after_change = raft::majority(progress.voter_ids().len());
+        let quorum_after_change = match ctx.cfg.quorum_algorithm {
+            QuorumAlgorithm::IntegrationOnHalfFail => {
+                util::integration_on_half_fail_quorum_fn(progress.voter_ids().len())
+            }
+            QuorumAlgorithm::Majority => raft::majority(progress.voter_ids().len()),
+        };
         if healthy >= quorum_after_change {
             return Ok(());
         }
