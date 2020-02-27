@@ -287,7 +287,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                         group,
                                         &mut self.states,
                                         &mut self.states_offset_each_logical_row,
-                                        |val| SortKey::new_option(val).map_err(Into::into)
+                                        |val| Ok(SortKey::map_option(val)?)
                                     )?;
                                 }
                             }
