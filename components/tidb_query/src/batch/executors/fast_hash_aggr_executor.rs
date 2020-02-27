@@ -165,7 +165,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             states: Vec::with_capacity(1024),
             groups,
             group_by_exp,
-            group_by_field_type: group_by_field_type,
+            group_by_field_type,
             states_offset_each_logical_row: Vec::with_capacity(
                 crate::batch::runner::BATCH_MAX_SIZE,
             ),
@@ -535,6 +535,7 @@ mod tests {
                 .as_real_slice()
                 .iter()
                 .map(|v| {
+                    use std::hash::Hasher;
                     let mut s = std::collections::hash_map::DefaultHasher::new();
                     v.hash(&mut s);
                     s.finish()
