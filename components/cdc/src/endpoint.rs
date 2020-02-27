@@ -104,7 +104,7 @@ impl fmt::Debug for Task {
 pub struct Endpoint<T> {
     capture_regions: HashMap<u64, Delegate>,
     scheduler: Scheduler<Task>,
-    casual_router: T,
+    raft_router: T,
     observer: CdcObserver,
 
     pd_client: Arc<dyn PdClient>,
@@ -119,7 +119,7 @@ impl<T: CasualRouter> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
-        casual_router: T,
+        raft_router: T,
         observer: CdcObserver,
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
@@ -129,7 +129,7 @@ impl<T: CasualRouter> Endpoint<T> {
             pd_client,
             timer: SteadyTimer::default(),
             workers,
-            casual_router,
+            raft_router,
             observer,
             scan_batch_size: 1024,
             min_ts_interval: Duration::from_secs(10),
@@ -221,7 +221,7 @@ impl<T: CasualRouter> Endpoint<T> {
                 region_epoch: request.take_region_epoch(),
             }
         };
-        if let Err(e) = self.casual_router.send(
+        if let Err(e) = self.raft_router.send(
             region_id,
             CasualMessage::CaptureChange {
                 cmd: change_cmd,
@@ -269,7 +269,6 @@ impl<T: CasualRouter> Endpoint<T> {
     fn on_region_ready(&mut self, region_id: u64, resolver: Resolver, region: Region) {
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             delegate.on_region_ready(resolver, region);
-            println!("region ready: has_failed({})", delegate.has_failed());
             // Delegate may fail during handling pending batch.
             if delegate.has_failed() {
                 self.capture_regions.remove(&region_id);
