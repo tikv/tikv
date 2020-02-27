@@ -7,6 +7,7 @@ pub use self::utf8mb4::*;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::ops::Deref;
 
 use codec::prelude::*;
 
@@ -175,5 +176,16 @@ where
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).unwrap()
+    }
+}
+
+impl<T, C: Collator> Deref for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
