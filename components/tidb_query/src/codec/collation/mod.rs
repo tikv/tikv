@@ -126,7 +126,7 @@ where
     ///
     /// # Safety
     ///
-    /// The `Ord`, `Hash`, `PartialEq` and more, implementations assume that the bytes are
+    /// The `Ord`, `Hash`, `PartialEq` and more implementations assume that the bytes are
     /// valid for the certain collator. The violation will cause panic.
     #[inline]
     pub unsafe fn new_unchecked(inner: T) -> Self {
