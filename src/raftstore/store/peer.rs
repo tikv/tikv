@@ -270,6 +270,8 @@ pub struct Peer {
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
+    /// Indicates whether the peer should be woken up.
+    pub should_wake_up: bool,
     /// Whether this peer is destroyed asynchronously.
     /// If it's true when merging, its data in storeMeta will be removed early by the target peer
     pub pending_remove: bool,
@@ -376,6 +378,7 @@ impl Peer {
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
+            should_wake_up: false,
             pending_merge_state: None,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
@@ -613,6 +616,12 @@ impl Peer {
                 return res;
             }
         }
+        if self.raft_group.raft.pending_read_count() > 0 {
+            return res;
+        }
+        if self.raft_group.raft.lead_transferee.is_some() {
+            return res;
+        }
         // Unapplied entries can change the configuration of the group.
         res.up_to_date = self.get_store().applied_index() == last_index;
         res
@@ -620,7 +629,7 @@ impl Peer {
 
     pub fn check_after_tick(&self, state: GroupState, res: CheckTickResult) -> bool {
         if res.leader {
-            res.up_to_date && self.is_leader() && self.raft_group.raft.pending_read_count() == 0
+            res.up_to_date && self.is_leader()
         } else {
             // If follower keeps receiving data from leader, then it's safe to stop
             // ticking, as leader will make sure it has the latest logs.
@@ -629,6 +638,8 @@ impl Peer {
             state != GroupState::Chaos
                 && self.raft_group.raft.leader_id != raft::INVALID_ID
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
+                // If it becomes leader, the stats is not valid anymore.
+                && !self.is_leader()
         }
     }
 
@@ -1722,7 +1733,7 @@ impl Peer {
     ///    need to be up to date for now. If 'allow_remove_leader' is false then
     ///    the peer to be removed should not be the leader.
     fn check_conf_change<T, C>(
-        &self,
+        &mut self,
         ctx: &mut PollContext<T, C>,
         cmd: &RaftCmdRequest,
     ) -> Result<()> {
@@ -1797,6 +1808,8 @@ impl Peer {
             "healthy" => healthy,
             "quorum_after_change" => quorum_after_change,
         );
+        // Waking it up to replicate logs to candidate.
+        self.should_wake_up = true;
         Err(box_err!(
             "unsafe to perform conf change {:?}, total {}, healthy {}, quorum after \
              change {}",
@@ -2196,7 +2209,10 @@ impl Peer {
                         "last_index" => self.get_store().last_index(),
                     );
                 }
-                None => self.transfer_leader(&from),
+                None => {
+                    self.transfer_leader(&from);
+                    self.should_wake_up = true;
+                }
             }
             return;
         }
