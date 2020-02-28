@@ -851,7 +851,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_extra_message(&mut self, msg: &RaftMessage) {
         let extra_msg = msg.get_extra_msg();
-        match extra_msg.get_type() {
+        match extra_msg.get_field_type() {
             ExtraMessageType::MsgRegionWakeUp => {
                 if msg.get_message().get_index() < self.fsm.peer.get_store().committed_index() {
                     self.reset_raft_tick(GroupState::Ordered);
