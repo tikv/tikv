@@ -43,6 +43,7 @@ use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
+use tikv_util::time::Instant as UtilInstant;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 
@@ -239,7 +240,7 @@ pub struct Peer {
     pub peer_stat: PeerStat,
 
     /// Time of the last attempt to wake up inactive leader.
-    pub bcast_wake_up_time: Option<Instant>,
+    pub bcast_wake_up_time: Option<UtilInstant>,
 }
 
 impl Peer {
@@ -2018,7 +2019,7 @@ impl Peer {
                         >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL))
             {
                 self.bcast_wake_up_message(&mut poll_ctx.trans);
-                self.bcast_wake_up_time = Some(Instant::now());
+                self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
             }
             cb.invoke_with_response(err_resp);
             return false;
