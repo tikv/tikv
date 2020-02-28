@@ -56,6 +56,26 @@ pub enum ProcessResult {
     },
 }
 
+// TODO: error info lost!
+impl ProcessResult {
+    pub fn maybe_clone(&self) -> Option<ProcessResult> {
+        match self {
+            ProcessResult::MultiRes { results } => {
+                Some(ProcessResult::MultiRes {
+                    results: results.into_iter().map(|e| match e {
+                        Ok(_) => Ok(()),
+                        Err(e) => match e.maybe_clone() {
+                            Some(e) => Err(e),
+                            None => Ok(()),
+                        }
+                    }).collect()
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 quick_error! {
     #[derive(Debug)]
     pub enum ErrorInner {

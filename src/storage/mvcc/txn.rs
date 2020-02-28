@@ -382,7 +382,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         } else if is_pessimistic_lock {
             let mut could_repair = false;
-            if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
+            if let Some((commit_ts, _)) = self.reader.seek_write(&key, TimeStamp::max())? {
                 if commit_ts < self.start_ts {
                     // Used pipelined pessimistic lock acquiring in this txn but failed
                     // Luckily no other txn modified this lock, repair it by overwriting.

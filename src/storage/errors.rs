@@ -64,6 +64,23 @@ quick_error! {
     }
 }
 
+impl ErrorInner {
+    pub fn maybe_clone(&self) -> Option<ErrorInner> {
+        match self {
+            ErrorInner::Engine(e) => e.maybe_clone().map(ErrorInner::Engine),
+            ErrorInner::Txn(e) => e.maybe_clone().map(ErrorInner::Txn),
+            ErrorInner::Mvcc(e) => e.maybe_clone().map(ErrorInner::Mvcc),
+            e @ ErrorInner::Closed => e.maybe_clone(),
+            e @ ErrorInner::SchedTooBusy => e.maybe_clone(),
+            e @ ErrorInner::GcWorkerTooBusy => e.maybe_clone(),
+            ErrorInner::KeyTooLarge(size, limit) => Some(ErrorInner::KeyTooLarge(*size, *limit)),
+            ErrorInner::InvalidCf(cf_name) => Some(ErrorInner::InvalidCf(cf_name.to_string())),
+            e @ ErrorInner::PessimisticTxnNotEnabled => e.maybe_clone(),
+            ErrorInner::Io(_) | ErrorInner::Other(_) => None,
+        }
+    }
+}
+
 pub struct Error(pub Box<ErrorInner>);
 
 impl fmt::Debug for Error {
@@ -92,6 +109,15 @@ impl From<ErrorInner> for Error {
     #[inline]
     fn from(e: ErrorInner) -> Self {
         Error(Box::new(e))
+    }
+}
+
+impl Error {
+    pub fn maybe_clone(&self) -> Option<Error> {
+         match self.0.maybe_clone() {
+            Some(v) => Some(Error::from(v)),
+            _ => None,
+         }
     }
 }
 

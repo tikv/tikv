@@ -262,8 +262,15 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 } else {
                     let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
-                    // TODO: clone errors from pr
-                    let pipelined_write_pr = ProcessResult::MultiRes { results: vec![] };
+                    let (write_finished_pr, pipelined_write_pr) = if pipelined {
+                        (if let Some(v) = pr.maybe_clone() {
+                            v
+                        } else {
+                            ProcessResult::Res
+                        }, pr)
+                    } else {
+                        (pr, ProcessResult::Res)
+                    };
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
                         sched_pool
@@ -273,7 +280,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                                     sched,
                                     Msg::WriteFinished {
                                         cid,
-                                        pr,
+                                        pr: write_finished_pr,
                                         result,
                                         pipelined,
                                         tag,
