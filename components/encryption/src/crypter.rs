@@ -3,6 +3,16 @@ use openssl::symm::{self, Cipher as OCipher};
 
 use crate::Result;
 
+pub fn get_method_key_length(method: EncryptionMethod) -> usize {
+    match method {
+        EncryptionMethod::Plaintext => 0,
+        EncryptionMethod::Aes128Ctr => 16,
+        EncryptionMethod::Aes192Ctr => 24,
+        EncryptionMethod::Aes256Ctr => 32,
+        unknown => panic!("bad EncryptionMethod {:?}", unknown),
+    }
+}
+
 pub enum Cipher {
     Plaintext,
     AesCtr(OCipher),

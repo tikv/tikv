@@ -3,6 +3,7 @@ use kvproto::encryptionpb::{
 };
 
 use super::Backend;
+use crate::crypter::*;
 use crate::metadata::*;
 use crate::{AesCtrCtypter, Error, File, Iv, Result};
 
@@ -12,8 +13,18 @@ pub struct FileBased {
 }
 
 impl FileBased {
-    pub fn new(method: EncryptionMethod, key: Vec<u8>) -> FileBased {
-        FileBased { key, method }
+    pub fn new(method: EncryptionMethod, key: Vec<u8>) -> Result<FileBased> {
+        if key.len() != get_method_key_length(method) {
+            return Err(Error::Other(
+                format!(
+                    "encryption method and key length mismatch, expect {} get {}",
+                    get_method_key_length(method),
+                    key.len()
+                )
+                .into(),
+            ));
+        }
+        Ok(FileBased { key, method })
     }
 
     // TODO support online master key rotation

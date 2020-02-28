@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 
 use self::rockmock::*;
+use crate::crypter::*;
 use crate::master_key::*;
 use crate::{Error, Iv, Result};
 
@@ -95,16 +96,12 @@ impl Dicts {
 }
 
 fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
-    use rand::{rngs::OsRng, Rng, RngCore};
+    use rand::{rngs::OsRng, RngCore};
 
     let key_id = OsRng.next_u64();
-    let key = match method {
-        EncryptionMethod::Plaintext => vec![],
-        EncryptionMethod::Aes128Ctr => OsRng.gen::<[u8; 16]>().to_vec(),
-        EncryptionMethod::Aes192Ctr => OsRng.gen::<[u8; 24]>().to_vec(),
-        EncryptionMethod::Aes256Ctr => OsRng.gen::<[u8; 32]>().to_vec(),
-        unknown => panic!("bad EncryptionMethod {:?}", unknown),
-    };
+    let key_length = get_method_key_length(method);
+    let mut key = vec![0; key_length];
+    OsRng.fill_bytes(&mut key);
     (key_id, key)
 }
 
@@ -187,6 +184,8 @@ impl KeyManager for DataKeyManager {
     // Get key to open existing file.
     fn get_file(&self, file_path: &str) -> Result<FileEncryptionInfo> {
         let dicts = self.dicts.read().unwrap();
+        // TODO Should we return error if file is not found?
+        // TODO Should we use Plaintext if key not found?
         let file = dicts.get_file(file_path)?;
         let key_id = file.key_id;
         let data_key = dicts.get_key(key_id);
