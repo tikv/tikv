@@ -2,6 +2,8 @@
 #![allow(unused_imports)]
 
 #[macro_use]
+extern crate slog_global;
+#[macro_use]
 extern crate failure;
 
 mod crypter;

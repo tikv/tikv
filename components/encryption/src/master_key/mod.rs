@@ -14,3 +14,17 @@ pub trait Backend {
 
 mod filebase;
 // TODO support KMS
+
+#[derive(Default)]
+pub(crate) struct PlainTextBackend {}
+
+impl Backend for PlainTextBackend {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
+        let mut content = EncryptedContent::default();
+        content.set_content(plaintext.to_owned());
+        Ok(content)
+    }
+    fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
+        Ok(ciphertext.get_content().to_owned())
+    }
+}
