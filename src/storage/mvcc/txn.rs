@@ -351,6 +351,9 @@ impl<S: Snapshot> MvccTxn<S> {
         min_commit_ts: TimeStamp,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
+        if lock_type == LockType::Noop {
+            return Ok(());
+        }
         let (key, value) = mutation.into_key_value();
         let mut last_lock_ttl = 0;
         if let Some(lock) = self.reader.load_lock(&key)? {
@@ -419,8 +422,8 @@ impl<S: Snapshot> MvccTxn<S> {
         min_commit_ts: TimeStamp,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
-        // For the insert operation, the old key should not be in the system.
-        let should_not_exist = mutation.is_insert();
+        // For the insert/deleteExists operation, the old key should not be in the system.
+        let should_not_exist = mutation.should_not_exists();
         let (key, value) = mutation.into_key_value();
         // Check whether there is a newer version.
         if !skip_constraint_check {
@@ -442,6 +445,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
             }
+        }
+        if lock_type == LockType::Noop {
+            return Ok(());
         }
 
         // Check whether the current key is locked at any timestamp.
@@ -996,6 +1002,43 @@ mod tests {
         // After delete "k1", insert returns ok.
         assert!(try_prewrite_insert(&engine, k1, v2, k1, 13).is_ok());
         must_commit(&engine, k1, 13, 14);
+    }
+
+    #[test]
+    fn test_mvcc_txn_prewrite_check_not_exist() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k1, v1, v2, v3) = (b"k1", b"v1", b"v2", b"v3");
+        must_prewrite_put(&engine, k1, v1, k1, 1);
+        must_commit(&engine, k1, 1, 2);
+
+        // "k1" already exist, returns AlreadyExist error.
+        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 3).is_err());
+
+        // Delete "k1"
+        must_prewrite_delete(&engine, k1, k1, 4);
+        must_commit(&engine, k1, 4, 5);
+
+        // After delete "k1", check_not_exists returns ok.
+        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 6).is_ok());
+
+        assert!(try_prewrite_insert(&engine, k1, v2, k1, 7).is_ok());
+        must_commit(&engine, k1, 7, 8);
+
+        // Rollback
+        must_prewrite_put(&engine, k1, v3, k1, 9);
+        must_rollback(&engine, k1, 9);
+        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 10).is_err());
+
+        // Delete "k1" again
+        must_prewrite_delete(&engine, k1, k1, 11);
+        must_commit(&engine, k1, 11, 12);
+
+        // Rollback again
+        must_prewrite_put(&engine, k1, v3, k1, 13);
+        must_rollback(&engine, k1, 13);
+
+        // After delete "k1", check_not_exists returns ok.
+        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 14).is_ok());
     }
 
     #[test]

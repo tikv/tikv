@@ -62,6 +62,7 @@ impl MvccInfo {
                 LockType::Delete => kvrpcpb::Op::Del,
                 LockType::Lock => kvrpcpb::Op::Lock,
                 LockType::Pessimistic => kvrpcpb::Op::PessimisticLock,
+                LockType::Noop => panic!("noop lock never be writen, so unreachable to here"),
             };
             lock_info.set_type(op);
             lock_info.set_start_ts(lock.ts.into_inner());

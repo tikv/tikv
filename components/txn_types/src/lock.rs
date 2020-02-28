@@ -15,6 +15,7 @@ pub enum LockType {
     Delete,
     Lock,
     Pessimistic,
+    Noop,
 }
 
 const FLAG_PUT: u8 = b'P';
@@ -32,6 +33,7 @@ impl LockType {
             Mutation::Put(_) | Mutation::Insert(_) => LockType::Put,
             Mutation::Delete(_) => LockType::Delete,
             Mutation::Lock(_) => LockType::Lock,
+            Mutation::CheckNotExists(_) => LockType::Noop,
         }
     }
 
@@ -51,6 +53,7 @@ impl LockType {
             LockType::Delete => FLAG_DELETE,
             LockType::Lock => FLAG_LOCK,
             LockType::Pessimistic => FLAG_PESSIMISTIC,
+            LockType::Noop => panic!("noop lock never be writen, so unreachable to here"),
         }
     }
 }
@@ -171,6 +174,7 @@ impl Lock {
             LockType::Delete => Op::Del,
             LockType::Lock => Op::Lock,
             LockType::Pessimistic => Op::PessimisticLock,
+            LockType::Noop => panic!("noop lock never be writen, so unreachable to here"),
         };
         info.set_lock_type(lock_type);
         info.set_lock_for_update_ts(self.for_update_ts.into_inner());
