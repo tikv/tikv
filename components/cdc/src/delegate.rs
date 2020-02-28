@@ -562,6 +562,7 @@ mod tests {
     use tikv::server::RaftKv;
     use tikv::storage::mvcc::test_util::*;
     use tikv::storage::mvcc::tests::*;
+    use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender};
     use tikv_util::mpsc::{bounded, Sender as UtilSender};
 
     // TODO add test_txn once cdc observer is ready.
@@ -577,9 +578,12 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, events) = unbounded();
+        let (sink, rx) = batch::unbounded(1);
+        let events = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
+        let downstream = Downstream::new(String::new(), region_epoch);
+        downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
-        delegate.subscribe(Downstream::new(String::new(), region_epoch, sink));
+        delegate.subscribe();
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
         let mut resolver = Resolver::new();

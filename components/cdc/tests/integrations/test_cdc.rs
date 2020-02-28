@@ -4,8 +4,9 @@ use std::cell::Cell;
 use std::sync::*;
 use std::time::Duration;
 
+use futures::sink::Sink;
 use futures::{Future, Stream};
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::WriteFlags;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
@@ -15,142 +16,12 @@ use kvproto::cdcpb::{
     ChangeDataClient, ChangeDataRequest,
 };
 use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
-use raftstore::coprocessor::CoprocessorHost;
-use test_raftstore::*;
-use tikv_util::collections::HashMap;
-use tikv_util::worker::Worker;
-use tikv_util::HandyRwLock;
-use txn_types::TimeStamp;
+use test_raftstore::sleep_ms;
 
-use cdc::{CdcObserver, Task};
+use cdc::Task;
 
-struct TestSuite {
-    cluster: Cluster<ServerCluster>,
-    endpoints: HashMap<u64, Worker<Task>>,
-    obs: HashMap<u64, CdcObserver>,
-    tikv_cli: TikvClient,
-    cdc_cli: ChangeDataClient,
-
-    _env: Arc<Environment>,
-}
-
-impl TestSuite {
-    fn new(count: usize) -> TestSuite {
-        super::init();
-        let mut cluster = new_server_cluster(1, count);
-
-        let pd_cli = cluster.pd_client.clone();
-        let mut endpoints = HashMap::default();
-        let mut obs = HashMap::default();
-        // Hack! node id are generated from 1..count+1.
-        for id in 1..=count as u64 {
-            // Create and run cdc endpoints.
-            let worker = Worker::new(format!("cdc-{}", id));
-            let mut sim = cluster.sim.wl();
-
-            // Register cdc service to gRPC server.
-            let scheduler = worker.scheduler();
-            sim.pending_services
-                .entry(id)
-                .or_default()
-                .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone()))
-                }));
-            let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
-            obs.insert(id, cdc_ob.clone());
-            sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
-                move |host: &mut CoprocessorHost| {
-                    cdc_ob.register_to(host);
-                },
-            ));
-            endpoints.insert(id, worker);
-        }
-
-        cluster.run();
-        for (id, worker) in &mut endpoints {
-            let sim = cluster.sim.rl();
-            let apply_router = (*sim).get_apply_router(*id);
-            let cdc_ob = obs.get(&id).unwrap().clone();
-            let mut cdc_endpoint =
-                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), apply_router, cdc_ob);
-            cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
-            cdc_endpoint.set_scan_batch_size(2);
-            worker.start(cdc_endpoint).unwrap();
-        }
-
-        let region = cluster.get_region(&[]);
-        let leader = cluster.leader_of_region(region.get_id()).unwrap();
-        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
-        let env = Arc::new(Environment::new(1));
-        let channel = ChannelBuilder::new(env.clone()).connect(&leader_addr);
-        let tikv_cli = TikvClient::new(channel.clone());
-        let cdc_cli = ChangeDataClient::new(channel);
-
-        TestSuite {
-            cluster,
-            endpoints,
-            obs,
-            tikv_cli,
-            cdc_cli,
-            _env: env,
-        }
-    }
-
-    fn stop(mut self) {
-        for (_, mut worker) in self.endpoints {
-            worker.stop().unwrap().join().unwrap();
-        }
-        self.cluster.shutdown();
-    }
-
-    fn must_kv_prewrite(&mut self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
-        let mut prewrite_req = PrewriteRequest::default();
-        prewrite_req.set_context(self.get_context(1));
-        prewrite_req.set_mutations(muts.into_iter().collect());
-        prewrite_req.primary_lock = pk;
-        prewrite_req.start_version = ts.into_inner();
-        prewrite_req.lock_ttl = prewrite_req.start_version + 1;
-        let prewrite_resp = self.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
-        assert!(
-            !prewrite_resp.has_region_error(),
-            "{:?}",
-            prewrite_resp.get_region_error()
-        );
-        assert!(
-            prewrite_resp.errors.is_empty(),
-            "{:?}",
-            prewrite_resp.get_errors()
-        );
-    }
-
-    fn must_kv_commit(&mut self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
-        let mut commit_req = CommitRequest::default();
-        commit_req.set_context(self.get_context(1));
-        commit_req.start_version = start_ts.into_inner();
-        commit_req.set_keys(keys.into_iter().collect());
-        commit_req.commit_version = commit_ts.into_inner();
-        let commit_resp = self.tikv_cli.kv_commit(&commit_req).unwrap();
-        assert!(
-            !commit_resp.has_region_error(),
-            "{:?}",
-            commit_resp.get_region_error()
-        );
-        assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
-    }
-
-    fn get_context(&mut self, region_id: u64) -> Context {
-        let epoch = self.cluster.get_region_epoch(region_id);
-        let leader = self.cluster.leader_of_region(region_id).unwrap();
-        let mut context = Context::default();
-        context.set_region_id(region_id);
-        context.set_peer(leader);
-        context.set_region_epoch(epoch);
-        context
-    }
-}
+use super::TestSuite;
 
 #[test]
 fn test_cdc_basic() {
@@ -159,9 +30,9 @@ fn test_cdc_basic() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
+    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let event_feed_wrap = Cell::new(Some(resp_rx));
     let receive_event = |keep_resolved_ts: bool| loop {
         let (change_data, events) =
             match event_feed_wrap.replace(None).unwrap().into_future().wait() {
@@ -214,7 +85,7 @@ fn test_cdc_basic() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone().into_bytes();
     mutation.value = v.into_bytes();
-    suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
     let event = receive_event(false);
     match event {
         Event_oneof_event::Entries(entries) => {
@@ -238,7 +109,7 @@ fn test_cdc_basic() {
             }
         }
     }
-    suite.must_kv_commit(vec![k.into_bytes()], start_ts, commit_ts);
+    suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
     let event = receive_event(false);
     match event {
         Event_oneof_event::Entries(entries) => {
@@ -272,8 +143,9 @@ fn test_cdc_basic() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed2 = suite.cdc_cli.event_feed(&req).unwrap();
-    event_feed_wrap.replace(Some(event_feed2));
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
+    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    event_feed_wrap.replace(Some(resp_rx));
     let event = receive_event(false);
 
     match event {
@@ -312,8 +184,9 @@ fn test_cdc_basic() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(Default::default()); // Zero region epoch.
-    let event_feed3 = suite.cdc_cli.event_feed(&req).unwrap();
-    event_feed_wrap.replace(Some(event_feed3));
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
+    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    event_feed_wrap.replace(Some(resp_rx));
     let event = receive_event(false);
     match event {
         Event_oneof_event::Error(err) => {
@@ -335,9 +208,9 @@ fn test_cdc_not_leader() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
+    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let event_feed_wrap = Cell::new(Some(resp_rx));
     let receive_event = |keep_resolved_ts: bool| loop {
         let (change_data, events) =
             match event_feed_wrap.replace(None).unwrap().into_future().wait() {
@@ -439,9 +312,9 @@ fn test_cdc_stale_epoch_after_region_ready() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
+    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let event_feed_wrap = Cell::new(Some(resp_rx));
     let receive_event = |keep_resolved_ts: bool| loop {
         let (change_data, events) =
             match event_feed_wrap.replace(None).unwrap().into_future().wait() {
@@ -475,8 +348,9 @@ fn test_cdc_stale_epoch_after_region_ready() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(Default::default()); // zero epoch is always stale.
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-    let feed1_holder = event_feed_wrap.replace(Some(event_feed));
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
+    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let feed1_holder = event_feed_wrap.replace(Some(resp_rx));
     // Must receive epoch not match error.
     let event = receive_event(false);
     match event {
@@ -510,10 +384,10 @@ fn test_cdc_scan() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone();
     mutation.value = v.clone();
-    suite.must_kv_prewrite(vec![mutation], k.clone(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
     // Commit
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(vec![k.clone()], start_ts, commit_ts);
+    suite.must_kv_commit(1, vec![k.clone()], start_ts, commit_ts);
 
     // Prewrite again
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
@@ -521,14 +395,14 @@ fn test_cdc_scan() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone();
     mutation.value = v.clone();
-    suite.must_kv_prewrite(vec![mutation], k.clone(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
 
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
+    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let event_feed_wrap = Cell::new(Some(resp_rx));
     let receive_event = |keep_resolved_ts: bool| loop {
         let (change_data, events) =
             match event_feed_wrap.replace(None).unwrap().into_future().wait() {
@@ -585,21 +459,22 @@ fn test_cdc_scan() {
     let checkpoint_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     // Commit = 6;
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(vec![k.clone()], start_ts, commit_ts);
+    suite.must_kv_commit(1, vec![k.clone()], start_ts, commit_ts);
     // Prewrite delete
     // Start = 7;
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Del);
     mutation.key = k.clone();
-    suite.must_kv_prewrite(vec![mutation], k.clone(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
 
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.checkpoint_ts = checkpoint_ts.into_inner();
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed2 = suite.cdc_cli.event_feed(&req).unwrap();
-    let event_feed1 = event_feed_wrap.replace(Some(event_feed2));
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
+    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let event_feed1 = event_feed_wrap.replace(Some(resp_rx));
 
     let event = receive_event(false);
     match event {
@@ -651,9 +526,9 @@ fn test_cdc_tso_failure() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
+    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let event_feed_wrap = Cell::new(Some(resp_rx));
     let receive_event = |keep_resolved_ts: bool| loop {
         let (change_data, events) =
             match event_feed_wrap.replace(None).unwrap().into_future().wait() {

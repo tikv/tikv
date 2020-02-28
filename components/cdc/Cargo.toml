@@ -61,6 +61,3 @@ test_util = { path = "../test_util" }
 [[test]]
 name = "integrations"
 path = "tests/integrations/mod.rs"
-
-[replace]
-"https://github.com/pingcap/kvproto.git#kvproto:0.0.2" = { git = "https://github.com/5kbpers/kvproto.git", branch = "cdc-batch-service" }
