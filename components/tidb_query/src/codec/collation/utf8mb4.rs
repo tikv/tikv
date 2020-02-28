@@ -388,7 +388,7 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
         let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
         for ch in s.chars().map(general_ci_convert) {
-            state.write_u16(ch);
+            ch.hash(state);
         }
         Ok(())
     }
