@@ -5,6 +5,7 @@ use std::mem;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::RaftMessage;
@@ -149,6 +150,65 @@ fn test_replica_read_on_hibernate() {
             Err(_) => unreachable!(),
         }
     }
+}
+
+#[test]
+fn test_read_hibernated_region() {
+    let mut cluster = new_node_cluster(0, 3);
+    // Initialize the cluster.
+    configure_for_lease_read(&mut cluster, Some(100), Some(8));
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(Duration::from_millis(1));
+    cluster.pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    let p2 = new_peer(2, 2);
+    cluster.pd_client.must_add_peer(r1, p2.clone());
+    let p3 = new_peer(3, 3);
+    cluster.pd_client.must_add_peer(r1, p3.clone());
+    cluster.must_put(b"k0", b"v0");
+    let region = cluster.get_region(b"k0");
+    cluster.must_transfer_leader(region.get_id(), p3);
+    // Make sure leader writes the data.
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+    // Wait for region is hibernated.
+    thread::sleep(Duration::from_secs(1));
+    cluster.stop_node(2);
+    cluster.run_node(2).unwrap();
+
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let (tx, rx) = mpsc::sync_channel(1);
+    let filter = Box::new(
+        RegionPacketFilter::new(1, 3)
+            .direction(Direction::Recv)
+            .reserve_dropped(Arc::clone(&dropped_msgs))
+            .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
+                if msg.has_extra_msg() {
+                    tx.send(msg.clone()).unwrap();
+                }
+            })),
+    );
+    cluster.sim.wl().add_recv_filter(3, filter);
+    // This request will fail because no valid leader.
+    let resp1_ch = async_read_on_peer(&mut cluster, p2.clone(), region.clone(), b"k1", true, true);
+    let resp1 = resp1_ch.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        resp1
+            .get_header()
+            .get_error()
+            .get_message()
+            .contains("can not read index due to no leader"),
+        "{:?}",
+        resp1.get_header()
+    );
+    // Wait util receiving wake up message.
+    let wake_up_msg = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    cluster.sim.wl().clear_recv_filters(3);
+    let router = cluster.sim.wl().get_router(3).unwrap();
+    router.send_raft_message(wake_up_msg).unwrap();
+    // Wait for the leader is woken up.
+    thread::sleep(Duration::from_millis(500));
+    let resp2_ch = async_read_on_peer(&mut cluster, p2, region, b"k1", true, true);
+    let resp2 = resp2_ch.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(!resp2.get_header().has_error(), "{:?}", resp2);
 }
 
 #[derive(Default)]
