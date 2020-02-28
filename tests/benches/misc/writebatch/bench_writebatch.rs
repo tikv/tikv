@@ -119,7 +119,7 @@ fn bench_writebatch_with_capacity(b: &mut Bencher) {
         .unwrap();
     let db = Arc::new(DB::open_default(path.path().to_str().unwrap()).unwrap());
     b.iter(|| {
-        let wb = db.c().write_batch();
+        let wb = db.c().write_batch_with_cap(4096);
         fill_writebatch(&wb, 4096);
     });
 }
