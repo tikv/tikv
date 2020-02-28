@@ -299,14 +299,14 @@ mod tests {
             ],
             &[
                 (
-                    engine_traits::CF_DEFAULT,
+                    engine::CF_DEFAULT,
                     &[
                         (&keys::data_key(&[b'a']), &[b'a']),
                         (&keys::data_key(&[]), &[]),
                     ],
                 ),
                 (
-                    engine_traits::CF_WRITE,
+                    engine::CF_WRITE,
                     &[
                         (&keys::data_key(&[b'a']), &[b'a']),
                         (&keys::data_key(&[b'b']), &[]),
