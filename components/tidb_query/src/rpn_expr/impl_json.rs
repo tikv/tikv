@@ -713,11 +713,6 @@ mod tests {
                 true,
             ),
             (
-                vec![Some(Json::from_str(r#"true"#).unwrap()).into()],
-                None,
-                true,
-            ),
-            (
                 vec![Some(Json::from_str("null").unwrap()).into()],
                 None,
                 true,
@@ -855,7 +850,7 @@ mod tests {
             if is_success {
                 assert_eq!(output.unwrap(), expected, "{:?}", vargs);
             } else {
-                assert_eq!(output.is_err(), true);
+                assert!(output.is_err());
             }
         }
     }

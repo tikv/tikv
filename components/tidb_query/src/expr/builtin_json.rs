@@ -353,13 +353,10 @@ mod tests {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]);
             if is_success {
-                let exp = match exp {
-                    None => Datum::Null,
-                    Some(s) => Datum::Json(s.parse().unwrap()),
-                };
+                let exp = exp.map_or(Datum::Null, |s| Datum::Json(s.parse().unwrap()));
                 assert_eq!(got.unwrap(), exp);
             } else {
-                assert_eq!(got.is_err(), true);
+                assert!(got.is_err());
             }
         }
     }
