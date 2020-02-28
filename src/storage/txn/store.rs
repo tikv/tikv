@@ -139,7 +139,10 @@ impl TxnEntry {
                     let v = WriteRef::parse(&write.1)
                         .map_err(MvccError::from)?
                         .to_owned();
-                    let v = v.short_value.unwrap();
+                    let v = match v.short_value {
+                        Some(v) => v,
+                        None => vec![],
+                    };
                     Ok((k, v))
                 }
             }
