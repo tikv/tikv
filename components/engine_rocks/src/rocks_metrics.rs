@@ -1,165 +1,16 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO: Need delete this defs after move the event_listener into engine_rocks.
-use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
-use std::i64;
-
-use crate::rocks::{
-    self, DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
-    HistogramData, DB,
-};
+use crate::rocks_metrics_defs::*;
 use engine_traits::CF_DEFAULT;
-
-pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
-pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem";
-pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &str = "rocksdb.cur-size-all-mem-tables";
-pub const ROCKSDB_ESTIMATE_NUM_KEYS: &str = "rocksdb.estimate-num-keys";
-pub const ROCKSDB_PENDING_COMPACTION_BYTES: &str = "rocksdb.\
-                                                    estimate-pending-compaction-bytes";
-pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-at-level";
-pub const ROCKSDB_NUM_SNAPSHOTS: &str = "rocksdb.num-snapshots";
-pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
-pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
-pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
-
-pub const ROCKSDB_TITANDB_LIVE_BLOB_SIZE: &str = "rocksdb.titandb.live-blob-size";
-pub const ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE: &str = "rocksdb.titandb.num-live-blob-file";
-pub const ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE: &str = "rocksdb.titandb.\
-                                                          num-obsolete-blob-file";
-pub const ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
-                                                       live-blob-file-size";
-pub const ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
-                                                           obsolete-blob-file-size";
-pub const ROCKSDB_CFSTATS: &str = "rocksdb.cfstats";
-pub const ROCKSDB_IOSTALL_KEY: &[&str] = &[
-    "io_stalls.level0_slowdown",
-    "io_stalls.level0_numfiles",
-    "io_stalls.slowdown_for_pending_compaction_bytes",
-    "io_stalls.stop_for_pending_compaction_bytes",
-    "io_stalls.memtable_slowdown",
-    "io_stalls.memtable_compaction",
-];
-
-pub const ROCKSDB_IOSTALL_TYPE: &[&str] = &[
-    "level0_file_limit_slowdown",
-    "level0_file_limit_stop",
-    "pending_compaction_bytes_slowdown",
-    "pending_compaction_bytes_stop",
-    "memtable_count_limit_slowdown",
-    "memtable_count_limit_stop",
-];
-
-pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
-    TickerType::BlockCacheMiss,
-    TickerType::BlockCacheHit,
-    TickerType::BlockCacheAdd,
-    TickerType::BlockCacheAddFailures,
-    TickerType::BlockCacheIndexMiss,
-    TickerType::BlockCacheIndexHit,
-    TickerType::BlockCacheIndexAdd,
-    TickerType::BlockCacheIndexBytesInsert,
-    TickerType::BlockCacheIndexBytesEvict,
-    TickerType::BlockCacheFilterMiss,
-    TickerType::BlockCacheFilterHit,
-    TickerType::BlockCacheFilterAdd,
-    TickerType::BlockCacheFilterBytesInsert,
-    TickerType::BlockCacheFilterBytesEvict,
-    TickerType::BlockCacheDataMiss,
-    TickerType::BlockCacheDataHit,
-    TickerType::BlockCacheDataAdd,
-    TickerType::BlockCacheDataBytesInsert,
-    TickerType::BlockCacheBytesRead,
-    TickerType::BlockCacheBytesWrite,
-    TickerType::BloomFilterUseful,
-    TickerType::MemtableHit,
-    TickerType::MemtableMiss,
-    TickerType::GetHitL0,
-    TickerType::GetHitL1,
-    TickerType::GetHitL2AndUp,
-    TickerType::CompactionKeyDropNewerEntry,
-    TickerType::CompactionKeyDropObsolete,
-    TickerType::CompactionKeyDropRangeDel,
-    TickerType::CompactionRangeDelDropObsolete,
-    TickerType::NumberKeysWritten,
-    TickerType::NumberKeysRead,
-    TickerType::BytesWritten,
-    TickerType::BytesRead,
-    TickerType::NumberDbSeek,
-    TickerType::NumberDbNext,
-    TickerType::NumberDbPrev,
-    TickerType::NumberDbSeekFound,
-    TickerType::NumberDbNextFound,
-    TickerType::NumberDbPrevFound,
-    TickerType::IterBytesRead,
-    TickerType::NoFileCloses,
-    TickerType::NoFileOpens,
-    TickerType::NoFileErrors,
-    TickerType::StallMicros,
-    TickerType::BloomFilterPrefixChecked,
-    TickerType::BloomFilterPrefixUseful,
-    TickerType::WalFileSynced,
-    TickerType::WalFileBytes,
-    TickerType::WriteDoneBySelf,
-    TickerType::WriteDoneByOther,
-    TickerType::WriteTimedout,
-    TickerType::WriteWithWal,
-    TickerType::CompactReadBytes,
-    TickerType::CompactWriteBytes,
-    TickerType::FlushWriteBytes,
-    TickerType::ReadAmpEstimateUsefulBytes,
-    TickerType::ReadAmpTotalReadBytes,
-    TickerType::BlobDbNumSeek,
-    TickerType::BlobDbNumNext,
-    TickerType::BlobDbNumPrev,
-    TickerType::BlobDbNumKeysWritten,
-    TickerType::BlobDbNumKeysRead,
-    TickerType::BlobDbBytesWritten,
-    TickerType::BlobDbBytesRead,
-    TickerType::BlobDbBlobFileBytesWritten,
-    TickerType::BlobDbBlobFileBytesRead,
-    TickerType::BlobDbBlobFileSynced,
-    TickerType::BlobDbGcNumFiles,
-    TickerType::BlobDbGcNumNewFiles,
-    TickerType::BlobDbGcNumKeysOverwritten,
-    TickerType::BlobDbGcNumKeysRelocated,
-    TickerType::BlobDbGcBytesOverwritten,
-    TickerType::BlobDbGcBytesRelocated,
-];
-
-pub const ENGINE_HIST_TYPES: &[HistType] = &[
-    HistType::DbGet,
-    HistType::DbWrite,
-    HistType::CompactionTime,
-    HistType::TableSyncMicros,
-    HistType::CompactionOutfileSyncMicros,
-    HistType::WalFileSyncMicros,
-    HistType::ManifestFileSyncMicros,
-    HistType::StallL0SlowdownCount,
-    HistType::StallMemtableCompactionCount,
-    HistType::StallL0NumFilesCount,
-    HistType::HardRateLimitDelayCount,
-    HistType::SoftRateLimitDelayCount,
-    HistType::NumFilesInSingleCompaction,
-    HistType::DbSeek,
-    HistType::WriteStall,
-    HistType::SstReadMicros,
-    HistType::NumSubcompactionsScheduled,
-    HistType::BytesPerRead,
-    HistType::BytesPerWrite,
-    HistType::BytesCompressed,
-    HistType::BytesDecompressed,
-    HistType::CompressionTimesNanos,
-    HistType::DecompressionTimesNanos,
-    HistType::BlobDbKeySize,
-    HistType::BlobDbValueSize,
-    HistType::BlobDbSeekMicros,
-    HistType::BlobDbNextMicros,
-    HistType::BlobDbPrevMicros,
-    HistType::BlobDbBlobFileWriteMicros,
-    HistType::BlobDbBlobFileReadMicros,
-    HistType::BlobDbBlobFileSyncMicros,
-    HistType::BlobDbGcMicros,
-];
+use lazy_static::lazy_static;
+use prometheus::{
+    exponential_buckets, register_gauge_vec, register_histogram_vec, register_int_counter_vec,
+    register_int_gauge_vec, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec,
+};
+use rocksdb::{
+    DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
+};
+use std::i64;
 
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
     let v = value as i64;
@@ -814,7 +665,7 @@ pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
     let stall_num = ROCKSDB_IOSTALL_KEY.len();
     let mut counter = vec![0; stall_num];
     for cf in engine.cf_names() {
-        let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
+        let handle = crate::util::get_cf_handle(engine, cf).unwrap();
         if let Some(info) = engine.get_map_property_cf(handle, ROCKSDB_CFSTATS) {
             for i in 0..stall_num {
                 let value = info.get_property_int_value(ROCKSDB_IOSTALL_KEY[i]);
@@ -833,10 +684,10 @@ pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
 
 pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool) {
     for cf in engine.cf_names() {
-        let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
+        let handle = crate::util::get_cf_handle(engine, cf).unwrap();
         // It is important to monitor each cf's size, especially the "raft" and "lock" column
         // families.
-        let cf_used_size = rocks::util::get_engine_cf_used_size(engine, handle);
+        let cf_used_size = crate::util::get_engine_cf_used_size(engine, handle);
         STORE_ENGINE_SIZE_GAUGE_VEC
             .with_label_values(&[name, cf])
             .set(cf_used_size as i64);
@@ -886,7 +737,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         for level in 0..opts.get_num_levels() {
             // Compression ratio at levels
             if let Some(v) =
-                rocks::util::get_engine_compression_ratio_at_level(engine, handle, level)
+                crate::util::get_engine_compression_ratio_at_level(engine, handle, level)
             {
                 STORE_ENGINE_COMPRESSION_RATIO_VEC
                     .with_label_values(&[name, cf, &level.to_string()])
@@ -894,7 +745,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
             }
 
             // Num files at levels
-            if let Some(v) = rocks::util::get_cf_num_files_at_level(engine, handle, level) {
+            if let Some(v) = crate::util::get_cf_num_files_at_level(engine, handle, level) {
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
                     .with_label_values(&[name, cf, &level.to_string()])
                     .set(v as i64);
@@ -902,7 +753,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         }
 
         // Num immutable mem-table
-        if let Some(v) = rocks::util::get_num_immutable_mem_table(engine, handle) {
+        if let Some(v) = crate::util::get_num_immutable_mem_table(engine, handle) {
             STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
                 .with_label_values(&[name, cf])
                 .set(v as i64);
@@ -964,7 +815,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
     if shared_block_cache {
         // Since block cache is shared, getting cache size from any CF is fine. Here we get from
         // default CF.
-        let handle = rocks::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
+        let handle = crate::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
         let block_cache_usage = engine.get_block_cache_usage_cf(handle);
         STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
             .with_label_values(&[name, "all"])
@@ -1354,14 +1205,14 @@ mod tests {
 
     use tempfile::Builder;
 
-    use crate::rocks;
     use engine_traits::ALL_CFS;
+    use rocksdb::HistogramData;
 
     #[test]
     fn test_flush() {
         let dir = Builder::new().prefix("test-flush").tempdir().unwrap();
-        let db =
-            rocks::util::new_engine(dir.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let engine =
+            crate::util::new_engine(dir.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         for tp in ENGINE_TICKER_TYPES {
             flush_engine_ticker_metrics(*tp, 2, "test-name");
         }
@@ -1371,9 +1222,11 @@ mod tests {
         }
 
         let shared_block_cache = false;
-        flush_engine_properties(&db, "test-name", shared_block_cache);
-        let handle = db.cf_handle("default").unwrap();
-        let info = db.get_map_property_cf(handle, ROCKSDB_CFSTATS);
+        flush_engine_properties(&engine.as_inner(), "test-name", shared_block_cache);
+        let handle = engine.as_inner().cf_handle("default").unwrap();
+        let info = engine
+            .as_inner()
+            .get_map_property_cf(handle, ROCKSDB_CFSTATS);
         assert!(info.is_some());
     }
 }

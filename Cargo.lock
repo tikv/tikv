@@ -554,6 +554,7 @@ dependencies = [
  "chrono",
  "clap",
  "engine",
+ "engine_rocks",
  "engine_traits",
  "fs2",
  "futures 0.1.29",
@@ -1031,6 +1032,8 @@ dependencies = [
  "engine",
  "engine_traits",
  "kvproto",
+ "lazy_static",
+ "prometheus",
  "rand 0.7.2",
  "rocksdb",
  "slog",
@@ -1038,6 +1041,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
+ "time",
 ]
 
 [[package]]
@@ -4297,8 +4301,6 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
  "failure",
- "num-derive",
- "num-traits",
  "tikv_alloc",
  "tipb",
 ]
