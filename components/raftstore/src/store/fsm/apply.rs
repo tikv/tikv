@@ -58,6 +58,7 @@ use super::super::RegionTask;
 
 const WRITE_MAX_BATCH_SIZE: usize = 32;
 const WRITE_BATCH_MAX_COUNT: usize = 24;
+const WRITE_MAX_SINGLE_BATCH_SIZE: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
@@ -453,6 +454,14 @@ impl ApplyContext {
         });
     }
 
+    pub fn is_write_batch_full(&self) -> bool {
+        if self.enable_multi_batch_write {
+            self.cur_wb > WRITE_BATCH_MAX_COUNT
+        } else {
+            self.kv_wbs[0].count() > WRITE_MAX_SINGLE_BATCH_SIZE
+        }
+    }
+
     fn check_switch_write_batch(&mut self) {
         if self.enable_multi_batch_write && self.kv_wbs[self.cur_wb].count() > WRITE_MAX_BATCH_SIZE
         {
@@ -568,7 +577,7 @@ pub fn notify_stale_req(term: u64, cb: Callback<RocksEngine>) {
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest, batch_count: usize) -> bool {
+fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -578,12 +587,6 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, batch_count: usize) -> bool {
             AdminCmdType::RollbackMerge => return true,
             _ => {}
         }
-    }
-
-    // When write batch contains more than `recommended` keys, write the batch
-    // to engine.
-    if batch_count > WRITE_BATCH_MAX_COUNT {
-        return true;
     }
 
     // Some commands may modify keys covered by the current write batch, so we
@@ -860,7 +863,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.cur_wb) {
+            if should_write_to_engine(&cmd) || apply_ctx.is_write_batch_full(){
                 apply_ctx.commit(self);
                 if self.written {
                     return ApplyResult::Yield;
@@ -3214,7 +3217,7 @@ mod tests {
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
         let wb = WriteBatch::default();
-        assert_eq!(should_write_to_engine(&req, 0), true);
+        assert_eq!(should_write_to_engine(&req), true);
 
         // IngestSst command
         let mut req = Request::default();
@@ -3223,17 +3226,7 @@ mod tests {
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
         let wb = WriteBatch::default();
-        assert_eq!(should_write_to_engine(&cmd, 0), true);
-
-        // Write batch keys reach WRITE_BATCH_MAX_KEYS
-        let req = RaftCmdRequest::default();
-        assert_eq!(
-            should_write_to_engine(&req, WRITE_BATCH_MAX_COUNT + 1),
-            true
-        );
-
-        // Write batch keys not reach WRITE_BATCH_MAX_KEYS
-        assert_eq!(should_write_to_engine(&req, WRITE_BATCH_MAX_COUNT), false);
+        assert_eq!(should_write_to_engine(&cmd), true);
     }
 
     fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
