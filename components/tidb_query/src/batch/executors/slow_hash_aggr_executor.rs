@@ -140,7 +140,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             .iter()
             .map(|expr| expr.ret_field_type(src.schema()).clone())
             .collect();
-        let group_by_bytes_len = group_by_exprs_field_type
+        let extra_group_by_col_len = group_by_exprs_field_type
             .iter()
             .filter(|field_type| {
                 EvalType::try_from(field_type.as_accessor().tp())
@@ -148,19 +148,19 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
                     .unwrap_or(false)
             })
             .count();
-        let group_by_len = group_by_exps.len() + group_by_bytes_len;
+        let group_by_col_len = group_by_exps.len() + extra_group_by_col_len;
         let aggr_impl = SlowHashAggregationImpl {
             states: Vec::with_capacity(1024),
             groups: HashMap::default(),
             group_by_exps,
             group_by_exprs_field_type,
-            group_by_len,
+            extra_group_by_col_len,
             group_key_buffer: Box::new(Vec::with_capacity(8192)),
             group_key_offsets,
             states_offset_each_logical_row: Vec::with_capacity(
                 crate::batch::runner::BATCH_MAX_SIZE,
             ),
-            group_by_results_unsafe: Vec::with_capacity(group_by_len),
+            group_by_results_unsafe: Vec::with_capacity(group_by_col_len),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -181,7 +181,12 @@ pub struct SlowHashAggregationImpl {
     groups: HashMap<GroupKeyRefUnsafe, usize>,
     group_by_exps: Vec<RpnExpression>,
     group_by_exprs_field_type: Vec<FieldType>,
-    group_by_len: usize,
+
+    /// Extra-group-by-columns store the bytes columns in original data form while
+    /// they has already been stored one in sortkey form before.
+    /// The sortkey form is used to aggr on while the original form is to be returned
+    /// as results.
+    extra_group_by_col_len: usize,
 
     /// Encoded group keys are stored in this buffer sequentially. Offsets of each encoded
     /// element are stored in `group_key_offsets`.
@@ -192,8 +197,10 @@ pub struct SlowHashAggregationImpl {
 
     /// The offsets of encoded keys in `group_key_buffer`. This `Vec` always has a leading `0`
     /// element. Then, the begin and end offsets of the "i"-th column of the group key whose group
-    /// index is "j" are `group_key_offsets[j * group_by_len + i]` and
-    /// `group_key_offsets[j * group_by_len + i + 1]`.
+    /// index is "j" are `group_key_offsets[j * group_by_col_len + i]` and
+    /// `group_key_offsets[j * group_by_col_len + i + 1]`.
+    ///
+    /// group_by_col_len = group_by_exps.len() + extra_group_by_col_len
     group_key_offsets: Vec<usize>,
 
     states_offset_each_logical_row: Vec<usize>,
@@ -257,7 +264,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         for logical_row_idx in 0..logical_rows_len {
             let offset_begin = self.group_key_buffer.len();
 
-            // always encode group keys to the buffer first
+            // Always encode group keys to the buffer first
             // we'll then remove them if the group already exists
             for group_by_result in &self.group_by_results_unsafe {
                 match group_by_result {
@@ -274,7 +281,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     _ => unreachable!(),
                 }
             }
+
+            // End of the sortkey columns
             let group_key_ref_end = self.group_key_buffer.len();
+
+            // Encode bytes column in original form to extra-group-by-columns which is to be returned
+            // as group by results, and it's not included in `GroupKeyRefUnsafe` to avoid being aggr on.
             for group_by_result in &self.group_by_results_unsafe {
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
@@ -292,6 +304,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     _ => unreachable!(),
                 }
             }
+
             let group_key_ref_unsafe = GroupKeyRefUnsafe {
                 buffer_ptr,
                 begin: offset_begin,
@@ -311,8 +324,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                 HashMapEntry::Occupied(entry) => {
                     // remove the duplicated group key
                     self.group_key_buffer.truncate(offset_begin);
-                    self.group_key_offsets
-                        .truncate(self.group_key_offsets.len() - self.group_by_len);
+                    self.group_key_offsets.truncate(
+                        self.group_key_offsets.len()
+                            - self.group_by_exps.len()
+                            - self.extra_group_by_col_len,
+                    );
                     *entry.get()
                 }
             };
@@ -367,23 +383,28 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             )?;
 
             // Extract group column from group key for each group
-            let group_key_offsets = &self.group_key_offsets[group_index * self.group_by_len..];
-            let mut group_by_bytes_index = 0;
+            let group_key_offsets = &self.group_key_offsets
+                [group_index * (self.group_by_exps.len() + self.extra_group_by_col_len)..];
+
+            let mut extra_group_by_col_index = 0;
             for group_index in 0..self.group_by_exps.len() {
-                let buffer_group_index = if EvalType::try_from(
+                let is_bytes_col = EvalType::try_from(
                     self.group_by_exprs_field_type[group_index]
                         .as_accessor()
                         .tp(),
                 )
                 .map(|eval_type| eval_type == EvalType::Bytes)
-                .unwrap_or(false)
-                {
-                    let group_index = self.group_by_exps.len() + group_by_bytes_index;
-                    group_by_bytes_index += 1;
+                .unwrap_or(false);
+
+                // Read from extra column if it's a bytes column
+                let buffer_group_index = if is_bytes_col {
+                    let group_index = self.group_by_exps.len() + extra_group_by_col_index;
+                    extra_group_by_col_index += 1;
                     group_index
                 } else {
                     group_index
                 };
+
                 let offset_begin = group_key_offsets[buffer_group_index];
                 let offset_end = group_key_offsets[buffer_group_index + 1];
                 group_by_columns[group_index]
