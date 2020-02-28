@@ -65,15 +65,15 @@ impl Iv {
     }
 }
 
-pub struct AesCtrCtypter<'k> {
+pub struct AesCtrCrypter<'k> {
     method: EncryptionMethod,
     iv: Iv,
     key: &'k [u8],
 }
 
-impl<'k> AesCtrCtypter<'k> {
-    pub fn new(method: EncryptionMethod, key: &'k [u8], iv: Iv) -> AesCtrCtypter<'k> {
-        AesCtrCtypter { method, iv, key }
+impl<'k> AesCtrCrypter<'k> {
+    pub fn new(method: EncryptionMethod, key: &'k [u8], iv: Iv) -> AesCtrCrypter<'k> {
+        AesCtrCrypter { method, iv, key }
     }
 
     pub fn encrypt(&self, pt: &[u8]) -> Result<Vec<u8>> {
@@ -126,7 +126,7 @@ mod tests {
         let key = Vec::from_hex(key).unwrap();
         let iv = Vec::from_hex(iv).unwrap().as_slice().into();
 
-        let crypter = AesCtrCtypter::new(method, &key, iv);
+        let crypter = AesCtrCrypter::new(method, &key, iv);
         let ciphertext = crypter.encrypt(&pt).unwrap();
         assert_eq!(ciphertext, ct, "{}", hex::encode(&ciphertext));
         let plaintext = crypter.decrypt(&ct).unwrap();

@@ -5,7 +5,7 @@ use kvproto::encryptionpb::{
 use super::Backend;
 use crate::crypter::*;
 use crate::metadata::*;
-use crate::{AesCtrCtypter, Error, File, Iv, Result};
+use crate::{AesCtrCrypter, Error, File, Iv, Result};
 
 pub struct FileBased {
     method: EncryptionMethod,
@@ -46,7 +46,7 @@ impl Backend for FileBased {
             .mut_metadata()
             .insert(METADATA_KEY_ENCRYPTION_METHOD.to_owned(), method_value);
         let key = &self.key;
-        let ciphertext = AesCtrCtypter::new(self.method, key, iv).encrypt(plaintext)?;
+        let ciphertext = AesCtrCrypter::new(self.method, key, iv).encrypt(plaintext)?;
         content.set_content(ciphertext);
         Ok(content)
     }
@@ -67,6 +67,6 @@ impl Backend for FileBased {
         let iv = Iv::from(iv_value.as_slice());
         let method = decode_ecryption_method(method_value)?;
         let ciphertext = content.get_content();
-        AesCtrCtypter::new(method, key, iv).decrypt(ciphertext)
+        AesCtrCrypter::new(method, key, iv).decrypt(ciphertext)
     }
 }
