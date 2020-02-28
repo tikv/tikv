@@ -86,10 +86,6 @@ impl KvEngine for RocksEngine {
         let e: &dyn Any = &self.0;
         e.downcast_ref().expect("bad engine downcast")
     }
-
-    fn is_titan(&self) -> bool {
-        self.0.is_titan()
-    }
 }
 
 impl Iterable for RocksEngine {

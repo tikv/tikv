@@ -42,6 +42,4 @@ pub trait KvEngine:
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
-
-    fn is_titan(&self) -> bool { false }
 }
