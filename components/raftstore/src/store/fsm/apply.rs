@@ -351,7 +351,8 @@ impl ApplyContext {
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate) {
         if self.kv_wbs.is_empty() {
-            self.kv_wbs.push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            self.kv_wbs
+                .push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
@@ -408,7 +409,7 @@ impl ApplyContext {
                         panic!("failed to write to engine: {:?}", e);
                     });
             } else {
-                 self.engines
+                self.engines
                     .kv
                     .write_opt(&self.kv_wbs[0], &write_opts)
                     .unwrap_or_else(|e| {
@@ -453,20 +454,22 @@ impl ApplyContext {
     }
 
     fn check_switch_write_batch(&mut self) {
-        if self.enable_multi_batch_write && self.kv_wbs[self.cur_wb].count() > WRITE_MAX_BATCH_SIZE {
+        if self.enable_multi_batch_write && self.kv_wbs[self.cur_wb].count() > WRITE_MAX_BATCH_SIZE
+        {
             self.cur_wb += 1;
-            if self.cur_wb  == self.kv_wbs.len() {
-                self.kv_wbs.push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            if self.cur_wb == self.kv_wbs.len() {
+                self.kv_wbs
+                    .push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
             }
         }
     }
 
     fn wb_data_size(&self) -> usize {
-        self.kv_wbs.iter().map(|w|w.data_size()).sum()
+        self.kv_wbs.iter().map(|w| w.data_size()).sum()
     }
 
     fn wb_count(&self) -> usize {
-        self.kv_wbs.iter().map(|w|w.count()).sum()
+        self.kv_wbs.iter().map(|w| w.count()).sum()
     }
 
     pub fn delta_bytes(&self) -> u64 {
@@ -2708,7 +2711,9 @@ impl ApplyFsm {
                 apply_ctx.timer = Some(SlowTimer::new());
             }
             if apply_ctx.kv_wbs.is_empty() {
-                apply_ctx.kv_wbs.push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                apply_ctx
+                    .kv_wbs
+                    .push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
             }
             self.delegate
                 .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
@@ -3222,7 +3227,10 @@ mod tests {
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        assert_eq!(should_write_to_engine(&req, WRITE_BATCH_MAX_COUNT + 1), true);
+        assert_eq!(
+            should_write_to_engine(&req, WRITE_BATCH_MAX_COUNT + 1),
+            true
+        );
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         assert_eq!(should_write_to_engine(&req, WRITE_BATCH_MAX_COUNT), false);

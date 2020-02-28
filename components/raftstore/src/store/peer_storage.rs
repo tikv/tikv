@@ -1440,7 +1440,7 @@ where
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.
-pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_raft_state(raft_wb: &WriteBatch, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::default();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -1452,11 +1452,7 @@ pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Resu
 
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region apply state first.
-pub fn write_initial_apply_state<T: Mutable>(
-    kv_engine: &DB,
-    kv_wb: &T,
-    region_id: u64,
-) -> Result<()> {
+pub fn write_initial_apply_state(kv_engine: &DB, kv_wb: &WriteBatch, region_id: u64) -> Result<()> {
     let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
     apply_state
@@ -1471,9 +1467,9 @@ pub fn write_initial_apply_state<T: Mutable>(
     Ok(())
 }
 
-pub fn write_peer_state<T: Mutable>(
+pub fn write_peer_state(
     kv_engine: &DB,
-    kv_wb: &T,
+    kv_wb: &WriteBatch,
     region: &metapb::Region,
     state: PeerState,
     merge_state: Option<MergeState>,
