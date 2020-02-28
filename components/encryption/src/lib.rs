@@ -7,13 +7,13 @@ extern crate slog_global;
 extern crate failure;
 
 mod crypter;
+mod encrypted_file;
 mod errors;
-mod file;
 mod manager;
 mod master_key;
 mod metadata;
 
 pub use self::crypter::{AesCtrCrypter, Iv};
+pub use self::encrypted_file::EncryptedFile;
 pub use self::errors::{Error, Result};
-pub use self::file::File;
 pub use metadata::*;

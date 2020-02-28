@@ -12,7 +12,7 @@ pub trait Backend {
     fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>>;
 }
 
-mod filebase;
+mod file;
 // TODO support KMS
 
 #[derive(Default)]

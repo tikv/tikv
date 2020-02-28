@@ -5,15 +5,15 @@ use kvproto::encryptionpb::{
 use super::Backend;
 use crate::crypter::*;
 use crate::metadata::*;
-use crate::{AesCtrCrypter, Error, File, Iv, Result};
+use crate::{AesCtrCrypter, Error, Iv, Result};
 
-pub struct FileBased {
+pub struct FileBackend {
     method: EncryptionMethod,
     key: Vec<u8>,
 }
 
-impl FileBased {
-    pub fn new(method: EncryptionMethod, key: Vec<u8>) -> Result<FileBased> {
+impl FileBackend {
+    pub fn new(method: EncryptionMethod, key: Vec<u8>) -> Result<FileBackend> {
         if key.len() != get_method_key_length(method) {
             return Err(Error::Other(
                 format!(
@@ -24,7 +24,7 @@ impl FileBased {
                 .into(),
             ));
         }
-        Ok(FileBased { key, method })
+        Ok(FileBackend { key, method })
     }
 
     // TODO support online master key rotation
@@ -33,7 +33,7 @@ impl FileBased {
     }
 }
 
-impl Backend for FileBased {
+impl Backend for FileBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
         let mut content = EncryptedContent::default();
         let iv = Iv::new();
