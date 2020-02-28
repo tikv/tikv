@@ -577,6 +577,13 @@ pub fn create_test_engine(
     (engines, path)
 }
 
+pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Uses long check interval to make leader keep sleeping during tests.
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
+}
+
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
