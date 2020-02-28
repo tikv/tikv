@@ -842,9 +842,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
             self.reset_raft_tick(GroupState::Chaos);
-        } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id()
-            || msg.get_message().get_msg_type() == MessageType::MsgReadIndex
-        {
+        } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
             self.reset_raft_tick(GroupState::Ordered);
         }
 
