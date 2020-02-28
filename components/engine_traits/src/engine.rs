@@ -15,6 +15,7 @@ pub trait KvEngine:
     + Iterable
     + WriteBatchExt
     + DBOptionsExt
+    + CFNamesExt
     + CFHandleExt
     + ImportExt
     + SstExt
@@ -30,8 +31,6 @@ pub trait KvEngine:
 
     fn snapshot(&self) -> Self::Snapshot;
     fn sync(&self) -> Result<()>;
-
-    fn cf_names(&self) -> Vec<&str>;
 
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.

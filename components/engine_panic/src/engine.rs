@@ -20,9 +20,6 @@ impl KvEngine for PanicEngine {
     fn sync(&self) -> Result<()> {
         panic!()
     }
-    fn cf_names(&self) -> Vec<&str> {
-        panic!()
-    }
     fn bad_downcast<T: 'static>(&self) -> &T {
         panic!()
     }
