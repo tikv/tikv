@@ -276,10 +276,16 @@ mod tests {
         let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY)).unwrap();
         writer
             .write(
-                vec![TxnEntry::Commit {
-                    default: (vec![b'a'], vec![b'a']),
-                    write: (vec![b'a'], vec![b'a']),
-                }]
+                vec![
+                    TxnEntry::Commit {
+                        default: (vec![b'a'], vec![b'a']),
+                        write: (vec![b'a'], vec![b'a']),
+                    },
+                    TxnEntry::Commit {
+                        default: (vec![], vec![]),
+                        write: (vec![b'b'], vec![]),
+                    },
+                ]
                 .into_iter(),
                 false,
             )
@@ -292,8 +298,20 @@ mod tests {
                 (engine::CF_WRITE, &temp.path().join(files[1].get_name())),
             ],
             &[
-                (engine::CF_DEFAULT, &[(&keys::data_key(&[b'a']), &[b'a'])]),
-                (engine::CF_WRITE, &[(&keys::data_key(&[b'a']), &[b'a'])]),
+                (
+                    engine::CF_DEFAULT,
+                    &[
+                        (&keys::data_key(&[b'a']), &[b'a']),
+                        (&keys::data_key(&[]), &[]),
+                    ],
+                ),
+                (
+                    engine::CF_WRITE,
+                    &[
+                        (&keys::data_key(&[b'a']), &[b'a']),
+                        (&keys::data_key(&[b'b']), &[]),
+                    ],
+                ),
             ],
         );
     }
