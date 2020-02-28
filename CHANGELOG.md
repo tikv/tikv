@@ -2,6 +2,11 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.10]
+- Raftstore
+    - Fix the system panic issue #6460 or data loss issue #5981 caused by Region merge failure [#6614](https://github.com/tikv/tikv/pull/6614)
+    - Support `yield` to optimize scheduling fairness, and support pre-transfering the leader to improve leader scheduling stability [#6563](https://github.com/tikv/tikv/pull/6563)
+
 ## [3.0.8]
 - Coprocessor
   - Modify the level of the output log from `error` to `warn` when an error occurs in Coprocessor [#6051](https://github.com/tikv/tikv/pull/6051)
