@@ -4,6 +4,11 @@ use std::fmt::Debug;
 
 use crate::*;
 
+// FIXME: Revisit the remaining types and methods on KvEngine. Some of these are
+// here for lack of somewhere better to put them at the time of writing.
+// Consider moving everything into other traits and making KvEngine essentially
+// a trait typedef.
+
 pub trait KvEngine:
     Peekable
     + Mutable
