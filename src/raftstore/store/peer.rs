@@ -1612,6 +1612,7 @@ impl Peer {
                     // possible.
                     self.raft_group.skip_bcast_commit(false);
                 }
+                self.should_wake_up = true;
                 let meta = ProposalMeta {
                     index: idx,
                     term: self.term(),
@@ -1980,6 +1981,7 @@ impl Peer {
 
         let read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
         self.pending_reads.push_back(read, self.is_leader());
+        self.should_wake_up = true;
 
         debug!(
             "request to get a read index";
