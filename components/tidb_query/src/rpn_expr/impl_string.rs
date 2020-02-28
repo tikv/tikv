@@ -389,6 +389,26 @@ pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<In
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn find_in_set(s: &Option<Bytes>, str_list: &Option<Bytes>) -> Result<Option<Int>> {
+    Ok(match (s, str_list) {
+        (Some(s), Some(str_list)) => {
+            if str_list.is_empty() {
+                Some(0)
+            } else {
+                let s = String::from_utf8_lossy(s);
+                String::from_utf8_lossy(str_list)
+                    .split(',')
+                    .position(|str_in_set| str_in_set == s)
+                    .map(|p| p as i64 + 1)
+                    .or(Some(0))
+            }
+        }
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1545,6 +1565,43 @@ mod tests {
                 .push_param(s)
                 .push_param(substr)
                 .evaluate::<Int>(ScalarFuncSig::InstrUtf8)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_find_in_set() {
+        let cases = vec![
+            ("foo", "foo,bar", 1),
+            ("foo", "foobar,bar", 0),
+            (" foo ", "foo, foo ", 2),
+            ("", "foo,bar,", 3),
+            ("", "", 0),
+            ("a,b", "a,b,c", 0),
+        ];
+
+        for (s, str_list, exp) in cases {
+            let s = Some(s.as_bytes().to_vec());
+            let str_list = Some(str_list.as_bytes().to_vec());
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(str_list)
+                .evaluate::<Int>(ScalarFuncSig::FindInSet)
+                .unwrap();
+            assert_eq!(got, Some(exp))
+        }
+
+        let null_cases = vec![
+            (Some(b"foo".to_vec()), None, None),
+            (None, Some(b"bar".to_vec()), None),
+            (None, None, None),
+        ];
+        for (s, str_list, exp) in null_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(str_list)
+                .evaluate::<Int>(ScalarFuncSig::FindInSet)
                 .unwrap();
             assert_eq!(got, exp);
         }
