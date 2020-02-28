@@ -863,7 +863,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd) || apply_ctx.is_write_batch_full(){
+            if should_write_to_engine(&cmd) || apply_ctx.is_write_batch_full() {
                 apply_ctx.commit(self);
                 if self.written {
                     return ApplyResult::Yield;
