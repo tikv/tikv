@@ -5,6 +5,10 @@
 //!
 //! FIXME: Things here need to be moved elsewhere.
 
+use crate::errors::Result;
+
 pub trait MiscExt {
     fn is_titan(&self) -> bool { false }
+
+    fn delete_files_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], include_end: bool) -> Result<()>;
 }
