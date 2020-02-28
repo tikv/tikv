@@ -3,8 +3,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::{CfName, CF_DEFAULT, CF_WRITE, DB};
+use engine::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use futures_util::io::AllowStdIo;
@@ -56,6 +57,7 @@ impl Writer {
         }
         Ok(())
     }
+
     fn update_raw_with(&mut self, key: &[u8], value: &[u8], need_checksum: bool) -> Result<()> {
         self.total_kvs += 1;
         self.total_bytes += (key.len() + value.len()) as u64;
@@ -274,13 +276,13 @@ mod tests {
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
 
-    type CfKvs<'a> = (engine::CfName, &'a [(&'a [u8], &'a [u8])]);
+    type CfKvs<'a> = (engine_traits::CfName, &'a [(&'a [u8], &'a [u8])]);
 
-    fn check_sst(ssts: &[(engine::CfName, &Path)], kvs: &[CfKvs]) {
+    fn check_sst(ssts: &[(engine_traits::CfName, &Path)], kvs: &[CfKvs]) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine::CF_DEFAULT, engine::CF_WRITE])
+            .cfs(&[engine_traits::CF_DEFAULT, engine_traits::CF_WRITE])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
@@ -316,7 +318,11 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine::CF_DEFAULT, engine::CF_LOCK, engine::CF_WRITE])
+            .cfs(&[
+                engine_traits::CF_DEFAULT,
+                engine_traits::CF_LOCK,
+                engine_traits::CF_WRITE,
+            ])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
@@ -343,18 +349,30 @@ mod tests {
         let files = writer.save(&storage).unwrap();
         assert_eq!(files.len(), 1);
         check_sst(
-            &[(engine::CF_WRITE, &temp.path().join(files[0].get_name()))],
-            &[(engine::CF_WRITE, &[(&keys::data_key(&[b'a']), &[b'a'])])],
+            &[(
+                engine_traits::CF_WRITE,
+                &temp.path().join(files[0].get_name()),
+            )],
+            &[(
+                engine_traits::CF_WRITE,
+                &[(&keys::data_key(&[b'a']), &[b'a'])],
+            )],
         );
 
         // Test write and default.
         let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY)).unwrap();
         writer
             .write(
-                vec![TxnEntry::Commit {
-                    default: (vec![b'a'], vec![b'a']),
-                    write: (vec![b'a'], vec![b'a']),
-                }]
+                vec![
+                    TxnEntry::Commit {
+                        default: (vec![b'a'], vec![b'a']),
+                        write: (vec![b'a'], vec![b'a']),
+                    },
+                    TxnEntry::Commit {
+                        default: (vec![], vec![]),
+                        write: (vec![b'b'], vec![]),
+                    },
+                ]
                 .into_iter(),
                 false,
             )
@@ -363,12 +381,30 @@ mod tests {
         assert_eq!(files.len(), 2);
         check_sst(
             &[
-                (engine::CF_DEFAULT, &temp.path().join(files[0].get_name())),
-                (engine::CF_WRITE, &temp.path().join(files[1].get_name())),
+                (
+                    engine_traits::CF_DEFAULT,
+                    &temp.path().join(files[0].get_name()),
+                ),
+                (
+                    engine_traits::CF_WRITE,
+                    &temp.path().join(files[1].get_name()),
+                ),
             ],
             &[
-                (engine::CF_DEFAULT, &[(&keys::data_key(&[b'a']), &[b'a'])]),
-                (engine::CF_WRITE, &[(&keys::data_key(&[b'a']), &[b'a'])]),
+                (
+                    engine_traits::CF_DEFAULT,
+                    &[
+                        (&keys::data_key(&[b'a']), &[b'a']),
+                        (&keys::data_key(&[]), &[]),
+                    ],
+                ),
+                (
+                    engine_traits::CF_WRITE,
+                    &[
+                        (&keys::data_key(&[b'a']), &[b'a']),
+                        (&keys::data_key(&[b'b']), &[]),
+                    ],
+                ),
             ],
         );
     }

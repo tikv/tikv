@@ -9,12 +9,13 @@ use futures::{future, Future, Stream};
 use futures03::channel::mpsc;
 use futures03::prelude::*;
 use rand::prelude::*;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
+use tidb_query::metrics::*;
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
@@ -29,6 +30,10 @@ use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+
+/// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
+/// which means they don't need a permit from the semaphore before execution.
+const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
@@ -199,16 +204,19 @@ impl<E: Engine> Endpoint<E> {
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
                     );
-                    dag::build_handler(
+                    dag::DagHandlerBuilder::new(
                         dag,
                         ranges,
                         store,
-                        data_version,
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
-                        enable_batch_if_possible,
                     )
+                    .data_version(data_version)
+                    .enable_batch_if_possible(enable_batch_if_possible)
+                    .execution_time_limit(req_ctx.execution_time_limit)
+                    .semaphore(req_ctx.semaphore.clone())
+                    .build()
                 });
             }
             REQ_TYPE_ANALYZE => {
@@ -294,6 +302,33 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
+    /// Try to acquire a permit from the semaphore.
+    ///
+    /// When `is_heavy` is false, it means the request can be a light task and is allowed to
+    /// run without a permit, but the execution time should be limited by the returned `Duration`.
+    ///
+    /// When `is_heavy` is true, the function won't return until a permit is acquired successfully.
+    async fn acquire_permit(
+        semaphore: Option<&Semaphore>,
+    ) -> (Option<SemaphorePermit<'_>>, Option<Duration>) {
+        if let Some(semaphore) = semaphore {
+            // If a task fail to acquire a permit from the semaphore, it has limited
+            // execution time.
+            match semaphore.try_acquire() {
+                Ok(permit) => {
+                    COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_generic.inc();
+                    (Some(permit), None)
+                }
+                Err(_) => {
+                    COPR_ACQUIRE_SEMAPHORE_TYPE.unacquired.inc();
+                    (None, Some(LIGHT_TASK_THRESHOLD))
+                }
+            }
+        } else {
+            (None, None)
+        }
+    }
+
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
@@ -304,12 +339,7 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
-        let _permit = if let Some(semaphore) = semaphore.as_ref() {
-            Some(semaphore.acquire().await)
-        } else {
-            None
-        };
-
+        let (_permit, execution_time_limit) = Self::acquire_permit(semaphore.as_deref()).await;
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.req_ctx.deadline.check()?;
@@ -329,15 +359,20 @@ impl<E: Engine> Endpoint<E> {
             // Build a cached request handler instead if cache version is matching.
             CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
         } else {
+            if execution_time_limit.is_some() {
+                tracker.req_ctx.execution_time_limit = execution_time_limit;
+                tracker.req_ctx.semaphore = semaphore.clone();
+            }
             handler_builder(snapshot, &tracker.req_ctx)?
         };
 
         tracker.on_begin_all_items();
         tracker.on_begin_item();
-        // There might be errors when handling requests. In this case, we still need its
-        // execution metrics.
+
         let result = handler.handle_request().await;
 
+        // There might be errors when handling requests. In this case, we still need its
+        // execution metrics.
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
 
@@ -543,8 +578,8 @@ fn make_error_response(e: Error) -> coppb::Response {
             tag = "meet_lock";
             resp.set_locked(info);
         }
-        Error::MaxExecuteTimeExceeded => {
-            tag = "max_execute_time_exceeded";
+        Error::DeadlineExceeded => {
+            tag = "deadline_exceeded";
             resp.set_other_error(e.to_string());
         }
         Error::MaxPendingTasksExceeded => {

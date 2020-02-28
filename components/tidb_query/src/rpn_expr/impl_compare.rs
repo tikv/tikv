@@ -4,8 +4,8 @@ use std::cmp::Ordering;
 
 use tidb_query_codegen::rpn_fn;
 
+use crate::codec::collation::Collator;
 use crate::codec::data_type::*;
-use crate::expr_util::collation::Collator;
 use crate::Result;
 
 #[rpn_fn]
@@ -674,21 +674,133 @@ mod tests {
             ScalarFuncSig::NeString,
         ];
         let cases = vec![
-            // strA, strB, [binOrd, ciOrd]
-            ("a", "b", [Ordering::Less, Ordering::Less]),
-            ("a", "A", [Ordering::Greater, Ordering::Equal]),
-            ("À", "A", [Ordering::Greater, Ordering::Equal]),
-            ("abc", "ab", [Ordering::Greater, Ordering::Greater]),
-            ("Abc", "abC", [Ordering::Less, Ordering::Equal]),
-            ("filé-110", "file-12", [Ordering::Greater, Ordering::Less]),
-            ("😜", "😃", [Ordering::Greater, Ordering::Equal]),
+            // strA, strB, [binOrd, utfbin_no_padding, utf8bin, ciOrd]
+            (
+                "",
+                " ",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "a",
+                "b",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                ],
+            ),
+            (
+                "a",
+                "A",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "a",
+                "A ",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "a",
+                "a ",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "À",
+                "A",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "À\t",
+                "A",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                ],
+            ),
+            (
+                "abc",
+                "ab",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                ],
+            ),
+            (
+                "a bc",
+                "ab ",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                ],
+            ),
+            (
+                "Abc",
+                "abC",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "filé-110",
+                "file-12",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Less,
+                ],
+            ),
+            (
+                "😜",
+                "😃",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                ],
+            ),
         ];
-        let collations = vec![
+        let collations = [
             (Collation::Binary, 0),
-            (Collation::Utf8Bin, 0),
-            (Collation::Utf8GeneralCi, 1),
-            (Collation::Utf8Mb4Bin, 0),
-            (Collation::Utf8Mb4GeneralCi, 1),
+            (Collation::Utf8Mb4BinNoPadding, 1),
+            (Collation::Utf8Mb4Bin, 2),
+            (Collation::Utf8Mb4GeneralCi, 3),
         ];
 
         for (str_a, str_b, ordering_in_collations) in cases {

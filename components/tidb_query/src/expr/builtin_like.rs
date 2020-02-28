@@ -3,9 +3,9 @@
 use regex::{bytes::Regex as BytesRegex, Regex};
 
 use super::{EvalContext, Result, ScalarFunc};
+use crate::codec::collation::*;
 use crate::codec::Datum;
 use crate::expr_util;
-use crate::expr_util::collation::*;
 use tidb_query_datatype::{Collation, FieldTypeAccessor};
 
 impl ScalarFunc {
@@ -13,19 +13,11 @@ impl ScalarFunc {
         let target = try_opt!(self.children[0].eval_string(ctx, row));
         let pattern = try_opt!(self.children[1].eval_string(ctx, row));
         let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
-        Ok(Some(
-            (match self.field_type.as_accessor().collation() {
-                Collation::Utf8GeneralCi | Collation::Utf8Mb4GeneralCi => {
-                    expr_util::like::like::<CollatorUtf8Mb4GeneralCi>(&target, &pattern, escape)
-                }
-                Collation::Utf8Bin | Collation::Utf8Mb4Bin => {
-                    expr_util::like::like::<CollatorUtf8Mb4Bin>(&target, &pattern, escape)
-                }
-                Collation::Binary => {
-                    expr_util::like::like::<CollatorBinary>(&target, &pattern, escape)
-                }
-            })? as i64,
-        ))
+        Ok(Some(match_template_collator! {
+            TT, match self.field_type.collation()? {
+                Collation::TT => expr_util::like::like::<TT>(&target, &pattern, escape)?
+            }
+        } as i64))
     }
 
     pub fn regexp_utf8(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {

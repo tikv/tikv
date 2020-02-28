@@ -4,8 +4,8 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::ops::Bound;
 
-use engine::CfName;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine_traits::CfName;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};

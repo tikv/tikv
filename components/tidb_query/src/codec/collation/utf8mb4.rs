@@ -1,12 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::str;
 
 use codec::prelude::*;
 
-use super::{Charset, Collator, DecodeError, DecodeOrWriteError};
+use super::*;
+use crate::codec::Result;
 
 pub struct CharsetUtf8mb4;
 
@@ -338,8 +339,6 @@ static GENERAL_CI_PLANE_TABLE: [Option<&[u16; 256]>; 256] = [
     Some(&GENERAL_CI_PLANE_FF),
 ];
 
-pub struct CollatorUtf8Mb4GeneralCi;
-
 #[inline]
 fn general_ci_convert(c: char) -> u16 {
     let r = c as usize;
@@ -353,14 +352,22 @@ fn general_ci_convert(c: char) -> u16 {
     }
 }
 
+pub const TRIM_PADDING_SPACE: char = 0x20 as char;
+
+/// Collator for utf8mb4_general_ci collation with padding behavior (trims right spaces).
+pub struct CollatorUtf8Mb4GeneralCi;
+
 impl Collator for CollatorUtf8Mb4GeneralCi {
     type Charset = CharsetUtf8mb4;
 
-    fn write_sort_key<W: BufferWriter>(
-        bstr: &[u8],
-        writer: &mut W,
-    ) -> Result<usize, DecodeOrWriteError> {
-        let s = str::from_utf8(bstr).map_err(DecodeError::from)?;
+    #[inline]
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
+
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
         let mut n = 0;
         for ch in s.chars() {
             writer.write_u16_be(general_ci_convert(ch))?;
@@ -369,57 +376,86 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
         Ok(n * std::mem::size_of::<u16>())
     }
 
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering, DecodeError> {
-        let sa = str::from_utf8(a)?;
-        let sb = str::from_utf8(b)?;
-        let sa_chars = sa.chars();
-        let sb_chars = sb.chars();
-        Ok(sa_chars.cmp_by(sb_chars, |a, b| {
-            general_ci_convert(a).cmp(&general_ci_convert(b))
-        }))
+    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
+        let sa = str::from_utf8(a)?.trim_end_matches(TRIM_PADDING_SPACE);
+        let sb = str::from_utf8(b)?.trim_end_matches(TRIM_PADDING_SPACE);
+        Ok(sa
+            .chars()
+            .map(general_ci_convert)
+            .cmp(sb.chars().map(general_ci_convert)))
     }
 
-    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError> {
-        use std::hash::Hash;
-
-        // We follow the `[T]::hash` implementation to hash length as well.
-        // See `impl<T> Hash for [T]` in https://doc.rust-lang.org/std/hash/trait.Hash.html
-        bstr.len().hash(state);
-
-        let s = str::from_utf8(bstr)?;
-        for ch in s.chars() {
-            state.write_u16(general_ci_convert(ch));
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        for ch in s.chars().map(general_ci_convert) {
+            ch.hash(state);
         }
         Ok(())
     }
 }
 
+/// Collator for utf8mb4_bin collation with padding behavior (trims right spaces).
 pub struct CollatorUtf8Mb4Bin;
 
 impl Collator for CollatorUtf8Mb4Bin {
     type Charset = CharsetUtf8mb4;
 
     #[inline]
-    fn write_sort_key<W: BufferWriter>(
-        bstr: &[u8],
-        writer: &mut W,
-    ) -> Result<usize, DecodeOrWriteError> {
-        str::from_utf8(bstr).map_err(DecodeError::from)?;
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        writer.write_bytes(s.as_bytes())?;
+        Ok(s.len())
+    }
+
+    #[inline]
+    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
+        let sa = str::from_utf8(a)?.trim_end_matches(TRIM_PADDING_SPACE);
+        let sb = str::from_utf8(b)?.trim_end_matches(TRIM_PADDING_SPACE);
+        Ok(sa.as_bytes().cmp(sb.as_bytes()))
+    }
+
+    #[inline]
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        s.hash(state);
+        Ok(())
+    }
+}
+
+/// Collator for utf8mb4_bin collation without padding.
+pub struct CollatorUtf8Mb4BinNoPadding;
+
+impl Collator for CollatorUtf8Mb4BinNoPadding {
+    type Charset = CharsetUtf8mb4;
+
+    #[inline]
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
+        str::from_utf8(bstr)?;
         writer.write_bytes(bstr)?;
         Ok(bstr.len())
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering, DecodeError> {
+    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
         str::from_utf8(a)?;
         str::from_utf8(b)?;
         Ok(a.cmp(b))
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<(), DecodeError> {
-        use std::hash::Hash;
-
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
         str::from_utf8(bstr)?;
         bstr.hash(state);
         Ok(())
@@ -429,38 +465,155 @@ impl Collator for CollatorUtf8Mb4Bin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tidb_query_datatype::Collation;
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]
-    fn test_general_ci() {
-        let s1 = "cAfe".as_bytes();
-        let s2 = "café".as_bytes();
-        type C = CollatorUtf8Mb4GeneralCi;
-        assert_eq!(C::sort_key(s1).unwrap(), C::sort_key(s2).unwrap());
-        assert_eq!(C::sort_compare(s1, s2).unwrap(), Ordering::Equal);
+    fn test_compare() {
+        use std::cmp::Ordering;
+        use std::collections::hash_map::DefaultHasher;
+
+        let collations = [
+            (Collation::Utf8Mb4Bin, 0),
+            (Collation::Utf8Mb4BinNoPadding, 1),
+            (Collation::Utf8Mb4GeneralCi, 2),
+        ];
+        let cases = vec![
+            // (sa, sb, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
+            (
+                "a".as_bytes(),
+                "a".as_bytes(),
+                [Ordering::Equal, Ordering::Equal, Ordering::Equal],
+            ),
+            (
+                "a".as_bytes(),
+                "a ".as_bytes(),
+                [Ordering::Equal, Ordering::Less, Ordering::Equal],
+            ),
+            (
+                "a".as_bytes(),
+                "A ".as_bytes(),
+                [Ordering::Greater, Ordering::Greater, Ordering::Equal],
+            ),
+            (
+                "aa ".as_bytes(),
+                "a a".as_bytes(),
+                [Ordering::Greater, Ordering::Greater, Ordering::Greater],
+            ),
+            (
+                "A".as_bytes(),
+                "a\t".as_bytes(),
+                [Ordering::Less, Ordering::Less, Ordering::Less],
+            ),
+            (
+                "cAfe".as_bytes(),
+                "café".as_bytes(),
+                [Ordering::Less, Ordering::Less, Ordering::Equal],
+            ),
+            (
+                "cAfe ".as_bytes(),
+                "café".as_bytes(),
+                [Ordering::Less, Ordering::Less, Ordering::Equal],
+            ),
+        ];
+
+        for (sa, sb, expected) in cases {
+            for (collation, order_in_expected) in &collations {
+                let (cmp, ha, hb) = match_template_collator! {
+                    TT, match collation {
+                        Collation::TT => {
+                            let eval_hash = |s| {
+                                let mut hasher = DefaultHasher::default();
+                                TT::sort_hash(&mut hasher, s).unwrap();
+                                hasher.finish()
+                            };
+
+                            let cmp = TT::sort_compare(sa, sb).unwrap();
+                            let ha = eval_hash(sa);
+                            let hb = eval_hash(sb);
+                            (cmp, ha, hb)
+                        }
+                    }
+                };
+
+                assert_eq!(
+                    cmp, expected[*order_in_expected],
+                    "when comparing {:?} and {:?} by {:?}",
+                    sa, sb, collation
+                );
+
+                if expected[*order_in_expected] == Ordering::Equal {
+                    assert_eq!(
+                        ha, hb,
+                        "when comparing the hash of {:?} and {:?} by {:?}, which should be equal",
+                        sa, sb, collation
+                    );
+                } else {
+                    assert_ne!(
+                        ha, hb,
+                        "when comparing the hash of {:?} and {:?} by {:?}, which should not be equal",
+                        sa, sb, collation
+                    );
+                }
+            }
+        }
     }
 
     #[test]
-    fn test_general_ci_convert_code() {
+    fn test_utf8mb4_sort_key() {
+        let collations = [
+            (Collation::Utf8Mb4Bin, 0),
+            (Collation::Utf8Mb4BinNoPadding, 1),
+            (Collation::Utf8Mb4GeneralCi, 2),
+        ];
         let cases = vec![
-            ("a", vec![0x00, 0x41]),
-            ("A", vec![0x00, 0x41]),
-            ("😃", vec![0xff, 0xfd]),
+            // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
+            ("a", [vec![0x61], vec![0x61], vec![0x00, 0x41]]),
+            ("A ", [vec![0x41], vec![0x41, 0x20], vec![0x00, 0x41]]),
+            ("A", [vec![0x41], vec![0x41], vec![0x00, 0x41]]),
+            (
+                "😃",
+                [
+                    vec![0xF0, 0x9F, 0x98, 0x83],
+                    vec![0xF0, 0x9F, 0x98, 0x83],
+                    vec![0xff, 0xfd],
+                ],
+            ),
             (
                 "Foo © bar 𝌆 baz ☃ qux",
-                vec![
-                    0x00, 0x46, 0x00, 0x4f, 0x00, 0x4f, 0x00, 0x20, 0x00, 0xa9, 0x00, 0x20, 0x00,
-                    0x42, 0x00, 0x41, 0x00, 0x52, 0x00, 0x20, 0xff, 0xfd, 0x00, 0x20, 0x00, 0x42,
-                    0x00, 0x41, 0x00, 0x5a, 0x00, 0x20, 0x26, 0x3, 0x00, 0x20, 0x00, 0x51, 0x00,
-                    0x55, 0x00, 0x58,
+                [
+                    vec![
+                        0x46, 0x6F, 0x6F, 0x20, 0xC2, 0xA9, 0x20, 0x62, 0x61, 0x72, 0x20, 0xF0,
+                        0x9D, 0x8C, 0x86, 0x20, 0x62, 0x61, 0x7A, 0x20, 0xE2, 0x98, 0x83, 0x20,
+                        0x71, 0x75, 0x78,
+                    ],
+                    vec![
+                        0x46, 0x6F, 0x6F, 0x20, 0xC2, 0xA9, 0x20, 0x62, 0x61, 0x72, 0x20, 0xF0,
+                        0x9D, 0x8C, 0x86, 0x20, 0x62, 0x61, 0x7A, 0x20, 0xE2, 0x98, 0x83, 0x20,
+                        0x71, 0x75, 0x78,
+                    ],
+                    vec![
+                        0x00, 0x46, 0x00, 0x4f, 0x00, 0x4f, 0x00, 0x20, 0x00, 0xa9, 0x00, 0x20,
+                        0x00, 0x42, 0x00, 0x41, 0x00, 0x52, 0x00, 0x20, 0xff, 0xfd, 0x00, 0x20,
+                        0x00, 0x42, 0x00, 0x41, 0x00, 0x5a, 0x00, 0x20, 0x26, 0x3, 0x00, 0x20,
+                        0x00, 0x51, 0x00, 0x55, 0x00, 0x58,
+                    ],
                 ],
             ),
         ];
-        for (s, expected) in &cases {
-            type C = CollatorUtf8Mb4GeneralCi;
-            let mut code = Vec::new();
-            C::write_sort_key(s.as_bytes(), &mut code).unwrap();
-            assert_eq!(&code, expected);
+        for (s, expected) in cases {
+            for (collation, order_in_expected) in &collations {
+                let code = match_template_collator! {
+                    TT, match collation {
+                        Collation::TT => TT::sort_key(s.as_bytes()).unwrap()
+                    }
+                };
+                assert_eq!(
+                    code, expected[*order_in_expected],
+                    "when testing {} by {:?}",
+                    s, collation
+                );
+            }
         }
     }
 }
