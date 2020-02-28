@@ -14,12 +14,16 @@ struct Dicts {
 }
 
 impl Dicts {
+    fn get_key(&self, key_id: u64) -> Option<&DataKey> {
+        self.key_dict.keys.get(&key_id)
+    }
+
     fn current_data_key(&self) -> (u64, &DataKey) {
         (
-            self.key_dict.current_data_key,
+            self.key_dict.current_key_id,
             self.key_dict
                 .keys
-                .get(&self.key_dict.current_data_key)
+                .get(&self.key_dict.current_key_id)
                 .unwrap_or_else(|| {
                     panic!(
                         "current data key not found! Length of keys {}",
@@ -39,10 +43,11 @@ impl Dicts {
         Ok(file)
     }
 
-    fn new_file(&mut self, file_path: &str) -> Result<&FileInfo> {
+    fn new_file(&mut self, file_path: &str, method: EncryptionMethod) -> Result<&FileInfo> {
         let mut file = FileInfo::default();
         file.iv = Iv::new().as_slice().to_vec();
-        file.key_id = self.key_dict.current_data_key;
+        file.key_id = self.key_dict.current_key_id;
+        file.method = method;
         let mut entry = self.file_dict.files.entry(file_path.to_owned());
         let file = match entry {
             Entry::Vacant(e) => Ok(e.insert(file)),
@@ -87,11 +92,13 @@ impl KeyManager for KeyManagerImpl {
     fn get_file(&self, file_path: &str) -> Result<FileEncryptionInfo> {
         let dicts = self.dicts.read().unwrap();
         let file = dicts.get_file(file_path)?;
-        let (key_id, data_key) = dicts.current_data_key();
+        let key_id = file.key_id;
+        let data_key = dicts.get_key(key_id);
+        let key = data_key.map(|k| k.key.clone()).unwrap_or_else(|| vec![]);
         let encrypted_file = FileEncryptionInfo {
             key_id,
-            key: data_key.get_key().to_owned(),
-            method: self.method,
+            key,
+            method: file.method,
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
@@ -101,7 +108,7 @@ impl KeyManager for KeyManagerImpl {
         let mut dicts = self.dicts.write().unwrap();
         let (key_id, data_key) = dicts.current_data_key();
         let key = data_key.get_key().to_owned();
-        let file = dicts.new_file(file_path)?;
+        let file = dicts.new_file(file_path, self.method)?;
         let encrypted_file = FileEncryptionInfo {
             key_id,
             key,
