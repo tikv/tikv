@@ -219,6 +219,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use import::*;
+mod misc;
+pub use misc::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
