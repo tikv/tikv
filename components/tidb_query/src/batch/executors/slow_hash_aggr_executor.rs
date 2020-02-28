@@ -143,7 +143,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
         let group_by_bytes_len = group_by_exprs_field_type
             .iter()
             .filter(|field_type| {
-                EvalType::try_from(field_type.tp())
+                EvalType::try_from(field_type.as_accessor().tp())
                     .map(|eval_type| eval_type == EvalType::Bytes)
                     .unwrap_or(false)
             })
@@ -370,17 +370,20 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             let group_key_offsets = &self.group_key_offsets[group_index * self.group_by_len..];
             let mut group_by_bytes_index = 0;
             for group_index in 0..self.group_by_exps.len() {
-                let buffer_group_index =
-                    if EvalType::try_from(self.group_by_exprs_field_type[group_index].tp())
-                        .map(|eval_type| eval_type == EvalType::Bytes)
-                        .unwrap_or(false)
-                    {
-                        let group_index = self.group_by_exps.len() + group_by_bytes_index;
-                        group_by_bytes_index += 1;
-                        group_index
-                    } else {
-                        group_index
-                    };
+                let buffer_group_index = if EvalType::try_from(
+                    self.group_by_exprs_field_type[group_index]
+                        .as_accessor()
+                        .tp(),
+                )
+                .map(|eval_type| eval_type == EvalType::Bytes)
+                .unwrap_or(false)
+                {
+                    let group_index = self.group_by_exps.len() + group_by_bytes_index;
+                    group_by_bytes_index += 1;
+                    group_index
+                } else {
+                    group_index
+                };
                 let offset_begin = group_key_offsets[buffer_group_index];
                 let offset_end = group_key_offsets[buffer_group_index + 1];
                 group_by_columns[group_index]
