@@ -124,12 +124,12 @@ where
 
     /// Create SortKey from unchecked bytes.
     ///
-    /// # Safety
+    /// # Panic
     ///
     /// The `Ord`, `Hash`, `PartialEq` and more implementations assume that the bytes are
     /// valid for the certain collator. The violation will cause panic.
     #[inline]
-    pub unsafe fn new_unchecked(inner: T) -> Self {
+    pub fn new_unchecked(inner: T) -> Self {
         Self {
             inner,
             _phantom: PhantomData,
