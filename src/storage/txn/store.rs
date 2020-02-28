@@ -116,7 +116,7 @@ impl TxnEntry {
                     let k = Key::from_encoded(write.0).truncate_ts()?;
                     let k = k.into_raw()?;
                     let v = Write::parse(&write.1)?;
-                    let v = v.short_value.unwrap();
+                    let v = v.short_value.unwrap_or_else(Vec::default);
                     Ok((k, v))
                 }
             }
