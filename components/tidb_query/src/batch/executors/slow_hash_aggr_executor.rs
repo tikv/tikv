@@ -285,7 +285,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             // End of the sortkey columns
             let group_key_ref_end = self.group_key_buffer.len();
 
-            // Encode bytes column in original form to extra-group-by-columns which is to be returned
+            // Encode bytes column in original form to extra-group-by-columns, which is to be returned
             // as group by results, and it's not included in `GroupKeyRefUnsafe` to avoid being aggr on.
             for group_by_result in &self.group_by_results_unsafe {
                 match group_by_result {
