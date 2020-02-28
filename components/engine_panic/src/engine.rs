@@ -13,17 +13,7 @@ pub struct PanicEngine;
 
 impl KvEngine for PanicEngine {
     type Snapshot = PanicSnapshot;
-    type WriteBatch = PanicWriteBatch;
 
-    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        panic!()
-    }
-    fn write_batch(&self) -> Self::WriteBatch {
-        panic!()
-    }
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        panic!()
-    }
     fn snapshot(&self) -> Self::Snapshot {
         panic!()
     }
