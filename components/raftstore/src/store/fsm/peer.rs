@@ -888,6 +888,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             ExtraMessageType::MsgRegionWakeUp => {
                 self.reset_raft_tick(GroupState::Ordered);
             }
+            // just fix compile problem with new kvproto, please remove me after MsgWantRollbackMerge code done.
+            ExtraMessageType::MsgWantRollbackMerge => {
+                panic!("un-implement message type - MsgWantRollbackMerge")
+            }
         }
     }
 
