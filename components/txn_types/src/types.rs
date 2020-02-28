@@ -281,7 +281,7 @@ impl From<kvrpcpb::Mutation> for Mutation {
             kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key())),
             kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key())),
             kvrpcpb::Op::Insert => Mutation::Insert((Key::from_raw(m.get_key()), m.take_value())),
-            // kvrpcpb::Op::CheckNotExists => Mutation::CheckNotExists(Key::from_raw(m.get_key())),
+            kvrpcpb::Op::CheckNotExists => Mutation::CheckNotExists(Key::from_raw(m.get_key())),
             _ => panic!("mismatch Op in prewrite mutations"),
         }
     }
