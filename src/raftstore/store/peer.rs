@@ -1669,6 +1669,7 @@ impl Peer {
                     // possible.
                     self.raft_group.skip_bcast_commit(false);
                 }
+                self.should_wake_up = true;
                 let meta = ProposalMeta {
                     index: idx,
                     term: self.term(),
@@ -2016,6 +2017,7 @@ impl Peer {
 
         let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
         self.pending_reads.reads.push_back(read_proposal);
+        self.should_wake_up = true;
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
