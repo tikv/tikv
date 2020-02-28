@@ -3,8 +3,10 @@
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-use std::sync::mpsc;
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{
+    atomic::{self, AtomicU64},
+    mpsc, Arc, Mutex,
+};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
@@ -39,6 +41,7 @@ use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollec
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::AutoGcConfig;
 use super::gc_manager::{GcManager, GcManagerHandle};
+use super::init_compaction_filter;
 use super::{Callback, Error, ErrorInner, Result};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
@@ -727,11 +730,12 @@ impl<E: Engine> GcWorker<E> {
     ) -> GcWorker<E> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
+        let config_manager = GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg)));
         GcWorker {
             engine,
             local_storage,
             raft_store_router,
-            config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
+            config_manager,
             region_info_accessor,
             scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
@@ -746,9 +750,13 @@ impl<E: Engine> GcWorker<E> {
         &self,
         cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
+        let db = self.local_storage.clone().unwrap();
+        let safe_point = Arc::new(AtomicU64::new(0));
+        init_compaction_filter(db, Arc::clone(&safe_point), self.config_manager.clone());
+
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
-        let new_handle = GcManager::new(cfg, self.worker_scheduler.clone()).start()?;
+        let new_handle = GcManager::new(cfg, safe_point, self.worker_scheduler.clone()).start()?;
         *handle = Some(new_handle);
         Ok(())
     }

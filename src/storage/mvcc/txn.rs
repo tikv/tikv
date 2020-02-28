@@ -1,22 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ffi::CString;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use crate::storage::types::TxnStatus;
-use engine::rocks::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
-    DBCompactionFilter, Writable, WriteBatch, WriteOptions, DB,
-};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use tikv_util::time::Instant;
 use txn_types::{
-    is_short_value, Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
+    is_short_value, Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteType,
 };
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -854,194 +846,6 @@ macro_rules! new_txn {
     ($ss: expr, $ts: literal, $fill_cache: expr) => {
         $crate::storage::mvcc::MvccTxn::new($ss, $ts.into(), $fill_cache)
     };
-}
-
-pub struct WriteCompactionFilterFactory;
-
-impl CompactionFilterFactory for WriteCompactionFilterFactory {
-    fn create_compaction_filter(
-        &self,
-        _context: &CompactionFilterContext,
-    ) -> *mut DBCompactionFilter {
-        if !get_gc_with_compaction_filter() {
-            return std::ptr::null_mut();
-        }
-
-        let name = CString::new("write_compaction_filter").unwrap();
-        let safe_point = SAFE_POINT.lock().unwrap().as_ref().map(Arc::clone);
-        let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone);
-        match (safe_point, db) {
-            (Some(sp), Some(db)) => {
-                let filter = Box::new(WriteCompactionFilter::new(sp, db));
-                unsafe { new_compaction_filter_raw(name, true, filter) }
-            }
-            _ => std::ptr::null_mut(),
-        }
-    }
-}
-
-struct WriteCompactionFilter {
-    safe_point: Arc<AtomicU64>,
-    db: Arc<DB>,
-
-    write_batch: WriteBatch,
-    key_prefix: Vec<u8>,
-    remove_older: bool,
-
-    level: usize,
-    versions: usize,
-    rows: usize,
-    stale_versions: usize,
-    deleted: usize,
-    default_deleted: usize,
-    skipped: usize, // DELETE mark should be kept in compaction filter.
-    start: Instant,
-}
-
-impl WriteCompactionFilter {
-    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>) -> Self {
-        WriteCompactionFilter {
-            safe_point,
-            db,
-
-            write_batch: WriteBatch::with_capacity(DEFAULT_DELETE_BATCH_SIZE),
-            key_prefix: vec![],
-            remove_older: false,
-
-            level: 0,
-            versions: 0,
-            rows: 0,
-            stale_versions: 0,
-            deleted: 0,
-            default_deleted: 0,
-            skipped: 0,
-            start: Instant::now_coarse(),
-        }
-    }
-
-    fn delete_default_key(&self, key: &[u8]) {
-        self.write_batch.delete(key).unwrap();
-        if self.write_batch.data_size() > DEFAULT_DELETE_BATCH_SIZE {
-            let mut opts = WriteOptions::new();
-            opts.set_sync(false);
-            self.db.write_opt(&self.write_batch, &opts).unwrap();
-            self.write_batch.clear();
-        }
-    }
-}
-
-impl Drop for WriteCompactionFilter {
-    fn drop(&mut self) {
-        if !self.write_batch.is_empty() {
-            let mut opts = WriteOptions::new();
-            opts.set_sync(true);
-            self.db.write_opt(&self.write_batch, &opts).unwrap();
-        }
-        info!(
-            "WriteCompactionFilter uses {}s", self.start.elapsed_secs();
-            "level" => self.level,
-            "versions" => self.versions,
-            "stale_versions" => self.stale_versions,
-            "rows" => self.rows,
-            "deleted" => self.deleted,
-            "default_deleted" => self.default_deleted,
-            "skipped" => self.skipped,
-        );
-        // GC_DELETED_VERSIONS.inc_by(self.deleted as i64);
-    }
-}
-
-impl CompactionFilter for WriteCompactionFilter {
-    fn filter(
-        &mut self,
-        level: usize,
-        key: &[u8],
-        value: &[u8],
-        _: &mut Vec<u8>,
-        _: &mut bool,
-    ) -> bool {
-        self.level = level;
-        let safe_point = self.safe_point.load(Ordering::Acquire);
-        if safe_point == 0 {
-            return false;
-        }
-
-        let (key_prefix, commit_ts) = match Key::split_on_ts_for(key) {
-            Ok((key, ts)) => (key, ts),
-            // Invalid MVCC keys, don't touch them.
-            Err(_) => return false,
-        };
-
-        self.versions += 1;
-        if self.key_prefix != key_prefix {
-            self.key_prefix.clear();
-            self.key_prefix.extend_from_slice(key_prefix);
-            self.remove_older = false;
-        }
-
-        if commit_ts.physical() > safe_point {
-            return false;
-        }
-
-        self.stale_versions += 1;
-        let mut filtered = self.remove_older;
-        let WriteRef {
-            write_type,
-            start_ts,
-            short_value,
-        } = WriteRef::parse(value).unwrap();
-        if !self.remove_older {
-            // here `filtered` must be false.
-            match write_type {
-                WriteType::Rollback | WriteType::Lock => filtered = true,
-                WriteType::Delete => {
-                    self.remove_older = true;
-                    self.skipped += 1; // Currently `WriteType::Delete` will always be kept.
-                }
-                WriteType::Put => {
-                    self.remove_older = true;
-                    self.rows += 1;
-                }
-            }
-        }
-
-        if filtered {
-            if short_value.is_none() {
-                let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
-                self.delete_default_key(key.as_encoded());
-                self.default_deleted += 1;
-            }
-            self.deleted += 1;
-        }
-
-        filtered
-    }
-}
-
-const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
-
-pub fn init_mvcc_gc_db(db: Arc<DB>) {
-    let mut mvcc_gc_db = MVCC_GC_DB.lock().unwrap();
-    *mvcc_gc_db = Some(db);
-}
-
-pub fn init_safe_point(safe_point: Arc<AtomicU64>) {
-    let mut sp = SAFE_POINT.lock().unwrap();
-    *sp = Some(safe_point);
-}
-
-pub fn set_gc_with_compaction_filter(b: bool) {
-    GC_WITH_COMACTION_FILTER.store(b, Ordering::Release);
-}
-
-pub fn get_gc_with_compaction_filter() -> bool {
-    GC_WITH_COMACTION_FILTER.load(Ordering::Acquire)
-}
-
-lazy_static! {
-    static ref GC_WITH_COMACTION_FILTER: AtomicBool = AtomicBool::new(false);
-    static ref SAFE_POINT: Mutex<Option<Arc<AtomicU64>>> = Mutex::new(None);
-    static ref MVCC_GC_DB: Mutex<Option<Arc<DB>>> = Mutex::new(None);
 }
 
 #[cfg(test)]

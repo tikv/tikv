@@ -469,3 +469,4 @@ stream-channel-window = 123
 ratio-threshold = 1.2
 batch-keys = 256
 max-write-bytes-per-sec = "10MB"
+enable-compaction-filter = true
