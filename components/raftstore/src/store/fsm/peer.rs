@@ -490,7 +490,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.report_snapshot_status(to_peer_id, status);
             }
             SignificantMsg::Unreachable { to_peer_id, .. } => {
-                // TODO: check why unreachable prevent leader from sleeping.
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.raft_group.report_unreachable(to_peer_id);
                 } else if to_peer_id == self.fsm.peer.leader_id() {
