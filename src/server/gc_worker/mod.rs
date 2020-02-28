@@ -13,3 +13,6 @@ pub use compaction_filter::WriteCompactionFilterFactory;
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 pub use gc_manager::AutoGcConfig;
 pub use gc_worker::{GcSafePointProvider, GcTask, GcWorker, GC_MAX_EXECUTING_TASKS};
+
+#[cfg(test)]
+pub use compaction_filter::tests::gc_by_compact;

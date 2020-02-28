@@ -74,7 +74,6 @@ struct WriteCompactionFilter {
     key_prefix: Vec<u8>,
     remove_older: bool,
 
-    level: usize,
     versions: usize,
     rows: usize,
     stale_versions: usize,
@@ -94,7 +93,6 @@ impl WriteCompactionFilter {
             key_prefix: vec![],
             remove_older: false,
 
-            level: 0,
             versions: 0,
             rows: 0,
             stale_versions: 0,
@@ -125,7 +123,6 @@ impl Drop for WriteCompactionFilter {
         }
         info!(
             "WriteCompactionFilter uses {}s", self.start.elapsed_secs();
-            "level" => self.level,
             "versions" => self.versions,
             "stale_versions" => self.stale_versions,
             "rows" => self.rows,
@@ -140,13 +137,12 @@ impl Drop for WriteCompactionFilter {
 impl CompactionFilter for WriteCompactionFilter {
     fn filter(
         &mut self,
-        level: usize,
+        _level: usize,
         key: &[u8],
         value: &[u8],
         _: &mut Vec<u8>,
         _: &mut bool,
     ) -> bool {
-        self.level = level;
         let safe_point = self.safe_point.load(Ordering::Acquire);
         if safe_point == 0 {
             return false;
@@ -165,7 +161,7 @@ impl CompactionFilter for WriteCompactionFilter {
             self.remove_older = false;
         }
 
-        if commit_ts.physical() > safe_point {
+        if commit_ts.into_inner() > safe_point {
             return false;
         }
 
@@ -205,4 +201,18 @@ impl CompactionFilter for WriteCompactionFilter {
 }
 
 #[cfg(test)]
-mod tests {}
+pub mod tests {
+    use super::*;
+    use crate::storage::kv::RocksEngine;
+    use engine::rocks::util::{compact_range, get_cf_handle};
+
+    pub fn gc_by_compact(engine: &RocksEngine, _: &[u8], safe_point: u64) {
+        let kv = engine.get_rocksdb();
+        let safe_point = Arc::new(AtomicU64::new(safe_point));
+        let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
+        cfg.0.update(|v| v.enable_compaction_filter = true);
+        init_compaction_filter(Arc::clone(&kv), safe_point, cfg);
+        let handle = get_cf_handle(&kv, "write").unwrap();
+        compact_range(&kv, handle, None, None, false, 1);
+    }
+}
