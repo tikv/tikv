@@ -6,16 +6,8 @@ use std::time::Duration;
 
 use super::RaftKv;
 use super::Result;
-use crate::config::ConfigController;
 use crate::import::SSTImporter;
-use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::fsm::store::StoreMeta;
-use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use crate::raftstore::store::PdTask;
-use crate::raftstore::store::{
-    self, initial_region, Config as StoreConfig, SnapManager, Transport,
-};
+use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
@@ -23,9 +15,17 @@ use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use pd_client::{Error as PdError, PdClient, INVALID_ID};
-use tikv_util::future_pool::FuturePool;
+use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
+use raftstore::coprocessor::dispatcher::CoprocessorHost;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::SplitCheckTask;
+use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
+use raftstore::store::{DynamicConfig, PdTask};
+use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
+use tikv_util::worker::Worker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -35,22 +35,22 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
-    read_pools: Vec<FuturePool>,
+    read_pool: ReadPoolHandle,
     lock_mgr: Option<LockManager>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let store = Storage::from_engine(engine, cfg, read_pools, lock_mgr)?;
+    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr)?;
     Ok(store)
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<C: PdClient + ConfigClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
-    store_cfg: StoreConfig,
+    store_cfg: Arc<VersionTrack<StoreConfig>>,
     system: RaftBatchSystem,
     has_started: bool,
 
@@ -59,13 +59,13 @@ pub struct Node<C: PdClient + 'static> {
 
 impl<C> Node<C>
 where
-    C: PdClient,
+    C: PdClient + ConfigClient,
 {
     /// Creates a new Node.
     pub fn new(
         system: RaftBatchSystem,
         cfg: &ServerConfig,
-        store_cfg: &StoreConfig,
+        store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
     ) -> Node<C> {
         let mut store = metapb::Store::default();
@@ -77,6 +77,12 @@ where
         }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
         store.set_status_address(cfg.status_addr.clone());
+
+        if let Ok(path) = std::env::current_exe() {
+            store.set_binary_path(path.to_string_lossy().to_string());
+        };
+
+        store.set_start_timestamp(chrono::Local::now().timestamp());
         store.set_git_hash(
             option_env!("TIKV_BUILD_GIT_HASH")
                 .unwrap_or("Unknown git hash")
@@ -95,7 +101,7 @@ where
         Node {
             cluster_id: cfg.cluster_id,
             store,
-            store_cfg: store_cfg.clone(),
+            store_cfg,
             pd_client,
             system,
             has_started: false,
@@ -115,7 +121,8 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-        cfg_controller: ConfigController,
+        split_check_worker: Worker<SplitCheckTask>,
+        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -150,7 +157,8 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            cfg_controller,
+            split_check_worker,
+            dyn_cfg,
         )?;
 
         // Put store only if the cluster is bootstrapped.
@@ -169,6 +177,10 @@ where
     /// raftstore.
     pub fn get_router(&self) -> RaftRouter {
         self.system.router()
+    }
+    /// Gets a transmission end of a channel which is used send messages to apply worker.
+    pub fn get_apply_router(&self) -> ApplyRouter {
+        self.system.apply_router()
     }
 
     // check store, return store id for the engine.
@@ -284,7 +296,9 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e),
+                Err(e) => {
+                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
+                }
             }
             retry += 1;
             thread::sleep(Duration::from_secs(
@@ -320,7 +334,8 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-        cfg_controller: ConfigController,
+        split_check_worker: Worker<SplitCheckTask>,
+        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -345,7 +360,8 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            cfg_controller,
+            split_check_worker,
+            dyn_cfg,
         )?;
         Ok(())
     }

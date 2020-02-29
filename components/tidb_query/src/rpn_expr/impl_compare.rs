@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 
 use tidb_query_codegen::rpn_fn;
 
+use crate::codec::collation::Collator;
 use crate::codec::data_type::*;
 use crate::Result;
 
@@ -23,8 +24,7 @@ pub trait Comparer {
 }
 
 pub struct BasicComparer<T: Evaluable + Ord, F: CmpOp> {
-    _phantom_t: std::marker::PhantomData<T>,
-    _phantom_f: std::marker::PhantomData<F>,
+    _phantom: std::marker::PhantomData<(T, F)>,
 }
 
 impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
@@ -40,8 +40,28 @@ impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
     }
 }
 
+pub struct StringComparer<C: Collator, F: CmpOp> {
+    _phantom: std::marker::PhantomData<(C, F)>,
+}
+
+impl<C: Collator, F: CmpOp> Comparer for StringComparer<C, F> {
+    type T = Bytes;
+
+    #[inline]
+    fn compare(lhs: &Option<Bytes>, rhs: &Option<Bytes>) -> Result<Option<i64>> {
+        Ok(match (lhs, rhs) {
+            (None, None) => F::compare_null(),
+            (None, _) | (_, None) => F::compare_partial_null(),
+            (Some(lhs), Some(rhs)) => {
+                let ord = C::sort_compare(lhs, rhs)?;
+                Some(F::compare_order(ord) as i64)
+            }
+        })
+    }
+}
+
 pub struct UintUintComparer<F: CmpOp> {
-    _phantom_f: std::marker::PhantomData<F>,
+    _phantom: std::marker::PhantomData<F>,
 }
 
 impl<F: CmpOp> Comparer for UintUintComparer<F> {
@@ -62,7 +82,7 @@ impl<F: CmpOp> Comparer for UintUintComparer<F> {
 }
 
 pub struct UintIntComparer<F: CmpOp> {
-    _phantom_f: std::marker::PhantomData<F>,
+    _phantom: std::marker::PhantomData<F>,
 }
 
 impl<F: CmpOp> Comparer for UintIntComparer<F> {
@@ -86,7 +106,7 @@ impl<F: CmpOp> Comparer for UintIntComparer<F> {
 }
 
 pub struct IntUintComparer<F: CmpOp> {
-    _phantom_f: std::marker::PhantomData<F>,
+    _phantom: std::marker::PhantomData<F>,
 }
 
 impl<F: CmpOp> Comparer for IntUintComparer<F> {
@@ -235,7 +255,7 @@ mod tests {
     use super::*;
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
@@ -641,6 +661,195 @@ mod tests {
                     assert_eq!(output, Some(1));
                 } else {
                     assert_eq!(output, Some(0));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_compare_string() {
+        fn should_match(ord: Ordering, sig: ScalarFuncSig) -> bool {
+            match ord {
+                Ordering::Less => {
+                    sig == ScalarFuncSig::LtString
+                        || sig == ScalarFuncSig::LeString
+                        || sig == ScalarFuncSig::NeString
+                }
+                Ordering::Equal => {
+                    sig == ScalarFuncSig::EqString
+                        || sig == ScalarFuncSig::LeString
+                        || sig == ScalarFuncSig::GeString
+                }
+                Ordering::Greater => {
+                    sig == ScalarFuncSig::GtString
+                        || sig == ScalarFuncSig::GeString
+                        || sig == ScalarFuncSig::NeString
+                }
+            }
+        }
+
+        let signatures = vec![
+            ScalarFuncSig::LtString,
+            ScalarFuncSig::LeString,
+            ScalarFuncSig::GtString,
+            ScalarFuncSig::GeString,
+            ScalarFuncSig::EqString,
+            ScalarFuncSig::NeString,
+        ];
+        let cases = vec![
+            // strA, strB, [binOrd, utfbin_no_padding, utf8bin, ciOrd]
+            (
+                "",
+                " ",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "a",
+                "b",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                ],
+            ),
+            (
+                "a",
+                "A",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "a",
+                "A ",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "a",
+                "a ",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "À",
+                "A",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "À\t",
+                "A",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                ],
+            ),
+            (
+                "abc",
+                "ab",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                ],
+            ),
+            (
+                "a bc",
+                "ab ",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                ],
+            ),
+            (
+                "Abc",
+                "abC",
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "filé-110",
+                "file-12",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Less,
+                ],
+            ),
+            (
+                "😜",
+                "😃",
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                ],
+            ),
+        ];
+        let collations = [
+            (Collation::Binary, 0),
+            (Collation::Utf8Mb4BinNoPadding, 1),
+            (Collation::Utf8Mb4Bin, 2),
+            (Collation::Utf8Mb4GeneralCi, 3),
+        ];
+
+        for (str_a, str_b, ordering_in_collations) in cases {
+            for &sig in &signatures {
+                for &(collation, index) in &collations {
+                    let result: i64 = RpnFnScalarEvaluator::new()
+                        .push_param(str_a.as_bytes().to_vec())
+                        .push_param(str_b.as_bytes().to_vec())
+                        .return_field_type(
+                            FieldTypeBuilder::new()
+                                .tp(FieldTypeTp::Long)
+                                .collation(collation),
+                        )
+                        .evaluate(sig)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(
+                        should_match(ordering_in_collations[index], sig) as i64,
+                        result,
+                        "Unexpected {:?}({}, {}) == {} in {}",
+                        sig,
+                        str_a,
+                        str_b,
+                        result,
+                        collation
+                    );
                 }
             }
         }

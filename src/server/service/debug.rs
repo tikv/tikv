@@ -14,11 +14,10 @@ use kvproto::raft_cmdpb::{
 };
 use tokio_sync::oneshot;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
-use crate::server::gc_worker::GcWorker;
-use crate::storage::kv::Engine;
+use crate::server::gc_worker::GcWorkerConfigManager;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::msg::Callback;
 use tikv_util::metrics;
 
 use tikv_alloc;
@@ -45,25 +44,28 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter, E: Engine> {
+pub struct Service<T: RaftStoreRouter> {
     pool: CpuPool,
-    debugger: Debugger<E>,
+    debugger: Debugger,
     raft_router: T,
+    dynamic_config: bool,
 }
 
-impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
+impl<T: RaftStoreRouter> Service<T> {
     /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
     pub fn new(
         engines: Engines,
         pool: CpuPool,
         raft_router: T,
-        gc_worker: GcWorker<E>,
-    ) -> Service<T, E> {
-        let debugger = Debugger::new(engines, Some(gc_worker));
+        gc_worker_cfg: GcWorkerConfigManager,
+        dynamic_config: bool,
+    ) -> Service<T> {
+        let debugger = Debugger::new(engines, Some(gc_worker_cfg));
         Service {
             pool,
             debugger,
             raft_router,
+            dynamic_config,
         }
     }
 
@@ -85,7 +87,7 @@ impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb::Debug for Service<T, E> {
+impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -372,6 +374,14 @@ impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb::Debug for Servi
         sink: UnarySink<ModifyTikvConfigResponse>,
     ) {
         const TAG: &str = "modify_tikv_config";
+
+        if self.dynamic_config {
+            let msg =
+                "Dynamic config feature is enabled, please modify tikv config through PD instead";
+            let status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some(msg.to_owned()));
+            ctx.spawn(sink.fail(status).map_err(move |e| on_grpc_error(TAG, &e)));
+            return;
+        }
 
         let module = req.get_module();
         let config_name = req.take_config_name();

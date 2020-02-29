@@ -13,15 +13,15 @@ use kvproto::raft_serverpb::RaftMessage;
 use engine;
 use engine::rocks;
 use engine::rocks::DB;
-use engine::{ALL_CFS, CF_DEFAULT};
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::Snapshot;
-use tikv::raftstore::router::RaftStoreRouter;
-use tikv::raftstore::store::{
+use engine_traits::{ALL_CFS, CF_DEFAULT};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{
     cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
     SignificantMsg, WriteResponse,
 };
-use tikv::raftstore::Result;
+use raftstore::Result;
 use tikv::server::raftkv::{CmdRes, RaftKv};
 use tikv::storage::kv::{Callback as EngineCallback, CbContext, Modify, Result as EngineResult};
 use tikv::storage::Engine;
@@ -142,7 +142,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     b.iter(|| {
         let on_finished: EngineCallback<RegionSnapshot<RocksEngine>> = Box::new(move |results| {
             let _ = test::black_box(results);
@@ -167,7 +167,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     b.iter(|| {
         let on_finished: EngineCallback<()> = Box::new(|_| {
             test::black_box(());

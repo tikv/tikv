@@ -1,17 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use clap::ArgMatches;
-
-use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
-use tikv_util::collections::HashMap;
-use tikv_util::{self, logger};
-
-use chrono::Local;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use chrono::Local;
+use clap::ArgMatches;
+use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
+use tikv_util::collections::HashMap;
+use tikv_util::{self, logger};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -91,6 +89,10 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
 #[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
+    if matches.is_present("enable-dynamic-config") {
+        config.dynamic_config = true;
+    }
+
     if let Some(level) = matches.value_of("log-level") {
         config.log_level = logger::get_level_by_string(level).unwrap();
     }
@@ -150,18 +152,18 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
 #[allow(dead_code)]
 pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {}", e.description());
+    }
+
     if let Err(e) = check_critical_config(config) {
         fatal!("critical config check failed: {}", e);
     }
 
     if persist {
-        if let Err(e) = persist_critical_config(&config) {
+        if let Err(e) = persist_config(&config) {
             fatal!("persist critical config failed: {}", e);
         }
-    }
-
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
     }
 }

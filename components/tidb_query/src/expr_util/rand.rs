@@ -1,3 +1,4 @@
+pub(crate) const MAX_RAND_BYTES_LENGTH: i64 = 1024;
 const MAX_RAND_VALUE: u32 = 0x3FFFFFFF;
 
 pub struct MySQLRng {
@@ -25,6 +26,11 @@ impl MySQLRng {
     }
 }
 
+/// Generate random bytes.
+pub fn gen_random_bytes(len: usize) -> Vec<u8> {
+    (0..len).map(|_| rand::random::<u8>()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -33,6 +39,7 @@ mod tests {
     #[allow(clippy::float_cmp)]
     fn test_rand_new() {
         let mut rng1 = MySQLRng::new();
+        std::thread::sleep(std::time::Duration::from_millis(100));
         let mut rng2 = MySQLRng::new();
         let got1 = rng1.gen();
         let got2 = rng2.gen();
@@ -60,6 +67,14 @@ mod tests {
             assert_eq!(res1, exp1);
             let res2 = rand.gen();
             assert_eq!(res2, exp2);
+        }
+    }
+
+    #[test]
+    fn test_gen_random_bytes() {
+        let tests: Vec<usize> = vec![1, 256, 1024, 2333];
+        for len in tests {
+            assert_eq!(gen_random_bytes(len).len(), len)
         }
     }
 }

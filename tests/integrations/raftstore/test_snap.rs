@@ -10,9 +10,9 @@ use kvproto::raft_serverpb::*;
 use raft::eraftpb::{Message, MessageType};
 
 use engine::Peekable;
+use raftstore::store::*;
+use raftstore::Result;
 use test_raftstore::*;
-use tikv::raftstore::store::*;
-use tikv::raftstore::Result;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 

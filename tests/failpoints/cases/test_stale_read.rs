@@ -10,8 +10,8 @@ use kvproto::metapb::{Peer, Region};
 use raft::eraftpb::MessageType;
 
 use pd_client::PdClient;
+use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -376,6 +376,7 @@ fn test_read_index_when_transfer_leader_2() {
     let filter = Box::new(
         RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
             .direction(Direction::Recv)
+            .skip(MessageType::MsgTransferLeader)
             .when(Arc::new(AtomicBool::new(true)))
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );

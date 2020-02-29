@@ -5,40 +5,79 @@
 
 extern crate proc_macro;
 
-use proc_macro::TokenStream;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::*;
 
 #[proc_macro_derive(Configuration, attributes(config))]
-pub fn config(input: TokenStream) -> TokenStream {
-    let ast = parse_macro_input!(input as DeriveInput);
-    match generate_token(ast.ident, ast.data) {
+pub fn config(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    match generate_token(parse_macro_input!(input as DeriveInput)) {
         Ok(res) => res.into(),
-        Err(e) => TokenStream::from(e.to_compile_error()),
+        Err(e) => proc_macro::TokenStream::from(e.to_compile_error()),
     }
 }
 
-fn generate_token(name: Ident, data: Data) -> std::result::Result<proc_macro2::TokenStream, Error> {
-    let creat_name = Ident::new("configuration", proc_macro2::Span::call_site());
-    let fields = get_struct_fields(name.span(), &data)?;
+fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
+    let name = &ast.ident;
+    check_generics(&ast.generics, name.span())?;
+
+    let creat_name = Ident::new("configuration", Span::call_site());
+    let encoder_name = Ident::new(
+        {
+            // Avoid naming conflict
+            let mut hasher = DefaultHasher::new();
+            format!("{}", &name).hash(&mut hasher);
+            format!("{}_encoder_{:x}", name, hasher.finish()).as_str()
+        },
+        Span::call_site(),
+    );
+    let encoder_lt = Lifetime::new("'lt", Span::call_site());
+
+    let fields = get_struct_fields(ast.data, name.span())?;
     let update_fn = update(&fields, &creat_name)?;
     let diff_fn = diff(&fields, &creat_name)?;
+    let get_encoder_fn = get_encoder(&encoder_name, &encoder_lt);
+    let encoder_struct = encoder(
+        &name,
+        &creat_name,
+        &encoder_name,
+        &encoder_lt,
+        ast.attrs,
+        fields,
+    )?;
+
     Ok(quote! {
-        impl #creat_name::Configuration for #name {
+        impl<#encoder_lt> #creat_name::Configuration<#encoder_lt> for #name {
+            type Encoder = #encoder_name<#encoder_lt>;
             #update_fn
             #diff_fn
+            #get_encoder_fn
         }
+        #encoder_struct
     })
 }
 
+fn check_generics(g: &Generics, sp: Span) -> Result<()> {
+    if !g.params.is_empty() || g.where_clause.is_some() {
+        return Err(Error::new(
+            sp,
+            "can not derive Configuration on struct with generics type",
+        ));
+    }
+    Ok(())
+}
+
 fn get_struct_fields(
-    span: proc_macro2::Span,
-    data: &Data,
-) -> std::result::Result<&Punctuated<Field, Comma>, Error> {
+    data: Data,
+    span: Span,
+) -> std::result::Result<Punctuated<Field, Comma>, Error> {
     if let Data::Struct(DataStruct {
-        fields: Fields::Named(FieldsNamed { ref named, .. }),
+        fields: Fields::Named(FieldsNamed { named, .. }),
         ..
     }) = data
     {
@@ -51,15 +90,81 @@ fn get_struct_fields(
     }
 }
 
-fn update(
-    fields: &Punctuated<Field, Comma>,
+fn encoder(
+    name: &Ident,
     creat_name: &Ident,
-) -> Result<proc_macro2::TokenStream> {
-    let incoming = Ident::new("incoming", proc_macro2::Span::call_site());
+    encoder_name: &Ident,
+    lt: &Lifetime,
+    attrs: Vec<Attribute>,
+    fields: Punctuated<Field, Comma>,
+) -> Result<TokenStream> {
+    let from_ident = Ident::new("source", Span::call_site());
+    let mut construct_fields = Vec::with_capacity(fields.len());
+    let mut serialize_fields = Vec::with_capacity(fields.len());
+    for mut field in fields {
+        let (_, hidden, submodule) = get_config_attrs(&field.attrs)?;
+        if hidden || field.ident.is_none() {
+            continue;
+        }
+        let field_name = field.ident.as_ref().unwrap();
+
+        construct_fields.push(if submodule {
+            quote! { #field_name: #from_ident.#field_name.get_encoder() }
+        } else {
+            quote! { #field_name: &#from_ident.#field_name }
+        });
+
+        field.ty = {
+            let ty = &field.ty;
+            if submodule {
+                Type::Verbatim(quote! { <#ty as #creat_name::Configuration<#lt>>::Encoder })
+            } else {
+                Type::Verbatim(quote! { &#lt #ty })
+            }
+        };
+        // Only reserve attributes that related to `serde`
+        field.attrs = field
+            .attrs
+            .into_iter()
+            .filter(|f| is_attr("serde", f))
+            .collect();
+        serialize_fields.push(field);
+    }
+    // Only reserve attributes that related to `serde`
+    let attrs: Vec<_> = attrs.into_iter().filter(|a| is_attr("serde", a)).collect();
+
+    Ok(quote! {
+        #[doc(hidden)]
+        #[derive(serde::Serialize)]
+        #(#attrs)*
+        pub struct #encoder_name<#lt> {
+            #(#serialize_fields,)*
+        }
+
+        impl<#lt> From<&#lt #name> for #encoder_name<#lt> {
+            fn from(#from_ident: &#lt #name) -> #encoder_name<#lt> {
+                #encoder_name {
+                    #(#construct_fields,)*
+                }
+            }
+        }
+    })
+}
+
+fn get_encoder(encoder_name: &Ident, lt: &Lifetime) -> TokenStream {
+    quote! {
+        fn get_encoder(&#lt self) -> Self::Encoder {
+            #encoder_name::from(self)
+        }
+    }
+}
+
+fn update(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenStream> {
+    let incoming = Ident::new("incoming", Span::call_site());
     let mut update_fields = Vec::with_capacity(fields.len());
     for field in fields {
-        let (skip, submodule) = get_attrs(&field.attrs)?;
-        if skip || field.ident.is_none() {
+        let (skip, hidden, submodule) = get_config_attrs(&field.attrs)?;
+        if skip || hidden || field.ident.is_none() {
             continue;
         }
         let name = field.ident.as_ref().unwrap();
@@ -86,13 +191,13 @@ fn update(
     })
 }
 
-fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_macro2::TokenStream> {
-    let diff_ident = Ident::new("diff_ident", proc_macro2::Span::call_site());
-    let incoming = Ident::new("incoming", proc_macro2::Span::call_site());
+fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenStream> {
+    let diff_ident = Ident::new("diff_ident", Span::call_site());
+    let incoming = Ident::new("incoming", Span::call_site());
     let mut diff_fields = Vec::with_capacity(fields.len());
     for field in fields {
-        let (skip, submodule) = get_attrs(&field.attrs)?;
-        if skip || field.ident.is_none() {
+        let (skip, hidden, submodule) = get_config_attrs(&field.attrs)?;
+        if skip || hidden || field.ident.is_none() {
             continue;
         }
         let name = field.ident.as_ref().unwrap();
@@ -116,6 +221,7 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_ma
         diff_fields.push(f);
     }
     Ok(quote! {
+        #[allow(clippy::float_cmp)]
         fn diff(&self, mut #incoming: &Self) -> #creat_name::ConfigChange {
             let mut #diff_ident = std::collections::HashMap::default();
             #(#diff_fields)*
@@ -124,30 +230,30 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_ma
     })
 }
 
-fn get_attrs(attrs: &[Attribute]) -> Result<(bool, bool)> {
-    let (mut skip, mut submodule) = (false, false);
+fn get_config_attrs(attrs: &[Attribute]) -> Result<(bool, bool, bool)> {
+    let (mut skip, mut hidden, mut submodule) = (false, false, false);
     for attr in attrs {
-        if !is_config_attr(&attr) {
+        if !is_attr("config", &attr) {
             continue;
         }
-        let name = attr.parse_args::<Ident>()?;
-        if name == "skip" {
-            skip = true;
-        } else if name == "submodule" {
-            submodule = true;
-        } else {
-            return Err(Error::new(
-                name.span(),
-                "expect #[config(skip)] or #[config(submodule)]",
-            ));
+        match attr.parse_args::<Ident>()? {
+            name if name == "skip" => skip = true,
+            name if name == "hidden" => hidden = true,
+            name if name == "submodule" => submodule = true,
+            name => {
+                return Err(Error::new(
+                    name.span(),
+                    "expect #[config(skip)], #[config(hidden)] or #[config(submodule)]",
+                ))
+            }
         }
     }
-    Ok((skip, submodule))
+    Ok((skip, hidden, submodule))
 }
 
-fn is_config_attr(attr: &Attribute) -> bool {
+fn is_attr(name: &str, attr: &Attribute) -> bool {
     for s in &attr.path.segments {
-        if s.ident == "config" {
+        if s.ident == name {
             return true;
         }
     }

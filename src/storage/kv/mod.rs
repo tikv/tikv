@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod btree_engine;
-mod compact_listener;
 mod cursor;
 mod perf_context;
 mod rocksdb_engine;
@@ -12,24 +11,21 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
-use engine::{CfName, CF_DEFAULT};
+use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::{CfName, CF_DEFAULT};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
-use crate::into_other::IntoOther;
-use crate::raftstore::coprocessor::SeekRegionCallback;
-
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
-pub use self::compact_listener::{CompactedEvent, CompactionListener};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use into_other::IntoOther;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -124,10 +120,10 @@ pub trait Snapshot: Send + Clone {
         iter_opt: IterOption,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>>;
-    fn get_properties(&self) -> Result<TablePropertiesCollection> {
+    fn get_properties(&self) -> Result<RocksTablePropertiesCollection> {
         self.get_properties_cf(CF_DEFAULT)
     }
-    fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
+    fn get_properties_cf(&self, _: CfName) -> Result<RocksTablePropertiesCollection> {
         Err(box_err!("no user properties"))
     }
     // The minimum key this snapshot can retrieve.
@@ -168,12 +164,6 @@ pub trait Iterator: Send {
     fn key(&self) -> &[u8];
     /// Only be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
-}
-
-pub trait RegionInfoProvider: Send + Clone + 'static {
-    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
-    /// this TiKV satisfies `filter(peer)` returns true.
-    fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> Result<()>;
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -283,7 +273,9 @@ thread_local! {
 
 /// Execute the closure on the thread local engine.
 ///
-/// Safety: precondition: `TLS_ENGINE_ANY` is non-null.
+/// # Safety
+///
+/// Precondition: `TLS_ENGINE_ANY` is non-null.
 pub unsafe fn with_tls_engine<E: Engine, F, R>(f: F) -> R
 where
     F: FnOnce(&E) -> R,
@@ -310,9 +302,12 @@ pub fn set_tls_engine<E: Engine>(engine: E) {
 
 /// Destroy the thread local engine.
 ///
-/// Safety: the current tls engine must have the same type as `E` (or at least
-/// there destructors must be compatible).
 /// Postcondition: `TLS_ENGINE_ANY` is null.
+///
+/// # Safety
+///
+/// The current tls engine must have the same type as `E` (or at least
+/// there destructors must be compatible).
 pub unsafe fn destroy_tls_engine<E: Engine>() {
     // Safety: we check that `TLS_ENGINE_ANY` is non-null, we must ensure that references
     // to `TLS_ENGINE_ANY` can never be stored outside of `TLS_ENGINE_ANY`.

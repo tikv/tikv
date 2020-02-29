@@ -136,6 +136,11 @@ fn main() {
                      leaves it empty will disable Prometheus push",
                 ),
         )
+        .arg(
+            Arg::with_name("enable-dynamic-config")
+                .long("enable-dynamic-config")
+                .help("switch of online config change feature"),
+        )
         .get_matches();
 
     if matches.is_present("print-sample-config") {
@@ -154,8 +159,6 @@ fn main() {
         validate_and_persist_config(&mut config, false);
         println!("config check successful");
         process::exit(0)
-    } else {
-        validate_and_persist_config(&mut config, true);
     }
 
     cmd::server::run_tikv(config);

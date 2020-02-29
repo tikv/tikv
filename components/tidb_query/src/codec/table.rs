@@ -2,6 +2,7 @@
 
 use std::convert::TryInto;
 use std::io::Write;
+use std::sync::Arc;
 use std::{cmp, u8};
 
 use kvproto::coprocessor::KeyRange;
@@ -26,6 +27,8 @@ pub const INDEX_PREFIX_SEP: &[u8] = b"_i";
 pub const SEP_LEN: usize = 2;
 pub const TABLE_PREFIX_LEN: usize = 1;
 pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
+// the maximum len of the old encoding of index value.
+pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
@@ -395,11 +398,26 @@ impl RowColsDict {
 
 /// `cut_row` cuts the encoded row into (col_id,offset,length)
 ///  and returns interested columns' meta in RowColsDict
-pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
+///
+/// Encoded row can be either in row format v1 or v2.
+///
+/// `col_ids` must be consistent with `cols`. Otherwise the result is undefined.
+pub fn cut_row(
+    data: Vec<u8>,
+    col_ids: &HashSet<i64>,
+    cols: Arc<Vec<ColumnInfo>>,
+) -> Result<RowColsDict> {
     if cols.is_empty() || data.is_empty() || (data.len() == 1 && data[0] == datum::NIL_FLAG) {
         return Ok(RowColsDict::new(HashMap::default(), data));
     }
+    match data[0] {
+        crate::codec::row::v2::CODEC_VERSION => cut_row_v2(data, cols),
+        _ => cut_row_v1(data, col_ids),
+    }
+}
 
+/// Cuts a non-empty row in row format v1.
+fn cut_row_v1(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     let meta_map = {
         let mut meta_map = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
         let length = data.len();
@@ -416,6 +434,41 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
         meta_map
     };
     Ok(RowColsDict::new(meta_map, data))
+}
+
+/// Cuts a non-empty row in row format v2 and encodes into v1 format.
+fn cut_row_v2(data: Vec<u8>, cols: Arc<Vec<ColumnInfo>>) -> Result<RowColsDict> {
+    use crate::codec::datum_codec::{ColumnIdDatumEncoder, EvaluableDatumEncoder};
+    use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
+
+    let mut meta_map = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
+    let mut result = Vec::with_capacity(data.len() + cols.len() * 8);
+
+    let row_slice = RowSlice::from_bytes(&data)?;
+    for col in cols.iter() {
+        let id = col.get_column_id();
+        if let Some((start, offset)) = row_slice.search_in_non_null_ids(id)? {
+            result.write_column_id_datum(id)?;
+            let v2_datum = &row_slice.values()[start..offset];
+            let result_offset = result.len();
+            result.write_v2_as_datum(v2_datum, col)?;
+            meta_map.insert(
+                id,
+                RowColMeta::new(result_offset, result.len() - result_offset),
+            );
+        } else if row_slice.search_in_null_ids(id) {
+            result.write_column_id_datum(id)?;
+            let result_offset = result.len();
+            result.write_evaluable_datum_null()?;
+            meta_map.insert(
+                id,
+                RowColMeta::new(result_offset, result.len() - result_offset),
+            );
+        } else {
+            // Otherwise the column does not exist.
+        }
+    }
+    Ok(RowColsDict::new(meta_map, result))
 }
 
 /// `cut_idx_key` cuts the encoded index key into RowColsDict and handle .
@@ -473,7 +526,7 @@ mod tests {
             Datum::U64(1),
             Datum::Bytes(b"123".to_vec()),
             Datum::I64(-1),
-            Datum::Dur(Duration::parse(b"12:34:56.666", 2).unwrap()),
+            Datum::Dur(Duration::parse(&mut EvalContext::default(), b"12:34:56.666", 2).unwrap()),
         ];
 
         let mut duration_col = ColumnInfo::default();
@@ -509,7 +562,13 @@ mod tests {
     }
 
     fn cut_row_as_owned(bs: &[u8], col_id_set: &HashSet<i64>) -> HashMap<i64, Vec<u8>> {
-        let res = cut_row(bs.to_vec(), col_id_set).unwrap();
+        let is_empty_row =
+            col_id_set.is_empty() || bs.is_empty() || (bs.len() == 1 && bs[0] == datum::NIL_FLAG);
+        let res = if is_empty_row {
+            RowColsDict::new(HashMap::default(), bs.to_vec())
+        } else {
+            cut_row_v1(bs.to_vec(), col_id_set).unwrap()
+        };
         to_hash_map(&res)
     }
 
@@ -539,7 +598,7 @@ mod tests {
             2 => Datum::Bytes(b"abc".to_vec()),
             3 => Datum::Dec(10.into()),
             5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap()),
-            6 => Datum::Dur(Duration::parse(b"23:23:23.666",2 ).unwrap())
+            6 => Datum::Dur(Duration::parse(&mut EvalContext::default(),b"23:23:23.666",2 ).unwrap())
         ];
 
         let mut ctx = EvalContext::default();
@@ -614,7 +673,7 @@ mod tests {
             Datum::I64(100),
             Datum::Bytes(b"abc".to_vec()),
             Datum::Dec(10.into()),
-            Datum::Dur(Duration::parse(b"23:23:23.666", 2).unwrap()),
+            Datum::Dur(Duration::parse(&mut EvalContext::default(), b"23:23:23.666", 2).unwrap()),
         ];
 
         let mut ctx = EvalContext::default();

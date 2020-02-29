@@ -5,11 +5,12 @@ use tipb::FieldType;
 use crate::FieldTypeAccessor;
 
 /// Helper to build a `FieldType` protobuf message.
+#[derive(Default)]
 pub struct FieldTypeBuilder(FieldType);
 
 impl FieldTypeBuilder {
     pub fn new() -> Self {
-        Self(FieldType::default())
+        Default::default()
     }
 
     pub fn tp(mut self, v: crate::FieldTypeTp) -> Self {

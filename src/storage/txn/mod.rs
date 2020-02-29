@@ -11,7 +11,7 @@ mod process;
 mod store;
 
 use crate::storage::{
-    types::{MvccInfo, TxnStatus},
+    types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
 use kvproto::kvrpcpb::LockInfo;
@@ -20,7 +20,7 @@ use std::fmt;
 use std::io::Error as IoError;
 use txn_types::{Key, TimeStamp};
 
-pub use self::commands::{Command, PointGetCommand};
+pub use self::commands::Command;
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
 pub use self::scheduler::{Msg, Scheduler};
 pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
@@ -30,13 +30,30 @@ pub use self::store::{Scanner, SnapshotStore, Store};
 /// Process result of a command.
 pub enum ProcessResult {
     Res,
-    MultiRes { results: Vec<StorageResult<()>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Locks { locks: Vec<LockInfo> },
-    TxnStatus { txn_status: TxnStatus },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
+    MultiRes {
+        results: Vec<StorageResult<()>>,
+    },
+    MvccKey {
+        mvcc: MvccInfo,
+    },
+    MvccStartTs {
+        mvcc: Option<(Key, MvccInfo)>,
+    },
+    Locks {
+        locks: Vec<LockInfo>,
+    },
+    TxnStatus {
+        txn_status: TxnStatus,
+    },
+    NextCommand {
+        cmd: Command,
+    },
+    Failed {
+        err: StorageError,
+    },
+    PessimisticLockRes {
+        res: StorageResult<PessimisticLockRes>,
+    },
 }
 
 quick_error! {

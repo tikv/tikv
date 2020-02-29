@@ -15,17 +15,17 @@ use raft::eraftpb;
 
 use engine::rocks::Writable;
 use engine::*;
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::SnapManager;
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::ConfigController;
+use tikv::config::ConfigHandler;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv_util::worker::FutureWorker;
+use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
@@ -95,8 +95,8 @@ fn test_rawkv() {
 
     // Raw delete
     let mut delete_req = RawDeleteRequest::default();
-    delete_req.set_context(ctx.clone());
-    delete_req.key = k.clone();
+    delete_req.set_context(ctx);
+    delete_req.key = k;
     let delete_resp = client.raw_delete(&delete_req).unwrap();
     assert!(!delete_resp.has_region_error());
     assert!(delete_resp.error.is_empty());
@@ -143,6 +143,22 @@ fn must_kv_commit(
     );
     assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
     assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
+}
+
+fn must_physical_scan_lock(
+    client: &TikvClient,
+    ctx: Context,
+    max_ts: u64,
+    start_key: &[u8],
+    limit: usize,
+) -> Vec<LockInfo> {
+    let mut req = PhysicalScanLockRequest::default();
+    req.set_context(ctx);
+    req.set_max_ts(max_ts);
+    req.set_start_key(start_key.to_owned());
+    req.set_limit(limit as _);
+    let mut resp = client.physical_scan_lock(&req).unwrap();
+    resp.take_locks().into()
 }
 
 #[test]
@@ -212,7 +228,7 @@ fn test_mvcc_basic() {
     ts += 1;
     let batch_get_version = ts;
     let mut batch_get_req = BatchGetRequest::default();
-    batch_get_req.set_context(ctx.clone());
+    batch_get_req.set_context(ctx);
     batch_get_req.set_keys(vec![k.clone()].into_iter().collect());
     batch_get_req.version = batch_get_version;
     let batch_get_resp = client.kv_batch_get(&batch_get_req).unwrap();
@@ -237,7 +253,7 @@ fn test_mvcc_rollback_and_cleanup() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
+    mutation.set_value(v);
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -265,7 +281,7 @@ fn test_mvcc_rollback_and_cleanup() {
     let mut mut_pri = Mutation::default();
     mut_pri.set_op(Op::Put);
     mut_pri.set_key(k2.clone());
-    mut_pri.set_value(v2.clone());
+    mut_pri.set_value(v2);
     let mut mut_sec = Mutation::default();
     mut_sec.set_op(Op::Put);
     mut_sec.set_key(k.clone());
@@ -306,8 +322,8 @@ fn test_mvcc_rollback_and_cleanup() {
     let rollback_resp = client.kv_batch_rollback(&rollback_req.clone()).unwrap();
     assert!(!rollback_resp.has_region_error());
     assert!(!rollback_resp.has_error());
-    rollback_req.set_keys(vec![k.clone()].into_iter().collect());
-    let rollback_resp2 = client.kv_batch_rollback(&rollback_req.clone()).unwrap();
+    rollback_req.set_keys(vec![k].into_iter().collect());
+    let rollback_resp2 = client.kv_batch_rollback(&rollback_req).unwrap();
     assert!(!rollback_resp2.has_region_error());
     assert!(!rollback_resp2.has_error());
 
@@ -316,7 +332,7 @@ fn test_mvcc_rollback_and_cleanup() {
     let mut cleanup_req = CleanupRequest::default();
     cleanup_req.set_context(ctx.clone());
     cleanup_req.start_version = cleanup_start_version;
-    cleanup_req.set_key(k2.clone());
+    cleanup_req.set_key(k2);
     let cleanup_resp = client.kv_cleanup(&cleanup_req).unwrap();
     assert!(!cleanup_resp.has_region_error());
     assert!(!cleanup_resp.has_error());
@@ -325,7 +341,7 @@ fn test_mvcc_rollback_and_cleanup() {
     ts += 1;
     let scan_lock_max_version2 = ts;
     let mut scan_lock_req = ScanLockRequest::default();
-    scan_lock_req.set_context(ctx.clone());
+    scan_lock_req.set_context(ctx);
     scan_lock_req.max_version = scan_lock_max_version2;
     let scan_lock_resp = client.kv_scan_lock(&scan_lock_req).unwrap();
     assert!(!scan_lock_resp.has_region_error());
@@ -347,7 +363,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
+    mutation.set_value(v);
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -379,8 +395,8 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     mut_pri.set_value(new_v.clone());
     let mut mut_sec = Mutation::default();
     mut_sec.set_op(Op::Put);
-    mut_sec.set_key(k2.clone());
-    mut_sec.set_value(v2.clone());
+    mut_sec.set_key(k2);
+    mut_sec.set_value(v2);
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -459,7 +475,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
     // Delete range
     let mut del_req = DeleteRangeRequest::default();
-    del_req.set_context(ctx.clone());
+    del_req.set_context(ctx);
     del_req.start_key = b"a".to_vec();
     del_req.end_key = b"z".to_vec();
     let del_resp = client.kv_delete_range(&del_req).unwrap();
@@ -476,6 +492,65 @@ fn test_coprocessor() {
     let mut req = Request::default();
     req.set_tp(REQ_TYPE_DAG);
     client.coprocessor(&req).unwrap();
+}
+
+#[test]
+fn test_physical_scan_lock() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+
+    // Generate kvs like k10, v10, ts=10; k11, v11, ts=11; ...
+    let kv: Vec<_> = (10..20)
+        .map(|i| (i, vec![b'k', i as u8], vec![b'v', i as u8]))
+        .collect();
+
+    for (ts, k, v) in &kv {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.set_key(k.clone());
+        mutation.set_value(v.clone());
+        must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), *ts);
+    }
+
+    let all_locks: Vec<_> = kv
+        .into_iter()
+        .map(|(ts, k, _)| {
+            // Create a LockInfo that matches the prewrite request in `must_kv_prewrite`.
+            let mut lock_info = LockInfo::default();
+            lock_info.set_primary_lock(k.clone());
+            lock_info.set_lock_version(ts);
+            lock_info.set_key(k);
+            lock_info.set_lock_ttl(ts + 1);
+            lock_info.set_lock_type(Op::Put);
+            lock_info
+        })
+        .collect();
+
+    let check_result = |got_locks: &[_], expected_locks: &[_]| {
+        for i in 0..std::cmp::max(got_locks.len(), expected_locks.len()) {
+            assert_eq!(got_locks[i], expected_locks[i], "lock {} mismatch", i);
+        }
+    };
+
+    check_result(
+        &must_physical_scan_lock(&client, ctx.clone(), 30, b"", 100),
+        &all_locks,
+    );
+    check_result(
+        &must_physical_scan_lock(&client, ctx.clone(), 15, b"", 100),
+        &all_locks[0..=5],
+    );
+    check_result(
+        &must_physical_scan_lock(&client, ctx.clone(), 10, b"", 100),
+        &all_locks[0..1],
+    );
+    check_result(
+        &must_physical_scan_lock(&client, ctx.clone(), 9, b"", 100),
+        &[],
+    );
+    check_result(
+        &must_physical_scan_lock(&client, ctx, 30, &[b'k', 13], 5),
+        &all_locks[3..8],
+    );
 }
 
 #[test]
@@ -541,9 +616,9 @@ fn test_read_index() {
     // Raw put
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     let mut put_req = RawPutRequest::default();
-    put_req.set_context(ctx.clone());
-    put_req.key = k.clone();
-    put_req.value = v.clone();
+    put_req.set_context(ctx);
+    put_req.key = k;
+    put_req.value = v;
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error());
     assert!(put_resp.error.is_empty());
@@ -724,7 +799,7 @@ fn test_debug_region_size() {
 
     let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
-    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
+    req.set_cfs(cfs.iter().map(|s| (*s).to_string()).collect());
     let entries: Vec<_> = debug_client
         .region_size(&req)
         .unwrap()
@@ -834,14 +909,16 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), None);
-    let coprocessor_host = CoprocessorHost::new(Default::default(), router.clone());
+    let coprocessor_host = CoprocessorHost::new(router);
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())
     };
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
-    let cfg_controller = ConfigController::new(Default::default());
+    let cfg_controller = Default::default();
+    let config_client =
+        ConfigHandler::start(String::new(), cfg_controller, pd_worker.scheduler()).unwrap();
     let e = node
         .start(
             engines,
@@ -851,10 +928,103 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
-            cfg_controller,
+            Worker::new("split"),
+            Box::new(config_client),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
     drop(sim);
     cluster.shutdown();
+}
+
+fn kv_pessimistic_lock(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    ts: u64,
+    for_update_ts: u64,
+    return_values: bool,
+) -> PessimisticLockResponse {
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx);
+    let primary = keys[0].clone();
+    let mut mutations = vec![];
+    for key in keys {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::PessimisticLock);
+        mutation.set_key(key);
+        mutations.push(mutation);
+    }
+    req.set_mutations(mutations.into());
+    req.primary_lock = primary;
+    req.start_version = ts;
+    req.for_update_ts = for_update_ts;
+    req.lock_ttl = 20;
+    req.is_first_lock = false;
+    req.return_values = return_values;
+    client.kv_pessimistic_lock(&req).unwrap()
+}
+
+fn must_kv_pessimistic_rollback(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let mut req = PessimisticRollbackRequest::default();
+    req.set_context(ctx);
+    req.set_keys(vec![key].into_iter().collect());
+    req.start_version = ts;
+    req.for_update_ts = ts;
+    let resp = client.kv_pessimistic_rollback(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+}
+
+#[test]
+fn test_pessimistic_lock() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+
+    // Prewrite
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
+
+    // KeyIsLocked
+    for &return_values in &[false, true] {
+        let resp =
+            kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], 20, 20, return_values);
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert_eq!(resp.errors.len(), 1);
+        assert!(resp.errors[0].has_locked());
+        assert!(resp.values.is_empty());
+    }
+
+    must_kv_commit(&client, ctx.clone(), vec![k.clone()], 10, 30, 30);
+
+    // WriteConflict
+    for &return_values in &[false, true] {
+        let resp =
+            kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], 20, 20, return_values);
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert_eq!(resp.errors.len(), 1);
+        assert!(resp.errors[0].has_conflict());
+        assert!(resp.values.is_empty());
+    }
+
+    // Return multiple values
+    for &return_values in &[false, true] {
+        let resp = kv_pessimistic_lock(
+            &client,
+            ctx.clone(),
+            vec![k.clone(), b"nonexsit".to_vec()],
+            40,
+            40,
+            true,
+        );
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.errors.is_empty());
+        if return_values {
+            assert_eq!(resp.get_values().to_vec(), vec![v.clone(), vec![]]);
+        }
+        must_kv_pessimistic_rollback(&client, ctx.clone(), k.clone(), 40);
+    }
 }

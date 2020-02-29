@@ -30,10 +30,10 @@ use crate::storage::txn::{
 };
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    types::{MvccInfo, TxnStatus},
+    types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
-use engine::CF_WRITE;
+use engine_traits::CF_WRITE;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
 
@@ -422,7 +422,8 @@ fn process_read_impl<E: Engine>(
                         next_scan_key,
                         kv_pairs,
                         cmd.ctx.clone(),
-                    ),
+                    )
+                    .into(),
                 })
             }
         }
@@ -458,7 +459,7 @@ fn wake_up_waiters_if_needed<L: LockManager>(
     }
 }
 
-fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
+fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
     match res {
         Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
@@ -605,11 +606,16 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             is_first_lock,
             for_update_ts,
             wait_timeout,
+            return_values,
             ..
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
-            let mut locks = vec![];
             let rows = keys.len();
+            let mut res = if return_values {
+                Ok(PessimisticLockRes::Values(vec![]))
+            } else {
+                Ok(PessimisticLockRes::Empty)
+            };
             for (k, should_not_exist) in keys {
                 match txn.acquire_pessimistic_lock(
                     k,
@@ -617,10 +623,15 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     should_not_exist,
                     lock_ttl,
                     for_update_ts,
+                    return_values,
                 ) {
-                    Ok(_) => {}
-                    e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                    Ok(val) => {
+                        if return_values {
+                            res.as_mut().unwrap().push(val);
+                        }
+                    }
+                    Err(e @ MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
+                        res = Err(e).map_err(Error::from).map_err(StorageError::from);
                         break;
                     }
                     Err(e) => return Err(Error::from(e)),
@@ -629,13 +640,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 
             statistics.add(&txn.take_statistics());
             // no conflict
-            if locks.is_empty() {
-                let pr = ProcessResult::MultiRes { results: vec![] };
+            if res.is_ok() {
+                let pr = ProcessResult::PessimisticLockRes { res };
                 let modifies = txn.into_modifies();
                 (pr, modifies, rows, cmd.ctx, None)
             } else {
-                let lock = extract_lock_from_result(&locks[0]);
-                let pr = ProcessResult::MultiRes { results: locks };
+                let lock = extract_lock_from_result(&res);
+                let pr = ProcessResult::PessimisticLockRes { res };
                 let lock_info = Some((lock, is_first_lock, wait_timeout));
                 // Wait for lock released
                 (pr, vec![], 0, cmd.ctx, lock_info)
@@ -825,7 +836,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 ProcessResult::Res
             } else {
                 ProcessResult::NextCommand {
-                    cmd: ResolveLock::new(txn_status, scan_key.take(), vec![], cmd.ctx.clone()),
+                    cmd: ResolveLock::new(txn_status, scan_key.take(), vec![], cmd.ctx.clone())
+                        .into(),
                 }
             };
 
@@ -838,7 +850,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         }) => {
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &resolve_keys);
 
-            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let rows = resolve_keys.len();
             let mut is_pessimistic_txn = false;
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
@@ -867,7 +879,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             advise_ttl,
         }) => {
             // TxnHeartBeat never remove locks. No need to wake up waiters.
-            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
 
             statistics.add(&txn.take_statistics());
@@ -883,7 +895,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             current_ts,
             rollback_if_not_exist,
         }) => {
-            let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !cmd.ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache());
             let (txn_status, is_pessimistic_txn) = txn.check_txn_status(
                 primary_key.clone(),
                 caller_start_ts,
@@ -981,7 +993,7 @@ mod tests {
         let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
             MvccError::from(MvccErrorInner::KeyIsLocked(info)),
         ))));
-        let lock = extract_lock_from_result(&Err(case));
+        let lock = extract_lock_from_result::<()>(&Err(case));
         assert_eq!(lock.ts, ts.into());
         assert_eq!(lock.hash, key.gen_hash());
     }
@@ -1108,16 +1120,7 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let cmd = Prewrite::new(
-            mutations,
-            primary,
-            TimeStamp::from(start_ts),
-            0,
-            false,
-            0,
-            TimeStamp::default(),
-            ctx,
-        );
+        let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
         let m = DummyLockManager {};
         let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
@@ -1149,7 +1152,7 @@ mod tests {
             ctx,
         );
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
+        let ret = process_write_impl(cmd.into(), snap, Some(m), statistics)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

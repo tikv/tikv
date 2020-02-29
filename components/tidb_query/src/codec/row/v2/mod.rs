@@ -13,7 +13,11 @@ bitflags! {
     }
 }
 
+mod compat_v1;
 mod row_slice;
+
+pub use self::compat_v1::*;
+pub use self::row_slice::*;
 
 #[cfg(test)]
 mod encoder;

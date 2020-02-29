@@ -9,7 +9,6 @@ use std::time::Instant;
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
-use crate::raftstore::router::RaftStoreRouter;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
@@ -17,6 +16,7 @@ use grpcio::{
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
+use raftstore::router::RaftStoreRouter;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
@@ -152,7 +152,7 @@ pub struct RaftClient<T: 'static> {
     grpc_thread_load: Arc<ThreadLoad>,
     // When message senders want to delay the notification to the gRPC client,
     // it can put a tokio_timer::Delay to the runtime.
-    stats_pool: tokio_threadpool::Sender,
+    stats_pool: Option<tokio_threadpool::Sender>,
     timer: Handle,
 }
 
@@ -163,7 +163,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
         security_mgr: Arc<SecurityManager>,
         router: T,
         grpc_thread_load: Arc<ThreadLoad>,
-        stats_pool: tokio_threadpool::Sender,
+        stats_pool: Option<tokio_threadpool::Sender>,
     ) -> RaftClient<T> {
         RaftClient {
             env,
@@ -223,13 +223,13 @@ impl<T: RaftStoreRouter> RaftClient<T> {
                 continue;
             }
             if let Some(notifier) = conn.stream.get_notifier() {
-                if !self.grpc_thread_load.in_heavy_load() {
+                if !self.grpc_thread_load.in_heavy_load() || self.stats_pool.is_none() {
                     notifier.notify();
                     counter += 1;
                     continue;
                 }
                 let wait = self.cfg.heavy_load_wait_duration.0;
-                let _ = self.stats_pool.spawn(
+                let _ = self.stats_pool.as_ref().unwrap().spawn(
                     self.timer
                         .delay(Instant::now() + wait)
                         .map_err(|_| warn!("RaftClient delay flush error"))

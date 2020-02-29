@@ -109,7 +109,7 @@
 //!
 //!   Example:
 //!
-//!   ```
+//!   ```ignore
 //!   // in engine_traits
 //!
 //!   trait IOLimiterExt {
@@ -119,8 +119,8 @@
 //!   trait IOLimiter { }
 //!   ```
 //!
-//!   ```
-//!   // in engine_rust
+//!   ```ignore
+//!   // in engine_rocks
 //!
 //!   impl IOLimiterExt for RocksEngine {
 //!       type IOLimiter = RocksIOLimiter;
@@ -146,6 +146,13 @@
 //!
 //!   - https://github.com/rust-lang/rfcs/pull/1598
 //!   - https://github.com/rust-lang/rust/issues/44265
+//!
+//! - Traits can't have mutually-recursive associated types. That is, if
+//!   `KvEngine` has a `Snapshot` associated type, `Snapshot` can't then have a
+//!   `KvEngine` associated type - the compiler will not be able to resolve both
+//!   `KvEngine`s to the same type. In these cases, e.g. `Snapshot` needs to be
+//!   parameterized over its engine type and `impl Snapshot<RocksEngine> for
+//!   RocksSnapshot`.
 //!
 //!
 //! # Refactoring tips
@@ -212,8 +219,6 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use import::*;
-mod io_limiter;
-pub use io_limiter::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
@@ -236,8 +241,8 @@ pub use crate::peekable::*;
 // These modules contain support code that does not need to be implemented by
 // engines.
 
-mod cfdefs;
-pub use crate::cfdefs::*;
+mod cf_defs;
+pub use crate::cf_defs::*;
 mod engines;
 pub use engines::*;
 mod errors;
@@ -246,6 +251,8 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+pub mod metrics_flusher;
 pub mod util;
+pub use crate::metrics_flusher::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

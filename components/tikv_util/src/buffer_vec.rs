@@ -2,6 +2,8 @@
 
 use std::iter::*;
 
+use codec::prelude::BufferWriter;
+
 /// A vector like container storing multiple buffers. Each buffer is a `[u8]` slice in
 /// arbitrary length.
 #[derive(Default, Clone)]
@@ -98,6 +100,16 @@ impl BufferVec {
             let slice = part.as_ref();
             self.data.extend_from_slice(slice);
         }
+    }
+
+    /// Returns a delegator that provides `extend` appends buffers together as one buffer
+    /// to the back.
+    ///
+    /// Note that this function always creates a new buffer even if you don't call `extend`
+    /// on the delegator later, which simply results in appending a new empty buffer.
+    #[inline]
+    pub fn begin_concat_extend(&mut self) -> WithConcatExtend<'_> {
+        WithConcatExtend::init(self)
     }
 
     /// Removes the last buffer if there is any.
@@ -281,6 +293,53 @@ impl<'a> Extend<&'a u8> for BufferVec {
     }
 }
 
+pub struct WithConcatExtend<'a>(&'a mut BufferVec);
+
+impl<'a> WithConcatExtend<'a> {
+    fn init(b: &'a mut BufferVec) -> Self {
+        b.offsets.push(b.data.len());
+        Self(b)
+    }
+
+    pub fn finish(self) {
+        // do nothing
+    }
+}
+
+impl<'a> Extend<u8> for WithConcatExtend<'a> {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        self.0.data.extend(iter);
+    }
+}
+
+impl<'a, 'b> Extend<&'a u8> for WithConcatExtend<'b> {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = &'a u8>,
+    {
+        self.0.data.extend(iter);
+    }
+}
+
+impl<'a> BufferWriter for WithConcatExtend<'a> {
+    unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
+        self.0.data.bytes_mut(size)
+    }
+
+    #[inline]
+    unsafe fn advance_mut(&mut self, count: usize) {
+        self.0.data.advance_mut(count)
+    }
+
+    #[inline]
+    fn write_bytes(&mut self, values: &[u8]) -> codec::Result<()> {
+        self.0.data.write_bytes(values)
+    }
+}
+
 // TODO: Implement Index<XxxRange>
 
 #[derive(Clone, Copy)]
@@ -317,18 +376,24 @@ impl<'a> Iterator for Iter<'a> {
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        if n + 1 < self.offsets.len() {
-            let begin_offset = self.offsets[n];
-            let end_offset = self.offsets[n + 1];
-            self.offsets = &self.offsets[n + 1..];
-            Some(&self.data[begin_offset..end_offset])
-        } else if n + 1 == self.offsets.len() {
-            let begin_offset = self.offsets[n];
-            self.offsets = &[];
-            Some(&self.data[begin_offset..])
-        } else {
-            self.offsets = &[];
-            None
+        use std::cmp::Ordering::*;
+
+        match (n + 1).cmp(&self.offsets.len()) {
+            Less => {
+                let begin_offset = self.offsets[n];
+                let end_offset = self.offsets[n + 1];
+                self.offsets = &self.offsets[n + 1..];
+                Some(&self.data[begin_offset..end_offset])
+            }
+            Equal => {
+                let begin_offset = self.offsets[n];
+                self.offsets = &[];
+                Some(&self.data[begin_offset..])
+            }
+            Greater => {
+                self.offsets = &[];
+                None
+            }
         }
     }
 }
@@ -592,7 +657,7 @@ mod tests {
         assert_eq!(v3.total_len(), 3);
         assert_eq!(format!("{:?}", v3), "[null, null, null, AABB0C, null]");
 
-        let mut v3 = v2.clone();
+        let mut v3 = v2;
         v3.shift(2);
         v3.copy_from(&v1);
         assert_eq!(v3.len(), 4);
@@ -655,7 +720,7 @@ mod tests {
         assert_eq!(v3.total_len(), 3);
         assert_eq!(format!("{:?}", v3), "[null, AABB0C]");
 
-        let mut v3 = v1.clone();
+        let mut v3 = v1;
         v3.copy_n_from(&v2, 2);
         assert_eq!(v3.len(), 4);
         assert_eq!(v3.total_len(), 5);
@@ -754,7 +819,7 @@ mod tests {
         v2.copy_from(&v);
         assert_eq!(format!("{:?}", v2), "[null, AA00, null, null, BB00A0]");
 
-        let mut v2 = v.clone();
+        let mut v2 = v;
         v2.retain_by_array(&[false, false, false, true]);
         assert_eq!(format!("{:?}", v2), "[BB00A0]");
 

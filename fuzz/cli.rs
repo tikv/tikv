@@ -250,13 +250,13 @@ fn run_afl(target: &str) -> Result<(), Error> {
 fn run_honggfuzz(target: &str) -> Result<(), Error> {
     pre_check(
         Command::new("cargo").args(&["hfuzz", "version"]),
-        "cargo install hfuzz --version 0.5.34",
+        "cargo install honggfuzz --version 0.5.45",
     )?;
 
     let fuzzer = Fuzzer::Honggfuzz;
 
     let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();
-    rust_flags.push_str("-Z sanitizer=address");
+    rust_flags.push_str(" -Z sanitizer=address");
 
     let hfuzz_args = format!(
         "-f {} \

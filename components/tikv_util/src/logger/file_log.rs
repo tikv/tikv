@@ -48,35 +48,29 @@ pub trait Rotator: Send {
 ///
 /// After rotating, the original log file would be renamed to "{original name}.{%Y-%m-%d-%H:%M:%S}".
 /// Note: log file will *not* be compressed or otherwise modified.
-pub struct RotatingFileLogger<N>
-where
-    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
-{
+pub struct RotatingFileLogger {
     path: PathBuf,
     file: File,
-    rename: N,
+    rename: Box<dyn Send + Fn(&Path) -> io::Result<PathBuf>>,
     rotators: Vec<Box<dyn Rotator>>,
 }
 
 /// Builder for `RotatingFileLogger`.
-pub struct RotatingFileLoggerBuilder<N>
-where
-    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
-{
+pub struct RotatingFileLoggerBuilder {
     rotators: Vec<Box<dyn Rotator>>,
     path: PathBuf,
-    rename: N,
+    rename: Box<dyn Send + Fn(&Path) -> io::Result<PathBuf>>,
 }
 
-impl<N> RotatingFileLoggerBuilder<N>
-where
-    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
-{
-    pub fn new(path: impl AsRef<Path>, rename: N) -> Self {
+impl RotatingFileLoggerBuilder {
+    pub fn new<F>(path: impl AsRef<Path>, rename: F) -> Self
+    where
+        F: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+    {
         RotatingFileLoggerBuilder {
             path: path.as_ref().to_path_buf(),
             rotators: vec![],
-            rename,
+            rename: Box::new(rename),
         }
     }
 
@@ -87,7 +81,7 @@ where
         self
     }
 
-    pub fn build(mut self) -> io::Result<RotatingFileLogger<N>> {
+    pub fn build(mut self) -> io::Result<RotatingFileLogger> {
         let file = open_log_file(&self.path)?;
 
         for rotator in self.rotators.iter_mut() {
@@ -103,10 +97,7 @@ where
     }
 }
 
-impl<N> Write for RotatingFileLogger<N>
-where
-    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
-{
+impl Write for RotatingFileLogger {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         // Updates all roators' states.
         for rotator in self.rotators.iter_mut() {
@@ -136,10 +127,7 @@ where
     }
 }
 
-impl<N> Drop for RotatingFileLogger<N>
-where
-    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
-{
+impl Drop for RotatingFileLogger {
     fn drop(&mut self) {
         let _ = self.file.flush();
     }
@@ -278,12 +266,11 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let accessed = last_modified;
-
         // Create a file.
         open_log_file(path.clone()).unwrap();
 
         // Modify last_modified time.
+        let accessed = last_modified;
         utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
 
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
@@ -316,12 +303,11 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let accessed = last_modified;
-
         // Create a file.
         open_log_file(path.clone()).unwrap();
 
         // Modify last_modified time.
+        let accessed = last_modified;
         utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
 
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
@@ -383,12 +369,11 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let accessed = last_modified;
-
         // Create a file.
         open_log_file(path.clone()).unwrap();
 
         // Modify last_modified time.
+        let accessed = last_modified;
         utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
 
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
@@ -406,7 +391,7 @@ mod tests {
         // Triggers rotate by time.
         logger.flush().unwrap();
 
-        assert!(file_exists(new_path.clone()));
+        assert!(file_exists(new_path));
 
         // Should update `RotateBySize`'s state.
         assert_eq!(logger.rotators[1].should_rotate(), false);
@@ -426,12 +411,11 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let accessed = last_modified;
-
         // Create a file.
         open_log_file(path.clone()).unwrap();
 
         // Modify last_modified time.
+        let accessed = last_modified;
         utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
 
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
@@ -456,7 +440,7 @@ mod tests {
 
         logger.write_all(&[0xff; 2048]).unwrap();
         assert_eq!(logger.rotators[1].should_rotate(), false);
-        assert!(file_exists(new_path.clone()));
+        assert!(file_exists(new_path));
     }
 
     #[test]

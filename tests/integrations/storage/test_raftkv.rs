@@ -8,7 +8,7 @@ use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
 use engine::IterOption;
-use engine::{CfName, CF_DEFAULT};
+use engine_traits::{CfName, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
 use tikv::storage::CfStatistics;
@@ -206,12 +206,12 @@ fn test_invaild_read_index_when_no_leader() {
     let p2 = new_peer(2, 2);
     cluster.pd_client.must_add_peer(r1, p2.clone());
     let p3 = new_peer(3, 3);
-    cluster.pd_client.must_add_peer(r1, p3.clone());
+    cluster.pd_client.must_add_peer(r1, p3);
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
     // Transfer leader to p2
     let region = cluster.get_region(b"k0");
-    cluster.must_transfer_leader(region.get_id(), p2.clone());
+    cluster.must_transfer_leader(region.get_id(), p2);
 
     // Delay all raft messages to p1.
     let heartbeat_filter = Box::new(
@@ -238,12 +238,12 @@ fn test_invaild_read_index_when_no_leader() {
         vec![new_read_index_cmd()],
         true,
     );
-    request.mut_header().set_peer(p1.clone());
+    request.mut_header().set_peer(p1);
     let (cb, rx) = make_cb(&request);
     cluster
         .sim
         .rl()
-        .async_command_on_node(1, request.clone(), cb)
+        .async_command_on_node(1, request, cb)
         .unwrap();
 
     let resp = rx.recv_timeout(time::Duration::from_millis(500)).unwrap();

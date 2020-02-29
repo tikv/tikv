@@ -7,6 +7,120 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - `make docker` now builds the `pingcap/tikv` image, instead of the previous Dockerfile. (https://github.com/tikv/tikv/pull/5776)
 - `make dist_artifacts` now creates compressed archives of TiKV binaries and Docker images. (https://github.com/tikv/tikv/pull/5777)
 
+## [4.0.0-beta] - 2020-01-17
++ Upgrade the RocksDB version to 6.4.6
++ Fix the issue that the system cannot perform the compaction task normally when the disk space is used up by automatically creating a 2GB empty file when TiKV is started [#6321](https://github.com/tikv/tikv/pull/6321)
++ Support quick backup and restoration
+  + [#6462](https://github.com/tikv/tikv/pull/6462) [#6395](https://github.com/tikv/tikv/pull/6395) [#6378](https://github.com/tikv/tikv/pull/6378) [#6374](https://github.com/tikv/tikv/pull/6374) [#6349](https://github.com/tikv/tikv/pull/6349)
+  + [#6339](https://github.com/tikv/tikv/pull/6339) [#6308](https://github.com/tikv/tikv/pull/6308) [#6295](https://github.com/tikv/tikv/pull/6295) [#6286](https://github.com/tikv/tikv/pull/6286) [#6283](https://github.com/tikv/tikv/pull/6283)
+  + [#6261](https://github.com/tikv/tikv/pull/6261) [#6222](https://github.com/tikv/tikv/pull/6222) [#6209](https://github.com/tikv/tikv/pull/6209) [#6204](https://github.com/tikv/tikv/pull/6204) [#6202](https://github.com/tikv/tikv/pull/6202)
+  + [#6198](https://github.com/tikv/tikv/pull/6198) [#6186](https://github.com/tikv/tikv/pull/6186) [#6177](https://github.com/tikv/tikv/pull/6177) [#6146](https://github.com/tikv/tikv/pull/6146) [#6071](https://github.com/tikv/tikv/pull/6071)
+  + [#6042](https://github.com/tikv/tikv/pull/6042) [#5877](https://github.com/tikv/tikv/pull/5877) [#5806](https://github.com/tikv/tikv/pull/5806) [#5803](https://github.com/tikv/tikv/pull/5803) [#5800](https://github.com/tikv/tikv/pull/5800)
+  + [#5781](https://github.com/tikv/tikv/pull/5781) [#5772](https://github.com/tikv/tikv/pull/5772) [#5689](https://github.com/tikv/tikv/pull/5689) [#5683](https://github.com/tikv/tikv/pull/5683)
++ Support reading data from Follower replicas
+  + [#5051](https://github.com/tikv/tikv/pull/5051) [#5118](https://github.com/tikv/tikv/pull/5118) [#5213](https://github.com/tikv/tikv/pull/5213) [#5316](https://github.com/tikv/tikv/pull/5316) [#5401](https://github.com/tikv/tikv/pull/5401)
+  + [#5919](https://github.com/tikv/tikv/pull/5919) [#5887](https://github.com/tikv/tikv/pull/5887) [#6340](https://github.com/tikv/tikv/pull/6340) [#6348](https://github.com/tikv/tikv/pull/6348) [#6396](https://github.com/tikv/tikv/pull/6396)
++ Improve the performance of TiDB reading data through index [#5682](https://github.com/tikv/tikv/pull/5682)
++ Fix the issue that the `CAST` function behaves inconsistently in TiKV and in TiDB
+  + [#6459](https://github.com/tikv/tikv/pull/6459) [#6461](https://github.com/tikv/tikv/pull/6461) [#6458](https://github.com/tikv/tikv/pull/6458) [#6447](https://github.com/tikv/tikv/pull/6447) [#6440](https://github.com/tikv/tikv/pull/6440)
+  + [#6425](https://github.com/tikv/tikv/pull/6425) [#6424](https://github.com/tikv/tikv/pull/6424) [#6390](https://github.com/tikv/tikv/pull/6390) [#5842](https://github.com/tikv/tikv/pull/5842) [#5528](https://github.com/tikv/tikv/pull/5528)
+  + [#5334](https://github.com/tikv/tikv/pull/5334) [#5199](https://github.com/tikv/tikv/pull/5199) [#5167](https://github.com/tikv/tikv/pull/5167) [#5146](https://github.com/tikv/tikv/pull/5146) [#5141](https://github.com/tikv/tikv/pull/5141)
+  + [#4998](https://github.com/tikv/tikv/pull/4998) [#5029](https://github.com/tikv/tikv/pull/5029) [#5099](https://github.com/tikv/tikv/pull/5099) [#5006](https://github.com/tikv/tikv/pull/5006) [#5095](https://github.com/tikv/tikv/pull/5095)
+  + [#5093](https://github.com/tikv/tikv/pull/5093) [#5090](https://github.com/tikv/tikv/pull/5090) [#4987](https://github.com/tikv/tikv/pull/4987) [#5066](https://github.com/tikv/tikv/pull/5066) [#5038](https://github.com/tikv/tikv/pull/5038)
+  + [#4962](https://github.com/tikv/tikv/pull/4962) [#4890](https://github.com/tikv/tikv/pull/4890) [#4727](https://github.com/tikv/tikv/pull/4727) [#6060](https://github.com/tikv/tikv/pull/6060) [#5761](https://github.com/tikv/tikv/pull/5761)
+  + [#5793](https://github.com/tikv/tikv/pull/5793) [#5468](https://github.com/tikv/tikv/pull/5468) [#5540](https://github.com/tikv/tikv/pull/5540) [#5548](https://github.com/tikv/tikv/pull/5548) [#5455](https://github.com/tikv/tikv/pull/5455)
+  + [#5543](https://github.com/tikv/tikv/pull/5543) [#5433](https://github.com/tikv/tikv/pull/5433) [#5431](https://github.com/tikv/tikv/pull/5431) [#5423](https://github.com/tikv/tikv/pull/5423) [#5179](https://github.com/tikv/tikv/pull/5179)
+  + [#5134](https://github.com/tikv/tikv/pull/5134) [#4685](https://github.com/tikv/tikv/pull/4685) [#4650](https://github.com/tikv/tikv/pull/4650) [#6463](https://github.com/tikv/tikv/pull/6463)
+
+## [3.1.0-beta.1] - 2020-01-10
++ backup 
+    + Change the name of the backup file from `start_key` to the hash value of `start_key` to reduce the file name's length for easy reading (https://github.com/tikv/tikv/pull/6198)
+    + Disable RocksDB's `force_consistency_checks` check to avoid false positives in the consistency check [#6249](https://github.com/tikv/tikv/pull/6249)
+    + Add the incremental backup feature [#6286](https://github.com/tikv/tikv/pull/6286)
+
++ sst_importer
+    + Fix the issue that the SST file does not have MVCC properties during restoring [#6378](https://github.com/tikv/tikv/pull/6378)
+    + Add the monitoring items such as `tikv_import_download_duration`, `tikv_import_download_bytes`, `tikv_import_ingest_duration`, `tikv_import_ingest_bytes`, and `tikv_import_error_counter` to observe the overheads of downloading and ingesting SST files [#6404](https://github.com/tikv/tikv/pull/6404)
++ raftstore
+    + Fix the issue of Follower Read that the follower reads stale data when the leader changes, thus breaking transaction isolation [#6343](https://github.com/tikv/tikv/pull/6343)
+
+## [3.1.0-beta] - 2019-12-18
+
++ Support the distributed backup and restore feature [#5532](https://github.com/tikv/tikv/pull/5532)
++ Support the Follower Read feature [#5562](https://github.com/tikv/tikv/pull/5562)
+
+## [3.0.9] - 2020-01-14
+- Raftstore
+  - Speed up the configuration change to speed up the Region scattering [#6421](https://github.com/tikv/tikv/pull/6421)
+- Transaction
+  - Add the `tikv_lock_manager_waiter_lifetime_duration`, `tikv_lock_manager_detect_duration`, and `tikv_lock_manager_detect_duration`  monitoring metrics to monitor `waiter`s’ lifetime, the time cost of detecting deadlocks, and the status of `Wait` table [#6392](https://github.com/tikv/tikv/pull/6392)
+  - Optimize the following configuration items to reduce transaction execution latency caused by changing Region leader or the leader of deadlock detector in extreme situations [#6429](https://github.com/tikv/tikv/pull/6429)
+    - Change the default value of `wait-for-lock-time` from `3s` to `1s`
+    - Change the default value of `wake-up-delay-duration` from `100ms` to `20ms`
+  - Fix the issue that the leader of the deadlock detector might be incorrect during the Region Merge process [#6431](https://github.com/tikv/tikv/pull/6431)
+
+## [3.0.8] - 2019-12-31
+- Coprocessor
+  - Modify the level of the output log from `error` to `warn` when an error occurs in Coprocessor [#6051](https://github.com/tikv/tikv/pull/6051)
+  - Modify the update behavior of statistics sampling data from directly updating the row to deleting before inserting, to keep consistency with the update behavior of tidb-server [#6069](https://github.com/tikv/tikv/pull/6096)
+- Raftstore
+    - Fix the panic caused by repeatedly sending the `destroy` message to `peerfsm` and `peerfsm` being destroyed multiple times [#6297](https://github.com/tikv/tikv/pull/6297)
+    - Update the default value of `split-region-on-table` from `true` to `false` to disable splitting Regions by table by default [#6253](https://github.com/tikv/tikv/pull/6253)
+- Engine
+    - Fix the issue that empty data might be returned because RocksDB iterator errors are not correctly processed in extreme conditions  [#6326](https://github.com/tikv/tikv/pull/6326)
+- Transaction
+    - Fix the issue that TiKV fails to write data into keys and GC is blocked because the pessimistic locks are incorrectly cleaned up [#6354](https://github.com/tikv/tikv/pull/6354)
+    - Optimize the pessimistic lock waiting mechanism to improve the performance in scenarios where the lock conflict is severe [#6296](https://github.com/tikv/tikv/pull/6296)
+- Update the default value of `tikv_alloc` from `tikv_alloc/default` to `jemalloc` [#6206](https://github.com/tikv/tikv/pull/6206)
+
+## [3.0.7] - 2019-12-04
++ Update grpc to fix a potential memory leak issue [#6128](https://github.com/tikv/tikv/pull/6128)
++ Deadlock: only observe valid region in order to make sure the manager is in the valid region [#6110](https://github.com/tikv/tikv/pull/6110)
+
+## [3.0.6] - 2019-11-28
++ Pessimistic Transaction: keep lock's ttl when receive a smaller ttl [#6056](https://github.com/tikv/tikv/pull/6056)
++ rust-rocksdb: fix titan options for cf when create cf [#6009](https://github.com/tikv/tikv/pull/6009)
++ Fix TiKV panic when aggregation expr type is not valid [#6002](https://github.com/tikv/tikv/pull/6002)
++ Pessimistic Transaction: reduce clean up requests in lock_manager [#5965](https://github.com/tikv/tikv/pull/5965)
++ Fix a region merge bug which may cause panic: set is_merging flag after restart in raftstore [#5892](https://github.com/tikv/tikv/pull/5892)
++ Generate flamegraph at runtime [#5961](https://github.com/tikv/tikv/pull/5961)
++ Support to change the config gc io limit dynamically [#5957](https://github.com/tikv/tikv/pull/5957)
++ Limit the speed of write for GC [#5735](https://github.com/tikv/tikv/pull/5735)
++ Engine: update rocksdb and titan [#5968](https://github.com/tikv/tikv/pull/5968)
+  + rocksdb: Fix OnFlushCompleted fired before flush result write to MANIFEST [pingcap/rocksdb#130](https://github.com/pingcap/rocksdb/pull/130)
+  + titan: Fix status overrided by mistake [pingcap/titan#111](https://github.com/pingcap/titan/pull/111)
++ Makefile: add a new rule for CI test [#5938](https://github.com/tikv/tikv/pull/5938)
++ Add metrics for commit log duration [#5881](https://github.com/tikv/tikv/pull/5881)
++ Pessimistic Transaction: Add support for lock wait timeout [#5848](https://github.com/tikv/tikv/pull/5848)
++ LockManager: make has_waiter accurate [#5845](https://github.com/tikv/tikv/pull/5845)
++ Fix wrong txn_size when acquire pessimistic lock [#5740](https://github.com/tikv/tikv/pull/5740)
+
+## [3.0.5] - 2019-10-25
++ Fix the problem that split check is always scanning caused by updating approximate in pd-worker [#5716](https://github.com/tikv/tikv/pull/5716)
++ Update rust-rocksdb to avoid intra_L0 compaction issue [#5710](https://github.com/tikv/tikv/pull/5710)
++ Fix the bug which may break atomicity: product primary locks of pessimistic transactions from being collapsed [#5671](https://github.com/tikv/tikv/pull/5671)
++ Enable rocksdb force_consistency_checks and handle background error [#5662](https://github.com/tikv/tikv/pull/5662)
++ Fix the bug in raftstore that painic when getting value encouters an error [#5643](https://github.com/tikv/tikv/pull/5643)
++ Fix the bug that do not return the right tso when checking lock [#5634](https://github.com/tikv/tikv/pull/5634)
++ Reduce the overhead of region's heartbeat [#5620](https://github.com/tikv/tikv/pull/5620)
++ Reduce message flush in raftstore [#5617](https://github.com/tikv/tikv/pull/5617)
++ Check Lock's TTL  when doing clean up [#5589](https://github.com/tikv/tikv/pull/5589)
+  
+## [3.0.4] - 2019-10-08
+
++ Fix the issue that the approximate keys is not correct when region is empty [#5414](https://github.com/tikv/tikv/pull/5414)
++ Make the config support rocksdb doubly skiplist to optimize `reverse-scan` [#5368](https://github.com/tikv/tikv/pull/5368)
++ Optimize point-get in coprocessor [#5463](https://github.com/tikv/tikv/pull/5463)
++ Support batch-split command and empty batch command [#5470](https://github.com/tikv/tikv/pull/5470)
++ Fix `PointGetter` performance issue when there are concurrent write [#5495](https://github.com/tikv/tikv/pull/5495)
++ Fix the output on short version flag [#5501](https://github.com/tikv/tikv/pull/5501)
++ Support the pessmistic transaction API: txn-heart-beat [#5507](https://github.com/tikv/tikv/pull/5507)
++ `titan` GC and monitoring improvement [#5517](https://github.com/tikv/tikv/pull/5517)
++ Update `grpcio` to v0.4.5 [#5523](https://github.com/tikv/tikv/pull/5523)
++ Support GRPC memory quota [#5524](https://github.com/tikv/tikv/pull/5524)
++ Fix commit index is not forwarded when merge entry is empty [#5526](https://github.com/tikv/tikv/pull/5526)
++ Fix a resource leak bug in batch grpc [#5567](https://github.com/tikv/tikv/pull/5567)
+
 ## [3.0.3] - 2019-08-29
 + Fix the issue that ReadIndex might fail to respond to requests because of duplicate context [#5256](https://github.com/tikv/tikv/pull/5256)
 + Fix potential scheduling jitters caused by premature `PutStore` [#5277](https://github.com/tikv/tikv/pull/5277)
@@ -196,6 +310,12 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
 - Support receiving the client requests and sending replies in batch [#4043](https://github.com/tikv/tikv/pull/4043)
 - Support multi-thread Apply [#4044](https://github.com/tikv/tikv/pull/4044)
 - Support multi-thread Raftstore [#4066](https://github.com/tikv/tikv/pull/4066)
+
+## [2.1.19]
+- Raftstore：Fix the panic occurred when restarting TiKV and `is_merging` is given an incorrect value in the process of merging Regions and applying the Compact log [#5884](https://github.com/tikv/tikv/pull/5884)
+- Importer：Remove the limit on the gRPC message length [#5809](https://github.com/tikv/tikv/pull/5809)
+
+## [2.1.18]
 
 ## [2.1.17] - 2019-09-11
 - Fix the incorrect result of counting keys in a Region in some cases [#5415](https://github.com/tikv/tikv/pull/5415)

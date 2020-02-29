@@ -14,9 +14,9 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
-use tikv::raftstore::router::RaftStoreRouter;
-use tikv::raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
-use tikv::raftstore::{DiscardReason, Error, Result};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
+use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{Either, HandyRwLock};
 
@@ -312,14 +312,15 @@ impl Direction {
 
 /// Drop specified messages for the store with special region.
 ///
-/// If `msg_type` is None, all message will be filtered.
+/// If `drop_type` is empty, all message will be dropped.
 #[derive(Clone)]
 pub struct RegionPacketFilter {
     region_id: u64,
     store_id: u64,
     direction: Direction,
     block: Either<Arc<AtomicUsize>, Arc<AtomicBool>>,
-    msg_type: Option<MessageType>,
+    drop_type: Vec<MessageType>,
+    skip_type: Vec<MessageType>,
     dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
     msg_callback: Option<Arc<dyn Fn(&RaftMessage) + Send + Sync>>,
 }
@@ -330,14 +331,13 @@ impl Filter for RegionPacketFilter {
             let region_id = m.get_region_id();
             let from_store_id = m.get_from_peer().get_store_id();
             let to_store_id = m.get_to_peer().get_store_id();
+            let msg_type = m.get_message().get_msg_type();
 
             if self.region_id == region_id
                 && (self.direction.is_send() && self.store_id == from_store_id
                     || self.direction.is_recv() && self.store_id == to_store_id)
-                && self
-                    .msg_type
-                    .as_ref()
-                    .map_or(true, |t| t == &m.get_message().get_msg_type())
+                && (self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
+                && !self.skip_type.contains(&msg_type)
             {
                 if let Some(f) = self.msg_callback.as_ref() {
                     f(m)
@@ -373,7 +373,8 @@ impl RegionPacketFilter {
             region_id,
             store_id,
             direction: Direction::Both,
-            msg_type: None,
+            drop_type: vec![],
+            skip_type: vec![],
             block: Either::Right(Arc::new(AtomicBool::new(true))),
             dropped_messages: None,
             msg_callback: None,
@@ -385,8 +386,14 @@ impl RegionPacketFilter {
         self
     }
 
+    // TODO: rename it to `drop`.
     pub fn msg_type(mut self, m_type: MessageType) -> RegionPacketFilter {
-        self.msg_type = Some(m_type);
+        self.drop_type.push(m_type);
+        self
+    }
+
+    pub fn skip(mut self, m_type: MessageType) -> RegionPacketFilter {
+        self.skip_type.push(m_type);
         self
     }
 

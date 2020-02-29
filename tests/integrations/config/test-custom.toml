@@ -3,6 +3,15 @@ log-file = "foo"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 
+[readpool]
+unify-read-pool = true
+
+[readpool.unified]
+min-thread-count = 5
+max-thread-count = 10
+stack-size = "20MB"
+max-tasks-per-worker = 2200
+
 [readpool.storage]
 high-concurrency = 1
 normal-concurrency = 3
@@ -42,6 +51,7 @@ end-point-batch-row-limit = 64
 end-point-stream-batch-row-limit = 4096
 end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
+end-point-max-concurrency = 10
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10

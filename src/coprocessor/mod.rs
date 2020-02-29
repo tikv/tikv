@@ -25,7 +25,7 @@ pub mod dag;
 mod endpoint;
 mod error;
 pub mod local_metrics;
-mod metrics;
+pub(crate) mod metrics;
 pub mod readpool_impl;
 mod statistics;
 mod tracker;
@@ -37,8 +37,10 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
+use std::sync::Arc;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
+use tokio::sync::Semaphore;
 use txn_types::TsSet;
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -111,6 +113,12 @@ pub struct ReqContext {
     ///
     /// None means don't try to hit the cache.
     pub cache_match_version: Option<u64>,
+
+    /// The time allowed to be used on this handler without getting a semaphore permit.
+    pub execution_time_limit: Option<Duration>,
+
+    /// The coprocessor semaphore which limits concurrent running jobs.
+    pub semaphore: Option<Arc<Semaphore>>,
 }
 
 impl ReqContext {
@@ -137,6 +145,8 @@ impl ReqContext {
             ranges_len: ranges.len(),
             bypass_locks,
             cache_match_version,
+            execution_time_limit: None,
+            semaphore: None,
         }
     }
 

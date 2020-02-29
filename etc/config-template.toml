@@ -27,6 +27,28 @@
 ## Set it small are good to debug and tuning.
 # refresh-config-interval = "30s"
 
+[readpool]
+## (Experimental) Whether to use a single thread pool to serve all the read requests. If it is
+## set to `true`, the `readpool.storage` and `readpool.coprocessor` sections will be invalid and
+## be ignored automatically.
+# unify-read-pool = true
+
+# Configurations for the single thread pool serving read requests.
+# It only takes effect when `unify-read-pool` is `true`.
+[readpool.unified]
+## The minimal working thread count of the thread pool.
+# min-thread-count = 1
+
+## The maximum working thread count of the thread pool.
+## The default value is max(4, LOGICAL_CPU_NUM * 0.8).
+# max-thread-count = 8
+
+## Size of the stack for each thread in the thread pool.
+# stack-size = "10MB"
+
+## Max running tasks of each worker, reject if exceeded.
+# max-tasks-per-worker = 2000
+
 [readpool.storage]
 ## Size of the thread pool for high-priority operations.
 # high-concurrency = 4
@@ -96,7 +118,7 @@
 # grpc-memory-pool-quota = "32G"
 
 ## The number of connections with each TiKV server to send Raft messages.
-# grpc-raft-conn-num = 10
+# grpc-raft-conn-num = 1
 
 ## Amount to read ahead on individual gRPC streams.
 # grpc-stream-initial-window-size = "2MB"
@@ -462,8 +484,8 @@
 # enabled = false
 
 ## Maximum number of threads of `Titan` background gc jobs.
-# default: 1
-# max-background-gc = 1
+# default: 4
+# max-background-gc = 4
 
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
@@ -662,7 +684,7 @@
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
 # block-size = "16KB"
-# write-buffer-size = "128MB"
+# write-buffer-size = "32MB"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "128MB"
@@ -744,13 +766,13 @@
 
 ## The default and maximum delay in milliseconds before responding to TiDB when pessimistic
 ## transactions encounter locks
-# wait-for-lock-timeout = 3000
+# wait-for-lock-timeout = 1000
 
 ## If more than one transaction is waiting for the same lock, only the one with smallest
 ## start timestamp will be waked up immediately when the lock is released. Others will
 ## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
 ## one more likely acquires the lock.
-# wake-up-delay-duration = 100
+# wake-up-delay-duration = 20
 
 [gc]
 ## The number of keys to GC in one batch.

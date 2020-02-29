@@ -12,9 +12,10 @@ use kvproto::metapb;
 use kvproto::pdpb;
 
 use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use raftstore::store;
 use test_util;
-use tikv::raftstore::store;
 use tikv_util::security::{SecurityConfig, SecurityManager};
+use txn_types::TimeStamp;
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -101,6 +102,9 @@ fn test_rpc_client() {
     let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
+    let ts = client.get_tso().wait().unwrap();
+    assert_ne!(ts, TimeStamp::zero());
+
     let mut prev_id = 0;
     for _ in 0..100 {
         let client = new_client(eps.clone(), None);
@@ -154,7 +158,7 @@ fn test_get_tombstone_stores() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
-    let client = new_client(eps.clone(), None);
+    let client = new_client(eps, None);
 
     let mut all_stores = vec![];
     let store_id = client.alloc_id().unwrap();
@@ -163,11 +167,9 @@ fn test_get_tombstone_stores() {
     let region_id = client.alloc_id().unwrap();
     let mut region = metapb::Region::default();
     region.set_id(region_id);
-    client
-        .bootstrap_cluster(store.clone(), region.clone())
-        .unwrap();
+    client.bootstrap_cluster(store.clone(), region).unwrap();
 
-    all_stores.push(store.clone());
+    all_stores.push(store);
     assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
     let s = client.get_all_stores(false).unwrap();
     assert_eq!(s, all_stores);
@@ -190,11 +192,11 @@ fn test_get_tombstone_stores() {
     assert_eq!(s, all_stores);
 
     // Add another tombstone store.
-    let mut store199 = store99.clone();
+    let mut store199 = store99;
     store199.set_id(199);
     server.default_handler().add_store(store199.clone());
 
-    all_stores.push(store199.clone());
+    all_stores.push(store199);
     all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
     let mut s = client.get_all_stores(false).unwrap();
     s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
@@ -335,9 +337,7 @@ fn restart_leader(mgr: SecurityManager) {
     let mut region = metapb::Region::default();
     region.set_id(region_id);
     region.mut_peers().push(peer);
-    client
-        .bootstrap_cluster(store.clone(), region.clone())
-        .unwrap();
+    client.bootstrap_cluster(store, region.clone()).unwrap();
 
     let region = client
         .get_region_by_id(region.get_id())

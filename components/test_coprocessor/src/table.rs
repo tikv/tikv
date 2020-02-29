@@ -63,7 +63,7 @@ impl Table {
         for col_id in &self.idxs[&index] {
             let col = self.column_by_id(*col_id).unwrap();
             let mut c_info = ColumnInfo::default();
-            c_info.set_tp(col.col_type);
+            c_info.set_tp(col.col_field_type());
             c_info.set_column_id(col.id);
             if col.id == self.handle_id {
                 c_info.set_pk_handle(true);
@@ -135,12 +135,18 @@ impl TableBuilder {
     }
 
     pub fn add_col(mut self, name: impl std::borrow::Borrow<str>, col: Column) -> TableBuilder {
+        use std::cmp::Ordering::*;
+
         if col.index == 0 {
-            if self.handle_id > 0 {
-                self.handle_id = 0;
-            } else if self.handle_id < 0 {
-                // maybe need to check type.
-                self.handle_id = col.id;
+            match self.handle_id.cmp(&0) {
+                Greater => {
+                    self.handle_id = 0;
+                }
+                Less => {
+                    // maybe need to check type.
+                    self.handle_id = col.id;
+                }
+                Equal => {}
             }
         }
         self.columns.push((normalize_column_name(name), col));

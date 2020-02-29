@@ -6,6 +6,7 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::{Error, EvalContext};
 
 use crate::codec::data_type::*;
+use crate::expr_util::rand::{gen_random_bytes, MAX_RAND_BYTES_LENGTH};
 use crate::Result;
 
 const SHA0: i64 = 0;
@@ -79,6 +80,20 @@ pub fn uncompressed_length(ctx: &mut EvalContext, arg: &Option<Bytes>) -> Result
             Int::from(LittleEndian::read_u32(&s[0..4]))
         }
     }))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn random_bytes(_ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Bytes>> {
+    match arg {
+        Some(arg) => {
+            if *arg < 1 || *arg > MAX_RAND_BYTES_LENGTH {
+                return Err(Error::overflow("length", "random_bytes").into());
+            }
+            Ok(Some(gen_random_bytes(*arg as usize)))
+        }
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -254,5 +269,38 @@ mod tests {
                 .unwrap()
                 .is_none())
         }
+    }
+
+    #[test]
+    fn test_random_bytes() {
+        let cases = vec![1, 32, 233, 1024];
+
+        for len in cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(Some(Int::from(len as i64)))
+                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                .unwrap();
+            assert_eq!(got.unwrap().len(), len);
+        }
+
+        let overflow_tests = vec![
+            ScalarValue::Int(Some(-32)),
+            ScalarValue::Int(Some(1025)),
+            ScalarValue::Int(Some(0)),
+        ];
+
+        for len in overflow_tests {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(len)
+                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                .is_err(),);
+        }
+
+        //test NULL case
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param(ScalarValue::Int(None))
+            .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+            .unwrap()
+            .is_none())
     }
 }

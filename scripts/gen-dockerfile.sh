@@ -7,19 +7,20 @@
 # Since the glibc it uses (2.17) is from 2012 (https://sourceware.org/glibc/wiki/Glibc%20Timeline)
 # it is our lowest common denominator in terms of distro support.
 
+# Some commands in this script are structured in order to reduce the number of layers Docker
+# generates. Unfortunately Docker is limited to only 125 layers: 
+# https://github.com/moby/moby/blob/a9507c6f76627fdc092edc542d5a7ef4a6df5eec/layer/layer.go#L50-L53
+
 # We require epel packages, so enable the fedora EPEL repo then install dependencies.
+# Install the system dependencies
+# Attempt to clean and rebuild the cache to avoid 404s
 cat <<EOT
 FROM centos:7.6.1810 as builder
 RUN yum clean all && \
     yum makecache && \
     yum update -y && \
-    yum install -y epel-release
-EOT
-
-# Install the system dependencies
-# Attempt to clean and rebuild the cache to avoid 404s
-cat <<EOT
-RUN yum clean all && \
+    yum install -y epel-release && \
+    yum clean all && \
     yum makecache && \
 	yum update -y && \
 	yum install -y tar wget git which file unzip python-pip openssl-devel \
@@ -66,41 +67,38 @@ COPY Cargo.lock ./Cargo.lock
 EOT
 
 # Get components, remove test and profiler components
-components=(. ./cmd $(ls -d ./components/* | grep -v "test" | grep -v "profiler"))
+components=($(find . -type f -name 'Cargo.toml' | sed -r 's|/[^/]+$||' | sort -u))
+src_dirs=$(for i in ${components[@]}; do echo ${i}/src; done | xargs)
+lib_files=$(for i in ${components[@]}; do echo ${i}/src/lib.rs; done | xargs)
 # List components and add their Cargo files
-for i in "${components[@]}"; do
+echo "RUN mkdir -p ${src_dirs} && touch ${lib_files}"
+for i in ${components[@]}; do
     echo "COPY ${i}/Cargo.toml ${i}/Cargo.toml"
-    echo "RUN mkdir ${i}/src && echo '' > ${i}/src/lib.rs"
 done
 
 # Create dummy files, build the dependencies
-# then remove TiKV fingerprint for following rebuild
+# then remove TiKV fingerprint for following rebuild.
+# Finally, remove test dependencies and profile features.
 cat <<EOT
 RUN mkdir -p ./cmd/src/bin && \\
     echo 'fn main() {}' > ./cmd/src/bin/tikv-ctl.rs && \\
-    echo 'fn main() {}' > ./cmd/src/bin/tikv-server.rs
-EOT
-
-# Remove test dependencies and profile features.
-cat <<EOT
-RUN for cargotoml in \$(find . -name "Cargo.toml"); do \\
+    echo 'fn main() {}' > ./cmd/src/bin/tikv-server.rs && \\
+    for cargotoml in \$(find . -name "Cargo.toml"); do \\
         sed -i '/fuzz/d' \${cargotoml} && \\
         sed -i '/test\_/d' \${cargotoml} && \\
-        sed -i '/profiling/d' \${cargotoml} && \\
         sed -i '/profiler/d' \${cargotoml} && \\
         sed -i '/\"tests\",/d' \${cargotoml} ; \\
-    done
+    done && \\
+    make build_dist_release
 EOT
 
-# Do the prebuild
-echo "RUN make build_dist_release"
-
 # Remove fingerprints for when we build the real binaries.
-for i in "${components[@]}"; do
-    echo "RUN rm -rf ./target/release/.fingerprint/$(basename ${i})-*"
-    echo "COPY ${i}/src ${i}/src"
+fingerprint_dirs=$(for i in ${components[@]}; do echo ./target/release/.fingerprint/$(basename ${i})-*; done | xargs)
+echo "RUN rm -rf ${fingerprint_dirs} ./target/release/.fingerprint/tikv-*"
+for i in "${components[@]:1}"; do
+    echo "COPY ${i} ${i}"
 done
-echo "RUN rm -rf ./target/release/.fingerprint/tikv-*"
+echo "COPY src src"
 
 # Build real binaries now
 cat <<EOT

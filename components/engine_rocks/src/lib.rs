@@ -18,6 +18,8 @@
 extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
+#[macro_use]
+extern crate slog_global;
 
 mod cf_handle;
 pub use crate::cf_handle::*;
@@ -31,8 +33,6 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
-mod io_limiter;
-pub use crate::io_limiter::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
@@ -50,3 +50,18 @@ pub mod util;
 
 mod compat;
 pub use compat::*;
+
+mod compact_listener;
+pub use compact_listener::*;
+
+mod properties;
+pub use properties::*;
+
+pub mod metrics_flusher;
+pub use metrics_flusher::*;
+
+pub mod rocks_metrics;
+pub use rocks_metrics::*;
+
+pub mod rocks_metrics_defs;
+pub use rocks_metrics_defs::*;

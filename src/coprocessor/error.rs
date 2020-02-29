@@ -13,8 +13,8 @@ pub enum Error {
     #[fail(display = "Key is locked (will clean up) {:?}", _0)]
     Locked(kvproto::kvrpcpb::LockInfo),
 
-    #[fail(display = "Coprocessor task terminated due to exceeding max time limit")]
-    MaxExecuteTimeExceeded,
+    #[fail(display = "Coprocessor task terminated due to exceeding the deadline")]
+    DeadlineExceeded,
 
     #[fail(display = "Coprocessor task canceled due to exceeding max pending tasks")]
     MaxPendingTasksExceeded,
@@ -93,7 +93,7 @@ impl From<TxnError> for Error {
 
 impl From<tikv_util::deadline::DeadlineError> for Error {
     fn from(_: tikv_util::deadline::DeadlineError) -> Self {
-        Error::MaxExecuteTimeExceeded
+        Error::DeadlineExceeded
     }
 }
 

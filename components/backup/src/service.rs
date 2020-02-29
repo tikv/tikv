@@ -99,7 +99,7 @@ mod tests {
         server.start();
         let (_, port) = server.bind_addrs()[0];
         let addr = format!("127.0.0.1:{}", port);
-        let channel = ChannelBuilder::new(env.clone()).connect(&addr);
+        let channel = ChannelBuilder::new(env).connect(&addr);
         let client = BackupClient::new(channel);
         (server, client, rx)
     }

@@ -9,14 +9,17 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
 use engine::*;
+use engine_traits::{ALL_CFS, CF_RAFT};
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::{bootstrap_store, fsm, SnapManager};
 use test_raftstore::*;
 use tikv::config::ConfigController;
+use tikv::config::ConfigHandler;
 use tikv::import::SSTImporter;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::{bootstrap_store, fsm, SnapManager};
 use tikv::server::Node;
-use tikv_util::worker::FutureWorker;
+use tikv_util::config::VersionTrack;
+use tikv_util::worker::{FutureWorker, Worker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
@@ -56,7 +59,12 @@ fn test_node_bootstrap_with_prepared_data() {
     );
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
 
-    let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
+    let mut node = Node::new(
+        system,
+        &cfg.server,
+        Arc::new(VersionTrack::new(cfg.raft_store.clone())),
+        Arc::clone(&pd_client),
+    );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
     let pd_worker = FutureWorker::new("test-pd-worker");
 
@@ -78,15 +86,20 @@ fn test_node_bootstrap_with_prepared_data() {
         .is_some());
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_router());
+    let coprocessor_host = CoprocessorHost::new(node.get_router());
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())
     };
 
-    let cfg_controller = ConfigController::new(cfg);
-
+    let cfg_controller = ConfigController::new(cfg.clone(), Default::default());
+    let config_client = ConfigHandler::start(
+        cfg.server.advertise_addr,
+        cfg_controller,
+        pd_worker.scheduler(),
+    )
+    .unwrap();
     // try to restart this node, will clear the prepare data
     node.start(
         engines,
@@ -96,7 +109,8 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::new(Mutex::new(StoreMeta::new(0))),
         coprocessor_host,
         importer,
-        cfg_controller,
+        Worker::new("split"),
+        Box::new(config_client),
     )
     .unwrap();
     assert!(Arc::clone(&engine)

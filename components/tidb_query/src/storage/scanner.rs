@@ -321,7 +321,7 @@ mod tests {
             PointRange::from("bar_3").into(),
         ];
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: storage.clone(),
+            storage,
             ranges,
             scan_backward_in_range: false,
             is_key_only: true,
@@ -355,7 +355,7 @@ mod tests {
             IntervalRange::from(("a", "z")).into(),
         ];
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: storage.clone(),
+            storage,
             ranges,
             scan_backward_in_range: false,
             is_key_only: false,
@@ -500,7 +500,7 @@ mod tests {
             IntervalRange::from(("bar_4", "box")).into(),
         ];
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: storage.clone(),
+            storage,
             ranges,
             scan_backward_in_range: false,
             is_key_only: false,
@@ -633,7 +633,7 @@ mod tests {
             IntervalRange::from(("foo", "foo_3")).into(),
         ];
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: storage.clone(),
+            storage,
             ranges,
             scan_backward_in_range: true,
             is_key_only: false,

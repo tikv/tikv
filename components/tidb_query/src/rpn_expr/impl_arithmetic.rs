@@ -114,11 +114,12 @@ impl ArithmeticOp for RealPlus {
     type T = Real;
 
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
-        let res = *lhs + *rhs;
-        if res.is_infinite() {
+        if (**lhs > 0f64 && **rhs > (std::f64::MAX - **lhs))
+            || (**lhs < 0f64 && **rhs < (-std::f64::MAX - **lhs))
+        {
             return Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)).into());
         }
-        Ok(Some(res))
+        Ok(Some(*lhs + *rhs))
     }
 }
 
@@ -582,6 +583,12 @@ mod tests {
                 false,
             ),
             (Real::new(1e308).ok(), Real::new(1e308).ok(), None, true),
+            (
+                Real::new(std::f64::MAX - 1f64).ok(),
+                Real::new(2f64).ok(),
+                None,
+                true,
+            ),
         ];
         for (lhs, rhs, expected, is_err) in test_cases {
             let output = RpnFnScalarEvaluator::new()

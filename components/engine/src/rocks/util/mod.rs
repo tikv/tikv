@@ -3,7 +3,6 @@
 pub mod config;
 pub mod engine_metrics;
 mod event_listener;
-pub mod metrics_flusher;
 pub mod security;
 pub mod stats;
 
@@ -25,11 +24,11 @@ use crate::rocks::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
+use crate::{Error, Result};
 
 pub use self::event_listener::EventListener;
-pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::rocks::CFHandle;
+use engine_traits::{ALL_CFS, CF_DEFAULT};
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
@@ -523,7 +522,7 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::rocks::{ColumnFamilyOptions, DBOptions, Writable, DB};
-    use crate::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
     use tempfile::Builder;
 
     #[test]
@@ -565,7 +564,7 @@ mod tests {
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, opts.clone()),
             CFOptions::new("cf_dynamic_level_bytes", opts.clone()),
-            CFOptions::new("cf1", opts.clone()),
+            CFOptions::new("cf1", opts),
         ];
         {
             let mut db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
@@ -640,7 +639,7 @@ mod tests {
         cf_opts.set_disable_auto_compactions(true);
         let cfs_opts = vec![
             CFOptions::new("default", cf_opts.clone()),
-            CFOptions::new("test", cf_opts.clone()),
+            CFOptions::new("test", cf_opts),
         ];
         let db = new_engine(
             temp_dir.path().to_str().unwrap(),

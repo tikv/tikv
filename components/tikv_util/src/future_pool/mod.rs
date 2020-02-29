@@ -125,7 +125,6 @@ impl FuturePool {
     /// Spawns a future in the pool and returns a handle to the result of the future.
     ///
     /// The future will not be executed if the handle is not polled.
-    #[must_use]
     pub fn spawn_handle<F, R>(&self, future_fn: F) -> Result<SpawnHandle<R::Item, R::Error>, Full>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -209,13 +208,12 @@ mod tests {
     fn test_tick() {
         let tick_sequence = Arc::new(AtomicUsize::new(0));
 
-        let tick_sequence2 = tick_sequence.clone();
         let (tx, rx) = mpsc::sync_channel(1000);
 
         let pool = Builder::new()
             .pool_size(1)
             .on_tick(move || {
-                let seq = tick_sequence2.fetch_add(1, Ordering::SeqCst);
+                let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
                 tx.send(seq).unwrap();
             })
             .build();
@@ -265,13 +263,12 @@ mod tests {
     fn test_tick_multi_thread() {
         let tick_sequence = Arc::new(AtomicUsize::new(0));
 
-        let tick_sequence2 = tick_sequence.clone();
         let (tx, rx) = mpsc::sync_channel(1000);
 
         let pool = Builder::new()
             .pool_size(2)
             .on_tick(move || {
-                let seq = tick_sequence2.fetch_add(1, Ordering::SeqCst);
+                let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
                 tx.send(seq).unwrap();
             })
             .build();
@@ -315,10 +312,9 @@ mod tests {
         })
         .unwrap();
 
-        let tx2 = tx.clone();
         drop(
             pool.spawn_handle(move || {
-                tx2.send(7).unwrap();
+                tx.send(7).unwrap();
                 future::ok::<_, ()>(())
             })
             .unwrap(),
@@ -438,10 +434,7 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), Ok(1));
 
         // add new (running = 4)
-        wait_on_new_thread(
-            tx.clone(),
-            spawn_long_time_future(&read_pool, 7, 5).unwrap(),
-        );
+        wait_on_new_thread(tx, spawn_long_time_future(&read_pool, 7, 5).unwrap());
 
         // full
         assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());

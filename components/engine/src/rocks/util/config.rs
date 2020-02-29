@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::rocks::{DBCompressionType, DBTitanDBBlobRunMode};
+use configuration::ConfigValue;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -122,6 +123,27 @@ pub enum BlobRunMode {
     Normal,
     ReadOnly,
     Fallback,
+}
+
+impl From<BlobRunMode> for ConfigValue {
+    fn from(mode: BlobRunMode) -> ConfigValue {
+        ConfigValue::Other(format!("k{:?}", mode))
+    }
+}
+
+impl Into<BlobRunMode> for ConfigValue {
+    fn into(self) -> BlobRunMode {
+        if let ConfigValue::Other(s) = self {
+            match s.as_str() {
+                "kNormal" => BlobRunMode::Normal,
+                "kReadOnly" => BlobRunMode::ReadOnly,
+                "kFallback" => BlobRunMode::Fallback,
+                m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
+            }
+        } else {
+            panic!("expect: ConfigValue::Other, got: {:?}", self);
+        }
+    }
 }
 
 impl Into<DBTitanDBBlobRunMode> for BlobRunMode {
