@@ -21,6 +21,8 @@ pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     fn is_titan(&self) -> bool { false }
 
+    fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
+
     fn delete_files_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], include_end: bool) -> Result<()>;
 
     fn delete_all_in_range(
