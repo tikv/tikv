@@ -120,6 +120,8 @@ impl<E: KvEngine> Drop for PeerFsm<E> {
     }
 }
 
+pub type SenderFsmPair<E> = (LooseBoundedSender<PeerMsg<E>>, Box<PeerFsm<E>>);
+
 impl<E: KvEngine> PeerFsm<E> {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
@@ -130,7 +132,7 @@ impl<E: KvEngine> PeerFsm<E> {
         sched: Scheduler<RegionTask>,
         engines: Engines,
         region: &metapb::Region,
-    ) -> Result<(LooseBoundedSender<PeerMsg<E>>, Box<PeerFsm<E>>)> {
+    ) -> Result<SenderFsmPair<E>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -173,7 +175,7 @@ impl<E: KvEngine> PeerFsm<E> {
         engines: Engines,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<(LooseBoundedSender<PeerMsg<E>>, Box<PeerFsm<E>>)> {
+    ) -> Result<SenderFsmPair<E>> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";

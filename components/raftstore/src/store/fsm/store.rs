@@ -31,7 +31,7 @@ use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
-use crate::store::fsm::peer::{maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate};
+use crate::store::fsm::peer::{maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair};
 #[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
@@ -730,10 +730,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     fn init(
         &mut self,
     ) -> Result<
-        Vec<(
-            LooseBoundedSender<PeerMsg<RocksEngine>>,
-            Box<PeerFsm<RocksEngine>>,
-        )>,
+        Vec<SenderFsmPair<RocksEngine>>,
     > {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
@@ -1049,10 +1046,7 @@ impl RaftBatchSystem {
     fn start_system<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
         &mut self,
         mut workers: Workers,
-        region_peers: Vec<(
-            LooseBoundedSender<PeerMsg<RocksEngine>>,
-            Box<PeerFsm<RocksEngine>>,
-        )>,
+        region_peers: Vec<SenderFsmPair<RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
         dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()> {

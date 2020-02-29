@@ -566,6 +566,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(clippy::type_complexity)]
     fn new_reader(
         path: &str,
         store_id: u64,
