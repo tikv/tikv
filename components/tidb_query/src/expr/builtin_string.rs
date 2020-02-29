@@ -980,6 +980,24 @@ impl ScalarFunc {
         }
         Ok(Some(result))
     }
+
+    #[inline]
+    pub fn find_in_set<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let str_list = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        if str_list.is_empty() {
+            return Ok(Some(0));
+        }
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        Ok(str_list
+            .split(',')
+            .position(|str_in_set| str_in_set == s)
+            .map(|p| p as i64 + 1)
+            .or(Some(0)))
+    }
 }
 
 // when target_len is 0, return Some(0), means the pad function should return empty string
@@ -3590,5 +3608,35 @@ mod tests {
 
         let got = eval_func(ScalarFuncSig::Ord, &[Datum::Null]).unwrap();
         assert_eq!(got, Datum::Null);
+    }
+
+    #[test]
+    fn test_find_in_set() {
+        let cases = vec![
+            ("foo", "foo,bar", 1),
+            ("foo", "foobar,bar", 0),
+            (" foo ", "foo, foo ", 2),
+            ("", "foo,bar,", 3),
+            ("", "", 0),
+            ("a,b", "a,b,c", 0),
+        ];
+
+        for (s, sl, expect) in cases {
+            let sl = Datum::Bytes(sl.as_bytes().to_vec());
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::FindInSet, &[s, sl]).unwrap();
+            assert_eq!(got, Datum::I64(expect))
+        }
+
+        let null_cases = vec![
+            (Datum::Bytes(b"foo".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Null, Datum::Bytes(b"bar".to_vec()), Datum::Null),
+            (Datum::Null, Datum::Null, Datum::Null),
+        ];
+
+        for (s, sl, exp) in null_cases {
+            let got = eval_func(ScalarFuncSig::FindInSet, &[s, sl]).unwrap();
+            assert_eq!(got, exp);
+        }
     }
 }

@@ -19,7 +19,10 @@ use std::usize;
 
 use kvproto::configpb::{self, StatusCode};
 
-use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
+use configuration::{
+    rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult,
+    RollbackCollector,
+};
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -62,6 +65,7 @@ const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
 const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
@@ -1849,6 +1853,30 @@ impl Default for TiKvConfig {
 impl TiKvConfig {
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.validate_or_rollback(None)
+    }
+
+    /// Validate the config, if encounter invalid config try to fallback to
+    /// the valid config. Caller should not rely on this method for validating
+    /// because some configs not implement rollback collector yet.
+    pub fn validate_with_rollback(&mut self, cfg: &TiKvConfig) -> ConfigChange {
+        let mut c = HashMap::new();
+        let rb_collector = RollbackCollector::new(cfg, &mut c);
+        if let Err(e) = self.validate_or_rollback(Some(rb_collector)) {
+            warn!("Invalid config"; "err" => ?e)
+        }
+        c
+    }
+
+    // If `rb_collector` is `Some`, when encounter some invalid config, instead of
+    // return an Error, a fallback from these invalid configs to the valid config
+    // will be collected and insert into `rb_collector`. For configs that not implement
+    // rollback collector yet, an `Err` will return if encounter invalid config
+    // TODO: implement rollback collector for more config
+    fn validate_or_rollback(
+        &mut self,
+        mut rb_collector: Option<RollbackCollector<TiKvConfig>>,
+    ) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
 
@@ -1903,16 +1931,36 @@ impl TiKvConfig {
             .into());
         }
 
+        rollback_or!(
+            rb_collector,
+            raft_store,
+            |r| { self.raft_store.validate_or_rollback(r) },
+            self.raft_store.validate()?
+        );
+        rollback_or!(
+            rb_collector,
+            coprocessor,
+            |r| { self.coprocessor.validate_or_rollback(r) },
+            self.coprocessor.validate()?
+        );
+        rollback_or!(
+            rb_collector,
+            pessimistic_txn,
+            |r| { self.pessimistic_txn.validate_or_rollback(r) },
+            self.pessimistic_txn.validate()?
+        );
+        rollback_or!(
+            rb_collector,
+            gc,
+            |r| { self.gc.validate_or_rollback(r) },
+            self.gc.validate()?
+        );
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
         self.server.validate()?;
-        self.raft_store.validate()?;
         self.pd.validate()?;
-        self.coprocessor.validate()?;
         self.security.validate()?;
         self.import.validate()?;
-        self.pessimistic_txn.validate()?;
-        self.gc.validate()?;
         Ok(())
     }
 
@@ -1958,7 +2006,7 @@ impl TiKvConfig {
                 "server.end-point-concurrency",
                 self.server.end_point_concurrency
             );
-            let concurrency = self.server.end_point_concurrency.unwrap();
+            let concurrency = self.server.end_point_concurrency.take().unwrap();
             self.readpool.coprocessor.high_concurrency = concurrency;
             self.readpool.coprocessor.normal_concurrency = concurrency;
             self.readpool.coprocessor.low_concurrency = concurrency;
@@ -1974,7 +2022,7 @@ impl TiKvConfig {
                 "server.end-point-stack-size",
                 self.server.end_point_stack_size
             );
-            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.unwrap();
+            self.readpool.coprocessor.stack_size = self.server.end_point_stack_size.take().unwrap();
         }
         if self.server.end_point_max_tasks.is_some() {
             warn!(
@@ -1986,11 +2034,7 @@ impl TiKvConfig {
             // new configuration using old values.
             self.server.end_point_max_tasks = None;
         }
-        if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
-            let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()
-                + self.server.end_point_request_max_handle_duration.as_secs();
-            self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
-        }
+
         // When shared block cache is enabled, if its capacity is set, it overrides individual
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.
@@ -2087,21 +2131,28 @@ impl TiKvConfig {
 pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
-    let store_path = Path::new(&config.storage.data_dir);
-    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
-
-    if last_cfg_path.exists() {
-        let last_cfg = TiKvConfig::from_file(&last_cfg_path);
-        config.check_critical_cfg_with(&last_cfg)?;
+    if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
+        cfg.compatible_adjust();
+        let _ = cfg.validate();
+        config.check_critical_cfg_with(&cfg)?;
     }
-
     Ok(())
 }
 
-/// Persists critical config to `last_tikv.toml`
-pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
+    let store_path = Path::new(data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+    if last_cfg_path.exists() {
+        return Some(TiKvConfig::from_file(&last_cfg_path));
+    }
+    None
+}
+
+/// Persists config to `last_tikv.toml`
+pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     let store_path = Path::new(&config.storage.data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+    let tmp_cfg_path = store_path.join(TMP_CONFIG_FILE);
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
@@ -2112,10 +2163,20 @@ pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
         ));
     }
 
-    // Persist current critical configurations to file.
-    if let Err(e) = config.write_to_file(&last_cfg_path) {
+    // Persist current configurations to temporary file.
+    if let Err(e) = config.write_to_file(&tmp_cfg_path) {
         return Err(format!(
-            "persist critical config to '{}' failed: {}",
+            "persist config to '{}' failed: {}",
+            tmp_cfg_path.to_str().unwrap(),
+            e
+        ));
+    }
+
+    // Rename temporary file to last config file.
+    if let Err(e) = fs::rename(&tmp_cfg_path, &last_cfg_path) {
+        return Err(format!(
+            "rename config file from '{}' to '{}' failed: {}",
+            tmp_cfg_path.to_str().unwrap(),
             last_cfg_path.to_str().unwrap(),
             e
         ));
@@ -2145,7 +2206,9 @@ fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>
                 name = p;
             }
             if let ConfigValue::Module(change) = value {
-                entries.append(&mut helper(name, change)?);
+                if !change.is_empty() {
+                    entries.append(&mut helper(name, change)?);
+                }
             } else {
                 let mut e = configpb::ConfigEntry::default();
                 e.set_name(name);
@@ -2257,14 +2320,23 @@ impl ConfigController {
         // Config from PD have not been checked, call `compatible_adjust()`
         // and `validate()` before use it
         incoming.compatible_adjust();
-        // TODO: return the invalid config instead
-        if incoming.validate().is_err() {
-            let diff = incoming.diff(&self.current);
-            return Ok(Either::Left(diff));
+        let rollback = incoming.validate_with_rollback(&self.current);
+        if !rollback.is_empty() {
+            return Ok(Either::Left(rollback));
         }
         let diff = self.current.diff(&incoming);
         if diff.is_empty() {
             return Ok(Either::Right(false));
+        } else {
+            // validate current config after apply diff, we can't just validate the
+            // incoming config because some configs are skip and incoming config not
+            // equal to current config + diff
+            let mut current = self.current.clone();
+            current.update(diff.clone());
+            let rollback = current.validate_with_rollback(&self.current);
+            if !rollback.is_empty() {
+                return Ok(Either::Left(rollback));
+            }
         }
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {
@@ -2287,7 +2359,10 @@ impl ConfigController {
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
         self.current.update(to_update);
-        Ok(Either::Right(true))
+        match persist_config(&incoming) {
+            Err(e) => Err(e.into()),
+            Ok(_) => Ok(Either::Right(true)),
+        }
     }
 
     pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
@@ -2358,6 +2433,7 @@ impl ConfigHandler {
             StatusCode::Ok | StatusCode::WrongVersion => {
                 let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
                 let mut version = resp.take_version();
+                incoming.compatible_adjust();
                 if let Err(e) = incoming.validate() {
                     warn!(
                         "config from pd is invalid, fallback to local config";
@@ -2365,7 +2441,8 @@ impl ConfigHandler {
                         "error" => ?e,
                     );
                     version = configpb::Version::default();
-                    incoming = local_config;
+                    incoming =
+                        get_last_config(&local_config.storage.data_dir).unwrap_or(local_config);
                 }
                 info!("register config success"; "version" => ?version);
                 Ok((version, incoming))
@@ -2536,7 +2613,7 @@ mod tests {
 
         let mut tikv_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = path.as_path().to_str().unwrap().to_owned();
-        assert!(persist_critical_config(&tikv_cfg).is_ok());
+        assert!(persist_config(&tikv_cfg).is_ok());
     }
 
     #[test]
@@ -2739,5 +2816,68 @@ mod tests {
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
         assert_eq!(diff[0].1.as_str(), "kFallback");
+    }
+
+    #[test]
+    fn test_compatible_adjust_validate_equal() {
+        // After calling many time of `compatible_adjust` and `validate` should has
+        // the same effect as calling `compatible_adjust` and `validate` one time
+        let mut c = TiKvConfig::default();
+        let mut cfg = c.clone();
+        c.compatible_adjust();
+        c.validate().unwrap();
+
+        for _ in 0..10 {
+            cfg.compatible_adjust();
+            cfg.validate().unwrap();
+            assert_eq!(c, cfg);
+        }
+    }
+
+    #[test]
+    fn test_invalid_config_rollback() {
+        let mut valid_cfg = TiKvConfig::default();
+        assert!(valid_cfg.validate().is_ok());
+        // Valid config do not have rollback
+        assert!(valid_cfg
+            .validate_with_rollback(&TiKvConfig::default())
+            .is_empty());
+
+        // Call validate_with_rollback with an invalid config will
+        // return a rollback of the cause of invalid
+        let mut c = valid_cfg.clone();
+        // invalid config
+        c.gc.batch_keys = 0;
+        // valid config
+        c.raft_store.raft_log_gc_threshold = 200;
+        assert!(c.validate().is_err());
+        let rollback = to_config_entry(c.validate_with_rollback(&valid_cfg)).unwrap();
+        assert_eq!(rollback.len(), 1);
+        assert_eq!(rollback[0].name, "gc.batch-keys");
+        assert_eq!(
+            rollback[0].value,
+            toml::to_string(&valid_cfg.gc.batch_keys).unwrap()
+        );
+
+        // Some check in `validate` may relative to many configs and if
+        // the config can not pass the check, a rollback of all config
+        // relative to the check will return
+        let mut c = valid_cfg.clone();
+        // config check: region_max_keys >= region_split_keys
+        c.coprocessor.region_max_keys = 0;
+        assert!(c.validate().is_err());
+        let mut rollback = to_config_entry(c.validate_with_rollback(&valid_cfg)).unwrap();
+        rollback.sort_unstable_by(|a, b| a.name.partial_cmp(&b.name).unwrap());
+        assert_eq!(rollback.len(), 2);
+        assert_eq!(rollback[0].name, "coprocessor.region-max-keys");
+        assert_eq!(
+            rollback[0].value,
+            toml::to_string(&valid_cfg.coprocessor.region_max_keys).unwrap()
+        );
+        assert_eq!(rollback[1].name, "coprocessor.region-split-keys");
+        assert_eq!(
+            rollback[1].value,
+            toml::to_string(&valid_cfg.coprocessor.region_split_keys).unwrap()
+        );
     }
 }
