@@ -4302,8 +4302,6 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
  "failure",
- "num-derive",
- "num-traits",
  "tikv_alloc",
  "tipb",
 ]

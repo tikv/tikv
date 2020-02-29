@@ -1460,7 +1460,10 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     resp.set_errors(extract_key_errors(v).into())
 });
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
-    resp.set_errors(extract_key_errors(v).into())
+    match v {
+        Ok(Ok(res)) => resp.set_values(res.into_vec().into()),
+        Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+    }
 });
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())

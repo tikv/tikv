@@ -60,17 +60,21 @@ impl<S: Snapshot> MvccReader<S> {
         self.key_only = key_only;
     }
 
-    pub fn load_data(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Value>> {
+    pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
+        assert_eq!(write.write_type, WriteType::Put);
         if self.key_only {
-            return Ok(Some(vec![]));
+            return Ok(vec![]);
+        }
+        if let Some(val) = write.short_value {
+            return Ok(val);
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
             let iter_opt = IterOption::new(None, None, self.fill_cache);
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
-        let k = key.clone().append_ts(ts);
-        let res = if let Some(ref mut cursor) = self.data_cursor {
+        let k = key.clone().append_ts(write.start_ts);
+        let val = if let Some(ref mut cursor) = self.data_cursor {
             cursor
                 .get(&k, &mut self.statistics.data)?
                 .map(|v| v.to_vec())
@@ -78,9 +82,12 @@ impl<S: Snapshot> MvccReader<S> {
             self.statistics.data.get += 1;
             self.snapshot.get(&k)?
         };
-
         self.statistics.data.processed += 1;
-        Ok(res)
+
+        match val {
+            Some(val) => Ok(val),
+            None => Err(default_not_found_error(key.to_raw()?, "get")),
+        }
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
@@ -164,27 +171,24 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(())
     }
 
-    pub fn get(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Value>> {
-        // Check for locks that signal concurrent writes.
-        match self.isolation_level {
-            IsolationLevel::Si => self.check_lock(key, ts)?,
-            IsolationLevel::Rc => {}
-        }
-        if let Some(mut write) = self.get_write(key, ts)? {
-            if write.short_value.is_some() {
-                if self.key_only {
-                    return Ok(Some(vec![]));
-                }
-                return Ok(write.short_value.take());
-            }
-            match self.load_data(key, write.start_ts)? {
-                None => {
-                    return Err(default_not_found_error(key.to_raw()?, "get"));
-                }
-                Some(v) => return Ok(Some(v)),
+    pub fn get(
+        &mut self,
+        key: &Key,
+        ts: TimeStamp,
+        skip_lock_check: bool,
+    ) -> Result<Option<Value>> {
+        if !skip_lock_check {
+            // Check for locks that signal concurrent writes.
+            match self.isolation_level {
+                IsolationLevel::Si => self.check_lock(key, ts)?,
+                IsolationLevel::Rc => {}
             }
         }
-        Ok(None)
+        if let Some(write) = self.get_write(key, ts)? {
+            Ok(Some(self.load_data(key, write)?))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn get_write(&mut self, key: &Key, mut ts: TimeStamp) -> Result<Option<Write>> {
@@ -550,7 +554,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into())
+            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into(), false)
                 .unwrap();
             self.write(txn.into_modifies());
         }
@@ -1337,5 +1341,68 @@ mod tests {
         );
         // limit = 0 means unlimited.
         check_scan_lock(None, 0, &visible_locks, false);
+    }
+
+    #[test]
+    fn test_get() {
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_get_write")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        let (k, short_value, long_value) = (
+            b"k",
+            b"v",
+            "v".repeat(txn_types::SHORT_VALUE_MAX_LEN + 1).into_bytes(),
+        );
+        let m = Mutation::Put((Key::from_raw(k), short_value.to_vec()));
+        engine.prewrite(m, k, 1);
+        engine.commit(k, 1, 2);
+
+        engine.rollback(k, 5);
+
+        engine.lock(k, 6, 7);
+
+        engine.delete(k, 8, 9);
+
+        let m = Mutation::Put((Key::from_raw(k), long_value.to_vec()));
+        engine.prewrite(m, k, 10);
+
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.clone(), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+        let key = Key::from_raw(k);
+
+        for &skip_lock_check in &[false, true] {
+            assert_eq!(
+                reader.get(&key, 2.into(), skip_lock_check).unwrap(),
+                Some(short_value.to_vec())
+            );
+            assert_eq!(
+                reader.get(&key, 5.into(), skip_lock_check).unwrap(),
+                Some(short_value.to_vec())
+            );
+            assert_eq!(
+                reader.get(&key, 7.into(), skip_lock_check).unwrap(),
+                Some(short_value.to_vec())
+            );
+            assert_eq!(reader.get(&key, 9.into(), skip_lock_check).unwrap(), None);
+        }
+        assert!(reader.get(&key, 11.into(), false).is_err());
+        assert_eq!(reader.get(&key, 9.into(), true).unwrap(), None);
+
+        // Commit the long value
+        engine.commit(k, 10, 11);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+        for &skip_lock_check in &[false, true] {
+            assert_eq!(
+                reader.get(&key, 11.into(), skip_lock_check).unwrap(),
+                Some(long_value.to_vec())
+            );
+        }
     }
 }
