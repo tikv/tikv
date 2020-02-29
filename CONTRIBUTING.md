@@ -62,7 +62,7 @@ It is particularly handy alongside `cargo-watch`, which runs a command each time
 
 ```bash
 cargo install cargo-watch
-cargo watch -s "cargo check -all"
+cargo watch -s "cargo check --all"
 ```
 
 When you're ready to test out your changes, use the `dev` task. It will format your codebase, build with `clippy` enabled, and run tests. This should run without failure before you create a PR. Unfortunately, some tests will fail intermittently and others don't pass on all platforms. If you're unsure, just ask!
