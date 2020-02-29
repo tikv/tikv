@@ -13,7 +13,7 @@ use engine::rocks;
 use engine::{util as engine_util, Engines, Peekable};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Mutable};
+use engine_traits::{Mutable, WriteBatchExt};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -690,7 +690,7 @@ mod tests {
     use engine::Engines;
     use engine::Peekable;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{KvEngine, Mutable};
+    use engine_traits::{WriteBatchExt, Mutable};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;

@@ -9,7 +9,7 @@ use engine::util::MAX_DELETE_BATCH_SIZE;
 use engine::Iterable;
 use engine::DB;
 use engine_rocks::Compat;
-use engine_traits::{KvEngine, Mutable, WriteBatch};
+use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
 use tikv_util::worker::Runnable;
 
 pub struct Task {

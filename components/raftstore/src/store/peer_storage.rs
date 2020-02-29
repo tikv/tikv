@@ -1491,6 +1491,7 @@ mod tests {
     use engine::Engines;
     use engine_rocks::{Compat, RocksWriteBatch};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
+    use engine_traits::{WriteBatchExt};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
