@@ -31,7 +31,9 @@ use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
-use crate::store::fsm::peer::{maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair};
+use crate::store::fsm::peer::{
+    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
+};
 #[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
@@ -727,11 +729,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn init(
-        &mut self,
-    ) -> Result<
-        Vec<SenderFsmPair<RocksEngine>>,
-    > {
+    fn init(&mut self) -> Result<Vec<SenderFsmPair<RocksEngine>>> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
