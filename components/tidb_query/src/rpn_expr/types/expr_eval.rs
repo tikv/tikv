@@ -15,10 +15,7 @@ use crate::Result;
 static IDENTICAL_LOGICAL_ROWS: [usize; BATCH_MAX_SIZE] = {
     let mut logical_rows = [0; BATCH_MAX_SIZE];
     let mut row = 0;
-    loop {
-        if row >= logical_rows.len() {
-            break;
-        }
+    while row < logical_rows.len() {
         logical_rows[row] = row;
         row += 1;
     }
