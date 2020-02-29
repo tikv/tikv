@@ -9,9 +9,8 @@ use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
-use engine::util::delete_all_in_range_cf;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::TablePropertiesExt;
+use engine_traits::{TablePropertiesExt, MiscExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
@@ -451,7 +450,7 @@ impl<E: Engine> GcRunner<E> {
         let cleanup_all_start_time = Instant::now();
         for cf in cfs {
             // TODO: set use_delete_range with config here.
-            delete_all_in_range_cf(local_storage, cf, &start_data_key, &end_data_key, false)
+            local_storage.c().delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!(

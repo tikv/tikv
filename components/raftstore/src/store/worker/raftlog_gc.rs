@@ -5,7 +5,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use engine::util::MAX_DELETE_BATCH_SIZE;
+use engine_traits::MAX_DELETE_BATCH_SIZE;
 use engine::Iterable;
 use engine::DB;
 use engine_rocks::Compat;

@@ -10,11 +10,10 @@ use engine::rocks;
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Writable};
-use engine::util::{delete_all_files_in_range, delete_all_in_range};
 use engine::Engines;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
-use engine_traits::{SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE};
+use engine_traits::{SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE, MiscExt};
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
 use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
@@ -300,14 +299,12 @@ fn test_delete_files_in_range_for_titan() {
     // `delete_files_in_range` may expose some old keys.
     // For Titan it may encounter `missing blob file` in `delete_all_in_range`,
     // so we set key_only for Titan.
-    delete_all_files_in_range(
-        &engines.kv,
+    engines.kv.c().delete_all_files_in_range(
         &data_key(Key::from_raw(b"a").as_encoded()),
         &data_key(Key::from_raw(b"b").as_encoded()),
     )
     .unwrap();
-    delete_all_in_range(
-        &engines.kv,
+    engines.kv.c().delete_all_in_range(
         &data_key(Key::from_raw(b"a").as_encoded()),
         &data_key(Key::from_raw(b"b").as_encoded()),
         false,

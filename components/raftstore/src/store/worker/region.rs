@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine::rocks;
-use engine::{util as engine_util, Engines, Peekable};
+use engine::{Engines, Peekable};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{Mutable, WriteBatchExt};
+use engine_traits::{Mutable, WriteBatchExt, MiscExt};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -299,8 +299,7 @@ impl<R: CasualRouter> SnapContext<R> {
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(engine_util::delete_all_in_range(
-            &self.engines.kv,
+        box_try!(self.engines.kv.c().delete_all_in_range(
             &start_key,
             &end_key,
             self.use_delete_range
@@ -400,7 +399,7 @@ impl<R: CasualRouter> SnapContext<R> {
     ) {
         if use_delete_files {
             if let Err(e) =
-                engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
+                self.engines.kv.c().delete_all_files_in_range(start_key, end_key)
             {
                 error!(
                     "failed to delete files in range";
@@ -412,8 +411,7 @@ impl<R: CasualRouter> SnapContext<R> {
                 return;
             }
         }
-        if let Err(e) = engine_util::delete_all_in_range(
-            &self.engines.kv,
+        if let Err(e) = self.engines.kv.c().delete_all_in_range(
             start_key,
             end_key,
             self.use_delete_range,
