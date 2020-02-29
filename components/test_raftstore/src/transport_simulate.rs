@@ -735,3 +735,21 @@ impl Filter for LeaseReadFilter {
         Ok(())
     }
 }
+
+#[derive(Clone)]
+pub struct DropMessageFilter {
+    ty: MessageType,
+}
+
+impl DropMessageFilter {
+    pub fn new(ty: MessageType) -> DropMessageFilter {
+        DropMessageFilter { ty }
+    }
+}
+
+impl Filter for DropMessageFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        msgs.retain(|m| m.get_message().get_msg_type() != self.ty);
+        Ok(())
+    }
+}

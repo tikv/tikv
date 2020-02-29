@@ -839,10 +839,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
         self.fsm.peer.step(self.ctx, msg.take_message())?;
+        if self.fsm.peer.should_wake_up {
+            self.reset_raft_tick(GroupState::Ordered);
+        }
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
-            self.register_raft_base_tick();
+            self.reset_raft_tick(GroupState::Ordered);
         }
 
         self.fsm.has_ready = true;
@@ -863,6 +866,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn reset_raft_tick(&mut self, state: GroupState) {
         self.fsm.group_state = state;
         self.fsm.missing_ticks = 0;
+        self.fsm.peer.should_wake_up = false;
         self.register_raft_base_tick();
     }
 
@@ -2289,8 +2293,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         bind_term(&mut resp, term);
         if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
             self.fsm.has_ready = true;
-            self.fsm.group_state = GroupState::Ordered;
-            self.register_raft_base_tick();
+        }
+
+        if self.fsm.peer.should_wake_up {
+            self.reset_raft_tick(GroupState::Ordered);
         }
 
         self.register_pd_heartbeat_tick();
