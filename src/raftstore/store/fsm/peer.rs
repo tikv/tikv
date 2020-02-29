@@ -22,7 +22,8 @@ use kvproto::raft_cmdpb::{
     StatusResponse,
 };
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+    ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
+    RegionLocalState,
 };
 use protobuf::{Message, RepeatedField};
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -388,6 +389,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        // Apply committed entries more quickly.
+        if self.fsm.peer.raft_group.get_store().committed_index()
+            > self.fsm.peer.raft_group.get_store().applied_index()
+        {
+            self.fsm.has_ready = true;
+        }
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -803,7 +810,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_extra_msg() {
-            // now noop
+            self.on_extra_message(&msg);
             return Ok(());
         }
 
@@ -843,6 +850,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         self.fsm.has_ready = true;
         Ok(())
+    }
+
+    fn on_extra_message(&mut self, msg: &RaftMessage) {
+        let extra_msg = msg.get_extra_msg();
+        match extra_msg.get_field_type() {
+            ExtraMessageType::MsgRegionWakeUp => {
+                if msg.get_message().get_index() < self.fsm.peer.get_store().committed_index() {
+                    self.reset_raft_tick(GroupState::Ordered);
+                }
+            }
+        }
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
