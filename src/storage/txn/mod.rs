@@ -66,12 +66,34 @@ impl ProcessResult {
                         Ok(_) => Ok(()),
                         Err(e) => match e.maybe_clone() {
                             Some(e) => Err(e),
-                            None => Ok(()),
+                            None => Err(box_err!("clone failed in ProcessResult::MultiRes")),
                         }
                     }).collect()
                 })
             }
-            _ => None,
+            ProcessResult::PessimisticLockRes { res } => {
+                let cloned = match res {
+                    Ok(v) => match v {
+                        PessimisticLockRes::Values(values) => Ok(PessimisticLockRes::Values(
+                            values.into_iter().map(|it| match it {
+                                Some(v) => Some(v.to_vec()),
+                                None => None,
+                            }).collect(),
+                        )),
+                        PessimisticLockRes::Empty => Ok(PessimisticLockRes::Empty),
+                    },
+                    Err(e) => match e.maybe_clone() {
+                        Some(e) => Err(e),
+                        None => Err(box_err!("clone failed in ProcessResult::PessimisticLockRes")),
+                    }
+                };
+                Some(ProcessResult::PessimisticLockRes { res: cloned })
+            }
+            ProcessResult::Failed { err } => match err.maybe_clone() {
+                Some(err) => Some(ProcessResult::Failed { err: err }),
+                None => None,
+            },
+            _ => panic!("clone ProcessResult should be only in pipelined acquire pessimistic lock"),
         }
     }
 }

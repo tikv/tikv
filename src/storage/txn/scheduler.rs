@@ -463,9 +463,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         if let Some(cb) = tctx.cb {
             let pr = match result {
                 Ok(()) => pr,
-                    Err(e) => ProcessResult::Failed {
-                        err: StorageError::from(e),
-                    },
+                Err(e) => ProcessResult::Failed {
+                    err: StorageError::from(e),
+                },
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();

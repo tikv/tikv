@@ -76,7 +76,8 @@ impl ErrorInner {
             ErrorInner::KeyTooLarge(size, limit) => Some(ErrorInner::KeyTooLarge(*size, *limit)),
             ErrorInner::InvalidCf(cf_name) => Some(ErrorInner::InvalidCf(cf_name.to_string())),
             e @ ErrorInner::PessimisticTxnNotEnabled => e.maybe_clone(),
-            ErrorInner::Io(_) | ErrorInner::Other(_) => None,
+            ErrorInner::Io(e) => Some(ErrorInner::Io(IoError::from(e.kind()))),
+            ErrorInner::Other(e) => Some(box_err!(e.description())),
         }
     }
 }
