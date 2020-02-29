@@ -11,7 +11,7 @@ use engine_traits::{
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::db_vector::RocksDBVector;
-use crate::options::{RocksReadOptions};
+use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::{RocksEngineIterator, RocksSnapshot};
 

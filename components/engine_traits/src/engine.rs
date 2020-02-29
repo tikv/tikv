@@ -10,7 +10,7 @@ use crate::*;
 // a trait typedef.
 
 pub trait KvEngine:
-      Peekable
+    Peekable
     + Mutable
     + Iterable
     + WriteBatchExt

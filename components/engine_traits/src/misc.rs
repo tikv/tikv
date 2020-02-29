@@ -6,12 +6,12 @@
 //! FIXME: Things here need to be moved elsewhere.
 
 use crate::cf_defs::CF_LOCK;
-use crate::write_batch::{WriteBatchExt, WriteBatch};
-use crate::mutable::Mutable;
-use crate::iterable::{Iterable, Iterator};
 use crate::cf_names::CFNamesExt;
 use crate::errors::Result;
+use crate::iterable::{Iterable, Iterator};
+use crate::mutable::Mutable;
 use crate::options::IterOptions;
+use crate::write_batch::{WriteBatch, WriteBatchExt};
 
 use tikv_util::keybuilder::KeyBuilder;
 
@@ -19,11 +19,19 @@ use tikv_util::keybuilder::KeyBuilder;
 pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 
 pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
-    fn is_titan(&self) -> bool { false }
+    fn is_titan(&self) -> bool {
+        false
+    }
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
 
-    fn delete_files_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], include_end: bool) -> Result<()>;
+    fn delete_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()>;
 
     fn delete_all_in_range(
         &self,

@@ -10,7 +10,7 @@ use std::{cmp, mem, u64, usize};
 
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{KvEngine, Peekable, Snapshot, WriteOptions, WriteBatchExt};
+use engine_traits::{KvEngine, Peekable, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{

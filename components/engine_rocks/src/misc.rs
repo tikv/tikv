@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
-use engine_traits::{MiscExt, Result};
 use crate::util;
+use engine_traits::{MiscExt, Result};
 
 impl MiscExt for RocksEngine {
     fn is_titan(&self) -> bool {
@@ -14,9 +14,17 @@ impl MiscExt for RocksEngine {
         Ok(self.as_inner().flush_cf(handle, sync)?)
     }
 
-    fn delete_files_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], include_end: bool) -> Result<()> {
+    fn delete_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(self.as_inner().delete_files_in_range_cf(handle, start_key, end_key, include_end)?)
+        Ok(self
+            .as_inner()
+            .delete_files_in_range_cf(handle, start_key, end_key, include_end)?)
     }
 }
 
@@ -24,16 +32,16 @@ impl MiscExt for RocksEngine {
 mod tests {
     use tempfile::Builder;
 
+    use crate::engine::RocksEngine;
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::DB;
-    use crate::engine::RocksEngine;
     use std::sync::Arc;
 
     use super::*;
     use engine_traits::ALL_CFS;
-    use engine_traits::{Iterable, Iterator, WriteBatchExt, Mutable, SeekKey};
+    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, WriteBatchExt};
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
@@ -94,7 +102,8 @@ mod tests {
         // Delete all in ["k2", "k4").
         let start = b"k2";
         let end = b"k4";
-        db.delete_all_in_range(start, end, use_delete_range).unwrap();
+        db.delete_all_in_range(start, end, use_delete_range)
+            .unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -188,7 +197,8 @@ mod tests {
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").
-        db.delete_all_in_range(b"kabcdefg2", b"kabcdefg4", true).unwrap();
+        db.delete_all_in_range(b"kabcdefg2", b"kabcdefg4", true)
+            .unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
     }
 }

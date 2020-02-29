@@ -13,7 +13,7 @@ use engine::rocks;
 use engine::{Engines, Peekable};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{Mutable, WriteBatchExt, MiscExt};
+use engine_traits::{MiscExt, Mutable, WriteBatchExt};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -398,8 +398,11 @@ impl<R: CasualRouter> SnapContext<R> {
         use_delete_files: bool,
     ) {
         if use_delete_files {
-            if let Err(e) =
-                self.engines.kv.c().delete_all_files_in_range(start_key, end_key)
+            if let Err(e) = self
+                .engines
+                .kv
+                .c()
+                .delete_all_files_in_range(start_key, end_key)
             {
                 error!(
                     "failed to delete files in range";
@@ -411,11 +414,12 @@ impl<R: CasualRouter> SnapContext<R> {
                 return;
             }
         }
-        if let Err(e) = self.engines.kv.c().delete_all_in_range(
-            start_key,
-            end_key,
-            self.use_delete_range,
-        ) {
+        if let Err(e) =
+            self.engines
+                .kv
+                .c()
+                .delete_all_in_range(start_key, end_key, self.use_delete_range)
+        {
             error!(
                 "failed to delete data in range";
                 "region_id" => region_id,
@@ -688,7 +692,7 @@ mod tests {
     use engine::Engines;
     use engine::Peekable;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{WriteBatchExt, Mutable};
+    use engine_traits::{Mutable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;

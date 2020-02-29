@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
-use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 use crate::engine::RocksEngine;
 use crate::options::RocksWriteOptions;
+use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
+use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::util::get_cf_handle;
 
@@ -13,7 +13,11 @@ impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
 
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        debug_assert_eq!(wb.get_db().path(), self.as_inner().path(), "mismatched db path");
+        debug_assert_eq!(
+            wb.get_db().path(),
+            self.as_inner().path(),
+            "mismatched db path"
+        );
         let opt: RocksWriteOptions = opts.into();
         self.as_inner()
             .write_opt(wb.as_inner(), &opt.into_raw())

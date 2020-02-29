@@ -20,7 +20,7 @@ use engine_traits::{
     Mutable, TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteBatch,
     WriteOptions,
 };
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, WriteBatchExt};
+use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};

@@ -6,7 +6,7 @@ use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::DB;
 use engine_rocks::{Compat, RocksEngine, RocksWriteBatch};
-use engine_traits::{Mutable as MutableTrait, WriteBatch, WriteOptions, WriteBatchExt};
+use engine_traits::{Mutable as MutableTrait, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
