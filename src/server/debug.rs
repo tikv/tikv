@@ -1964,7 +1964,7 @@ mod tests {
         debugger.set_store_id(100);
         let engine = &debugger.engines.kv;
 
-        let get_region_stores = |engine: &DB, region_id: u64| {
+        let get_region_stores = |engine: &Arc<DB>, region_id: u64| {
             get_region_state(engine, region_id)
                 .get_region()
                 .get_peers()
