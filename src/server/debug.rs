@@ -1264,7 +1264,7 @@ impl MvccInfoIterator {
                 LockType::Delete => lock_info.set_type(Op::Del),
                 LockType::Lock => lock_info.set_type(Op::Lock),
                 LockType::Pessimistic => lock_info.set_type(Op::PessimisticLock),
-                LockType::Noop => panic!("noop lock never be writen, so unreachable to here"),
+                LockType::Noop => unreachable!(),
             }
             lock_info.set_start_ts(lock.ts.into_inner());
             lock_info.set_primary(lock.primary);

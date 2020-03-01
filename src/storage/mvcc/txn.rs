@@ -422,7 +422,7 @@ impl<S: Snapshot> MvccTxn<S> {
         min_commit_ts: TimeStamp,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
-        // For the insert/deleteExists operation, the old key should not be in the system.
+        // For the insert/checkNotExists operation, the old key should not be in the system.
         let should_not_exist = mutation.should_not_exists();
         let (key, value) = mutation.into_key_value();
         // Check whether there is a newer version.

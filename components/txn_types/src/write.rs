@@ -30,7 +30,7 @@ impl WriteType {
             LockType::Delete => Some(WriteType::Delete),
             LockType::Lock => Some(WriteType::Lock),
             LockType::Pessimistic => None,
-            LockType::Noop => panic!("noop lock never be writen, so unreachable to here"),
+            LockType::Noop => unreachable!(),
         }
     }
 
