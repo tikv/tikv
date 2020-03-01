@@ -4069,7 +4069,7 @@ mod tests {
     }
 
     struct SplitResultChecker<'a> {
-        db: &'a DB,
+        db: &'a Arc<DB>,
         origin_peers: &'a [metapb::Peer],
         epoch: Rc<RefCell<RegionEpoch>>,
     }
