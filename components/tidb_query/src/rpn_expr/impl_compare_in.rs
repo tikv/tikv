@@ -341,6 +341,31 @@ mod tests {
     fn test_in_string() {
         let cases = vec![
             (
+                vec![Some("naive"), Some("young"), Some("simple"), None],
+                Collation::Binary,
+                None,
+            ),
+            (
+                vec![Some("naive"), Some("young"), Some("simple"), Some("naive")],
+                Collation::Binary,
+                Some(1),
+            ),
+            (
+                vec![Some("pINGcap"), Some("PINGCAP"), Some("PingCAP"), Some("pingcap"), Some("pingCap")],
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                vec![Some("pINGcap"), Some("PINGCAP"), Some("PingCAP"), Some("pingcap"), Some("pingCap")],
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+            (
+                vec![Some("breeswish"), Some("breezewish")],
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+            (
                 vec![Some("breeswish"), Some("breezewish")],
                 Collation::Utf8Mb4GeneralCi,
                 Some(0),
