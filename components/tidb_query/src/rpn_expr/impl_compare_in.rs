@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::marker::PhantomData;
 
 use codec::prelude::NumberDecoder;
@@ -18,9 +18,8 @@ pub trait InByHash {
     type Key: Evaluable + Extract + Eq;
     type StoreKey: 'static + Hash + Eq + Sized + std::marker::Send;
 
-    fn eq(arg1: &Self::Key, arg2: &Self::Key) -> Result<bool>;
-    fn insert(hashset: &mut HashSet<Self::StoreKey>, key: Self::Key) -> Result<()>;
-    fn contains(hashset: &HashSet<Self::StoreKey>, key: &Self::Key) -> Result<bool>;
+    fn map(key: Self::Key) -> Result<Self::StoreKey>;
+    fn map_ref(key: &Self::Key) -> Result<&Self::StoreKey>;
 }
 
 pub struct NormalInByHash<K: Evaluable + Extract + Hash + Eq + Sized + std::marker::Send>(
@@ -32,73 +31,28 @@ impl<K: Evaluable + Extract + Hash + Eq + Sized> InByHash for NormalInByHash<K> 
     type StoreKey = K;
 
     #[inline]
-    fn eq(arg1: &Self::Key, arg2: &Self::Key) -> Result<bool> {
-        Ok(arg1 == arg2)
+    fn map(key: Self::Key) -> Result<Self::StoreKey> {
+        Ok(key)
     }
 
     #[inline]
-    fn insert(hashset: &mut HashSet<Self::StoreKey>, key: Self::Key) -> Result<()> {
-        hashset.insert(key);
-        Ok(())
-    }
-
-    #[inline]
-    fn contains(hashset: &HashSet<Self::StoreKey>, key: &Self::Key) -> Result<bool> {
-        Ok(hashset.contains(key))
+    fn map_ref(key: &Self::Key) -> Result<&Self::StoreKey> {
+        Ok(key)
     }
 }
-
-pub struct CollationAwareBytes<C: Collator>(Bytes, PhantomData<C>);
-
-impl<C: Collator> std::ops::Deref for CollationAwareBytes<C> {
-    type Target = Bytes;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<C: Collator> Hash for CollationAwareBytes<C> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write(&C::sort_key(&self.0).unwrap());
-    }
-}
-
-impl<C: Collator> PartialEq for CollationAwareBytes<C> {
-    fn eq(&self, other: &Self) -> bool {
-        C::sort_compare(&self.0, &other.0).unwrap() == std::cmp::Ordering::Equal
-    }
-}
-
-impl<C: Collator> Eq for CollationAwareBytes<C> {}
 
 pub struct CollationAwareBytesInByHash<C: Collator>(PhantomData<C>);
 
 impl<C: Collator> InByHash for CollationAwareBytesInByHash<C> {
     type Key = Bytes;
-    type StoreKey = CollationAwareBytes<C>;
+    type StoreKey = SortKey<Bytes, C>;
 
-    #[inline]
-    fn eq(arg1: &Self::Key, arg2: &Self::Key) -> Result<bool> {
-        match C::sort_compare(&arg1, &arg2)? {
-            std::cmp::Ordering::Equal => Ok(true),
-            _ => Ok(false),
-        }
+    fn map(key: Self::Key) -> Result<Self::StoreKey> {
+        SortKey::new(key).map_err(Error::from)
     }
 
-    #[inline]
-    fn insert(hashset: &mut HashSet<Self::StoreKey>, key: Self::Key) -> Result<()> {
-        C::validate(&key)?;
-        let store_key = unsafe { std::mem::transmute::<Self::Key, Self::StoreKey>(key) };
-        hashset.insert(store_key);
-        Ok(())
-    }
-
-    #[inline]
-    fn contains(hashset: &HashSet<Self::StoreKey>, key: &Self::Key) -> Result<bool> {
-        C::validate(key)?;
-        let store_key = unsafe { std::mem::transmute::<&Self::Key, &Self::StoreKey>(key) };
-        Ok(hashset.contains(store_key))
+    fn map_ref(key: &Self::Key) -> Result<&Self::StoreKey> {
+        SortKey::map(key).map_err(Error::from)
     }
 }
 
@@ -222,7 +176,8 @@ pub fn compare_in_by_hash<T: InByHash>(
     match base_val {
         None => Ok(None),
         Some(base_val) => {
-            if T::contains(&metadata.lookup_set, base_val)? {
+            let base_val = T::map_ref(base_val)?;
+            if metadata.lookup_set.contains(base_val) {
                 return Ok(Some(1));
             }
             let mut default_ret = if metadata.has_null { None } else { Some(0) };
@@ -232,7 +187,8 @@ pub fn compare_in_by_hash<T: InByHash>(
                         default_ret = None;
                     }
                     Some(v) => {
-                        if T::eq(base_val, v)? {
+                        let v = T::map_ref(v)?;
+                        if base_val == v {
                             return Ok(Some(1));
                         }
                     }
@@ -264,7 +220,8 @@ fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T:
             }
             expr_type => {
                 let val = T::Key::extract(expr_type, tree_node.take_val())?;
-                T::insert(&mut lookup_set, val)?;
+                let val = T::map(val)?;
+                lookup_set.insert(val);
             }
         }
         if is_constant {

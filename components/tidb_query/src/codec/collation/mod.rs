@@ -138,6 +138,13 @@ where
 
     #[inline]
     #[allow(clippy::transmute_ptr_to_ptr)]
+    pub fn map(inner: &T) -> Result<&Self> {
+        C::validate(inner.as_ref())?;
+        Ok(unsafe { std::mem::transmute(inner) })
+    }
+
+    #[inline]
+    #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn map_option(inner: &Option<T>) -> Result<&Option<Self>> {
         if let Some(inner) = inner {
             C::validate(inner.as_ref())?;
