@@ -118,6 +118,23 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
+    pub static ref RAFT_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_store_perf_context_time_duration_secs",
+            "Bucketed histogram of request wait time duration",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_apply_perf_context_time_duration_secs",
+            "Bucketed histogram of request wait time duration",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+
     pub static ref PEER_GC_RAFT_LOG_COUNTER: IntCounter =
         register_int_counter!(
             "tikv_raftstore_gc_raft_log_total",

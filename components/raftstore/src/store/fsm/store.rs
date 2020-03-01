@@ -41,7 +41,7 @@ use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
-use crate::store::util::is_initial_msg;
+use crate::store::util::{is_initial_msg, PerfStatisticsWrite};
 use crate::store::worker::{
     CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask, CompactRunner, CompactTask,
     ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
@@ -470,6 +470,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     pending_proposals: Vec<RegionProposal>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
+    perf_statistic: PerfStatisticsWrite,
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
@@ -691,7 +692,10 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
 
     fn end(&mut self, peers: &mut [Box<PeerFsm>]) {
         if self.poll_ctx.has_ready {
+            self.perf_statistic.start(self.poll_ctx.cfg.perf_level);
             self.handle_raft_ready(peers);
+            self.perf_statistic.observe();
+            self.perf_statistic.flush();
         }
         self.poll_ctx.current_time = None;
         if !self.poll_ctx.queued_snapshot.is_empty() {
@@ -958,6 +962,7 @@ where
             poll_ctx: ctx,
             pending_proposals: Vec::new(),
             cfg_tracker: self.cfg.clone().tracker(tag),
+            perf_statistic: PerfStatisticsWrite::new(RAFT_PERF_CONTEXT_TIME_HISTOGRAM.local()),
         }
     }
 }
