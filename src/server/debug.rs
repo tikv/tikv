@@ -1562,7 +1562,7 @@ mod tests {
         region
     }
 
-    fn get_region_state(engine: &DB, region_id: u64) -> RegionLocalState {
+    fn get_region_state(engine: &Arc<DB>, region_id: u64) -> RegionLocalState {
         let key = keys::region_state_key(region_id);
         engine
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
