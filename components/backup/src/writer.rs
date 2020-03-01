@@ -229,7 +229,7 @@ mod tests {
                 },
             )
             .unwrap();
-            assert_eq!(map.len(), kv.len(), "{:?} {:?}", map, kv);
+            assert_eq!(map.len(), kv.len(), "{} {:?} {:?}", cf, map, kv);
             for (k, v) in *kv {
                 assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());
             }
@@ -298,13 +298,7 @@ mod tests {
                 (engine::CF_WRITE, &temp.path().join(files[1].get_name())),
             ],
             &[
-                (
-                    engine::CF_DEFAULT,
-                    &[
-                        (&keys::data_key(&[b'a']), &[b'a']),
-                        (&keys::data_key(&[]), &[]),
-                    ],
-                ),
+                (engine::CF_DEFAULT, &[(&keys::data_key(&[b'a']), &[b'a'])]),
                 (
                     engine::CF_WRITE,
                     &[
