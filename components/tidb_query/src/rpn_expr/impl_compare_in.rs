@@ -341,12 +341,17 @@ mod tests {
     fn test_in_string() {
         let cases = vec![
             (
-                vec![Some("naive"), Some("young"), Some("simple"), None],
+                vec![Some("times naive"), Some("young"), Some("simple"), None],
                 Collation::Binary,
                 None,
             ),
             (
-                vec![Some("naive"), Some("young"), Some("simple"), Some("naive")],
+                vec![
+                    Some("times naive"),
+                    Some("young"),
+                    Some("simple"),
+                    Some("times naive"),
+                ],
                 Collation::Binary,
                 Some(1),
             ),
