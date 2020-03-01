@@ -343,7 +343,7 @@ impl Debugger {
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = set_region_tombstone(db.as_ref(), store_id, region, &wb) {
+            if let Err(e) = set_region_tombstone(db, store_id, region, &wb) {
                 errors.push((region_id, e));
             }
         }
@@ -1410,7 +1410,7 @@ fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
 }
 
 fn set_region_tombstone(
-    db: &DB,
+    db: &Arc<DB>,
     store_id: u64,
     region: Region,
     wb: &RocksWriteBatch,
