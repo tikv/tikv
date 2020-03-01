@@ -351,12 +351,24 @@ mod tests {
                 Some(1),
             ),
             (
-                vec![Some("pINGcap"), Some("PINGCAP"), Some("PingCAP"), Some("pingcap"), Some("pingCap")],
+                vec![
+                    Some("pINGcap"),
+                    Some("PINGCAP"),
+                    Some("PingCAP"),
+                    Some("pingcap"),
+                    Some("pingCap"),
+                ],
                 Collation::Utf8Mb4Bin,
                 Some(0),
             ),
             (
-                vec![Some("pINGcap"), Some("PINGCAP"), Some("PingCAP"), Some("pingcap"), Some("pingCap")],
+                vec![
+                    Some("pINGcap"),
+                    Some("PINGCAP"),
+                    Some("PingCAP"),
+                    Some("pingcap"),
+                    Some("pingCap"),
+                ],
                 Collation::Utf8Mb4GeneralCi,
                 Some(1),
             ),
