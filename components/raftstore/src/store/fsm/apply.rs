@@ -19,8 +19,8 @@ use engine::rocks::Writable;
 use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
@@ -775,6 +775,10 @@ impl ApplyDelegate {
         }
 
         apply_ctx.finish_for(self, results);
+
+        if self.pending_remove {
+            self.destroy(apply_ctx);
+        }
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
@@ -805,7 +809,7 @@ impl ApplyDelegate {
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
     ) -> ApplyResult {
-        fail_point!("apply_yield_1000", self.region_id() == 1000, |_| {
+        fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
             ApplyResult::Yield
         });
 
@@ -851,6 +855,11 @@ impl ApplyDelegate {
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
     ) -> ApplyResult {
+        // Although conf change can't yield in normal case, it is convenient to
+        // simulate yield before applying a conf change log.
+        fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
+            ApplyResult::Yield
+        });
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
@@ -2497,10 +2506,6 @@ impl ApplyFsm {
             .handle_raft_committed_entries(apply_ctx, apply.entries);
         if self.delegate.yield_state.is_some() {
             return;
-        }
-
-        if self.delegate.pending_remove {
-            self.delegate.destroy(apply_ctx);
         }
     }
 

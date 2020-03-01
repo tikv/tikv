@@ -90,7 +90,7 @@ mod tests {
     use crate::rocks;
     use crate::rocks::util::CFOptions;
     use crate::rocks::{ColumnFamilyOptions, DBOptions};
-    use crate::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use std::path::Path;
     use std::sync::Arc;
     use std::thread::sleep;

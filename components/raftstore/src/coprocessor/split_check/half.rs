@@ -1,9 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DB;
-use engine::{CF_DEFAULT, CF_WRITE};
 use engine_rocks::Compat;
 use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use std::sync::Arc;
@@ -169,7 +169,7 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
-    use engine::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;

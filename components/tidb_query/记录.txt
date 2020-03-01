@@ -1,0 +1,1 @@
+rg '^ +([a-zA-Z]+) => ([a-z_]+),' src/expr/scalar_function.rs -r '$1 $2' | % { $w=$_.split(' '); ((rg "fn $($w[1])" ./src/rpn_expr/ | Out-Null) || (rg "\[x\].*``$($w[0])`` \(Ve" /tmp/tmp.txt | Out-Null )) || echo $w[1] } | sort

@@ -3,8 +3,8 @@
 use crate::store::{CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
-use engine::CF_WRITE;
 use engine_rocks::Compat;
+use engine_traits::CF_WRITE;
 use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
@@ -209,7 +209,7 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
-    use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;

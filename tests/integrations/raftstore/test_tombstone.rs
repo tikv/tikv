@@ -9,8 +9,8 @@ use protobuf::Message;
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::Writable;
-use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
+use engine_traits::CF_RAFT;
 use test_raftstore::*;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
