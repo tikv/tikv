@@ -79,6 +79,45 @@ macro_rules! impl_box_observer {
     };
 }
 
+pub struct BoxSplitCheckObserver(Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver> + Send>);
+impl BoxSplitCheckObserver {
+    pub fn new<T: 'static + SplitCheckObserver + Clone>(observer: T) -> BoxSplitCheckObserver {
+        BoxSplitCheckObserver(Box::new(WrappedSplitCheckObserver { inner: observer }))
+    }
+}
+impl Clone for BoxSplitCheckObserver {
+    fn clone(&self) -> BoxSplitCheckObserver {
+        BoxSplitCheckObserver((**self).box_clone())
+    }
+}
+impl Deref for BoxSplitCheckObserver {
+    type Target = Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver> + Send>;
+
+    fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver> + Send> {
+        &self.0
+    }
+}
+
+struct WrappedSplitCheckObserver<T: SplitCheckObserver + Clone> {
+    inner: T,
+}
+impl<T: 'static + SplitCheckObserver + Clone> ClonableObserver for WrappedSplitCheckObserver<T> {
+    type Ob = dyn SplitCheckObserver;
+    fn inner(&self) -> &Self::Ob {
+        &self.inner as _
+    }
+
+    fn inner_mut(&mut self) -> &mut Self::Ob {
+        &mut self.inner as _
+    }
+
+    fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
+        Box::new(WrappedSplitCheckObserver {
+            inner: self.inner.clone(),
+        })
+    }
+}
+
 impl_box_observer!(BoxAdminObserver, AdminObserver, WrappedAdminObserver);
 impl_box_observer!(BoxQueryObserver, QueryObserver, WrappedQueryObserver);
 impl_box_observer!(
@@ -86,11 +125,11 @@ impl_box_observer!(
     ApplySnapshotObserver,
     WrappedApplySnapshotObserver
 );
-impl_box_observer!(
+/*impl_box_observer!(
     BoxSplitCheckObserver,
     SplitCheckObserver,
     WrappedSplitCheckObserver
-);
+);*/
 impl_box_observer!(BoxRoleObserver, RoleObserver, WrappedRoleObserver);
 impl_box_observer!(
     BoxRegionChangeObserver,
