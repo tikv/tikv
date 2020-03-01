@@ -52,7 +52,7 @@ impl<C: Collator> InByHash for CollationAwareBytesInByHash<C> {
     }
 
     fn map_ref(key: &Self::Key) -> Result<&Self::StoreKey> {
-        SortKey::map(key).map_err(Error::from)
+        SortKey::new_ref(key).map_err(Error::from)
     }
 }
 

@@ -138,7 +138,7 @@ where
 
     #[inline]
     #[allow(clippy::transmute_ptr_to_ptr)]
-    pub fn map(inner: &T) -> Result<&Self> {
+    pub fn new_ref(inner: &T) -> Result<&Self> {
         C::validate(inner.as_ref())?;
         Ok(unsafe { std::mem::transmute(inner) })
     }
