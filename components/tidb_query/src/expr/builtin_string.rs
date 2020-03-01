@@ -213,7 +213,7 @@ impl ScalarFunc {
                 Cow::Owned(val) => Ok(Some(Cow::Owned(val[i..].to_owned()))),
             }
         } else {
-            Ok(Some(Cow::Owned(b"".to_vec())))
+            Ok(Some(Cow::Borrowed(b"")))
         }
     }
 
@@ -231,7 +231,7 @@ impl ScalarFunc {
                 Cow::Owned(val) => Ok(Some(Cow::Owned(val[..val.len() - i].to_owned()))),
             }
         } else {
-            Ok(Some(Cow::Owned(b"".to_vec())))
+            Ok(Some(Cow::Borrowed(b"")))
         }
     }
 
@@ -263,7 +263,7 @@ impl ScalarFunc {
         let i = try_opt!(self.children[1].eval_int(ctx, row));
         let (i, length_positive) = i64_to_usize(i, self.children[1].is_unsigned());
         if !length_positive || i == 0 {
-            return Ok(Some(Cow::Owned(b"".to_vec())));
+            return Ok(Some(Cow::Borrowed(b"")));
         }
         if s.chars().count() > i {
             let t = s.chars();
@@ -304,7 +304,7 @@ impl ScalarFunc {
         let i = try_opt!(self.children[1].eval_int(ctx, row));
         let (i, length_positive) = i64_to_usize(i, self.children[1].is_unsigned());
         if !length_positive || i == 0 {
-            return Ok(Some(Cow::Owned(b"".to_vec())));
+            return Ok(Some(Cow::Borrowed(b"")));
         }
         let len = s.chars().count();
         if len > i {
