@@ -113,7 +113,7 @@ pub trait ApplySnapshotObserver: Coprocessor {
 
 /// SplitChecker is invoked during a split check scan, and decides to use
 /// which keys to split a region.
-pub trait SplitChecker {
+pub trait SplitChecker<E> {
     /// Hook to call for every kv scanned during split.
     ///
     /// Return true to abort scan early.
@@ -125,7 +125,7 @@ pub trait SplitChecker {
     fn split_keys(&mut self) -> Vec<Vec<u8>>;
 
     /// Get approximate split keys without scan.
-    fn approximate_split_keys(&mut self, _: &Region, _: &Arc<DB>) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, _: &Region, _: &E) -> Result<Vec<Vec<u8>>> {
         Ok(vec![])
     }
 
@@ -138,7 +138,7 @@ pub trait SplitCheckObserver: Coprocessor {
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
-        _: &mut SplitCheckerHost<'_>,
+        _: &mut SplitCheckerHost<'_, Arc<DB>>,
         _: &Arc<DB>,
         policy: CheckPolicy,
     );

@@ -42,7 +42,7 @@ impl Checker {
     }
 }
 
-impl SplitChecker for Checker {
+impl SplitChecker<Arc<DB>> for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
         if !key.is_commit_version() {
             return false;
@@ -100,7 +100,7 @@ impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver for KeysCheckObserv
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host,
+        host: &mut Host<'_, Arc<DB>>,
         engine: &Arc<DB>,
         policy: CheckPolicy,
     ) {

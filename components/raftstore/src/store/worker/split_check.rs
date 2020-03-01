@@ -261,7 +261,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
     /// Gets the split keys by scanning the range.
     fn scan_split_keys(
         &self,
-        host: &mut SplitCheckerHost<'_>,
+        host: &mut SplitCheckerHost<'_, Arc<DB>>,
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],

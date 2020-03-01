@@ -37,7 +37,7 @@ impl Checker {
     }
 }
 
-impl SplitChecker for Checker {
+impl SplitChecker<Arc<DB>> for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
             self.buckets.push(entry.key().to_vec());
@@ -83,7 +83,7 @@ impl SplitCheckObserver for HalfCheckObserver {
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
-        host: &mut Host,
+        host: &mut Host<'_, Arc<DB>>,
         _: &Arc<DB>,
         policy: CheckPolicy,
     ) {

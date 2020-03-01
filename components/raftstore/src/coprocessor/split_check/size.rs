@@ -46,7 +46,7 @@ impl Checker {
     }
 }
 
-impl SplitChecker for Checker {
+impl SplitChecker<Arc<DB>> for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         let size = entry.entry_size() as u64;
         self.current_size += size;
@@ -120,7 +120,7 @@ impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver for SizeCheckObserv
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host,
+        host: &mut Host<'_, Arc<DB>>,
         engine: &Arc<DB>,
         mut policy: CheckPolicy,
     ) {

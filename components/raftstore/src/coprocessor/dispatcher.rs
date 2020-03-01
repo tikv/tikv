@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use engine::rocks::DB;
 use engine_rocks::RocksEngine;
 use engine_traits::CfName;
@@ -327,7 +328,7 @@ impl CoprocessorHost {
         engine: &Arc<DB>,
         auto_split: bool,
         policy: CheckPolicy,
-    ) -> SplitCheckerHost<'a> {
+    ) -> SplitCheckerHost<'a, Arc<DB>> {
         let mut host = SplitCheckerHost::new(auto_split, cfg);
         loop_ob!(
             region,

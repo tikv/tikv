@@ -24,7 +24,7 @@ pub struct Checker {
     policy: CheckPolicy,
 }
 
-impl SplitChecker for Checker {
+impl SplitChecker<Arc<DB>> for Checker {
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
@@ -76,7 +76,7 @@ impl SplitCheckObserver for TableCheckObserver {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host,
+        host: &mut Host<'_, Arc<DB>>,
         engine: &Arc<DB>,
         policy: CheckPolicy,
     ) {
