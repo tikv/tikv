@@ -954,7 +954,6 @@ fn test_merge_isolated_store_with_no_target_peer() {
 // than recorded.
 #[test]
 fn test_node_merge_write_data_to_source_region_after_merging() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     // for snapshot after merging
@@ -996,22 +995,8 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     cluster.add_send_filter(IsolationFilterFactory::new(3));
 
     fail::remove(schedule_merge_fp);
-    // TODO: change to `pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));`
-    let timer = Instant::now();
-    loop {
-        if pd_client
-            .get_region_by_id(left.get_id())
-            .wait()
-            .unwrap()
-            .is_none()
-        {
-            break;
-        }
-        if timer.elapsed() > Duration::from_secs(5) {
-            panic!("region still not merged after 5 secs");
-        }
-        sleep_ms(10);
-    }
+
+    pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));
 
     region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
