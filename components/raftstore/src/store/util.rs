@@ -633,6 +633,7 @@ impl<
 pub struct PerfStatisticsWrite {
     pub start_time: Instant,
     pub wal_time: u64,
+    pub wait_lock_time: u64,
     pub write_pre_and_post_process_time: u64,
     pub memtable_time: u64,
     pub perf_level: i32,
@@ -643,6 +644,7 @@ impl Default for PerfStatisticsWrite {
         PerfStatisticsWrite {
             start_time: Instant::now(),
             wal_time: 0,
+            wait_lock_time: 0,
             memtable_time: 0,
             write_pre_and_post_process_time: 0,
             perf_level: 2,
@@ -656,6 +658,7 @@ impl PerfStatisticsWrite {
         PerfStatisticsWrite {
             start_time: Instant::now(),
             wal_time: 0,
+            wait_lock_time: 0,
             memtable_time: 0,
             write_pre_and_post_process_time: 0,
             perf_level: 2,
@@ -677,6 +680,7 @@ impl PerfStatisticsWrite {
         self.start_time = Instant::now();
         self.wal_time = 0;
         self.memtable_time = 0;
+        self.wait_lock_time = 0;
         self.write_pre_and_post_process_time = 0;
     }
 
@@ -688,21 +692,26 @@ impl PerfStatisticsWrite {
         let wal_time = perf_context.write_wal_time();
         let pre_time = perf_context.write_pre_and_post_process_time();
         let memtable_time = perf_context.write_memtable_time();
+        let lock_time = perf_context.db_mutex_lock_nanos();
         metric
             .with_label_values(&["write_wal"])
-            .observe((wal_time - self.wal_time) as f64 / 1000000.0);
+            .observe((wal_time - self.wal_time) as f64 / 1_000_000_000.0);
         metric
             .with_label_values(&["write_memtable"])
-            .observe((memtable_time - self.memtable_time) as f64 / 1000000.0);
+            .observe((memtable_time - self.memtable_time) as f64 / 1_000_000_000.0);
         metric
             .with_label_values(&["write_pre_and_post_process"])
-            .observe((pre_time - self.write_pre_and_post_process_time) as f64 / 1000000.0);
+            .observe((pre_time - self.write_pre_and_post_process_time) as f64 / 1_000_000_000.0);
+        metric
+            .with_label_values(&["wait_lock"])
+            .observe((lock_time - self.wait_lock_time) as f64 / 1_000_000_000.0);
         metric
             .with_label_values(&["observe_time"])
             .observe(self.start_time.elapsed_secs());
         self.wal_time = wal_time;
         self.memtable_time = memtable_time;
         self.write_pre_and_post_process_time = pre_time;
+        self.wait_lock_time = lock_time;
         self.start_time = Instant::now();
     }
 }
