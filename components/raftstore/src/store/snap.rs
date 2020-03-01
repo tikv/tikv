@@ -1586,7 +1586,7 @@ pub mod tests {
         region
     }
 
-    pub fn assert_eq_db(expected_db: &DB, db: &DB) {
+    pub fn assert_eq_db(expected_db: &Arc<DB>, db: &Arc<DB>) {
         let key = keys::data_key(TEST_KEY);
         for cf in SNAPSHOT_CFS {
             let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
@@ -1805,7 +1805,7 @@ pub mod tests {
         assert_eq!(size_track.load(Ordering::SeqCst), 0);
 
         // Verify the data is correct after applying snapshot.
-        assert_eq_db(&db, dst_db.as_ref());
+        assert_eq_db(&db, &dst_db);
     }
 
     #[test]
