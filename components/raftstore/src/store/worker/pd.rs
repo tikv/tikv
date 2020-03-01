@@ -14,7 +14,7 @@ use tokio_timer::Delay;
 
 use engine::rocks::util::*;
 use engine::rocks::DB;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, Compat};
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -881,7 +881,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 approximate_keys,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
-                    get_region_approximate_size(&self.db, &region).unwrap_or_default()
+                    get_region_approximate_size(self.db.c(), &region).unwrap_or_default()
                 });
                 let approximate_keys = approximate_keys.unwrap_or_else(|| {
                     get_region_approximate_keys(&self.db, &region).unwrap_or_default()

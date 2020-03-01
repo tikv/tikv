@@ -110,7 +110,7 @@ fn half_split_bucket_size(region_max_size: u64) -> u64 {
 
 /// Get region approximate middle key based on default and write cf size.
 pub fn get_region_approximate_middle(db: &Arc<DB>, region: &Region) -> Result<Option<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db.c(), cf, &region);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
