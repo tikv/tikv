@@ -145,7 +145,6 @@ impl Extract for Duration {
     }
 }
 
-// pub trait InByHash: Evaluable + Hash + Eq {}
 pub trait InByCompare: Evaluable + Eq {}
 
 impl InByCompare for Int {}
