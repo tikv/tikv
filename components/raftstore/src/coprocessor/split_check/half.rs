@@ -2,7 +2,7 @@
 
 use engine::rocks::DB;
 use engine_rocks::Compat;
-use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{TableProperties, TablePropertiesCollection, KvEngine};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
@@ -63,7 +63,7 @@ impl SplitChecker for Checker {
         region: &Region,
         engine: &Arc<DB>,
     ) -> Result<Vec<Vec<u8>>> {
-        let ks = box_try!(get_region_approximate_middle(engine, region)
+        let ks = box_try!(get_region_approximate_middle(engine.c(), region)
             .map(|keys| keys.map_or(vec![], |key| vec![key])));
 
         Ok(ks)
@@ -109,8 +109,8 @@ fn half_split_bucket_size(region_max_size: u64) -> u64 {
 }
 
 /// Get region approximate middle key based on default and write cf size.
-pub fn get_region_approximate_middle(db: &Arc<DB>, region: &Region) -> Result<Option<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db.c(), cf, &region);
+pub fn get_region_approximate_middle(db: &impl KvEngine, region: &Region) -> Result<Option<Vec<u8>>> {
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
@@ -131,13 +131,13 @@ pub fn get_region_approximate_middle(db: &Arc<DB>, region: &Region) -> Result<Op
 /// The returned key maybe is timestamped if transaction KV is used,
 /// and must start with "z".
 fn get_region_approximate_middle_cf(
-    db: &Arc<DB>,
+    db: &impl KvEngine,
     cfname: &str,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
+    let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
 
     let mut keys = Vec::new();
     for (_, v) in collection.iter() {
@@ -274,7 +274,7 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region)
+        let middle_key = get_region_approximate_middle_cf(engine.c(), CF_DEFAULT, &region)
             .unwrap()
             .unwrap();
 
