@@ -12,6 +12,7 @@ use crate::iterable::{Iterable, Iterator};
 use crate::mutable::Mutable;
 use crate::options::IterOptions;
 use crate::write_batch::{WriteBatch, WriteBatchExt};
+use crate::range::Range;
 
 use tikv_util::keybuilder::KeyBuilder;
 
@@ -101,4 +102,6 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
 
         Ok(())
     }
+
+    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;
 }
