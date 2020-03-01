@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
-use engine::{Peekable, DB};
-use engine_traits::CF_RAFT;
+use engine::{DB};
+use engine_traits::{CF_RAFT, Peekable};
+use engine_rocks::Compat;
 use fail;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
@@ -229,7 +230,7 @@ fn test_read_applying_snapshot() {
     // Check if peer 3 is applying snapshot
     let region_key = keys::region_state_key(r1);
     let region_state: RegionLocalState = cluster
-        .get_engine(3)
+        .get_engine(3).c()
         .get_msg_cf(CF_RAFT, &region_key)
         .unwrap()
         .unwrap();
@@ -361,7 +362,7 @@ fn test_read_after_cleanup_range_for_snap() {
 
 fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
     for _ in 1..300 {
-        let apply_state: RaftApplyState = engine
+        let apply_state: RaftApplyState = engine.c()
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
             .unwrap()
             .unwrap();

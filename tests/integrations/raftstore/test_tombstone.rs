@@ -8,7 +8,8 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIden
 use protobuf::Message;
 
 use engine::rocks::{Writable};
-use engine::{Iterable, Peekable};
+use engine::{Iterable};
+use engine_traits::Peekable;
 use engine_rocks::Compat;
 use engine_traits::{CF_RAFT, Mutable};
 use test_raftstore::*;
@@ -135,7 +136,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.stop_node(3);
 
     let key = keys::region_state_key(1);
-    let state: RegionLocalState = engine_3.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
+    let state: RegionLocalState = engine_3.c().get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // Force add some dirty data.
@@ -252,7 +253,7 @@ fn test_server_stale_meta() {
     cluster.shutdown();
 
     let engine_3 = cluster.get_engine(3);
-    let mut state: RegionLocalState = engine_3
+    let mut state: RegionLocalState = engine_3.c()
         .get_msg_cf(CF_RAFT, &keys::region_state_key(1))
         .unwrap()
         .unwrap();

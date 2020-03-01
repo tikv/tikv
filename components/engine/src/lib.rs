@@ -21,8 +21,6 @@ pub mod rocks;
 pub use crate::rocks::{CFHandle, DBIterator, DBVector, Range, ReadOptions, WriteOptions, DB};
 mod errors;
 pub use crate::errors::*;
-mod peekable;
-pub use crate::peekable::*;
 mod iterable;
 pub use crate::iterable::*;
 

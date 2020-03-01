@@ -11,8 +11,8 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
-use engine::*;
-use engine_traits::CF_RAFT;
+use engine_traits::{CF_RAFT, Peekable};
+use engine_rocks::Compat;
 use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
@@ -70,7 +70,7 @@ fn test_node_merge_rollback() {
         must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
-            .get_engine(i)
+            .get_engine(i).c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -97,7 +97,7 @@ fn test_node_merge_rollback() {
         must_get_equal(&cluster.get_engine(i), b"k12", b"v12");
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
-            .get_engine(i)
+            .get_engine(i).c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -132,10 +132,10 @@ fn test_node_merge_restart() {
     cluster.shutdown();
     let engine = cluster.get_engine(leader.get_store_id());
     let state_key = keys::region_state_key(left.get_id());
-    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine.c().get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Merging, "{:?}", state);
     let state_key = keys::region_state_key(right.get_id());
-    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine.c().get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
     fail::remove(schedule_merge_fp);
     cluster.start().unwrap();
@@ -149,14 +149,14 @@ fn test_node_merge_restart() {
         must_get_equal(&cluster.get_engine(i), b"k4", b"v4");
         let state_key = keys::region_state_key(left.get_id());
         let state: RegionLocalState = cluster
-            .get_engine(i)
+            .get_engine(i).c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
         assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
         let state_key = keys::region_state_key(right.get_id());
         let state: RegionLocalState = cluster
-            .get_engine(i)
+            .get_engine(i).c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();

@@ -1,23 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::option::Option;
-
-use super::{util, DBIterator, DBVector, DB};
+use super::{util, DBIterator, DB};
 use crate::iterable::IterOptionsExt;
-use crate::{IterOption, Iterable, Peekable, Result};
-
-impl Peekable for DB {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        let v = self.get(key)?;
-        Ok(v)
-    }
-
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = util::get_cf_handle(self, cf)?;
-        let v = self.get_cf(handle, key)?;
-        Ok(v)
-    }
-}
+use crate::{IterOption, Iterable, Result};
 
 impl Iterable for DB {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB> {

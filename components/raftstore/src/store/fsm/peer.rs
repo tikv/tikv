@@ -8,9 +8,8 @@ use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
-use engine::Peekable;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, Peekable};
 use engine_traits::CF_RAFT;
 use futures::Future;
 use kvproto::errorpb;
@@ -1081,7 +1080,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(state) = self
             .ctx
             .engines
-            .kv
+            .kv.c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
             debug!(
@@ -1712,7 +1711,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let state_key = keys::region_state_key(region_id);
-        let state: RegionLocalState = match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key) {
+        let state: RegionLocalState = match self.ctx.engines.kv.c().get_msg_cf(CF_RAFT, &state_key) {
             Err(e) => {
                 error!(
                     "failed to load region state, ignore";

@@ -10,10 +10,10 @@ use std::{cmp, error, u64};
 
 use engine::rocks::DB;
 use engine::Engines;
-use engine::{Iterable, Peekable};
+use engine::{Iterable};
 use engine_rocks::{RocksSnapshot, RocksWriteBatch, Compat};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Mutable, Peekable as PeekableTrait};
+use engine_traits::{KvEngine, Mutable, Peekable};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -328,7 +328,7 @@ pub fn recover_from_applying_state(
 ) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
     let snapshot_raft_state: RaftLocalState =
-        match box_try!(engines.kv.get_msg_cf(CF_RAFT, &snapshot_raft_state_key)) {
+        match box_try!(engines.kv.c().get_msg_cf(CF_RAFT, &snapshot_raft_state_key)) {
             Some(state) => state,
             None => {
                 return Err(box_err!(
@@ -340,7 +340,7 @@ pub fn recover_from_applying_state(
         };
 
     let raft_state_key = keys::raft_state_key(region_id);
-    let raft_state: RaftLocalState = match box_try!(engines.raft.get_msg(&raft_state_key)) {
+    let raft_state: RaftLocalState = match box_try!(engines.raft.c().get_msg(&raft_state_key)) {
         Some(state) => state,
         None => RaftLocalState::default(),
     };
@@ -359,7 +359,7 @@ pub fn recover_from_applying_state(
 
 pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
-    Ok(match engines.raft.get_msg(&state_key)? {
+    Ok(match engines.raft.c().get_msg(&state_key)? {
         Some(s) => s,
         None => {
             let mut raft_state = RaftLocalState::default();
@@ -378,7 +378,7 @@ pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalSt
 pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyState> {
     Ok(
         match engines
-            .kv
+            .kv.c()
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))?
         {
             Some(s) => s,
@@ -413,7 +413,7 @@ fn init_last_term(
         assert!(last_idx > RAFT_INIT_LOG_INDEX);
     }
     let last_log_key = keys::raft_log_key(region.get_id(), last_idx);
-    let entry = engines.raft.get_msg::<Entry>(&last_log_key)?;
+    let entry = engines.raft.c().get_msg::<Entry>(&last_log_key)?;
     match entry {
         None => Err(box_err!(
             "[region {}] entry at {} doesn't exist, may lose data.",

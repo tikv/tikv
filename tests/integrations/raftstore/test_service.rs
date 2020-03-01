@@ -14,7 +14,7 @@ use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
 use engine::rocks::Writable;
-use engine::*;
+use engine_traits::Peekable;
 use engine_rocks::Compat;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, Mutable};
 use raftstore::coprocessor::CoprocessorHost;
@@ -683,7 +683,7 @@ fn test_debug_raft_log() {
     entry.set_data(vec![42]);
     engine.c().put_msg(&key, &entry).unwrap();
     assert_eq!(
-        engine.get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
+        engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
         entry
     );
 
@@ -718,7 +718,7 @@ fn test_debug_region_info() {
     raft_state.set_last_index(42);
     raft_engine.c().put_msg(&raft_state_key, &raft_state).unwrap();
     assert_eq!(
-        raft_engine
+        raft_engine.c()
             .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
             .unwrap()
             .unwrap(),
@@ -732,7 +732,7 @@ fn test_debug_region_info() {
         .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
         .unwrap();
     assert_eq!(
-        kv_engine
+        kv_engine.c()
             .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .unwrap(),
@@ -746,7 +746,7 @@ fn test_debug_region_info() {
         .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
         .unwrap();
     assert_eq!(
-        kv_engine
+        kv_engine.c()
             .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .unwrap(),

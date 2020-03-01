@@ -17,9 +17,8 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::WriteOptions;
 use engine::Engines;
-use engine::Peekable;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
-use engine_traits::{MiscExt, Mutable, WriteBatch, WriteBatchExt};
+use engine_traits::{MiscExt, Mutable, WriteBatch, WriteBatchExt, Peekable};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -1899,7 +1898,7 @@ impl ApplyDelegate {
         self.ready_source_region_id = 0;
 
         let region_state_key = keys::region_state_key(source_region_id);
-        let state: RegionLocalState = match ctx.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
+        let state: RegionLocalState = match ctx.engines.kv.c().get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
             e => panic!(
                 "{} failed to get regions state of {:?}: {:?}",
@@ -1975,7 +1974,7 @@ impl ApplyDelegate {
             .with_label_values(&["rollback_merge", "all"])
             .inc();
         let region_state_key = keys::region_state_key(self.region_id());
-        let state: RegionLocalState = match ctx.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
+        let state: RegionLocalState = match ctx.engines.kv.c().get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
             e => panic!("{} failed to get regions state: {:?}", self.tag, e),
         };
@@ -3116,10 +3115,9 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine::Peekable;
     use engine::DB;
     use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{Peekable as PeekableTrait, WriteBatch};
+    use engine_traits::{Peekable, WriteBatch};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -3367,7 +3365,7 @@ mod tests {
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(engines
-            .kv
+            .kv.c()
             .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .is_none());
@@ -4077,7 +4075,7 @@ mod tests {
     impl<'a> SplitResultChecker<'a> {
         fn check(&self, start: &[u8], end: &[u8], id: u64, children: &[u64], check_initial: bool) {
             let key = keys::region_state_key(id);
-            let state: RegionLocalState = self.db.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
+            let state: RegionLocalState = self.db.c().get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
             assert_eq!(state.get_state(), PeerState::Normal);
             assert_eq!(state.get_region().get_id(), id);
             assert_eq!(state.get_region().get_start_key(), start);
@@ -4100,7 +4098,7 @@ mod tests {
                 return;
             }
             let key = keys::apply_state_key(id);
-            let initial_state: RaftApplyState = self.db.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
+            let initial_state: RaftApplyState = self.db.c().get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
             assert_eq!(initial_state.get_applied_index(), RAFT_INIT_LOG_INDEX);
             assert_eq!(
                 initial_state.get_truncated_state().get_index(),

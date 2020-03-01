@@ -1443,9 +1443,9 @@ pub mod tests {
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
-    use engine::{Engines, Peekable};
+    use engine::{Engines};
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::{Iterable, Mutable};
+    use engine_traits::{Iterable, Mutable, Peekable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1589,9 +1589,9 @@ pub mod tests {
     pub fn assert_eq_db(expected_db: &Arc<DB>, db: &Arc<DB>) {
         let key = keys::data_key(TEST_KEY);
         for cf in SNAPSHOT_CFS {
-            let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
+            let p1: Option<Peer> = expected_db.c().get_msg_cf(cf, &key[..]).unwrap();
             if let Some(p1) = p1 {
-                let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
+                let p2: Option<Peer> = db.c().get_msg_cf(cf, &key[..]).unwrap();
                 if let Some(p2) = p2 {
                     if p2 != p1 {
                         panic!(

@@ -17,6 +17,7 @@ use pd_client::Error as PdError;
 use raftstore::Error as RaftServerError;
 use tikv_util::codec::Error as CodecError;
 use tikv_util::worker::ScheduleError;
+use engine_traits::Error as EngineTraitError;
 
 quick_error! {
     #[derive(Debug)]
@@ -64,6 +65,12 @@ quick_error! {
             description(err.description())
         }
         Engine(err: EngineError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
+        EngineTrait(err: EngineTraitError) {
             from()
             cause(err)
             display("{:?}", err)

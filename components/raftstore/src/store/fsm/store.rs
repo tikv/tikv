@@ -6,7 +6,7 @@ use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::DB;
 use engine_rocks::{Compat, RocksEngine, RocksWriteBatch};
-use engine_traits::{KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
+use engine_traits::{KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions, Peekable};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -58,7 +58,7 @@ use crate::store::{
 };
 use crate::Result;
 use engine::Engines;
-use engine::{Iterable, Peekable};
+use engine::{Iterable};
 use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{ConfigClient, PdClient};
@@ -858,7 +858,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     ) {
         let region = origin_state.get_region();
         let raft_key = keys::raft_state_key(region.get_id());
-        let raft_state = match self.engines.raft.get_msg(&raft_key).unwrap() {
+        let raft_state = match self.engines.raft.c().get_msg(&raft_key).unwrap() {
             // it has been cleaned up.
             None => return,
             Some(value) => value,
@@ -1218,7 +1218,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // Check if the target peer is tombstone.
         let state_key = keys::region_state_key(region_id);
         let local_state: RegionLocalState =
-            match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)? {
+            match self.ctx.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)? {
                 Some(state) => state,
                 None => return Ok(false),
             };
