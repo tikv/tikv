@@ -14,7 +14,9 @@ use time::{Duration, Timespec};
 
 use super::peer_storage;
 use crate::{Error, Result};
-use tikv_util::time::monotonic_raw_now;
+use engine::rocks::{set_perf_level, PerfContext, PerfLevel};
+use prometheus::local::LocalHistogramVec;
+use tikv_util::time::{monotonic_raw_now, Instant};
 use tikv_util::Either;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -625,6 +627,83 @@ impl<
                 hex::encode_upper(it.next_back().unwrap())
             ),
         }
+    }
+}
+
+pub struct PerfStatisticsWrite {
+    pub start_time: Instant,
+    pub wal_time: u64,
+    pub write_pre_and_post_process_time: u64,
+    pub memtable_time: u64,
+    pub perf_level: i32,
+}
+
+impl Default for PerfStatisticsWrite {
+    fn default() -> Self {
+        PerfStatisticsWrite {
+            start_time: Instant::now(),
+            wal_time: 0,
+            memtable_time: 0,
+            write_pre_and_post_process_time: 0,
+            perf_level: 2,
+        }
+    }
+}
+
+impl PerfStatisticsWrite {
+    /// Create an instance which stores instant statistics values, retrieved at creation.
+    pub fn new() -> Self {
+        PerfStatisticsWrite {
+            start_time: Instant::now(),
+            wal_time: 0,
+            memtable_time: 0,
+            write_pre_and_post_process_time: 0,
+            perf_level: 2,
+        }
+    }
+
+    pub fn start(&mut self, level: i32) {
+        PerfContext::get().reset();
+        let perf_level = match level {
+            0 => PerfLevel::Uninitialized,
+            1 => PerfLevel::Disable,
+            2 => PerfLevel::EnableCount,
+            3 => PerfLevel::EnableTimeExceptForMutex,
+            4 => PerfLevel::EnableTime,
+            _ => PerfLevel::OutOfBounds,
+        };
+        set_perf_level(perf_level);
+        self.perf_level = level;
+        self.start_time = Instant::now();
+        self.wal_time = 0;
+        self.memtable_time = 0;
+        self.write_pre_and_post_process_time = 0;
+    }
+
+    pub fn observe(&mut self, metric: &mut LocalHistogramVec) {
+        if self.perf_level <= 2 {
+            return;
+        }
+        let perf_context = PerfContext::get();
+        let wal_time = perf_context.write_wal_time();
+        let pre_time = perf_context.write_pre_and_post_process_time();
+        let memtable_time = perf_context.write_memtable_time();
+        metric
+            .with_label_values(&["write_wal"])
+            .observe((wal_time - self.wal_time) as f64 / 1000000.0);
+        metric
+            .with_label_values(&["write_memtable"])
+            .observe((memtable_time - self.memtable_time) as f64 / 1000000.0);
+        metric
+            .with_label_values(&["write_pre_and_post_process"])
+            .observe((pre_time - self.write_pre_and_post_process_time) as f64 / 1000000.0);
+        metric
+            .with_label_values(&["observe_time"])
+            .observe(self.start_time.elapsed_secs());
+        self.wal_time = wal_time;
+        self.memtable_time = memtable_time;
+        self.write_pre_and_post_process_time = pre_time;
+        self.start_time = Instant::now();
     }
 }
 

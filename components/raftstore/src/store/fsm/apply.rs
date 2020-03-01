@@ -39,8 +39,8 @@ use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
-use crate::store::util::KeysInfoFormatter;
 use crate::store::util::{check_region_epoch, compare_region_epoch};
+use crate::store::util::{KeysInfoFormatter, PerfStatisticsWrite};
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
@@ -55,6 +55,7 @@ use tikv_util::MustConsumeVec;
 use super::metrics::*;
 
 use super::super::RegionTask;
+use prometheus::local::LocalHistogramVec;
 
 const WRITE_BATCH_MAX_KEYS: usize = 512;
 const DEFAULT_APPLY_WB_SIZE: usize = 128 * 1024;
@@ -303,6 +304,10 @@ struct ApplyContext {
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+
+    perf_level: i32,
+    perf_statistic: PerfStatisticsWrite,
+    perf_metric: LocalHistogramVec,
 }
 
 impl ApplyContext {
@@ -336,6 +341,9 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
+            perf_level: cfg.perf_level,
+            perf_statistic: PerfStatisticsWrite::new(),
+            perf_metric: APPLY_PERF_CONTEXT_TIME_HISTOGRAM.local(),
         }
     }
 
@@ -401,6 +409,7 @@ impl ApplyContext {
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
+            self.perf_statistic.observe(&mut self.perf_metric);
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -2865,7 +2874,11 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                 _ => {}
             }
             self.apply_ctx.enable_sync_log = incoming.sync_log;
+            self.apply_ctx.perf_level = incoming.perf_level;
         }
+        self.apply_ctx
+            .perf_statistic
+            .start(self.apply_ctx.perf_level);
     }
 
     /// There is no control fsm in apply poller.
@@ -2914,6 +2927,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     }
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
+        self.apply_ctx.perf_metric.flush();
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {
