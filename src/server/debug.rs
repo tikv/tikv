@@ -1546,7 +1546,7 @@ mod tests {
     use engine_traits::{CFHandleExt, Mutable as MutableTrait};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
-    fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
+    fn init_region_state(engine: &Arc<DB>, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
         let mut region = Region::default();
         region.set_id(region_id);
@@ -1892,7 +1892,7 @@ mod tests {
     fn test_tombstone_regions() {
         let debugger = new_debugger();
         debugger.set_store_id(11);
-        let engine = debugger.engines.kv.as_ref();
+        let engine = &debugger.engines.kv;
 
         // region 1 with peers at stores 11, 12, 13.
         let region_1 = init_region_state(engine, 1, &[11, 12, 13]);
@@ -1940,7 +1940,7 @@ mod tests {
     fn test_tombstone_regions_by_id() {
         let debugger = new_debugger();
         debugger.set_store_id(11);
-        let engine = debugger.engines.kv.as_ref();
+        let engine = &debugger.engines.kv;
 
         // tombstone region 1 which currently not exists.
         let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
@@ -1966,7 +1966,7 @@ mod tests {
     fn test_remove_failed_stores() {
         let debugger = new_debugger();
         debugger.set_store_id(100);
-        let engine = debugger.engines.kv.as_ref();
+        let engine = &debugger.engines.kv;
 
         let get_region_stores = |engine: &DB, region_id: u64| {
             get_region_state(engine, region_id)
