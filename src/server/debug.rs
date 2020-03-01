@@ -862,7 +862,7 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        let middle_key = match box_try!(get_region_approximate_middle(db, &region)) {
+        let middle_key = match box_try!(get_region_approximate_middle(db.c(), &region)) {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))
@@ -1461,8 +1461,8 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let mut region = Region::default();
     region.mut_peers().push(Peer::default());
-    let default_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_DEFAULT, &region));
-    let write_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_WRITE, &region));
+    let default_cf_size = box_try!(get_region_approximate_keys_cf(db.c(), CF_DEFAULT, &region));
+    let write_cf_size = box_try!(get_region_approximate_keys_cf(db.c(), CF_WRITE, &region));
 
     let cf = if default_cf_size >= write_cf_size {
         CF_DEFAULT
