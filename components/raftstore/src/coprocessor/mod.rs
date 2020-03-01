@@ -2,7 +2,6 @@
 
 use std::vec::IntoIter;
 
-use engine::rocks::DB;
 use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
@@ -10,7 +9,6 @@ use kvproto::raft_cmdpb::{
     AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
 };
 use raft::StateRole;
-use std::sync::Arc;
 
 pub mod config;
 pub mod dispatcher;
@@ -133,13 +131,13 @@ pub trait SplitChecker<E> {
     fn policy(&self) -> CheckPolicy;
 }
 
-pub trait SplitCheckObserver: Coprocessor {
+pub trait SplitCheckObserver<E>: Coprocessor {
     /// Add a checker for a split scan.
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
-        _: &mut SplitCheckerHost<'_, Arc<DB>>,
-        _: &Arc<DB>,
+        _: &mut SplitCheckerHost<'_, E>,
+        _: &E,
         policy: CheckPolicy,
     );
 }

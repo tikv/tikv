@@ -116,7 +116,7 @@ impl<C: CasualRouter<RocksEngine>> SizeCheckObserver<C> {
 
 impl<C: Send> Coprocessor for SizeCheckObserver<C> {}
 
-impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver for SizeCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver<Arc<DB>> for SizeCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,

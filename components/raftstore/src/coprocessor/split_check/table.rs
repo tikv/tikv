@@ -72,7 +72,7 @@ pub struct TableCheckObserver;
 
 impl Coprocessor for TableCheckObserver {}
 
-impl SplitCheckObserver for TableCheckObserver {
+impl SplitCheckObserver<Arc<DB>> for TableCheckObserver {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,

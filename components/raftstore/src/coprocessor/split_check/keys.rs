@@ -96,7 +96,7 @@ impl<C: CasualRouter<RocksEngine>> KeysCheckObserver<C> {
 
 impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
 
-impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver<Arc<DB>> for KeysCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,

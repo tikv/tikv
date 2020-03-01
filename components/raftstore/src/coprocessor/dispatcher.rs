@@ -7,6 +7,7 @@ use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use std::marker::PhantomData;
 
 use std::mem;
 use std::ops::Deref;
@@ -79,30 +80,31 @@ macro_rules! impl_box_observer {
     };
 }
 
-pub struct BoxSplitCheckObserver(Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver> + Send>);
-impl BoxSplitCheckObserver {
-    pub fn new<T: 'static + SplitCheckObserver + Clone>(observer: T) -> BoxSplitCheckObserver {
-        BoxSplitCheckObserver(Box::new(WrappedSplitCheckObserver { inner: observer }))
+pub struct BoxSplitCheckObserver<E>(Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver<E>> + Send>);
+impl<E: 'static + Send> BoxSplitCheckObserver<E> {
+    pub fn new<T: 'static + SplitCheckObserver<E> + Clone>(observer: T) -> BoxSplitCheckObserver<E> {
+        BoxSplitCheckObserver(Box::new(WrappedSplitCheckObserver { inner: observer, _phantom: PhantomData }))
     }
 }
-impl Clone for BoxSplitCheckObserver {
-    fn clone(&self) -> BoxSplitCheckObserver {
+impl<E: 'static> Clone for BoxSplitCheckObserver<E> {
+    fn clone(&self) -> BoxSplitCheckObserver<E> {
         BoxSplitCheckObserver((**self).box_clone())
     }
 }
-impl Deref for BoxSplitCheckObserver {
-    type Target = Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver> + Send>;
+impl<E> Deref for BoxSplitCheckObserver<E> {
+    type Target = Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver<E>> + Send>;
 
-    fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver> + Send> {
+    fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver<E>> + Send> {
         &self.0
     }
 }
 
-struct WrappedSplitCheckObserver<T: SplitCheckObserver + Clone> {
+struct WrappedSplitCheckObserver<E, T: SplitCheckObserver<E> + Clone> {
     inner: T,
+    _phantom: PhantomData<E>,
 }
-impl<T: 'static + SplitCheckObserver + Clone> ClonableObserver for WrappedSplitCheckObserver<T> {
-    type Ob = dyn SplitCheckObserver;
+impl<E: 'static + Send, T: 'static + SplitCheckObserver<E> + Clone> ClonableObserver for WrappedSplitCheckObserver<E, T> {
+    type Ob = dyn SplitCheckObserver<E>;
     fn inner(&self) -> &Self::Ob {
         &self.inner as _
     }
@@ -114,6 +116,7 @@ impl<T: 'static + SplitCheckObserver + Clone> ClonableObserver for WrappedSplitC
     fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
         Box::new(WrappedSplitCheckObserver {
             inner: self.inner.clone(),
+            _phantom: PhantomData,
         })
     }
 }
@@ -144,7 +147,7 @@ pub struct Registry {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
-    split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
+    split_check_observers: Vec<Entry<BoxSplitCheckObserver<Arc<DB>>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver>>,
@@ -181,7 +184,7 @@ impl Registry {
         push!(priority, aso, self.apply_snapshot_observers);
     }
 
-    pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver) {
+    pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver<Arc<DB>>) {
         push!(priority, sco, self.split_check_observers);
     }
 
@@ -445,6 +448,7 @@ impl CoprocessorHost {
 mod tests {
     use crate::coprocessor::*;
     use std::sync::atomic::*;
+    use std::sync::Arc;
 
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{

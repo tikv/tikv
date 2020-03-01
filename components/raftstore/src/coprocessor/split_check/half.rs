@@ -79,7 +79,7 @@ pub struct HalfCheckObserver;
 
 impl Coprocessor for HalfCheckObserver {}
 
-impl SplitCheckObserver for HalfCheckObserver {
+impl SplitCheckObserver<Arc<DB>> for HalfCheckObserver {
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
