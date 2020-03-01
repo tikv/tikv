@@ -19,7 +19,7 @@ use engine::rocks::WriteOptions;
 use engine::Engines;
 use engine::Peekable;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
-use engine_traits::{MiscExt, Mutable as MutableTrait, WriteBatch, WriteBatchExt};
+use engine_traits::{MiscExt, Mutable, WriteBatch, WriteBatchExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};

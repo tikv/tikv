@@ -25,8 +25,6 @@ mod peekable;
 pub use crate::peekable::*;
 mod iterable;
 pub use crate::iterable::*;
-mod mutable;
-pub use crate::mutable::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
 

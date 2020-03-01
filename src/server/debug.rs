@@ -1541,13 +1541,11 @@ mod tests {
     use crate::storage::mvcc::{Lock, LockType};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::Mutable;
     use engine_rocks::RocksEngine;
-    use engine_traits::{CFHandleExt, Mutable as MutableTrait};
+    use engine_traits::{CFHandleExt, Mutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     fn init_region_state(engine: &Arc<DB>, region_id: u64, stores: &[u64]) -> Region {
-        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
         let mut region = Region::default();
         region.set_id(region_id);
         for (i, &store_id) in stores.iter().enumerate() {
@@ -1560,7 +1558,7 @@ mod tests {
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region.clone());
         let key = keys::region_state_key(region_id);
-        engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
+        engine.c().put_msg_cf(CF_RAFT, &key, &region_state).unwrap();
         region
     }
 
@@ -1676,7 +1674,7 @@ mod tests {
             if let Ok(mut ident) = self.get_store_ident() {
                 ident.set_store_id(store_id);
                 let db = &self.engines.kv;
-                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+                db.c().put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
             }
         }
 
@@ -1684,7 +1682,7 @@ mod tests {
             if let Ok(mut ident) = self.get_store_ident() {
                 ident.set_cluster_id(cluster_id);
                 let db = &self.engines.kv;
-                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+                db.c().put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
             }
         }
     }
@@ -1717,7 +1715,7 @@ mod tests {
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
         entry.set_data(vec![42]);
-        engine.put_msg(&key, &entry).unwrap();
+        engine.c().put_msg(&key, &entry).unwrap();
         assert_eq!(engine.get_msg::<Entry>(&key).unwrap().unwrap(), entry);
 
         assert_eq!(debugger.raft_log(region_id, log_index).unwrap(), entry);
@@ -1732,13 +1730,12 @@ mod tests {
         let debugger = new_debugger();
         let raft_engine = &debugger.engines.raft;
         let kv_engine = &debugger.engines.kv;
-        let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
         let region_id = 1;
 
         let raft_state_key = keys::raft_state_key(region_id);
         let mut raft_state = RaftLocalState::default();
         raft_state.set_last_index(42);
-        raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+        raft_engine.c().put_msg(&raft_state_key, &raft_state).unwrap();
         assert_eq!(
             raft_engine
                 .get_msg::<RaftLocalState>(&raft_state_key)
@@ -1750,8 +1747,8 @@ mod tests {
         let apply_state_key = keys::apply_state_key(region_id);
         let mut apply_state = RaftApplyState::default();
         apply_state.set_applied_index(42);
-        kv_engine
-            .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
+        kv_engine.c()
+            .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
         assert_eq!(
             kv_engine
@@ -1764,8 +1761,8 @@ mod tests {
         let region_state_key = keys::region_state_key(region_id);
         let mut region_state = RegionLocalState::default();
         region_state.set_state(PeerState::Tombstone);
-        kv_engine
-            .put_msg_cf(raft_cf, &region_state_key, &region_state)
+        kv_engine.c()
+            .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
             .unwrap();
         assert_eq!(
             kv_engine
@@ -1798,9 +1795,8 @@ mod tests {
         region.set_end_key(b"zz".to_vec());
         let mut state = RegionLocalState::default();
         state.set_region(region);
-        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-        engine
-            .put_msg_cf(cf_raft, &region_state_key, &state)
+        engine.c()
+            .put_msg_cf(CF_RAFT, &region_state_key, &state)
             .unwrap();
 
         let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE];
@@ -2115,7 +2111,6 @@ mod tests {
 
         for (region_id, (start, end)) in metadata.into_iter().enumerate() {
             let region_id = region_id as u64;
-            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
             let mut region = Region::default();
             region.set_id(region_id);
             region.set_start_key(start.to_owned().into_bytes());
@@ -2126,8 +2121,7 @@ mod tests {
             region_state.set_region(region);
             let key = keys::region_state_key(region_id);
             engine
-                .as_inner()
-                .put_msg_cf(cf_raft.as_inner(), &key, &region_state)
+                .put_msg_cf(CF_RAFT, &key, &region_state)
                 .unwrap();
         }
 

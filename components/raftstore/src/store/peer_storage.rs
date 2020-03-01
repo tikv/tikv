@@ -10,10 +10,10 @@ use std::{cmp, error, u64};
 
 use engine::rocks::DB;
 use engine::Engines;
-use engine::{Iterable, Mutable, Peekable};
-use engine_rocks::{RocksSnapshot, RocksWriteBatch};
+use engine::{Iterable, Peekable};
+use engine_rocks::{RocksSnapshot, RocksWriteBatch, Compat};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Mutable as MutableTrait, Peekable as PeekableTrait};
+use engine_traits::{KvEngine, Mutable, Peekable as PeekableTrait};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -368,7 +368,7 @@ pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalSt
                 raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
                 raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
                 raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-                engines.raft.put_msg(&state_key, &raft_state)?;
+                engines.raft.c().put_msg(&state_key, &raft_state)?;
             }
             raft_state
         }
@@ -1431,7 +1431,7 @@ where
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.
-pub fn write_initial_raft_state<T: MutableTrait>(raft_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::default();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -1443,7 +1443,7 @@ pub fn write_initial_raft_state<T: MutableTrait>(raft_wb: &T, region_id: u64) ->
 
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region apply state first.
-pub fn write_initial_apply_state<T: MutableTrait>(kv_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_apply_state<T: Mutable>(kv_wb: &T, region_id: u64) -> Result<()> {
     let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
     apply_state
@@ -1457,7 +1457,7 @@ pub fn write_initial_apply_state<T: MutableTrait>(kv_wb: &T, region_id: u64) -> 
     Ok(())
 }
 
-pub fn write_peer_state<T: MutableTrait>(
+pub fn write_peer_state<T: Mutable>(
     kv_wb: &T,
     region: &metapb::Region,
     state: PeerState,
