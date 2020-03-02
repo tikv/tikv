@@ -839,12 +839,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
         self.fsm.peer.step(self.ctx, msg.take_message())?;
-        if self.fsm.peer.should_wake_up {
-            self.reset_raft_tick(GroupState::Ordered);
-        }
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
+            self.fsm.peer.should_wake_up = true;
+        }
+
+        if self.fsm.peer.should_wake_up {
             self.reset_raft_tick(GroupState::Ordered);
         }
 
@@ -856,9 +857,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let extra_msg = msg.get_extra_msg();
         match extra_msg.get_field_type() {
             ExtraMessageType::MsgRegionWakeUp => {
-                if msg.get_message().get_index() < self.fsm.peer.get_store().committed_index() {
-                    self.reset_raft_tick(GroupState::Ordered);
-                }
+                self.reset_raft_tick(GroupState::Ordered);
             }
         }
     }
