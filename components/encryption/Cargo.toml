@@ -20,6 +20,7 @@ failure = "0.1"
 openssl = "0.10"
 byteorder = "1.2"
 protobuf = "2.8"
+crc32fast = "1.2"
 
 [dev-dependencies]
 tempfile = "3.1"

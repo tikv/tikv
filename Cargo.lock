@@ -989,6 +989,7 @@ name = "encryption"
 version = "0.0.1"
 dependencies = [
  "byteorder",
+ "crc32fast",
  "failure",
  "hex 0.3.2",
  "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
