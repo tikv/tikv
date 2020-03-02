@@ -38,12 +38,12 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
-    db_exist, get_cf_handle, CFOptions, EventListener, FixedPrefixSliceTransform,
-    FixedSuffixSliceTransform, NoopSliceTransform,
+    db_exist, get_cf_handle, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+    NoopSliceTransform,
 };
 use engine::DB;
 use engine_rocks::{
-    RangePropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    RangePropertiesCollectorFactory, RocksEventListener, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -869,7 +869,7 @@ impl DbConfig {
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.enable_unordered_write(self.enable_unordered_write);
-        opts.add_event_listener(EventListener::new("kv"));
+        opts.add_event_listener(RocksEventListener::new("kv"));
 
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
@@ -1114,7 +1114,7 @@ impl RaftDbConfig {
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
-        opts.add_event_listener(EventListener::new("raft"));
+        opts.add_event_listener(RocksEventListener::new("raft"));
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         // TODO maybe create a new env for raft engine
