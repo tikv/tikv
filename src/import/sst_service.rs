@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
-use engine::{name_to_cf, CF_DEFAULT};
+use engine_traits::{name_to_cf, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};

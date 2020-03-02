@@ -8,7 +8,7 @@ use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
 use engine::IterOption;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 

@@ -15,7 +15,7 @@ use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 
 use engine::Engines;
-use engine::ALL_CFS;
+use engine_traits::ALL_CFS;
 use pd_client::ConfigClient;
 use pd_client::PdClient;
 use tempfile::{Builder, TempDir};

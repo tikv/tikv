@@ -329,7 +329,8 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
 #[cfg(test)]
 pub mod tests {
     use tidb_query_codegen::AggrFunction;
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::{Collation, FieldTypeTp};
 
     use crate::aggr_fn::*;
     use crate::batch::executors::util::mock_executor::MockExecutor;
@@ -365,23 +366,27 @@ pub mod tests {
     /// Builds an executor that will return these logical data:
     ///
     /// == Schema ==
-    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)
+    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)  Col4(Bytes-utf8_general_ci)
     /// == Call #1 ==
-    /// NULL         1.0         abc         1
-    /// 7.0          2.0         NULL        NULL
-    /// NULL         NULL        ""          NULL
-    /// NULL         4.5         HelloWorld  NULL
+    /// NULL         1.0         abc         1          aa
+    /// 7.0          2.0         NULL        NULL       aaa
+    /// NULL         NULL        ""          NULL       áá
+    /// NULL         4.5         HelloWorld  NULL       NULL
     /// == Call #2 ==
     /// == Call #3 ==
-    /// 1.5          4.5         aaaaa       5
+    /// 1.5          4.5         aaaaa       5          ááá
     /// (drained)
     pub fn make_src_executor_1() -> MockExecutor {
         MockExecutor::new(
             vec![
-                FieldTypeTp::Double.into(), // this column is not used
+                FieldTypeTp::Double.into(),
                 FieldTypeTp::Double.into(),
                 FieldTypeTp::VarString.into(),
-                FieldTypeTp::LongLong.into(), // this column is not used
+                FieldTypeTp::LongLong.into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarString)
+                    .collation(Collation::Utf8Mb4GeneralCi)
+                    .into(),
             ],
             vec![
                 BatchExecuteResult {
@@ -408,6 +413,13 @@ pub mod tests {
                             None,
                         ]),
                         VectorValue::Int(vec![None, None, Some(1), Some(10), None]),
+                        VectorValue::Bytes(vec![
+                            Some("áá".as_bytes().to_vec()),
+                            None,
+                            Some(b"aa".to_vec()),
+                            Some("ááá".as_bytes().to_vec()),
+                            Some(b"aaa".to_vec()),
+                        ]),
                     ]),
                     logical_rows: vec![2, 4, 0, 1],
                     warnings: EvalWarnings::default(),
@@ -419,6 +431,7 @@ pub mod tests {
                         VectorValue::Real(vec![Real::new(-10.0).ok()]),
                         VectorValue::Bytes(vec![Some(b"foo".to_vec())]),
                         VectorValue::Int(vec![None]),
+                        VectorValue::Bytes(vec![None]),
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
@@ -430,6 +443,10 @@ pub mod tests {
                         VectorValue::Real(vec![None, Real::new(4.5).ok()]),
                         VectorValue::Bytes(vec![None, Some(b"aaaaa".to_vec())]),
                         VectorValue::Int(vec![None, Some(5)]),
+                        VectorValue::Bytes(vec![
+                            Some("áá".as_bytes().to_vec()),
+                            Some("ááá".as_bytes().to_vec()),
+                        ]),
                     ]),
                     logical_rows: vec![1],
                     warnings: EvalWarnings::default(),

@@ -549,7 +549,7 @@ mod tests {
     use crate::store::util::Lease;
     use crate::store::Callback;
     use engine::rocks;
-    use engine::ALL_CFS;
+    use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
 
     use super::*;
