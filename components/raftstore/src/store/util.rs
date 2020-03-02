@@ -633,9 +633,10 @@ impl<
 pub struct PerfStatisticsWrite {
     pub start_time: Instant,
     pub wal_time: u64,
-    pub wait_lock_time: u64,
+    pub write_thread_wait_time: u64,
     pub write_pre_and_post_process_time: u64,
-    pub memtable_time: u64,
+    pub snapshot_time: u64,
+    pub write_delay_time: u64,
     pub perf_level: i32,
 }
 
@@ -644,9 +645,10 @@ impl Default for PerfStatisticsWrite {
         PerfStatisticsWrite {
             start_time: Instant::now(),
             wal_time: 0,
-            wait_lock_time: 0,
-            memtable_time: 0,
+            write_thread_wait_time: 0,
             write_pre_and_post_process_time: 0,
+            snapshot_time: 0,
+            write_delay_time: 0,
             perf_level: 2,
         }
     }
@@ -655,17 +657,13 @@ impl Default for PerfStatisticsWrite {
 impl PerfStatisticsWrite {
     /// Create an instance which stores instant statistics values, retrieved at creation.
     pub fn new() -> Self {
-        PerfStatisticsWrite {
-            start_time: Instant::now(),
-            wal_time: 0,
-            wait_lock_time: 0,
-            memtable_time: 0,
-            write_pre_and_post_process_time: 0,
-            perf_level: 2,
-        }
+        PerfStatisticsWrite::default()
     }
 
     pub fn start(&mut self, level: i32) {
+        if level <= 2 {
+            return;
+        }
         PerfContext::get().reset();
         let perf_level = match level {
             0 => PerfLevel::Uninitialized,
@@ -679,9 +677,10 @@ impl PerfStatisticsWrite {
         self.perf_level = level;
         self.start_time = Instant::now();
         self.wal_time = 0;
-        self.memtable_time = 0;
-        self.wait_lock_time = 0;
+        self.snapshot_time = 0;
+        self.write_thread_wait_time = 0;
         self.write_pre_and_post_process_time = 0;
+        self.write_delay_time = 0;
     }
 
     pub fn observe(&mut self, metric: &mut LocalHistogramVec) {
@@ -690,28 +689,35 @@ impl PerfStatisticsWrite {
         }
         let perf_context = PerfContext::get();
         let wal_time = perf_context.write_wal_time();
-        let pre_time = perf_context.write_pre_and_post_process_time();
-        let memtable_time = perf_context.write_memtable_time();
-        let lock_time = perf_context.db_mutex_lock_nanos();
+        let write_post_time = perf_context.write_pre_and_post_process_time();
+        let snapshot = perf_context.get_snapshot_time();
+        let write_wait = perf_context.write_thread_wait_nanos();
+        let delay_time = perf_context.write_delay_time();
         metric
             .with_label_values(&["write_wal"])
             .observe((wal_time - self.wal_time) as f64 / 1_000_000_000.0);
         metric
-            .with_label_values(&["write_memtable"])
-            .observe((memtable_time - self.memtable_time) as f64 / 1_000_000_000.0);
-        metric
             .with_label_values(&["write_pre_and_post_process"])
-            .observe((pre_time - self.write_pre_and_post_process_time) as f64 / 1_000_000_000.0);
+            .observe(
+                (write_post_time - self.write_pre_and_post_process_time) as f64 / 1_000_000_000.0,
+            );
         metric
-            .with_label_values(&["wait_lock"])
-            .observe((lock_time - self.wait_lock_time) as f64 / 1_000_000_000.0);
+            .with_label_values(&["snapshot"])
+            .observe((snapshot - self.snapshot_time) as f64 / 1_000_000_000.0);
+        metric
+            .with_label_values(&["write_thread_wait"])
+            .observe((write_wait - self.write_thread_wait_time) as f64 / 1_000_000_000.0);
+        metric
+            .with_label_values(&["write_delay"])
+            .observe((delay_time - self.write_delay_time) as f64 / 1_000_000_000.0);
         metric
             .with_label_values(&["observe_time"])
             .observe(self.start_time.elapsed_secs());
         self.wal_time = wal_time;
-        self.memtable_time = memtable_time;
-        self.write_pre_and_post_process_time = pre_time;
-        self.wait_lock_time = lock_time;
+        self.snapshot_time = snapshot;
+        self.write_pre_and_post_process_time = write_post_time;
+        self.write_thread_wait_time = write_wait;
+        self.write_delay_time = delay_time;
         self.start_time = Instant::now();
     }
 }

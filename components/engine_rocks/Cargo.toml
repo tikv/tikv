@@ -20,7 +20,8 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/Little-Wallace/rust-rocksdb.git"
+branch = "4.0-perf"
 package = "rocksdb"
 
 [dev-dependencies]

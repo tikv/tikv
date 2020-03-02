@@ -621,6 +621,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             }
             self.poll_ctx.cfg = incoming.clone();
         }
+        self.perf_statistic.start(self.poll_ctx.cfg.perf_level);
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
@@ -692,7 +693,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
 
     fn end(&mut self, peers: &mut [Box<PeerFsm>]) {
         if self.poll_ctx.has_ready {
-            self.perf_statistic.start(self.poll_ctx.cfg.perf_level);
             self.handle_raft_ready(peers);
             let mut local_metric = RAFT_PERF_CONTEXT_TIME_HISTOGRAM.local();
             self.perf_statistic.observe(&mut local_metric);
