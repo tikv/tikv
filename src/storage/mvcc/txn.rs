@@ -850,7 +850,7 @@ macro_rules! new_txn {
 mod tests {
     use super::*;
 
-    use crate::storage::kv::{Engine, TestEngineBuilder, RocksEngine};
+    use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
     use kvproto::kvrpcpb::Context;
