@@ -381,28 +381,17 @@ impl<S: Snapshot> MvccTxn<S> {
                 last_lock_ttl = lock.ttl;
             }
         } else if is_pessimistic_lock {
-            if let Some((commit_ts, _)) = self.reader.seek_write(&key, TimeStamp::max())? {
-                if commit_ts < self.start_ts {
-                    // Used pipelined pessimistic lock acquiring in this txn but failed
-                    // Luckily no other txn modified this lock, amend it by overwriting.
-                    MVCC_CONFLICT_COUNTER.pipelined_acquire_pessimistic_lock_amend.inc();
-                } else {
-                    warn!(
-                        "prewrite failed (pessimistic lock not found)";
-                        "start_ts" => self.start_ts,
-                        "commit_ts" => commit_ts,
-                        "key" => %key
-                    );
-                    return Err(ErrorInner::PessimisticLockNotFound {
-                        start_ts: self.start_ts,
-                        key: key.into_raw()?,
-                    }
-                    .into());
-                }
+            warn!(
+                "prewrite failed (pessimistic lock not found)";
+                "start_ts" => self.start_ts,
+                "commit_ts" => commit_ts,
+                "key" => %key
+            );
+            return Err(ErrorInner::PessimisticLockNotFound {
+                start_ts: self.start_ts,
+                key: key.into_raw()?,
             }
-
-            // Key not exists, amend it
-            MVCC_CONFLICT_COUNTER.pipelined_acquire_pessimistic_lock_amend.inc();
+            .into());
         }
 
         // No need to check data constraint, it's resolved by pessimistic locks.
