@@ -1562,29 +1562,15 @@ mod tests {
     #[test]
     fn test_truncate_int() {
         let test_cases = vec![
-            (Some(1028), false, Some(0), false, Some(1028)),
-            (Some(1028), false, Some(5), false, Some(1028)),
-            (Some(1028), false, Some(-2), false, Some(1000)),
-            (Some(1028), false, Some(309), false, Some(1028)),
-            (Some(1028), false, Some(i64::min_value()), false, Some(0)),
-            (
-                Some(1028),
-                false,
-                Some(u64::max_value() as i64),
-                true,
-                Some(1028),
-            ),
+            (1028, 0, false, 1028),
+            (1028, 5, false, 1028),
+            (1028, -2, false, 1000),
+            (1028, 309, false, 1028),
+            (1028, i64::min_value(), false, 0),
+            ((1028), u64::max_value() as i64, true, 1028),
         ];
 
-        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, expected) in test_cases {
-            let lhs_field_type = FieldTypeBuilder::new()
-                .tp(FieldTypeTp::LongLong)
-                .flag(if lhs_is_unsigned {
-                    FieldTypeFlag::UNSIGNED
-                } else {
-                    FieldTypeFlag::empty()
-                })
-                .build();
+        for (lhs, rhs, rhs_is_unsigned, expected) in test_cases {
             let rhs_field_type = FieldTypeBuilder::new()
                 .tp(FieldTypeTp::LongLong)
                 .flag(if rhs_is_unsigned {
@@ -1595,12 +1581,12 @@ mod tests {
                 .build();
 
             let output = RpnFnScalarEvaluator::new()
-                .push_param_with_field_type(lhs, lhs_field_type)
-                .push_param_with_field_type(rhs, rhs_field_type)
-                .evaluate(ScalarFuncSig::TruncateInt)
+                .push_param(Some(lhs))
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
+                .evaluate::<Int>(ScalarFuncSig::TruncateInt)
                 .unwrap();
 
-            assert_eq!(output, expected);
+            assert_eq!(output, Some(expected));
         }
     }
 }
