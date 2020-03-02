@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::str;
 
 use codec::prelude::*;
@@ -385,8 +385,12 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
             .cmp(sb.chars().map(general_ci_convert)))
     }
 
-    fn sort_hash<H: Hasher>(_state: &mut H, _bstr: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        for ch in s.chars().map(general_ci_convert) {
+            ch.hash(state);
+        }
+        Ok(())
     }
 }
 
@@ -417,8 +421,10 @@ impl Collator for CollatorUtf8Mb4Bin {
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(_state: &mut H, _bstr: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        s.hash(state);
+        Ok(())
     }
 }
 
@@ -449,8 +455,10 @@ impl Collator for CollatorUtf8Mb4BinNoPadding {
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(_state: &mut H, _bstr: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        bstr.hash(state);
+        Ok(())
     }
 }
 
@@ -463,6 +471,7 @@ mod tests {
     #[allow(clippy::string_lit_as_bytes)]
     fn test_compare() {
         use std::cmp::Ordering;
+        use std::collections::hash_map::DefaultHasher;
 
         let collations = [
             (Collation::Utf8Mb4Bin, 0),
@@ -478,8 +487,13 @@ mod tests {
             ),
             (
                 "a".as_bytes(),
-                "A\t".as_bytes(),
-                [Ordering::Greater, Ordering::Greater, Ordering::Less],
+                "a ".as_bytes(),
+                [Ordering::Equal, Ordering::Less, Ordering::Equal],
+            ),
+            (
+                "a".as_bytes(),
+                "A ".as_bytes(),
+                [Ordering::Greater, Ordering::Greater, Ordering::Equal],
             ),
             (
                 "aa ".as_bytes(),
@@ -505,9 +519,20 @@ mod tests {
 
         for (sa, sb, expected) in cases {
             for (collation, order_in_expected) in &collations {
-                let cmp = match_template_collator! {
+                let (cmp, ha, hb) = match_template_collator! {
                     TT, match collation {
-                        Collation::TT => TT::sort_compare(sa, sb).unwrap()
+                        Collation::TT => {
+                            let eval_hash = |s| {
+                                let mut hasher = DefaultHasher::default();
+                                TT::sort_hash(&mut hasher, s).unwrap();
+                                hasher.finish()
+                            };
+
+                            let cmp = TT::sort_compare(sa, sb).unwrap();
+                            let ha = eval_hash(sa);
+                            let hb = eval_hash(sb);
+                            (cmp, ha, hb)
+                        }
                     }
                 };
 
@@ -516,6 +541,20 @@ mod tests {
                     "when comparing {:?} and {:?} by {:?}",
                     sa, sb, collation
                 );
+
+                if expected[*order_in_expected] == Ordering::Equal {
+                    assert_eq!(
+                        ha, hb,
+                        "when comparing the hash of {:?} and {:?} by {:?}, which should be equal",
+                        sa, sb, collation
+                    );
+                } else {
+                    assert_ne!(
+                        ha, hb,
+                        "when comparing the hash of {:?} and {:?} by {:?}, which should not be equal",
+                        sa, sb, collation
+                    );
+                }
             }
         }
     }

@@ -2,7 +2,6 @@
 
 pub mod config;
 pub mod engine_metrics;
-mod event_listener;
 pub mod security;
 pub mod stats;
 
@@ -26,7 +25,6 @@ use crate::rocks::{
 };
 use crate::{Error, Result};
 
-pub use self::event_listener::EventListener;
 pub use crate::rocks::CFHandle;
 use engine_traits::{ALL_CFS, CF_DEFAULT};
 
