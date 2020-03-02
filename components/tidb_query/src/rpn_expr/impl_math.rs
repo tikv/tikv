@@ -1597,7 +1597,7 @@ mod tests {
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(Some(lhs))
-                .push_param_with_field_type(rhs, rhs_field_type)
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
                 .evaluate(ScalarFuncSig::TruncateUint)
                 .unwrap();
 
