@@ -3157,7 +3157,6 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine::rocks::Writable;
     use engine::Peekable;
     use engine::{WriteBatch, DB};
     use engine_rocks::RocksEngine;
@@ -3216,7 +3215,6 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        let wb = WriteBatch::default();
         assert_eq!(should_write_to_engine(&req), true);
 
         // IngestSst command
@@ -3225,7 +3223,6 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        let wb = WriteBatch::default();
         assert_eq!(should_write_to_engine(&cmd), true);
     }
 
