@@ -96,7 +96,12 @@ pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
 }
 
 impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
-    pub fn new(scheduler: S, pool: SchedPool, lock_mgr: Option<L>, pipelined_pessimistic_lock: bool) -> Self {
+    pub fn new(
+        scheduler: S,
+        pool: SchedPool,
+        lock_mgr: Option<L>,
+        pipelined_pessimistic_lock: bool,
+    ) -> Self {
         Executor {
             sched_pool: Some(pool),
             scheduler: Some(scheduler),
@@ -263,11 +268,14 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                     let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
                     let (write_finished_pr, pipelined_write_pr) = if pipelined {
-                        (if let Some(v) = pr.maybe_clone() {
-                            v
-                        } else {
-                            ProcessResult::Res
-                        }, pr)
+                        (
+                            if let Some(v) = pr.maybe_clone() {
+                                v
+                            } else {
+                                ProcessResult::Res
+                            },
+                            pr,
+                        )
                     } else {
                         (pr, ProcessResult::Res)
                     };

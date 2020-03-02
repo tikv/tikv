@@ -325,7 +325,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             engine: None,
             inner: Arc::clone(&self.inner),
         };
-        Executor::new(scheduler, pool, self.inner.lock_mgr.clone(), self.inner.pipelined_pessimistic_lock)
+        Executor::new(
+            scheduler,
+            pool,
+            self.inner.lock_mgr.clone(),
+            self.inner.pipelined_pessimistic_lock,
+        )
     }
 
     /// Releases all the latches held by a command.

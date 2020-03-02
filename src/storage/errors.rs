@@ -115,10 +115,10 @@ impl From<ErrorInner> for Error {
 
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
-         match self.0.maybe_clone() {
+        match self.0.maybe_clone() {
             Some(v) => Some(Error::from(v)),
             _ => None,
-         }
+        }
     }
 }
 
