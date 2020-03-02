@@ -41,9 +41,7 @@ impl<'a> EncryptedFile<'a> {
                 f.read_to_end(&mut buf)?;
                 let (_, content) = Header::parse(&buf)?;
                 let mut encrypted_content = EncryptedContent::default();
-                encrypted_content.merge_from_bytes(content).map_err(|e| {
-                    Error::Other("fail to decode encrypted_content".to_owned().into())
-                });
+                encrypted_content.merge_from_bytes(content)?;
                 let plaintext = master_key.decrypt(&encrypted_content)?;
 
                 Ok(plaintext)

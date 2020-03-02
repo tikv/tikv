@@ -1,4 +1,5 @@
 use openssl::error::ErrorStack as CrypterError;
+use protobuf::ProtobufError;
 use std::io::Error as IoError;
 use std::{error, result};
 
@@ -13,6 +14,8 @@ pub enum Error {
     Io(IoError),
     #[fail(display = "OpenSSL error {}", _0)]
     Crypter(CrypterError),
+    #[fail(display = "Protobuf error {}", _0)]
+    Proto(ProtobufError),
 }
 
 macro_rules! impl_from {
@@ -32,6 +35,7 @@ impl_from! {
     String => Rocks,
     IoError => Io,
     CrypterError => Crypter,
+    ProtobufError => Proto,
 }
 
 pub type Result<T> = result::Result<T, Error>;
