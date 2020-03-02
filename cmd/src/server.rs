@@ -66,8 +66,19 @@ use tikv_util::{
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
 pub fn run_tikv(config: TiKvConfig) {
+    // Sets the global logger ASAP.
+    // It is okay to use the config w/o `validate()`,
+    // because `initial_logger()` handles various conditions.
+    // TODO: currently the logger config can not be managed
+    // by PD and has to be provided when starting (or default
+    // config will be use). Consider remove this constraint.
+    initial_logger(&config);
+
+    // Print version information.
+    tikv::log_tikv_info();
+
     // Do some prepare works before start.
-    pre_start(&config);
+    pre_start();
 
     let mut tikv = TiKVServer::init(config);
 
@@ -208,8 +219,6 @@ impl TiKVServer {
 
         tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
-        // Print version information.
-        tikv::log_tikv_info();
         info!(
             "using config";
             "version" => ?version,
@@ -772,16 +781,8 @@ impl TiKVServer {
 /// - if `vm.swappiness` is not 0
 /// - if data directories are not on SSDs
 /// - if the "TZ" environment variable is not set on unix
-fn pre_start(config: &TiKvConfig) {
-    // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validate()`,
-    // because `initial_logger()` handles various conditions.
-    // TODO: currently the logger config has to be provided
-    // through command line. Consider remove this constraint.
-    initial_logger(&config);
-
+fn pre_start() {
     check_environment_variables();
-
     for e in tikv_util::config::check_kernel() {
         warn!(
             "check: kernel";
