@@ -30,6 +30,7 @@ use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+use tikv_util::time::Instant;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -368,6 +369,7 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
         tracker.on_begin_item();
+        let before_request = Instant::now();
 
         let result = handler.handle_request().await;
 
@@ -377,6 +379,9 @@ impl<E: Engine> Endpoint<E> {
         handler.collect_scan_statistics(&mut storage_stats);
 
         tracker.on_finish_item(Some(storage_stats));
+        if before_request.elapsed().gt(&Duration::from_millis(100)) {
+            tracker.report();
+        }
         let exec_details = tracker.get_item_exec_details();
 
         tracker.on_finish_all_items();

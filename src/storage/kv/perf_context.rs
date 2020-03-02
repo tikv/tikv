@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::super::metrics::GET_PERF_HISTOGRAM_VEC;
 use engine::rocks::PerfContext;
 
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
@@ -43,6 +44,23 @@ impl PerfStatisticsInstant {
     pub fn delta(&self) -> PerfStatisticsDelta {
         let now = Self::new();
         PerfStatisticsDelta(now.0 - self.0)
+    }
+
+    pub fn report() {
+        let mut perf_context = PerfContext::get();
+        GET_PERF_HISTOGRAM_VEC
+            .with_label_values(&["memtable"])
+            .observe(perf_context.get_from_memtable_time() as f64);
+        GET_PERF_HISTOGRAM_VEC
+            .with_label_values(&["snapshot"])
+            .observe(perf_context.get_snapshot_time() as f64);
+        GET_PERF_HISTOGRAM_VEC
+            .with_label_values(&["sst"])
+            .observe(perf_context.get_from_output_files_time() as f64);
+        GET_PERF_HISTOGRAM_VEC
+            .with_label_values(&["post_process"])
+            .observe(perf_context.get_post_process_time() as f64);
+        perf_context.reset();
     }
 }
 

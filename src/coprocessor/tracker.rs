@@ -136,6 +136,10 @@ impl Tracker {
         self.track();
     }
 
+    pub fn report(&self) {
+        PerfStatisticsInstant::report();
+    }
+
     fn track(&mut self) {
         if self.current_stage != TrackerState::AllItemFinished {
             return;

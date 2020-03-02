@@ -1902,7 +1902,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=4.0-perf#ac2d7dd60f360dbfe3635f48af7ca3cc1c75fdfa"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=4.0-perf#a86c3b1d8b8ae5cdbecd2fe975bc85c44372010b"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1920,7 +1920,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=4.0-perf#ac2d7dd60f360dbfe3635f48af7ca3cc1c75fdfa"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=4.0-perf#a86c3b1d8b8ae5cdbecd2fe975bc85c44372010b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3387,7 +3387,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=4.0-perf#ac2d7dd60f360dbfe3635f48af7ca3cc1c75fdfa"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=4.0-perf#a86c3b1d8b8ae5cdbecd2fe975bc85c44372010b"
 dependencies = [
  "libc",
  "librocksdb_sys",

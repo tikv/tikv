@@ -635,8 +635,9 @@ pub struct PerfStatisticsWrite {
     pub wal_time: u64,
     pub write_thread_wait_time: u64,
     pub write_pre_and_post_process_time: u64,
-    pub snapshot_time: u64,
+    pub memtable_time: u64,
     pub write_delay_time: u64,
+    pub schedule_time: u64,
     pub perf_level: i32,
 }
 
@@ -647,8 +648,9 @@ impl Default for PerfStatisticsWrite {
             wal_time: 0,
             write_thread_wait_time: 0,
             write_pre_and_post_process_time: 0,
-            snapshot_time: 0,
+            memtable_time: 0,
             write_delay_time: 0,
+            schedule_time: 0,
             perf_level: 2,
         }
     }
@@ -677,7 +679,8 @@ impl PerfStatisticsWrite {
         self.perf_level = level;
         self.start_time = Instant::now();
         self.wal_time = 0;
-        self.snapshot_time = 0;
+        self.memtable_time = 0;
+        self.schedule_time = 0;
         self.write_thread_wait_time = 0;
         self.write_pre_and_post_process_time = 0;
         self.write_delay_time = 0;
@@ -689,21 +692,20 @@ impl PerfStatisticsWrite {
         }
         let perf_context = PerfContext::get();
         let wal_time = perf_context.write_wal_time();
+        let memtable_time = perf_context.write_memtable_time();
         let write_post_time = perf_context.write_pre_and_post_process_time();
-        let snapshot = perf_context.get_snapshot_time();
         let write_wait = perf_context.write_thread_wait_nanos();
         let delay_time = perf_context.write_delay_time();
+        let schedule_time = perf_context.write_scheduling_flushes_compactions_time();
         metric
             .with_label_values(&["write_wal"])
             .observe((wal_time - self.wal_time) as f64 / 1_000_000_000.0);
+        metric.with_label_values(&["post_process"]).observe(
+            (write_post_time - self.write_pre_and_post_process_time) as f64 / 1_000_000_000.0,
+        );
         metric
-            .with_label_values(&["write_pre_and_post_process"])
-            .observe(
-                (write_post_time - self.write_pre_and_post_process_time) as f64 / 1_000_000_000.0,
-            );
-        metric
-            .with_label_values(&["snapshot"])
-            .observe((snapshot - self.snapshot_time) as f64 / 1_000_000_000.0);
+            .with_label_values(&["memtable"])
+            .observe((memtable_time - self.memtable_time) as f64 / 1_000_000_000.0);
         metric
             .with_label_values(&["write_thread_wait"])
             .observe((write_wait - self.write_thread_wait_time) as f64 / 1_000_000_000.0);
@@ -711,11 +713,15 @@ impl PerfStatisticsWrite {
             .with_label_values(&["write_delay"])
             .observe((delay_time - self.write_delay_time) as f64 / 1_000_000_000.0);
         metric
+            .with_label_values(&["schedule_flush"])
+            .observe((schedule_time - self.schedule_time) as f64 / 1_000_000_000.0);
+        metric
             .with_label_values(&["observe_time"])
             .observe(self.start_time.elapsed_secs());
         self.wal_time = wal_time;
-        self.snapshot_time = snapshot;
+        self.memtable_time = memtable_time;
         self.write_pre_and_post_process_time = write_post_time;
+        self.schedule_time = schedule_time;
         self.write_thread_wait_time = write_wait;
         self.write_delay_time = delay_time;
         self.start_time = Instant::now();
