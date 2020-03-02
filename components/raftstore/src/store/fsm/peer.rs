@@ -39,7 +39,7 @@ use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangePeer, ExecResult,
+    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
     RegionProposal,
 };
 use crate::store::metrics::*;
@@ -360,6 +360,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
+            CasualMessage::CaptureChange { cmd, callback } => self.on_capture_change(cmd, callback),
             CasualMessage::Test(cb) => cb(self.fsm),
         }
     }
@@ -486,6 +487,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
         self.register_split_region_check_tick();
+    }
+
+    fn on_capture_change(&mut self, cmd: ChangeCmd, cb: Callback<RocksEngine>) {
+        if !self.fsm.peer.is_leader() {
+            cb.invoke_with_response(new_error(Error::NotLeader(
+                self.region_id(),
+                self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
+            )));
+            return;
+        }
+        self.ctx
+            .apply_router
+            .schedule_task(self.region_id(), ApplyTask::Change { cmd, cb })
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
