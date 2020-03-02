@@ -120,7 +120,8 @@ impl Delegate {
         self.enabled.clone()
     }
 
-    pub fn subscribe(&mut self, downstream: Downstream) {
+    /// Return false if subscribe failed.
+    pub fn subscribe(&mut self, downstream: Downstream) -> bool {
         if let Some(region) = self.region.as_ref() {
             if let Err(e) = compare_region_epoch(
                 &downstream.region_epoch,
@@ -132,12 +133,13 @@ impl Delegate {
                 let err = Error::Request(e.into());
                 let change_data_error = self.error_event(err);
                 downstream.sink(change_data_error);
-                return;
+                return false;
             }
             self.downstreams.push(downstream);
         } else {
             self.pending.as_mut().unwrap().downstreams.push(downstream);
         }
+        true
     }
 
     pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
