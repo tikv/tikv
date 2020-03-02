@@ -89,10 +89,6 @@ quick_error! {
             display("try to commit key {} with commit_ts {} but min_commit_ts is {}", hex::encode_upper(key), commit_ts, min_commit_ts)
         }
         KeyVersion { description("bad format key(version)") }
-        PessimisticLockModified { start_ts: TimeStamp, key: Vec<u8> } {
-            description("pessimistic lock pessimistic lock had been modified when prewrite")
-            display("pessimistic lock had been modified, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
-        }
         PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> } {
             description("pessimistic lock not found when prewrite")
             display("pessimistic lock not found, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
@@ -180,12 +176,6 @@ impl ErrorInner {
             }),
             ErrorInner::PessimisticLockRolledBack { start_ts, key } => {
                 Some(ErrorInner::PessimisticLockRolledBack {
-                    start_ts: *start_ts,
-                    key: key.to_owned(),
-                })
-            }
-            ErrorInner::PessimisticLockModified { start_ts, key } => {
-                Some(ErrorInner::PessimisticLockModified {
                     start_ts: *start_ts,
                     key: key.to_owned(),
                 })
