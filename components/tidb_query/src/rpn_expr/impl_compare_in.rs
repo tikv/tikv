@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::hash::Hash;
-use std::marker::PhantomData;
+use std::marker::{PhantomData, Send, Sized};
 
 use codec::prelude::NumberDecoder;
 use tidb_query_codegen::rpn_fn;
@@ -16,15 +16,13 @@ use crate::{Error, Result};
 
 pub trait InByHash {
     type Key: Evaluable + Extract + Eq;
-    type StoreKey: 'static + Hash + Eq + Sized + std::marker::Send;
+    type StoreKey: 'static + Hash + Eq + Sized + Send;
 
     fn map(key: Self::Key) -> Result<Self::StoreKey>;
     fn map_ref(key: &Self::Key) -> Result<&Self::StoreKey>;
 }
 
-pub struct NormalInByHash<K: Evaluable + Extract + Hash + Eq + Sized + std::marker::Send>(
-    PhantomData<K>,
-);
+pub struct NormalInByHash<K: Evaluable + Extract + Hash + Eq + Sized + Send>(PhantomData<K>);
 
 impl<K: Evaluable + Extract + Hash + Eq + Sized> InByHash for NormalInByHash<K> {
     type Key = K;
@@ -56,7 +54,7 @@ impl<C: Collator> InByHash for CollationAwareBytesInByHash<C> {
     }
 }
 
-pub trait Extract: std::marker::Sized {
+pub trait Extract: Sized {
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self>;
 }
 
