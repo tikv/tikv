@@ -272,6 +272,13 @@ impl Mutation {
             _ => false,
         }
     }
+
+    pub fn should_not_write(&self) -> bool {
+        match self {
+            Mutation::CheckNotExists(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl From<kvrpcpb::Mutation> for Mutation {

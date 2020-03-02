@@ -15,7 +15,6 @@ pub enum LockType {
     Delete,
     Lock,
     Pessimistic,
-    Noop,
 }
 
 const FLAG_PUT: u8 = b'P';
@@ -28,12 +27,12 @@ const TXN_SIZE_PREFIX: u8 = b't';
 const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 impl LockType {
-    pub fn from_mutation(mutation: &Mutation) -> LockType {
+    pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
         match *mutation {
-            Mutation::Put(_) | Mutation::Insert(_) => LockType::Put,
-            Mutation::Delete(_) => LockType::Delete,
-            Mutation::Lock(_) => LockType::Lock,
-            Mutation::CheckNotExists(_) => LockType::Noop,
+            Mutation::Put(_) | Mutation::Insert(_) => Some(LockType::Put),
+            Mutation::Delete(_) => Some(LockType::Delete),
+            Mutation::Lock(_) => Some(LockType::Lock),
+            Mutation::CheckNotExists(_) => None,
         }
     }
 
@@ -53,7 +52,6 @@ impl LockType {
             LockType::Delete => FLAG_DELETE,
             LockType::Lock => FLAG_LOCK,
             LockType::Pessimistic => FLAG_PESSIMISTIC,
-            LockType::Noop => unreachable!("noop lock never be writen, so unreachable to here"),
         }
     }
 }
@@ -174,7 +172,6 @@ impl Lock {
             LockType::Delete => Op::Del,
             LockType::Lock => Op::Lock,
             LockType::Pessimistic => Op::PessimisticLock,
-            LockType::Noop => unreachable!("noop lock never be writen, so unreachable to here"),
         };
         info.set_lock_type(lock_type);
         info.set_lock_for_update_ts(self.for_update_ts.into_inner());
@@ -235,7 +232,7 @@ mod tests {
             ),
         ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
-            let lt = LockType::from_mutation(&mutation);
+            let lt = LockType::from_mutation(&mutation).unwrap();
             assert_eq!(
                 lt, lock_type,
                 "#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",

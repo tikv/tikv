@@ -350,10 +350,10 @@ impl<S: Snapshot> MvccTxn<S> {
         txn_size: u64,
         min_commit_ts: TimeStamp,
     ) -> Result<()> {
-        let lock_type = LockType::from_mutation(&mutation);
-        if lock_type == LockType::Noop {
+        if mutation.should_not_write() {
             return Ok(());
         }
+        let lock_type = LockType::from_mutation(&mutation);
         let (key, value) = mutation.into_key_value();
         let mut last_lock_ttl = 0;
         if let Some(lock) = self.reader.load_lock(&key)? {
@@ -401,7 +401,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // No need to check data constraint, it's resolved by pessimistic locks.
         self.prewrite_key_value(
             key,
-            lock_type,
+            lock_type.unwrap(),
             primary,
             value,
             ::std::cmp::max(last_lock_ttl, lock_ttl),
@@ -424,6 +424,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let lock_type = LockType::from_mutation(&mutation);
         // For the insert/checkNotExists operation, the old key should not be in the system.
         let should_not_exist = mutation.should_not_exists();
+        let should_not_write = mutation.should_not_write();
         let (key, value) = mutation.into_key_value();
         // Check whether there is a newer version.
         if !skip_constraint_check {
@@ -446,10 +447,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
             }
         }
-        if lock_type == LockType::Noop {
+        if should_not_write {
             return Ok(());
         }
-
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
@@ -471,7 +471,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
         self.prewrite_key_value(
             key,
-            lock_type,
+            lock_type.unwrap(),
             primary,
             value,
             lock_ttl,

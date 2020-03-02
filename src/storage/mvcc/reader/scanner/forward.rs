@@ -1917,7 +1917,7 @@ mod delta_entry_tests {
                     LockType::Lock => {
                         must_pessimistic_prewrite_lock(&engine, key, key, ts, for_update_ts, true)
                     }
-                    LockType::Pessimistic | LockType::Noop => {}
+                    LockType::Pessimistic => {}
                 }
             }
         }
