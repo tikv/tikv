@@ -4,6 +4,7 @@ use futures::future::Future;
 use std::time::Duration;
 
 use crate::pd_client::PdClient;
+use raft::eraftpb::ConfChangeType;
 use raftstore::store::QuorumAlgorithm;
 use test_raftstore::*;
 
@@ -32,15 +33,16 @@ fn test_check_conf_change() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.quorum_algorithm = QuorumAlgorithm::IntegrationOnHalfFail;
     let rid = cluster.run_conf_change();
+
+    cluster.pd_client.must_add_peer(rid, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(rid, new_learner_peer(3, 3));
+
     let r1 = cluster
         .pd_client
         .get_region_by_id(rid)
         .wait()
         .unwrap()
         .unwrap();
-
-    cluster.pd_client.must_add_peer(rid, new_peer(2, 2));
-    cluster.pd_client.must_add_peer(rid, new_learner_peer(3, 3));
 
     // Stop peer 3 and compact logs on peer 1 and 2, so that peer 3 can't become voter.
     cluster.stop_node(3);
@@ -55,7 +57,14 @@ fn test_check_conf_change() {
     assert!(!res.get_header().has_error());
 
     // Peer 3 can't be promoted.
-    cluster.pd_client.add_peer(rid, new_peer(3, 3));
-    sleep_ms(1000);
-    cluster.pd_client.must_none_peer(rid, new_peer(3, 3));
+    let cc = new_change_peer_request(ConfChangeType::AddNode, new_peer(3, 3));
+    let req = new_admin_request(rid, r1.get_region_epoch(), cc);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(res
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("unsafe to perform conf change peer"));
 }
