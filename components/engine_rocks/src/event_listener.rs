@@ -1,24 +1,24 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rocks::util::engine_metrics::*;
-use crate::rocks::{
+use crate::rocks_metrics::*;
+use rocksdb::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, WriteStallInfo,
 };
 use tikv_util::set_panic_mark;
 
-pub struct EventListener {
+pub struct RocksEventListener {
     db_name: String,
 }
 
-impl EventListener {
-    pub fn new(db_name: &str) -> EventListener {
-        EventListener {
+impl RocksEventListener {
+    pub fn new(db_name: &str) -> RocksEventListener {
+        RocksEventListener {
             db_name: db_name.to_owned(),
         }
     }
 }
 
-impl rocksdb::EventListener for EventListener {
+impl rocksdb::EventListener for RocksEventListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "flush"])
