@@ -17,8 +17,8 @@ use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
-use engine::CF_DEFAULT;
 use engine_rocks::RocksEngine;
+use engine_traits::CF_DEFAULT;
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -796,7 +796,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
         self.get_engine(store_id)
-            .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &keys::apply_state_key(region_id))
+            .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &keys::apply_state_key(region_id))
             .unwrap()
             .unwrap()
             .take_truncated_state()

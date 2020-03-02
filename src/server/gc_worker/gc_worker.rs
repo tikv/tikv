@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
-use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::RocksEngine;
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::TablePropertiesExt;
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use kvproto::metapb;
@@ -247,20 +248,22 @@ impl<E: Engine> GcRunner<E> {
         let start_key = keys::data_key(region_info.region.get_start_key());
         let end_key = keys::data_end_key(region_info.region.get_end_key());
 
-        let collection =
-            match engine::util::get_range_properties_cf(&db, CF_WRITE, &start_key, &end_key) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!(
-                        "failed to get range properties from write cf";
-                        "region_id" => ctx.get_region_id(),
-                        "start_key" => hex::encode_upper(&start_key),
-                        "end_key" => hex::encode_upper(&end_key),
-                        "err" => ?e,
-                    );
-                    return true;
-                }
-            };
+        let collection = match db
+            .c()
+            .get_range_properties_cf(CF_WRITE, &start_key, &end_key)
+        {
+            Ok(c) => c,
+            Err(e) => {
+                error!(
+                    "failed to get range properties from write cf";
+                    "region_id" => ctx.get_region_id(),
+                    "start_key" => hex::encode_upper(&start_key),
+                    "end_key" => hex::encode_upper(&end_key),
+                    "err" => ?e,
+                );
+                return true;
+            }
+        };
         check_need_gc(safe_point, self.cfg.ratio_threshold, collection)
     }
 

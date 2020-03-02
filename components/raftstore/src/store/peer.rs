@@ -43,6 +43,7 @@ use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
+use tikv_util::time::Instant as UtilInstant;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 
@@ -56,6 +57,7 @@ use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
+const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -183,6 +185,8 @@ pub struct Peer {
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
+    /// Indicates whether the peer should be woken up.
+    pub should_wake_up: bool,
     /// Whether this peer is destroyed asynchronously.
     /// If it's true when merging, its data in storeMeta will be removed early by the target peer
     pub pending_remove: bool,
@@ -236,6 +240,9 @@ pub struct Peer {
 
     /// Write Statistics for PD to schedule hot spot.
     pub peer_stat: PeerStat,
+
+    /// Time of the last attempt to wake up inactive leader.
+    pub bcast_wake_up_time: Option<UtilInstant>,
 }
 
 impl Peer {
@@ -292,6 +299,7 @@ impl Peer {
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
+            should_wake_up: false,
             pending_merge_state: None,
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
             last_proposed_prepare_merge_idx: 0,
@@ -312,6 +320,7 @@ impl Peer {
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
+            bcast_wake_up_time: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -526,6 +535,12 @@ impl Peer {
                 return res;
             }
         }
+        if self.raft_group.raft.pending_read_count() > 0 {
+            return res;
+        }
+        if self.raft_group.raft.lead_transferee.is_some() {
+            return res;
+        }
         // Unapplied entries can change the configuration of the group.
         res.up_to_date = self.get_store().applied_index() == last_index;
         res
@@ -533,7 +548,7 @@ impl Peer {
 
     pub fn check_after_tick(&self, state: GroupState, res: CheckTickResult) -> bool {
         if res.leader {
-            res.up_to_date && self.is_leader() && self.raft_group.raft.pending_read_count() == 0
+            res.up_to_date && self.is_leader()
         } else {
             // If follower keeps receiving data from leader, then it's safe to stop
             // ticking, as leader will make sure it has the latest logs.
@@ -543,6 +558,8 @@ impl Peer {
                 && self.raft_group.raft.leader_id != raft::INVALID_ID
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
                 && !self.has_unresolved_reads()
+                // If it becomes leader, the stats is not valid anymore.
+                && !self.is_leader()
         }
     }
 
@@ -724,7 +741,8 @@ impl Peer {
         if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
             // If the leader hasn't committed any entries in its term, it can't response read only
             // requests. Please also take a look at raft-rs.
-            if let LeaseState::Valid = self.inspect_lease() {
+            let state = self.inspect_lease();
+            if let LeaseState::Valid = state {
                 let mut resp = eraftpb::Message::default();
                 resp.set_msg_type(MessageType::MsgReadIndexResp);
                 resp.to = m.from;
@@ -734,6 +752,7 @@ impl Peer {
                 self.pending_messages.push(resp);
                 return Ok(());
             }
+            self.should_wake_up = state == LeaseState::Expired;
         }
         if msg_type == MessageType::MsgTransferLeader {
             self.execute_transfer_leader(ctx, &m);
@@ -1612,7 +1631,7 @@ impl Peer {
     /// Propose a request.
     ///
     /// Return true means the request has been proposed successfully.
-    pub fn propose<T, C>(
+    pub fn propose<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         cb: Callback<RocksEngine>,
@@ -1659,6 +1678,7 @@ impl Peer {
                     // possible.
                     self.raft_group.skip_bcast_commit(false);
                 }
+                self.should_wake_up = true;
                 let meta = ProposalMeta {
                     index: idx,
                     term: self.term(),
@@ -1723,7 +1743,7 @@ impl Peer {
     ///    need to be up to date for now. If 'allow_remove_leader' is false then
     ///    the peer to be removed should not be the leader.
     fn check_conf_change<T, C>(
-        &self,
+        &mut self,
         ctx: &mut PollContext<T, C>,
         cmd: &RaftCmdRequest,
     ) -> Result<()> {
@@ -1801,6 +1821,8 @@ impl Peer {
             "healthy" => healthy,
             "quorum_after_change" => quorum_after_change,
         );
+        // Waking it up to replicate logs to candidate.
+        self.should_wake_up = true;
         Err(box_err!(
             "unsafe to perform conf change {:?}, total {}, healthy {}, quorum after \
              change {}",
@@ -1953,7 +1975,7 @@ impl Peer {
     // 1. The region is in merging or splitting;
     // 2. The message is stale and dropped by the Raft group internally;
     // 3. There is already a read request proposed in the current lease;
-    fn read_index<T, C>(
+    fn read_index<T: Transport, C>(
         &mut self,
         poll_ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
@@ -1970,6 +1992,7 @@ impl Peer {
             poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
             cmd_resp::bind_error(&mut err_resp, e);
             cb.invoke_with_response(err_resp);
+            self.should_wake_up = true;
             return false;
         }
 
@@ -2006,6 +2029,16 @@ impl Peer {
                 box_err!("{} can not read index due to no leader", self.tag),
             );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
+            // The leader may be hibernated, send a message for trying to awaken the leader.
+            if poll_ctx.cfg.hibernate_regions
+                && (self.bcast_wake_up_time.is_none()
+                    || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                        >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL))
+            {
+                self.bcast_wake_up_message(&mut poll_ctx.trans);
+                self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
+            }
+            self.should_wake_up = true;
             cb.invoke_with_response(err_resp);
             return false;
         }
@@ -2016,6 +2049,7 @@ impl Peer {
 
         poll_ctx.raft_metrics.propose.read_index += 1;
 
+        self.bcast_wake_up_time = None;
         let id = Uuid::new_v4();
         self.raft_group.read_index(id.as_bytes().to_vec());
 
@@ -2033,6 +2067,7 @@ impl Peer {
 
         let read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
         self.pending_reads.push_back(read, self.is_leader());
+        self.should_wake_up = true;
 
         debug!(
             "request to get a read index";
@@ -2261,7 +2296,10 @@ impl Peer {
                         "last_index" => self.get_store().last_index(),
                     );
                 }
-                None => self.transfer_leader(&from),
+                None => {
+                    self.transfer_leader(&from);
+                    self.should_wake_up = true;
+                }
             }
             return;
         }

@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DB;
-use engine::CfName;
+use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -323,7 +323,7 @@ impl CoprocessorHost {
         &self,
         cfg: &'a Config,
         region: &Region,
-        engine: &DB,
+        engine: &Arc<DB>,
         auto_split: bool,
         policy: CheckPolicy,
     ) -> SplitCheckerHost<'a> {
@@ -404,7 +404,6 @@ impl CoprocessorHost {
 mod tests {
     use crate::coprocessor::*;
     use std::sync::atomic::*;
-    use std::sync::*;
 
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{

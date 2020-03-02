@@ -1,10 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DB;
-use engine::util;
-use engine::{CF_DEFAULT, CF_WRITE};
+use engine_rocks::Compat;
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use std::sync::Arc;
 
 use tikv_util::config::ReadableSize;
 
@@ -56,7 +58,11 @@ impl SplitChecker for Checker {
         }
     }
 
-    fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(
+        &mut self,
+        region: &Region,
+        engine: &Arc<DB>,
+    ) -> Result<Vec<Vec<u8>>> {
         let ks = box_try!(get_region_approximate_middle(engine, region)
             .map(|keys| keys.map_or(vec![], |key| vec![key])));
 
@@ -78,7 +84,7 @@ impl SplitCheckObserver for HalfCheckObserver {
         &self,
         _: &mut ObserverContext<'_>,
         host: &mut Host,
-        _: &DB,
+        _: &Arc<DB>,
         policy: CheckPolicy,
     ) {
         if host.auto_split() {
@@ -103,7 +109,7 @@ fn half_split_bucket_size(region_max_size: u64) -> u64 {
 }
 
 /// Get region approximate middle key based on default and write cf size.
-pub fn get_region_approximate_middle(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
+pub fn get_region_approximate_middle(db: &Arc<DB>, region: &Region) -> Result<Option<Vec<u8>>> {
     let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
@@ -125,19 +131,17 @@ pub fn get_region_approximate_middle(db: &DB, region: &Region) -> Result<Option<
 /// The returned key maybe is timestamped if transaction KV is used,
 /// and must start with "z".
 fn get_region_approximate_middle_cf(
-    db: &DB,
+    db: &Arc<DB>,
     cfname: &str,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let collection = box_try!(util::get_range_properties_cf(
-        db, cfname, &start_key, &end_key
-    ));
+    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
 
     let mut keys = Vec::new();
-    for (_, v) in &*collection {
-        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+    for (_, v) in collection.iter() {
+        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
         keys.extend(
             props
                 .take_excluded_range(start_key.as_slice(), end_key.as_slice())
@@ -165,7 +169,7 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
-    use engine::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
@@ -255,7 +259,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         let mut big_value = Vec::with_capacity(256);

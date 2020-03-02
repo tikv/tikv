@@ -7,16 +7,17 @@ pub use self::storage_impl::TiKVStorage;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
+use std::sync::Arc;
 use std::time::Duration;
-use tidb_query::error::EvaluateError;
 use tidb_query::storage::IntervalRange;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
+use tokio::sync::Semaphore;
 
 use crate::coprocessor::metrics::*;
-use crate::coprocessor::{Deadline, Error, RequestHandler, Result};
+use crate::coprocessor::{Deadline, RequestHandler, Result};
 use crate::storage::{Statistics, Store};
 
-pub fn build_handler<S: Store + 'static>(
+pub struct DagHandlerBuilder<S: Store + 'static> {
     req: DagRequest,
     ranges: Vec<KeyRange>,
     store: S,
@@ -25,25 +26,84 @@ pub fn build_handler<S: Store + 'static>(
     batch_row_limit: usize,
     is_streaming: bool,
     enable_batch_if_possible: bool,
-) -> Result<Box<dyn RequestHandler>> {
-    // TODO: support batch executor while handling server-side streaming requests
-    // https://github.com/tikv/tikv/pull/5945
-    if enable_batch_if_possible && !is_streaming {
-        tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors())?;
-        COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDAGHandler::new(req, ranges, store, data_version, deadline)?.into_boxed())
-    } else {
-        COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
-        Ok(DAGHandler::new(
+    execution_time_limit: Option<Duration>,
+    semaphore: Option<Arc<Semaphore>>,
+}
+
+impl<S: Store + 'static> DagHandlerBuilder<S> {
+    pub fn new(
+        req: DagRequest,
+        ranges: Vec<KeyRange>,
+        store: S,
+        deadline: Deadline,
+        batch_row_limit: usize,
+        is_streaming: bool,
+    ) -> Self {
+        DagHandlerBuilder {
             req,
             ranges,
             store,
-            data_version,
+            data_version: None,
             deadline,
             batch_row_limit,
             is_streaming,
-        )?
-        .into_boxed())
+            enable_batch_if_possible: true,
+            execution_time_limit: None,
+            semaphore: None,
+        }
+    }
+
+    pub fn data_version(mut self, data_version: Option<u64>) -> Self {
+        self.data_version = data_version;
+        self
+    }
+
+    pub fn enable_batch_if_possible(mut self, enable_batch_if_possible: bool) -> Self {
+        self.enable_batch_if_possible = enable_batch_if_possible;
+        self
+    }
+
+    pub fn execution_time_limit(mut self, execution_time_limit: Option<Duration>) -> Self {
+        self.execution_time_limit = execution_time_limit;
+        self
+    }
+
+    pub fn semaphore(mut self, semaphore: Option<Arc<Semaphore>>) -> Self {
+        self.semaphore = semaphore;
+        self
+    }
+
+    pub fn build(self) -> Result<Box<dyn RequestHandler>> {
+        // TODO: support batch executor while handling server-side streaming requests
+        // https://github.com/tikv/tikv/pull/5945
+        if self.enable_batch_if_possible && !self.is_streaming {
+            tidb_query::batch::runner::BatchExecutorsRunner::check_supported(
+                self.req.get_executors(),
+            )?;
+            COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
+            Ok(BatchDAGHandler::new(
+                self.req,
+                self.ranges,
+                self.store,
+                self.data_version,
+                self.deadline,
+                self.execution_time_limit,
+                self.semaphore,
+            )?
+            .into_boxed())
+        } else {
+            COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
+            Ok(DAGHandler::new(
+                self.req,
+                self.ranges,
+                self.store,
+                self.data_version,
+                self.deadline,
+                self.batch_row_limit,
+                self.is_streaming,
+            )?
+            .into_boxed())
+        }
     }
 }
 
@@ -103,6 +163,8 @@ impl BatchDAGHandler {
         store: S,
         data_version: Option<u64>,
         deadline: Deadline,
+        execution_time_limit: Option<Duration>,
+        semaphore: Option<Arc<Semaphore>>,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query::batch::runner::BatchExecutorsRunner::from_request(
@@ -110,6 +172,8 @@ impl BatchDAGHandler {
                 ranges,
                 TiKVStorage::from(store),
                 deadline,
+                execution_time_limit,
+                semaphore,
             )?,
             data_version,
         })
@@ -120,10 +184,6 @@ impl BatchDAGHandler {
 impl RequestHandler for BatchDAGHandler {
     async fn handle_request(&mut self) -> Result<Response> {
         handle_qe_response(self.runner.handle_request().await, self.data_version)
-    }
-
-    fn set_execution_time_limit(&mut self, execution_time_limit: Option<Duration>) {
-        self.runner.set_execution_time_limit(execution_time_limit);
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
@@ -149,9 +209,6 @@ fn handle_qe_response(
         }
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
-            ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded) => {
-                Err(Error::ExecutionTimeLimitExceeded)
-            }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
                 let mut sel_resp = SelectResponse::default();
@@ -181,9 +238,6 @@ fn handle_qe_stream_response(
         Ok((None, finished)) => Ok((None, finished)),
         Err(err) => match *err.0 {
             ErrorInner::Storage(err) => Err(err.into()),
-            ErrorInner::Evaluate(EvaluateError::ExecutionTimeLimitExceeded) => {
-                Err(Error::ExecutionTimeLimitExceeded)
-            }
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
                 let mut s_resp = StreamResponse::default();

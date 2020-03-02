@@ -8,6 +8,7 @@ mod table;
 use engine::rocks::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use std::sync::Arc;
 
 use super::config::Config;
 use super::error::Result;
@@ -79,7 +80,11 @@ impl<'a> Host<'a> {
         vec![]
     }
 
-    pub fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+    pub fn approximate_split_keys(
+        &mut self,
+        region: &Region,
+        engine: &Arc<DB>,
+    ) -> Result<Vec<Vec<u8>>> {
         for checker in &mut self.checkers {
             let keys = box_try!(checker.approximate_split_keys(region, engine));
             if !keys.is_empty() {

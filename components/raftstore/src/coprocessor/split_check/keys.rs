@@ -3,8 +3,9 @@
 use crate::store::{CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
-use engine::util;
-use engine::CF_WRITE;
+use engine_rocks::Compat;
+use engine_traits::CF_WRITE;
+use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::{Arc, Mutex};
@@ -101,7 +102,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
         &self,
         ctx: &mut ObserverContext<'_>,
         host: &mut Host,
-        engine: &DB,
+        engine: &Arc<DB>,
         policy: CheckPolicy,
     ) {
         let region = ctx.region();
@@ -162,7 +163,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
 }
 
 /// Get the approximate number of keys in the range.
-pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys(db: &Arc<DB>, region: &Region) -> Result<u64> {
     // try to get from RangeProperties first.
     match get_region_approximate_keys_cf(db, CF_WRITE, region) {
         Ok(v) => {
@@ -181,18 +182,16 @@ pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
     Ok(keys)
 }
 
-pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys_cf(db: &Arc<DB>, cfname: &str, region: &Region) -> Result<u64> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
     let range = Range::new(&start_key, &end_key);
     let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
 
-    let collection = box_try!(util::get_range_properties_cf(
-        db, cfname, &start_key, &end_key
-    ));
-    for (_, v) in &*collection {
-        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
+    for (_, v) in collection.iter() {
+        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
         keys += props.get_approximate_keys_in_range(&start_key, &end_key);
     }
     Ok(keys)
@@ -210,7 +209,7 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
-    use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;
@@ -374,7 +373,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
@@ -420,7 +419,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let write_cf = db.cf_handle(CF_WRITE).unwrap();
         let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
