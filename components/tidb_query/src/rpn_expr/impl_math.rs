@@ -503,6 +503,58 @@ pub fn truncate_real(x: Real, d: i32) -> Real {
     }
 }
 
+const U64_TEN_POWS: [u64; 20] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+    10_000_000_000_000_000_000,
+];
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_uint_with_uint(arg0: &Option<Int>, arg1: &Option<Int>) -> Result<Option<Int>> {
+    match (arg0, arg1) {
+        (&Some(x), Some(_)) => Ok(Some(x)),
+        _ => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_uint_with_int(arg0: &Option<Int>, arg1: &Option<Int>) -> Result<Option<Int>> {
+    match (arg0, arg1) {
+        (&Some(x), &Some(d)) => {
+            if d >= 0 {
+                Ok(Some(x))
+            } else {
+                if d <= -(U64_TEN_POWS.len() as i64) {
+                    return Ok(Some(0));
+                }
+                let x = x as u64;
+                let shift = U64_TEN_POWS[-d as usize];
+                Ok(Some((x / shift * shift) as Int))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 thread_local! {
    static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
@@ -1506,6 +1558,50 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(Real::from(expected)));
+        }
+    }
+
+    #[test]
+    fn test_truncate_uint() {
+        let test_cases = vec![
+            (
+                18446744073709551615_u64 as i64,
+                u64::max_value() as i64,
+                true,
+                18446744073709551615_u64 as i64,
+            ),
+            (
+                18446744073709551615_u64 as i64,
+                -2,
+                false,
+                18446744073709551600_u64 as i64,
+            ),
+            (
+                18446744073709551615_u64 as i64,
+                2,
+                false,
+                18446744073709551615_u64 as i64,
+            ),
+            (18446744073709551615_u64 as i64, -20, false, 0),
+        ];
+
+        for (lhs, rhs, rhs_is_unsigned, expected) in test_cases {
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(lhs))
+                .push_param_with_field_type(rhs, rhs_field_type)
+                .evaluate(ScalarFuncSig::TruncateUint)
+                .unwrap();
+
+            assert_eq!(output, Some(expected));
         }
     }
 }
