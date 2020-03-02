@@ -3866,7 +3866,7 @@ mod tests {
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
         let mut entries = vec![];
-        for i in 0..WRITE_BATCH_MAX_KEYS {
+        for i in 0..WRITE_MAX_BATCH_SIZE {
             let put_entry = EntryBuilder::new(i as u64 + 12, 3)
                 .put(b"k", b"v")
                 .epoch(1, 3)
@@ -3875,10 +3875,10 @@ mod tests {
             entries.push(put_entry);
         }
         router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries)));
-        for _ in 0..WRITE_BATCH_MAX_KEYS {
+        for _ in 0..WRITE_MAX_BATCH_SIZE {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
-        let index = WRITE_BATCH_MAX_KEYS + 11;
+        let index = WRITE_MAX_BATCH_SIZE + 11;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
