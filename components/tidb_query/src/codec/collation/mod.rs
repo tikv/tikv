@@ -5,7 +5,9 @@ mod utf8mb4;
 pub use self::utf8mb4::*;
 
 use std::cmp::Ordering;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
+use std::ops::Deref;
 
 use codec::prelude::*;
 
@@ -14,11 +16,10 @@ use crate::codec::Result;
 pub macro match_template_collator($t:tt, $($tail:tt)*) {
     match_template::match_template! {
         $t = [
-            Utf8Bin => CollatorUtf8Mb4Bin,
-            Utf8Mb4Bin => CollatorUtf8Mb4Bin,
-            Utf8GeneralCi => CollatorUtf8Mb4GeneralCi,
-            Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
             Binary => CollatorBinary,
+            Utf8Mb4Bin => CollatorUtf8Mb4Bin,
+            Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
+            Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
         ],
         $($tail)*
     }
@@ -48,17 +49,17 @@ impl Charset for CharsetBinary {
 pub trait Collator {
     type Charset: Charset;
 
+    fn validate(bstr: &[u8]) -> Result<()>;
+
     /// Writes the SortKey of `bstr` into `writer`.
-    fn write_sort_key<W: BufferWriter>(bstr: &[u8], writer: &mut W) -> Result<usize>;
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize>;
 
     /// Returns the SortKey of `bstr` as an owned byte vector.
     fn sort_key(bstr: &[u8]) -> Result<Vec<u8>> {
         let mut v = Vec::default();
-        Self::write_sort_key(bstr, &mut v)?;
+        Self::write_sort_key(&mut v, bstr)?;
         Ok(v)
     }
-
-    fn validate(bstr: &[u8]) -> Result<()>;
 
     /// Compares `a` and `b` based on their SortKey.
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering>;
@@ -66,23 +67,24 @@ pub trait Collator {
     /// Hashes `bstr` based on its SortKey directly.
     ///
     /// WARN: `sort_hash(str) != hash(sort_key(str))`.
-    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<()>;
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()>;
 }
 
+/// Collator for binary collation without padding.
 pub struct CollatorBinary;
 
 impl Collator for CollatorBinary {
     type Charset = CharsetBinary;
 
     #[inline]
-    fn write_sort_key<W: BufferWriter>(bstr: &[u8], writer: &mut W) -> Result<usize> {
-        writer.write_bytes(bstr)?;
-        Ok(bstr.len())
+    fn validate(_bstr: &[u8]) -> Result<()> {
+        Ok(())
     }
 
     #[inline]
-    fn validate(_bstr: &[u8]) -> Result<()> {
-        Ok(())
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
+        writer.write_bytes(bstr)?;
+        Ok(bstr.len())
     }
 
     #[inline]
@@ -91,10 +93,128 @@ impl Collator for CollatorBinary {
     }
 
     #[inline]
-    fn sort_hash<H: Hasher>(bstr: &[u8], state: &mut H) -> Result<()> {
-        use std::hash::Hash;
-
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
         bstr.hash(state);
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct SortKey<T, C: Collator>
+where
+    T: AsRef<[u8]>,
+{
+    inner: T,
+    _phantom: PhantomData<C>,
+}
+
+impl<T, C: Collator> SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    pub fn new(inner: T) -> Result<Self> {
+        C::validate(inner.as_ref())?;
+        Ok(Self {
+            inner,
+            _phantom: PhantomData,
+        })
+    }
+
+    /// Create SortKey from unchecked bytes.
+    ///
+    /// # Panic
+    ///
+    /// The `Ord`, `Hash`, `PartialEq` and more implementations assume that the bytes are
+    /// valid for the certain collator. The violation will cause panic.
+    #[inline]
+    pub fn new_unchecked(inner: T) -> Self {
+        Self {
+            inner,
+            _phantom: PhantomData,
+        }
+    }
+
+    #[inline]
+    #[allow(clippy::transmute_ptr_to_ptr)]
+    pub fn map_option(inner: &Option<T>) -> Result<&Option<Self>> {
+        if let Some(inner) = inner {
+            C::validate(inner.as_ref())?;
+        }
+        Ok(unsafe { std::mem::transmute(inner) })
+    }
+
+    #[inline]
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+}
+
+impl<T, C: Collator> Hash for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        C::sort_hash(state, self.inner.as_ref()).unwrap()
+    }
+}
+
+impl<T, C: Collator> PartialEq for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).unwrap()
+            == std::cmp::Ordering::Equal
+    }
+}
+
+impl<T, C: Collator> Eq for SortKey<T, C> where T: AsRef<[u8]> {}
+
+impl<T, C: Collator> PartialOrd for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).ok()
+    }
+}
+
+impl<T, C: Collator> Ord for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).unwrap()
+    }
+}
+
+impl<T, C: Collator> Clone for SortKey<T, C>
+where
+    T: AsRef<[u8]> + Clone,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T, C: Collator> Deref for SortKey<T, C>
+where
+    T: AsRef<[u8]>,
+{
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
