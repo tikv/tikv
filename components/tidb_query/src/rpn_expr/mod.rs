@@ -49,6 +49,14 @@ fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> Result<RpnF
     })
 }
 
+fn map_compare_in_string_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(crate::codec::Error::from)? {
+            Collation::TT => compare_in_by_hash_fn_meta::<CollationAwareBytesInByHash::<TT>>()
+        }
+    })
+}
+
 fn map_like_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
         TT, match ret_field_type.as_accessor().collation().map_err(crate::codec::Error::from)? {
@@ -316,12 +324,12 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
         ScalarFuncSig::CoalesceJson => coalesce_fn_meta::<Json>(),
         // impl_compare_in
-        ScalarFuncSig::InInt => compare_in_by_hash_fn_meta::<Int>(),
-        ScalarFuncSig::InReal => compare_in_by_hash_fn_meta::<Real>(),
-        ScalarFuncSig::InString => compare_in_by_hash_fn_meta::<Bytes>(),
-        ScalarFuncSig::InDecimal => compare_in_by_hash_fn_meta::<Decimal>(),
+        ScalarFuncSig::InInt => compare_in_by_hash_fn_meta::<NormalInByHash::<Int>>(),
+        ScalarFuncSig::InReal => compare_in_by_hash_fn_meta::<NormalInByHash::<Real>>(),
+        ScalarFuncSig::InString => map_compare_in_string_sig(ft)?,
+        ScalarFuncSig::InDecimal => compare_in_by_hash_fn_meta::<NormalInByHash::<Decimal>>(),
         ScalarFuncSig::InTime => compare_in_by_compare_fn_meta::<DateTime>(),
-        ScalarFuncSig::InDuration => compare_in_by_hash_fn_meta::<Duration>(),
+        ScalarFuncSig::InDuration => compare_in_by_hash_fn_meta::<NormalInByHash::<Duration>>(),
         ScalarFuncSig::InJson => compare_in_by_compare_fn_meta::<Json>(),
         // impl_control
         ScalarFuncSig::IfNullInt => if_null_fn_meta::<Int>(),
