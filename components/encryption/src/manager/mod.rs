@@ -19,12 +19,12 @@ const FILE_DICT_NAME: &str = "file.dict";
 struct Dicts {
     file_dict: FileDictionary,
     key_dict: KeyDictionary,
-
+    rotation_period: Duration,
     base: PathBuf,
 }
 
 impl Dicts {
-    fn open(path: &str, master_key: &dyn Backend) -> Result<Dicts> {
+    fn open(path: &str, rotation_period: Duration, master_key: &dyn Backend) -> Result<Dicts> {
         let base = Path::new(path);
         let file_file = EncryptedFile::new(base, FILE_DICT_NAME);
         let file_bytes = file_file.read(master_key)?;
@@ -39,6 +39,7 @@ impl Dicts {
         Ok(Dicts {
             file_dict,
             key_dict,
+            rotation_period,
             base: base.to_owned(),
         })
     }
@@ -133,53 +134,18 @@ impl Dicts {
         // re-encrypt key dict file.
         self.save_key_dict(master_key).map(|()| true)
     }
-}
 
-fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
-    use rand::{rngs::OsRng, RngCore};
-
-    let key_id = OsRng.next_u64();
-    let key_length = get_method_key_length(method);
-    let mut key = vec![0; key_length];
-    OsRng.fill_bytes(&mut key);
-    (key_id, key)
-}
-
-#[derive(Clone)]
-pub struct DataKeyManager {
-    master_key: Arc<dyn Backend>,
-    dicts: Arc<RwLock<Dicts>>,
-    method: EncryptionMethod,
-    rotation_period: Duration,
-}
-
-impl DataKeyManager {
-    pub fn new(
-        master_key: Arc<dyn Backend>,
+    fn maybe_rotate_data_key(
+        &mut self,
         method: EncryptionMethod,
-        rotation_period: Duration,
-        dict_path: &str,
-    ) -> Result<DataKeyManager> {
-        let dicts = Arc::new(RwLock::new(Dicts::open(dict_path, master_key.as_ref())?));
-        let manager = DataKeyManager {
-            dicts,
-            master_key,
-            method,
-            rotation_period,
-        };
-        manager.maybe_rotate_data_key();
-        Ok(manager)
-    }
-
-    fn maybe_rotate_data_key(&self) -> Result<()> {
-        let mut dicts = self.dicts.write().unwrap();
-
+        master_key: &dyn Backend,
+    ) -> Result<()> {
         let now = SystemTime::now();
         // 0 means it's a new key dict
-        if dicts.key_dict.current_key_id != 0 {
+        if self.key_dict.current_key_id != 0 {
             // It's not a new dict, then check current data key
             // cration time.
-            let (_, key) = dicts.current_data_key();
+            let (_, key) = self.current_data_key();
 
             let creation_time = UNIX_EPOCH + Duration::from_secs(key.creation_time);
             match now.duration_since(creation_time) {
@@ -203,14 +169,14 @@ impl DataKeyManager {
         // Generate new data key.
         let generate_limit = 10;
         for _ in 0..generate_limit {
-            let (key_id, key) = generate_data_key(self.method);
+            let (key_id, key) = generate_data_key(method);
             let mut data_key = DataKey::default();
             data_key.key = key;
-            data_key.method = self.method;
+            data_key.method = method;
             data_key.creation_time = creation_time;
             data_key.was_exposed = false;
 
-            let ok = dicts.rotate_key(key_id, data_key, self.master_key.as_ref())?;
+            let ok = self.rotate_key(key_id, data_key, master_key)?;
             if !ok {
                 // key id collides, retry
                 continue;
@@ -220,6 +186,41 @@ impl DataKeyManager {
         Err(Error::Other(
             format!("key id collides {} times!", generate_limit).into(),
         ))
+    }
+}
+
+fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
+    use rand::{rngs::OsRng, RngCore};
+
+    let key_id = OsRng.next_u64();
+    let key_length = get_method_key_length(method);
+    let mut key = vec![0; key_length];
+    OsRng.fill_bytes(&mut key);
+    (key_id, key)
+}
+
+#[derive(Clone)]
+pub struct DataKeyManager {
+    master_key: Arc<dyn Backend>,
+    dicts: Arc<RwLock<Dicts>>,
+    method: EncryptionMethod,
+}
+
+impl DataKeyManager {
+    pub fn new(
+        master_key: Arc<dyn Backend>,
+        method: EncryptionMethod,
+        rotation_period: Duration,
+        dict_path: &str,
+    ) -> Result<DataKeyManager> {
+        let mut dicts = Dicts::open(dict_path, rotation_period, master_key.as_ref())?;
+        dicts.maybe_rotate_data_key(method, master_key.as_ref())?;
+        let manager = DataKeyManager {
+            dicts: Arc::new(RwLock::new(dicts)),
+            master_key,
+            method,
+        };
+        Ok(manager)
     }
 }
 
@@ -243,6 +244,8 @@ impl EncryptionKeyManager for DataKeyManager {
 
     fn new_file(&self, file_path: &str) -> IoResult<FileEncryptionInfo> {
         let mut dicts = self.dicts.write().unwrap();
+        // Rotate data key if necessary.
+        dicts.maybe_rotate_data_key(self.method, self.master_key.as_ref())?;
         let (key_id, data_key) = dicts.current_data_key();
         let key = data_key.get_key().to_owned();
         let file = dicts.new_file(file_path, self.method, self.master_key.as_ref())?;
@@ -305,7 +308,12 @@ mod tests {
         };
 
         // Do not rotate.
-        manager.maybe_rotate_data_key();
+        manager
+            .dicts
+            .write()
+            .unwrap()
+            .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
+            .unwrap();
         let (current_key_id1, current_key1) = {
             let dicts = manager.dicts.read().unwrap();
             let (id, k) = dicts.current_data_key();
@@ -314,10 +322,15 @@ mod tests {
         assert_eq!(current_key_id1, key_id);
         assert_eq!(current_key1, key);
 
-        // Change rotateion period to a smaller value, must roate.
-        manager.rotation_period = Duration::from_millis(1);
+        // Change rotateion period to a smaller value, must rotate.
+        manager.dicts.write().unwrap().rotation_period = Duration::from_millis(1);
         sleep(Duration::from_secs(1));
-        manager.maybe_rotate_data_key();
+        manager
+            .dicts
+            .write()
+            .unwrap()
+            .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
+            .unwrap();
         let (current_key_id2, current_key2) = {
             let dicts = manager.dicts.read().unwrap();
             let (id, k) = dicts.current_data_key();
@@ -325,6 +338,17 @@ mod tests {
         };
         assert_ne!(current_key_id2, key_id);
         assert_ne!(current_key2, key);
+
+        // Sleep and must rotate when new a file.
+        sleep(Duration::from_secs(1));
+        manager.new_file("foo").unwrap();
+        let (current_key_id3, current_key3) = {
+            let dicts = manager.dicts.read().unwrap();
+            let (id, k) = dicts.current_data_key();
+            (id, k.clone())
+        };
+        assert_ne!(current_key_id3, current_key_id2);
+        assert_ne!(current_key3, current_key2);
     }
 
     #[test]
