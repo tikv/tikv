@@ -62,7 +62,7 @@ impl ProcessResult {
         match self {
             ProcessResult::MultiRes { results } => Some(ProcessResult::MultiRes {
                 results: results
-                    .into_iter()
+                    .iter()
                     .map(|e| match e {
                         Ok(_) => Ok(()),
                         Err(e) => match e.maybe_clone() {
@@ -77,7 +77,7 @@ impl ProcessResult {
                     Ok(v) => match v {
                         PessimisticLockRes::Values(values) => Ok(PessimisticLockRes::Values(
                             values
-                                .into_iter()
+                                .iter()
                                 .map(|it| match it {
                                     Some(v) => Some(v.to_vec()),
                                     None => None,

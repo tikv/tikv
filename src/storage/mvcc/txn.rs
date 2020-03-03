@@ -385,7 +385,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 if commit_ts < self.start_ts {
                     // Used pipelined pessimistic lock acquiring in this txn but failed
                     // Luckily no other txn modified this lock, amend it by overwriting.
-                    MVCC_CONFLICT_COUNTER.pipelined_acquire_pessimistic_lock_amend_update.inc();
+                    MVCC_CONFLICT_COUNTER
+                        .pipelined_acquire_pessimistic_lock_amend_update
+                        .inc();
                 } else {
                     warn!(
                         "prewrite failed (pessimistic lock not found)";
@@ -393,7 +395,9 @@ impl<S: Snapshot> MvccTxn<S> {
                         "commit_ts" => commit_ts,
                         "key" => %key
                     );
-                    MVCC_CONFLICT_COUNTER.pipelined_acquire_pessimistic_lock_false_success.inc();
+                    MVCC_CONFLICT_COUNTER
+                        .pipelined_acquire_pessimistic_lock_false_success
+                        .inc();
                     return Err(ErrorInner::PessimisticLockNotFound {
                         start_ts: self.start_ts,
                         key: key.into_raw()?,
@@ -402,7 +406,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             } else {
                 // Key not exists, amend it
-                MVCC_CONFLICT_COUNTER.pipelined_acquire_pessimistic_lock_amend_insert.inc();
+                MVCC_CONFLICT_COUNTER
+                    .pipelined_acquire_pessimistic_lock_amend_insert
+                    .inc();
             }
         }
 

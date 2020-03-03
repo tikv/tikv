@@ -1158,6 +1158,11 @@ impl<E: Engine> TestStorageBuilder<E> {
         self
     }
 
+    pub fn enable_pipelined_pessimistic_lock(mut self) -> Self {
+        self.pipelined_pessimistic_lock = true;
+        self
+    }
+
     pub fn enable_pessimistic_txn(mut self) -> Self {
         self.pessimistic_txn_enabled = true;
         self
@@ -4075,7 +4080,7 @@ mod tests {
 
     #[test]
     fn test_pipelined_pessimistic_lock() {
-        type PessimisticLockCommand = TypedCommand<Result<Option<(Option<Value>, TimeStamp)>>>;
+        type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
         fn new_acquire_pessimistic_lock_command(
             key: Key,
             start_ts: impl Into<TimeStamp>,
@@ -4177,8 +4182,11 @@ mod tests {
         storage
             .sched_txn_command(
                 new_acquire_pessimistic_lock_command(key, 30, 30, true),
-                Box::new(move |res: Result<Result<_>>| {
-                    assert_eq!(res.unwrap().unwrap(), Some((Some(val), TimeStamp::new(20))));
+                Box::new(move |res: Result<_>| {
+                    assert_eq!(
+                        res.unwrap().unwrap(),
+                        PessimisticLockRes::Values(vec![Some(val.clone())])
+                    );
                     tx.send(0).unwrap();
                 }),
             )
