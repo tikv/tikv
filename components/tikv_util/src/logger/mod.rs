@@ -228,7 +228,7 @@ where
         if let Err(e) = self.0.log(record, values) {
             let fatal_drainer = Mutex::new(term_drainer()).ignore_res();
             fatal_drainer.log(record, values).unwrap();
-            slog::Logger::root(fatal_drainer, slog_o!());
+            let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
             slog::slog_crit!(
                 fatal_logger,
                 "logger encountered error";
