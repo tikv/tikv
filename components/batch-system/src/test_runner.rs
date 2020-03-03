@@ -5,7 +5,9 @@
 use crate::*;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
+use std::thread::sleep;
 use tikv_util::mpsc;
+use tikv_util::time::Duration;
 
 /// Message `Runner` can accepts.
 pub enum Message {
@@ -70,6 +72,7 @@ pub struct Handler {
 
 impl Handler {
     fn handle(&mut self, r: &mut Runner) -> Option<usize> {
+        let mut batch_size = 0;
         for _ in 0..16 {
             match r.recv.try_recv() {
                 Ok(Message::Loop(count)) => {
@@ -78,11 +81,14 @@ impl Handler {
                         r.res *= count;
                         r.res %= count + 1;
                     }
+                    batch_size += count;
                 }
                 Ok(Message::Callback(cb)) => cb(r),
                 Err(_) => break,
             }
         }
+        // We assume that every key costs 10us on writing into memtable.
+        sleep(Duration::from_micros(batch_size as u64 * 10));
         Some(0)
     }
 }
@@ -106,6 +112,8 @@ impl PollHandler<Runner, Runner> for Handler {
         let mut c = self.metrics.lock().unwrap();
         *c += self.local;
         self.local = HandleMetrics::default();
+        // We assume that every write_batch cost 500us on writing wal on disk.
+        sleep(Duration::from_micros(500));
     }
 }
 
