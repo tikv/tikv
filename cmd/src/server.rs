@@ -425,6 +425,9 @@ impl TiKVServer {
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
+                self.config.server.split_qps_threshold,
+                self.config.server.split_score,
+
             ))
         } else {
             None
