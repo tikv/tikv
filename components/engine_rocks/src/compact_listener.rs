@@ -14,7 +14,7 @@ use tikv_util::collections::hash_set_with_capacity;
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 
 impl<'a> RocksCompactionJobInfo<'a> {
-    pub fn from_raw(raw: &RawCompactionJobInfo) -> RocksCompactionJobInfo {
+    pub fn from_raw(raw: &'a RawCompactionJobInfo) -> RocksCompactionJobInfo {
         RocksCompactionJobInfo(raw)
     }
 
@@ -23,7 +23,7 @@ impl<'a> RocksCompactionJobInfo<'a> {
     }
 }
 
-impl<'a> CompactionJobInfo for RocksCompactionJobInfo<'a> {
+impl CompactionJobInfo for RocksCompactionJobInfo<'_> {
     type TablePropertiesCollectionView = TablePropertiesCollectionView;
     type CompactionReason = CompactionReason;
 
