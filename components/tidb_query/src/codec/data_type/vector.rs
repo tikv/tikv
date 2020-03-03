@@ -351,6 +351,38 @@ impl VectorValue {
             }
         }
     }
+
+    pub fn encode_sort_key(
+        &self,
+        row_index: usize,
+        field_type: &FieldType,
+        ctx: &mut EvalContext,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        use crate::codec::collation::{match_template_collator, Collator};
+        use crate::codec::datum_codec::EvaluableDatumEncoder;
+        use tidb_query_datatype::Collation;
+
+        match self {
+            VectorValue::Bytes(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(ref val) => {
+                        let sort_key = match_template_collator! {
+                            TT, match field_type.collation()? {
+                                Collation::TT => TT::sort_key(val)?
+                            }
+                        };
+                        output.write_evaluable_datum_bytes(&sort_key)?;
+                    }
+                }
+                Ok(())
+            }
+            _ => self.encode(row_index, field_type, ctx, output),
+        }
+    }
 }
 
 macro_rules! impl_as_slice {

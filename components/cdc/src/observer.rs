@@ -39,6 +39,16 @@ impl CdcObserver {
         }
     }
 
+    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost) {
+        // 100 is the priority of the observer. CDC should have a high priority.
+        coprocessor_host
+            .registry
+            .register_cmd_observer(100, BoxCmdObserver::new(self.clone()));
+        coprocessor_host
+            .registry
+            .register_role_observer(100, BoxRoleObserver::new(self.clone()));
+    }
+
     /// Subscribe an region, the observer will sink events of the region into
     /// its scheduler.
     pub fn subscribe_region(&self, region_id: u64) {
