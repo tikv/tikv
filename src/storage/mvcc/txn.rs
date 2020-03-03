@@ -381,30 +381,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 last_lock_ttl = lock.ttl;
             }
         } else if is_pessimistic_lock {
-            fn pessimistic_lock(
-                primary: &[u8],
-                start_ts: TimeStamp,
-                lock_ttl: u64,
-                for_update_ts: TimeStamp,
-            ) -> Lock {
-                Lock::new(
-                    LockType::Pessimistic,
-                    primary.to_vec(),
-                    start_ts,
-                    lock_ttl,
-                    None,
-                    for_update_ts,
-                    0,
-                    TimeStamp::default(),
-                )
-            }
-
             if let Some((commit_ts, _)) = self.reader.seek_write(&key, TimeStamp::max())? {
                 if commit_ts < self.start_ts {
                     // Used pipelined pessimistic lock acquiring in this txn but failed
                     // Luckily no other txn modified this lock, amend it by overwriting.
-                    let lock = pessimistic_lock(primary, self.start_ts, lock_ttl, for_update_ts);
-                    self.put_lock(key.clone(), &lock);
                     MVCC_CONFLICT_COUNTER.pipelined_acquire_pessimistic_lock_amend_update.inc();
                 } else {
                     warn!(
@@ -421,8 +401,6 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             } else {
                 // Key not exists, amend it
-                let lock = pessimistic_lock(primary, self.start_ts, lock_ttl, for_update_ts);
-                self.put_lock(key.clone(), &lock);
                 MVCC_CONFLICT_COUNTER.pipelined_acquire_pessimistic_lock_amend_insert.inc();
             }
         }
