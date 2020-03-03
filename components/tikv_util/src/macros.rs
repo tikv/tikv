@@ -95,7 +95,7 @@ macro_rules! box_try {
 macro_rules! slow_log {
     ($t:expr, $($arg:tt)*) => {{
         if $t.is_slow() {
-            warn!($($arg)*; "takes" => ?$t.elapsed());
+            warn!(#"slow_log", $($arg)*; "takes" => ?$t.elapsed());
         }
     }}
 }

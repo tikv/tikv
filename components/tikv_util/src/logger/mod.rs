@@ -239,6 +239,34 @@ where
     }
 }
 
+/// Dispatches logs to a normal `Drain` or a slow-log specialized `Drain` by tag
+pub struct LogDispatcher<N: Drain, S: Drain> {
+    normal: N,
+    slow: S,
+}
+
+impl<N: Drain, S: Drain> LogDispatcher<N, S> {
+    pub fn new(normal: N, slow: S) -> Self {
+        Self { normal, slow }
+    }
+}
+
+impl<N, S> Drain for LogDispatcher<N, S>
+where
+    N: Drain<Ok = (), Err = io::Error>,
+    S: Drain<Ok = (), Err = io::Error>,
+{
+    type Ok = ();
+    type Err = io::Error;
+
+    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        match record.tag() {
+            "slow_log" => self.slow.log(record, values),
+            _ => self.normal.log(record, values),
+        }
+    }
+}
+
 /// Writes log header to decorator. See [log-header](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-header-section)
 fn write_log_header(decorator: &mut dyn RecordDecorator, record: &Record<'_>) -> io::Result<()> {
     decorator.start_timestamp()?;
@@ -359,6 +387,7 @@ impl<'a> slog::ser::Serializer for Serializer<'a> {
 mod tests {
     use super::*;
     use chrono::DateTime;
+    use regex::Regex;
     use slog::{slog_debug, slog_info, slog_warn};
     use slog_term::PlainSyncDecorator;
     use std::cell::RefCell;
@@ -384,7 +413,6 @@ mod tests {
 
     #[test]
     fn test_log_format() {
-        use regex::Regex;
         use std::time::Duration;
         let decorator = PlainSyncDecorator::new(TestWriter);
         let drain = TikvFormat::new(decorator).fuse();
@@ -571,5 +599,61 @@ mod tests {
         assert_eq!("INFO", get_unified_log_level(Level::Info));
         assert_eq!("DEBUG", get_unified_log_level(Level::Debug));
         assert_eq!("TRACE", get_unified_log_level(Level::Trace));
+    }
+
+    thread_local! {
+        static NORMAL_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+        static SLOW_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    }
+
+    struct NormalWriter;
+    impl Write for NormalWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            NORMAL_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            NORMAL_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
+    struct SlowLogWriter;
+    impl Write for SlowLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            SLOW_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            SLOW_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
+    #[test]
+    fn test_log_diverter() {
+        let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
+        let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
+        let drain = LogDispatcher::new(normal, slow).fuse();
+        let logger = slog::Logger::root_typed(drain, slog_o!());
+        let normal_expected = "Hello World!";
+        let slow_expected = "Hello Slow World!";
+        slog_info!(logger, "{}", normal_expected);
+        slog_info!(logger, #"slow_log", "{}", slow_expected);
+        let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
+        NORMAL_BUFFER.with(|buffer| {
+            let buffer = buffer.borrow_mut();
+            let output = from_utf8(&*buffer).unwrap();
+            let output_segments = re.captures(output).unwrap();
+            assert_eq!(
+                output_segments["msg"].to_owned(),
+                "[\"".to_owned() + normal_expected + "\"]"
+            );
+        });
+        SLOW_BUFFER.with(|buffer| {
+            let buffer = buffer.borrow_mut();
+            let output = from_utf8(&*buffer).unwrap();
+            let output_segments = re.captures(output).unwrap();
+            assert_eq!(
+                output_segments["msg"].to_owned(),
+                "[\"".to_owned() + slow_expected + "\"]"
+            );
+        });
     }
 }
