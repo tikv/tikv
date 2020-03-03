@@ -56,9 +56,11 @@ use super::metrics::*;
 
 use super::super::RegionTask;
 
-const WRITE_BATCH_MAX_KEYS: usize = 512;
-const DEFAULT_APPLY_WB_SIZE: usize = 128 * 1024;
-const APPLY_WB_SHRINK_SIZE: usize = 8 * 1024 * 1024;
+const WRITE_MAX_BATCH_SIZE: usize = 32;
+const WRITE_BATCH_MAX_COUNT: usize = 24;
+const WRITE_MAX_SINGLE_BATCH_SIZE: usize = 128;
+const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
@@ -290,7 +292,8 @@ struct ApplyContext {
     apply_res: Vec<ApplyRes>,
     exec_ctx: Option<ExecContext>,
 
-    kv_wb: Option<WriteBatch>,
+    kv_wbs: Vec<WriteBatch>,
+    cur_wb: usize,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
@@ -303,6 +306,7 @@ struct ApplyContext {
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+    enable_multi_batch_write: bool,
 }
 
 impl ApplyContext {
@@ -325,7 +329,8 @@ impl ApplyContext {
             engines,
             router,
             notifier,
-            kv_wb: None,
+            kv_wbs: vec![],
+            cur_wb: 0,
             cbs: MustConsumeVec::new("callback of apply context"),
             apply_res: vec![],
             kv_wb_last_bytes: 0,
@@ -336,6 +341,7 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
+            enable_multi_batch_write: cfg.enable_multi_batch_write,
         }
     }
 
@@ -345,8 +351,9 @@ impl ApplyContext {
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate) {
-        if self.kv_wb.is_none() {
-            self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+        if self.kv_wbs.is_empty() {
+            self.kv_wbs
+                .push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
@@ -371,7 +378,7 @@ impl ApplyContext {
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
         if self.last_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
+            delegate.write_apply_state(&self.engines, self.kv_wb());
         }
         // last_applied_index doesn't need to be updated, set persistent to true will
         // force it call `prepare_for` automatically.
@@ -384,34 +391,47 @@ impl ApplyContext {
             self.write_to_db();
             self.prepare_for(delegate);
         }
-        self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
-        self.kv_wb_last_keys = self.kv_wb().count() as u64;
+        self.kv_wb_last_bytes = self.wb_data_size() as u64;
+        self.kv_wb_last_keys = self.wb_count() as u64;
     }
 
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.enable_sync_log && self.sync_log_hint;
-        if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
+        if !self.kv_wbs.is_empty() && !self.kv_wb().is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.engines
-                .kv
-                .write_opt(self.kv_wb(), &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("failed to write to engine: {:?}", e);
-                });
-            self.sync_log_hint = false;
-            let data_size = self.kv_wb().data_size();
-            if data_size > APPLY_WB_SHRINK_SIZE {
-                // Control the memory usage for the WriteBatch.
-                self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            if self.cur_wb > 0 && self.enable_multi_batch_write {
+                self.engines
+                    .kv
+                    .multi_batch_write(&self.kv_wbs, &write_opts)
+                    .unwrap_or_else(|e| {
+                        panic!("failed to write to engine: {:?}", e);
+                    });
             } else {
-                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
-                self.kv_wb().clear();
+                self.engines
+                    .kv
+                    .write_opt(&self.kv_wbs[0], &write_opts)
+                    .unwrap_or_else(|e| {
+                        panic!("failed to write to engine: {:?}", e);
+                    });
             }
+            self.sync_log_hint = false;
+            for w in 0..self.cur_wb + 1 {
+                let data_size = self.kv_wbs[w].data_size();
+                if data_size > APPLY_WB_SHRINK_SIZE {
+                    // Control the memory usage for the WriteBatch.
+                    self.kv_wbs[w] = WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE);
+                } else {
+                    // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+                    self.kv_wbs[w].clear();
+                }
+            }
+
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
+            self.cur_wb = 0;
         }
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -422,7 +442,7 @@ impl ApplyContext {
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult>) {
         if !delegate.pending_remove {
-            delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
+            delegate.write_apply_state(&self.engines, self.kv_wb());
         }
         self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
@@ -434,22 +454,49 @@ impl ApplyContext {
         });
     }
 
+    pub fn is_write_batch_full(&self) -> bool {
+        if self.enable_multi_batch_write {
+            self.cur_wb > WRITE_BATCH_MAX_COUNT
+        } else {
+            self.kv_wbs[0].count() > WRITE_MAX_SINGLE_BATCH_SIZE
+        }
+    }
+
+    fn check_switch_write_batch(&mut self) {
+        if self.enable_multi_batch_write && self.kv_wbs[self.cur_wb].count() > WRITE_MAX_BATCH_SIZE
+        {
+            self.cur_wb += 1;
+            if self.cur_wb == self.kv_wbs.len() {
+                self.kv_wbs
+                    .push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            }
+        }
+    }
+
+    fn wb_data_size(&self) -> usize {
+        self.kv_wbs.iter().map(|w| w.data_size()).sum()
+    }
+
+    fn wb_count(&self) -> usize {
+        self.kv_wbs.iter().map(|w| w.count()).sum()
+    }
+
     pub fn delta_bytes(&self) -> u64 {
-        self.kv_wb().data_size() as u64 - self.kv_wb_last_bytes
+        self.wb_data_size() as u64 - self.kv_wb_last_bytes
     }
 
     pub fn delta_keys(&self) -> u64 {
-        self.kv_wb().count() as u64 - self.kv_wb_last_keys
+        self.wb_count() as u64 - self.kv_wb_last_keys
     }
 
     #[inline]
     pub fn kv_wb(&self) -> &WriteBatch {
-        self.kv_wb.as_ref().unwrap()
+        &self.kv_wbs[self.cur_wb]
     }
 
     #[inline]
     pub fn kv_kv_wb_mut(&mut self) -> &mut WriteBatch {
-        self.kv_wb.as_mut().unwrap()
+        &mut self.kv_wbs[self.cur_wb]
     }
 
     /// Flush all pending writes to engines.
@@ -530,7 +577,7 @@ pub fn notify_stale_req(term: u64, cb: Callback<RocksEngine>) {
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
+fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -540,12 +587,6 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
             AdminCmdType::RollbackMerge => return true,
             _ => {}
         }
-    }
-
-    // When write batch contains more than `recommended` keys, write the batch
-    // to engine.
-    if kv_wb_keys >= WRITE_BATCH_MAX_KEYS {
-        return true;
     }
 
     // Some commands may modify keys covered by the current write batch, so we
@@ -822,13 +863,14 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
+            if should_write_to_engine(&cmd) || apply_ctx.is_write_batch_full() {
                 apply_ctx.commit(self);
                 if self.written {
                     return ApplyResult::Yield;
                 }
                 self.written = true;
             }
+            apply_ctx.check_switch_write_batch();
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
@@ -1607,7 +1649,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        let kv_wb_mut = ctx.kv_wb();
         if let Err(e) = write_peer_state(&ctx.engines.kv, kv_wb_mut, &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
@@ -1717,7 +1759,7 @@ impl ApplyDelegate {
             regions.push(derived.clone());
         }
         let kv = &ctx.engines.kv;
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        let kv_wb_mut = ctx.kv_wb();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
             // TODO: check new region id validation.
@@ -1801,7 +1843,7 @@ impl ApplyDelegate {
         merging_state.set_commit(exec_ctx.index);
         write_peer_state(
             &ctx.engines.kv,
-            ctx.kv_wb.as_mut().unwrap(),
+            ctx.kv_wb(),
             &region,
             PeerState::Merging,
             Some(merging_state.clone()),
@@ -1942,7 +1984,7 @@ impl ApplyDelegate {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
         let kv = &ctx.engines.kv;
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        let kv_wb_mut = ctx.kv_wb();
         write_peer_state(kv, kv_wb_mut, &region, PeerState::Normal, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
@@ -2003,7 +2045,7 @@ impl ApplyDelegate {
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
         let kv = &ctx.engines.kv;
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        let kv_wb_mut = ctx.kv_wb();
         write_peer_state(kv, kv_wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
                 "{} failed to rollback merge {:?}: {:?}",
@@ -2671,8 +2713,10 @@ impl ApplyFsm {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(SlowTimer::new());
             }
-            if apply_ctx.kv_wb.is_none() {
-                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            if apply_ctx.kv_wbs.is_empty() {
+                apply_ctx
+                    .kv_wbs
+                    .push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
             }
             self.delegate
                 .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
@@ -2740,7 +2784,7 @@ impl ApplyFsm {
         ) {
             Ok(()) => {
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
-                if apply_ctx.kv_wb.is_some() && apply_ctx.kv_wb().count() > 0 {
+                if !apply_ctx.kv_wbs.is_empty() && apply_ctx.kv_wb().count() > 0 {
                     apply_ctx.commit(&mut self.delegate);
                 }
                 ReadResponse {
@@ -3113,9 +3157,8 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine::rocks::Writable;
     use engine::Peekable;
-    use engine::{WriteBatch, DB};
+    use engine::DB;
     use engine_rocks::RocksEngine;
     use engine_traits::Peekable as PeekableTrait;
     use kvproto::metapb::{self, RegionEpoch};
@@ -3172,8 +3215,7 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        let wb = WriteBatch::default();
-        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine(&req), true);
 
         // IngestSst command
         let mut req = Request::default();
@@ -3181,26 +3223,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        let wb = WriteBatch::default();
-        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
-
-        // Write batch keys reach WRITE_BATCH_MAX_KEYS
-        let req = RaftCmdRequest::default();
-        let wb = WriteBatch::default();
-        for i in 0..WRITE_BATCH_MAX_KEYS {
-            let key = format!("key_{}", i);
-            wb.put(key.as_bytes(), b"value").unwrap();
-        }
-        assert_eq!(should_write_to_engine(&req, wb.count()), true);
-
-        // Write batch keys not reach WRITE_BATCH_MAX_KEYS
-        let req = RaftCmdRequest::default();
-        let wb = WriteBatch::default();
-        for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
-            let key = format!("key_{}", i);
-            wb.put(key.as_bytes(), b"value").unwrap();
-        }
-        assert_eq!(should_write_to_engine(&req, wb.count()), false);
+        assert_eq!(should_write_to_engine(&cmd), true);
     }
 
     fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
@@ -3840,7 +3863,7 @@ mod tests {
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
         let mut entries = vec![];
-        for i in 0..WRITE_BATCH_MAX_KEYS {
+        for i in 0..WRITE_MAX_BATCH_SIZE {
             let put_entry = EntryBuilder::new(i as u64 + 12, 3)
                 .put(b"k", b"v")
                 .epoch(1, 3)
@@ -3849,10 +3872,10 @@ mod tests {
             entries.push(put_entry);
         }
         router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries)));
-        for _ in 0..WRITE_BATCH_MAX_KEYS {
+        for _ in 0..WRITE_MAX_BATCH_SIZE {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
-        let index = WRITE_BATCH_MAX_KEYS + 11;
+        let index = WRITE_MAX_BATCH_SIZE + 11;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
