@@ -1,10 +1,92 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
+use std::path::Path;
 
 use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
-use engine::rocks::{CompactionJobInfo, EventListener};
+use engine::rocks::EventListener;
+use engine_traits::CompactionJobInfo;
+use rocksdb::{
+    CompactionJobInfo as RawCompactionJobInfo, CompactionReason, TablePropertiesCollectionView,
+};
 use tikv_util::collections::hash_set_with_capacity;
+
+pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
+
+impl<'a> RocksCompactionJobInfo<'a> {
+    pub fn from_raw(raw: &RawCompactionJobInfo) -> RocksCompactionJobInfo {
+        RocksCompactionJobInfo(raw)
+    }
+
+    pub fn into_raw(self) -> &'a RawCompactionJobInfo {
+        self.0
+    }
+}
+
+impl<'a> CompactionJobInfo for RocksCompactionJobInfo<'a> {
+    type TablePropertiesCollectionView = TablePropertiesCollectionView;
+    type CompactionReason = CompactionReason;
+
+    fn status(&self) -> Result<(), String> {
+        self.0.status()
+    }
+
+    fn cf_name(&self) -> &str {
+        self.0.cf_name()
+    }
+
+    fn input_file_count(&self) -> usize {
+        self.0.input_file_count()
+    }
+
+    fn input_file_at(&self, pos: usize) -> &Path {
+        self.0.input_file_at(pos)
+    }
+
+    fn output_file_count(&self) -> usize {
+        self.0.output_file_count()
+    }
+
+    fn output_file_at(&self, pos: usize) -> &Path {
+        self.0.output_file_at(pos)
+    }
+
+    fn table_properties(&self) -> &Self::TablePropertiesCollectionView {
+        self.0.table_properties()
+    }
+
+    fn elapsed_micros(&self) -> u64 {
+        self.0.elapsed_micros()
+    }
+
+    fn num_corrupt_keys(&self) -> u64 {
+        self.0.num_corrupt_keys()
+    }
+
+    fn output_level(&self) -> i32 {
+        self.0.output_level()
+    }
+
+    fn input_records(&self) -> u64 {
+        self.0.input_records()
+    }
+
+    fn output_records(&self) -> u64 {
+        self.0.output_records()
+    }
+
+    fn total_input_bytes(&self) -> u64 {
+        self.0.total_input_bytes()
+    }
+
+    fn total_output_bytes(&self) -> u64 {
+        self.0.total_output_bytes()
+    }
+
+    fn compaction_reason(&self) -> Self::CompactionReason {
+        self.0.compaction_reason()
+    }
+}
 
 pub struct CompactedEvent {
     pub cf: String,
@@ -19,7 +101,7 @@ pub struct CompactedEvent {
 
 impl CompactedEvent {
     pub fn new(
-        info: &CompactionJobInfo,
+        info: &RocksCompactionJobInfo,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         input_props: Vec<RangeProperties>,
@@ -38,7 +120,7 @@ impl CompactedEvent {
     }
 }
 
-pub type Filter = fn(&CompactionJobInfo) -> bool;
+pub type Filter = fn(&RocksCompactionJobInfo) -> bool;
 
 pub struct CompactionListener {
     ch: Box<dyn Fn(CompactedEvent) + Send + Sync>,
@@ -55,7 +137,8 @@ impl CompactionListener {
 }
 
 impl EventListener for CompactionListener {
-    fn on_compaction_completed(&self, info: &CompactionJobInfo) {
+    fn on_compaction_completed(&self, info: &RawCompactionJobInfo) {
+        let info = &RocksCompactionJobInfo::from_raw(info);
         if info.status().is_err() {
             return;
         }
