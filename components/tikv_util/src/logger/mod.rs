@@ -228,7 +228,7 @@ where
         if let Err(e) = self.0.log(record, values) {
             let fatal_drainer = Mutex::new(term_drainer()).ignore_res();
             fatal_drainer.log(record, values).unwrap();
-            let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
+            slog::Logger::root(fatal_drainer, slog_o!());
             slog::slog_crit!(
                 fatal_logger,
                 "logger encountered error";
@@ -328,7 +328,7 @@ impl<'a> Drop for Serializer<'a> {
     fn drop(&mut self) {}
 }
 
-impl<'a> slog::ser::Serializer for Serializer<'a> {
+impl<'a> slog::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         self.emit_arguments(key, &format_args!("None"))
     }
