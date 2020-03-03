@@ -3,6 +3,7 @@
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
 use engine::*;
+use engine_traits::CF_RAFT;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;

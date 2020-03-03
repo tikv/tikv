@@ -111,6 +111,7 @@ impl ScalarFunc {
             | ScalarFuncSig::DateFormatSig
             | ScalarFuncSig::Sha2
             | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::TruncateUint
             | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::TruncateReal
@@ -133,7 +134,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Instr
             | ScalarFuncSig::Locate2ArgsUtf8
             | ScalarFuncSig::InstrUtf8
-            | ScalarFuncSig::Locate2Args => (2, 2),
+            | ScalarFuncSig::Locate2Args
+            | ScalarFuncSig::FindInSet => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -392,8 +394,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Pi => (0, 0),
 
             // unimplemented signature
-            ScalarFuncSig::TruncateUint
-            | ScalarFuncSig::AesDecryptIv
+            ScalarFuncSig::AesDecryptIv
             | ScalarFuncSig::AesEncryptIv
             | ScalarFuncSig::Encode
             | ScalarFuncSig::Decode
@@ -445,7 +446,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ExportSet5Arg
             | ScalarFuncSig::ExtractDatetime
             | ScalarFuncSig::ExtractDuration
-            | ScalarFuncSig::FindInSet
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
             | ScalarFuncSig::FoundRows
@@ -828,6 +828,8 @@ dispatch_call! {
         RoundWithFracInt => round_with_frac_int,
 
         TruncateInt => truncate_int,
+        TruncateUint => truncate_uint,
+
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -874,6 +876,7 @@ dispatch_call! {
         Ord => ord,
         InstrUtf8 => instr_utf8,
         JsonDepthSig => json_depth,
+        FindInSet => find_in_set,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1221,6 +1224,7 @@ mod tests {
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::TruncateInt,
+                    ScalarFuncSig::TruncateUint,
                     ScalarFuncSig::TruncateReal,
                     ScalarFuncSig::TruncateDecimal,
                     ScalarFuncSig::Atan2Args,
@@ -1246,6 +1250,7 @@ mod tests {
                     ScalarFuncSig::PeriodDiff,
                     ScalarFuncSig::Locate2ArgsUtf8,
                     ScalarFuncSig::Locate2Args,
+                    ScalarFuncSig::FindInSet,
                 ],
                 2,
                 2,
@@ -1547,7 +1552,6 @@ mod tests {
 
         // unimplemented signature
         let cases = vec![
-            ScalarFuncSig::TruncateUint,
             ScalarFuncSig::AesDecryptIv,
             ScalarFuncSig::AesEncryptIv,
             ScalarFuncSig::Encode,
@@ -1600,7 +1604,6 @@ mod tests {
             ScalarFuncSig::ExportSet5Arg,
             ScalarFuncSig::ExtractDatetime,
             ScalarFuncSig::ExtractDuration,
-            ScalarFuncSig::FindInSet,
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
             ScalarFuncSig::FoundRows,

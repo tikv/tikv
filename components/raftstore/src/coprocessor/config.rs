@@ -3,7 +3,7 @@
 use super::Result;
 use crate::store::SplitCheckTask;
 
-use configuration::{ConfigChange, ConfigManager, Configuration};
+use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
 use tikv_util::config::ReadableSize;
 use tikv_util::worker::Scheduler;
 
@@ -55,19 +55,30 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        self.validate_or_rollback(None)
+    }
+
+    pub fn validate_or_rollback(
+        &self,
+        mut rb_collector: Option<RollbackCollector<Config>>,
+    ) -> Result<()> {
         if self.region_max_size.0 < self.region_split_size.0 {
-            return Err(box_err!(
-                "region max size {} must >= split size {}",
-                self.region_max_size.0,
-                self.region_split_size.0
-            ));
+            rollback_or!(rb_collector, region_max_size, region_split_size, {
+                Err(box_err!(
+                    "region max size {} must >= split size {}",
+                    self.region_max_size.0,
+                    self.region_split_size.0
+                ))
+            })
         }
         if self.region_max_keys < self.region_split_keys {
-            return Err(box_err!(
-                "region max keys {} must >= split keys {}",
-                self.region_max_keys,
-                self.region_split_keys
-            ));
+            rollback_or!(rb_collector, region_max_keys, region_split_keys, {
+                Err(box_err!(
+                    "region max keys {} must >= split keys {}",
+                    self.region_max_keys,
+                    self.region_split_keys
+                ))
+            })
         }
         Ok(())
     }
