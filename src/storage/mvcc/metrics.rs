@@ -11,6 +11,7 @@ make_static_metric! {
         acquire_pessimistic_lock_conflict,
         pipelined_acquire_pessimistic_lock_amend_update,
         pipelined_acquire_pessimistic_lock_amend_insert,
+        pipelined_acquire_pessimistic_lock_false_success,
     }
 
     pub label_enum MvccDuplicateCommandKind {

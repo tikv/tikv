@@ -393,6 +393,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         "commit_ts" => commit_ts,
                         "key" => %key
                     );
+                    MVCC_CONFLICT_COUNTER.pipelined_acquire_pessimistic_lock_false_success.inc();
                     return Err(ErrorInner::PessimisticLockNotFound {
                         start_ts: self.start_ts,
                         key: key.into_raw()?,
