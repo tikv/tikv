@@ -89,6 +89,8 @@ impl Writer {
         file.set_crc64xor(self.checksum);
         file.set_total_kvs(self.total_kvs);
         file.set_total_bytes(self.total_bytes);
+        file.set_cf(cf.to_owned());
+        file.set_size(sst_info.file_size());
         Ok(file)
     }
 
