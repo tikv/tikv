@@ -77,14 +77,14 @@ impl Dicts {
         )
     }
 
-    fn get_file(&self, file_path: &str) -> Result<&FileInfo> {
-        let file = self.file_dict.files.get(file_path).ok_or_else(|| {
-            Error::Io(IoError::new(
-                ErrorKind::NotFound,
-                format!("file is not found, {}", file_path),
-            ))
-        })?;
-        Ok(file)
+    fn get_file(&mut self, file_path: &str) -> &FileInfo {
+        if self.file_dict.files.get(file_path).is_none() {
+            // Return Plaintext if file not found
+            let mut file = FileInfo::default();
+            file.method = EncryptionMethod::Plaintext;
+            self.file_dict.files.insert(file_path.to_owned(), file);
+        }
+        self.file_dict.files.get(file_path).unwrap()
     }
 
     fn new_file(
@@ -227,17 +227,29 @@ impl DataKeyManager {
 impl EncryptionKeyManager for DataKeyManager {
     // Get key to open existing file.
     fn get_file(&self, file_path: &str) -> IoResult<FileEncryptionInfo> {
-        let dicts = self.dicts.read().unwrap();
-        // TODO Should we return error if file is not found?
-        // TODO Should we use Plaintext if key not found?
-        let file = dicts.get_file(file_path)?;
-        let key_id = file.key_id;
-        let data_key = dicts.get_key(key_id);
-        let key = data_key.map(|k| k.key.clone()).unwrap_or_else(|| vec![]);
+        let mut dicts = self.dicts.write().unwrap();
+        let (method, key_id, iv) = {
+            let file = dicts.get_file(file_path);
+            (file.method, file.key_id, file.iv.to_owned())
+        };
+        // Fail if key is specified but not found.
+        let key = if method == EncryptionMethod::Plaintext {
+            vec![]
+        } else {
+            match dicts.get_key(key_id) {
+                Some(k) => k.key.clone(),
+                None => {
+                    return Err(IoError::new(
+                        ErrorKind::Other,
+                        format!("key not found for id {}", key_id),
+                    ));
+                }
+            }
+        };
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: encryption_method_to_db_encryption_method(file.method),
-            iv: file.get_iv().to_owned(),
+            method: encryption_method_to_db_encryption_method(method),
+            iv,
         };
         Ok(encrypted_file)
     }
@@ -270,6 +282,7 @@ impl EncryptionKeyManager for DataKeyManager {
 mod tests {
     use super::*;
 
+    use rocksdb::DBEncryptionMethod;
     use std::thread::sleep;
 
     fn new_tmp_key_manager(temp: Option<tempfile::TempDir>) -> (tempfile::TempDir, DataKeyManager) {
@@ -293,8 +306,25 @@ mod tests {
         let get_file = manager.get_file("foo").unwrap();
         assert_eq!(new_file, get_file);
         manager.delete_file("foo").unwrap();
-        manager.get_file("foo").unwrap_err();
+        manager.delete_file("foo").unwrap_err();
         manager.delete_file("foo1").unwrap_err();
+
+        // Must be plaintext if file not found.
+        let file = manager.get_file("foo").unwrap();
+        assert_eq!(file.method, DBEncryptionMethod::Plaintext);
+
+        // Must fail if key is specified but not found.
+        let mut file = FileInfo::default();
+        file.method = EncryptionMethod::Aes192Ctr;
+        file.key_id = 7; // Not exists.
+        manager
+            .dicts
+            .write()
+            .unwrap()
+            .file_dict
+            .files
+            .insert("foo".to_owned(), file);
+        manager.get_file("foo").unwrap_err();
     }
 
     #[test]
