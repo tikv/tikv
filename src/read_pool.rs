@@ -253,6 +253,8 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
     engine: E,
+    qps_threshold:u32,
+    split_score:f64,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
 
@@ -275,17 +277,14 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .name("collect-qps".to_owned())
         .spawn(move || {
             let mut unify_hub = cop_m::Hub::new();
-            let mut last_tick = Instant::now_coarse();
-            const TICK_INTERVAL: Duration = Duration::from_secs(1);
+            unify_hub.qps_threshold=qps_threshold;
+            unify_hub.split_score=split_score;
             loop {
+                std::thread::sleep(Duration::from_secs(1));
                 while let Ok(mut other_hub) = rx.try_recv() {
                     unify_hub.update(&mut other_hub);
                 }
-                let now = Instant::now_coarse();
-                if now.duration_since(last_tick) < TICK_INTERVAL {
-                    continue;
-                }
-                last_tick = now;
+
                 let (top, split_infos) = unify_hub.flush();
                 reporter2.split(split_infos);
                 for i in 0..cop_m::TOP_N {
@@ -388,7 +387,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine);
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine,100,0.25);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
