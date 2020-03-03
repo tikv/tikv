@@ -55,7 +55,6 @@ use tikv_util::MustConsumeVec;
 use super::metrics::*;
 
 use super::super::RegionTask;
-use prometheus::local::LocalHistogramVec;
 
 const WRITE_MAX_BATCH_SIZE: usize = 32;
 const WRITE_BATCH_MAX_COUNT: usize = 24;
@@ -2982,7 +2981,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     }
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
-        self.apply_ctx.perf_metric.flush();
+        self.apply_ctx.perf_statistic.flush();
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {

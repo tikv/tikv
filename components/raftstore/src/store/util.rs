@@ -631,12 +631,14 @@ impl<
 }
 
 pub struct PerfStatisticsWrite {
-    pub start_time: Instant,
-    pub wal_time: u64,
-    pub write_pre_and_post_process_time: u64,
-    pub memtable_time: u64,
-    pub perf_level: i32,
-    pub metric: LocalHistogramVec,
+    metric: LocalHistogramVec,
+    start_time: Instant,
+    wal_time: u64,
+    write_pre_and_post_process_time: u64,
+    memtable_time: u64,
+    wait_mutex_time: u64,
+    write_thread_wait_time: u64,
+    perf_level: i32,
 }
 
 
@@ -649,6 +651,8 @@ impl PerfStatisticsWrite {
             wal_time: 0,
             memtable_time: 0,
             write_pre_and_post_process_time: 0,
+            wait_mutex_time: 0,
+            write_thread_wait_time: 0,
             perf_level: 2,
         }
     }
@@ -660,7 +664,8 @@ impl PerfStatisticsWrite {
             1 => PerfLevel::Disable,
             2 => PerfLevel::EnableCount,
             3 => PerfLevel::EnableTimeExceptForMutex,
-            4 => PerfLevel::EnableTime,
+            4 => PerfLevel::EnableTimeAndCPUTimeExceptForMutex,
+            5 => PerfLevel::EnableTime,
             _ => PerfLevel::OutOfBounds,
         };
         set_perf_level(perf_level);
@@ -669,6 +674,8 @@ impl PerfStatisticsWrite {
         self.wal_time = 0;
         self.memtable_time = 0;
         self.write_pre_and_post_process_time = 0;
+        self.wait_mutex_time = 0;
+        self.write_thread_wait_time = 0;
     }
 
     pub fn observe(&mut self) {
@@ -679,6 +686,9 @@ impl PerfStatisticsWrite {
         let wal_time = perf_context.write_wal_time();
         let pre_time = perf_context.write_pre_and_post_process_time();
         let memtable_time = perf_context.write_memtable_time();
+        let write_wait = perf_context.write_thread_wait_nanos();
+        let wait_mutex = perf_context.db_mutex_lock_nanos();
+
         self.metric
             .with_label_values(&["write_wal"])
             .observe((wal_time - self.wal_time) as f64 / 1000000.0);
@@ -689,11 +699,20 @@ impl PerfStatisticsWrite {
             .with_label_values(&["write_pre_and_post_process"])
             .observe((pre_time - self.write_pre_and_post_process_time) as f64 / 1000000.0);
         self.metric
+            .with_label_values(&["write_thread_wait"])
+            .observe((write_wait - self.write_thread_wait_time) as f64 / 1_000_000_000.0);
+        self.metric
+            .with_label_values(&["wait_mutex"])
+            .observe((wait_mutex - self.wait_mutex_time) as f64 / 1_000_000_000.0);
+        self.metric
             .with_label_values(&["observe_time"])
             .observe(self.start_time.elapsed_secs());
+
         self.wal_time = wal_time;
         self.memtable_time = memtable_time;
         self.write_pre_and_post_process_time = pre_time;
+        self.write_thread_wait_time = write_wait;
+        self.wait_mutex_time = wait_mutex;
         self.start_time = Instant::now();
     }
 
