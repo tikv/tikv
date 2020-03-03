@@ -544,6 +544,7 @@ fn test_serde_custom_tikv_config() {
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
         enable_compaction_filter: true,
+        traditional_gc_cron: "8 8 8 * * * *".to_owned(),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

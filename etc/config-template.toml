@@ -784,3 +784,5 @@
 
 ## Enable GC by compaction filter or not.
 # enable-compaction-filter = false
+## Scheduling traditional GC tasks if compaction filter is enabled.
+# traditional-gc-cron = "0 0 3 * * * *"

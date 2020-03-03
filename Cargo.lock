@@ -412,7 +412,7 @@ version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5d1b4d380e1bab994591a24c2bdd1b054f64b60bef483a8c598c7c345bc3bbe"
 dependencies = [
- "error-chain",
+ "error-chain 0.12.1",
  "semver",
  "serde",
  "serde_derive",
@@ -770,6 +770,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cron"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab2c162d8a208293b4a4e126db1211571ee4990dbfa6f7fdacc267486849dab8"
+dependencies = [
+ "chrono",
+ "error-chain 0.10.0",
+ "nom 2.1.0",
+]
+
+[[package]]
 name = "crossbeam"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1066,6 +1077,15 @@ dependencies = [
  "log",
  "regex",
  "termcolor",
+]
+
+[[package]]
+name = "error-chain"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9435d864e017c3c6afeac1654189b06cdb491cf2ff73dbf0d73b0f292f42ff8"
+dependencies = [
+ "backtrace",
 ]
 
 [[package]]
@@ -1453,7 +1473,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20a3fc5818b1223ec628fc6998c8900486208b577f78c07500d4b52f983ebc9d"
 dependencies = [
- "error-chain",
+ "error-chain 0.12.1",
  "lazy_static",
  "pkg-config",
 ]
@@ -2238,9 +2258,9 @@ checksum = "2f9667ddcc6cc8a43afc9b7917599d7216aa09c463919ea32c59ed6cac8bc945"
 
 [[package]]
 name = "nom"
-version = "2.2.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf51a729ecf40266a2368ad335a5fdde43471f545a967109cd62146ecf8b66ff"
+checksum = "e5d4598834859fedb9a0a69d5b862a970e77982a92f544d547257a4d49469067"
 
 [[package]]
 name = "nom"
@@ -2700,7 +2720,7 @@ source = "git+https://github.com/tikv/procinfo-rs?rev=5125fc1a69496b73b26b3c08b6
 dependencies = [
  "byteorder",
  "libc",
- "nom 2.2.1",
+ "nom 2.1.0",
  "rustc_version",
 ]
 
@@ -2923,7 +2943,7 @@ version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9bf259a81de2b2eb9850ec990ec78e6a25319715584fd7652b9b26f96fcb1510"
 dependencies = [
- "error-chain",
+ "error-chain 0.12.1",
  "idna 0.2.0",
  "lazy_static",
  "regex",
@@ -4319,6 +4339,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crc64fast",
+ "cron",
  "crossbeam",
  "derive_more",
  "engine",

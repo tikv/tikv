@@ -756,7 +756,13 @@ impl<E: Engine> GcWorker<E> {
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
-        let new_handle = GcManager::new(cfg, safe_point, self.worker_scheduler.clone()).start()?;
+        let new_handle = GcManager::new(
+            cfg,
+            safe_point,
+            self.config_manager.clone(),
+            self.worker_scheduler.clone(),
+        )
+        .start()?;
         *handle = Some(new_handle);
         Ok(())
     }

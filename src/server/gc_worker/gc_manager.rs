@@ -1,14 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use chrono::offset::Local;
+use chrono::DateTime;
+use cron::Schedule;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
 use std::cmp::Ordering;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tikv_util::worker::FutureScheduler;
 use txn_types::{Key, TimeStamp};
 
@@ -17,7 +21,7 @@ use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
-use super::Result;
+use super::{GcWorkerConfigManager, Result};
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
 
@@ -234,6 +238,8 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     /// updated, `GCManager` will start to do GC on all regions.
     safe_point: Arc<AtomicU64>,
 
+    worker_cfg: GcWorkerConfigManager,
+
     safe_point_last_check_time: Instant,
 
     /// Used to schedule `GcTask`s.
@@ -241,20 +247,31 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
 
     /// Holds the running status. It will tell us if `GcManager` should stop working and exit.
     gc_manager_ctx: GcManagerContext,
+
+    // Scheduling traditional GC if compaction filter is enabled.
+    cron_expr: String,
+    next_round: Option<DateTime<Local>>,
+    schedule: Option<Schedule>,
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     pub fn new(
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
+        worker_cfg: GcWorkerConfigManager,
         worker_scheduler: FutureScheduler<GcTask>,
     ) -> GcManager<S, R> {
+        let cron_expr = worker_cfg.value().traditional_gc_cron.clone();
         GcManager {
             cfg,
             safe_point,
+            worker_cfg,
             safe_point_last_check_time: Instant::now(),
             worker_scheduler,
             gc_manager_ctx: GcManagerContext::new(),
+            cron_expr,
+            next_round: None,
+            schedule: None,
         }
     }
 
@@ -266,6 +283,42 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     fn save_safe_point(&self, ts: TimeStamp) {
         self.safe_point
             .store(ts.into_inner(), AtomicOrdering::Relaxed);
+    }
+
+    // Check it's necessary to run a round of GC or not.
+    fn need_gc_beside_compaction_filter(&mut self) -> bool {
+        let worker_cfg = self.worker_cfg.value();
+        if !worker_cfg.enable_compaction_filter {
+            // Run traditional GC if compaction filter is disabled.
+            return true;
+        }
+
+        if self.cron_expr != worker_cfg.traditional_gc_cron {
+            // Cron expression has been changed.
+            self.cron_expr = worker_cfg.traditional_gc_cron.clone();
+            self.schedule = None;
+            self.next_round = None;
+        }
+
+        if self.next_round.is_none() {
+            let expr = &self.cron_expr;
+            let s = self
+                .schedule
+                .get_or_insert_with(|| Schedule::from_str(expr).unwrap());
+            self.next_round = s.upcoming(Local).next();
+        }
+        match self.next_round.take() {
+            Some(round) => {
+                let now = DateTime::<Local>::from(SystemTime::now());
+                if round <= now {
+                    true
+                } else {
+                    self.next_round = Some(round);
+                    false
+                }
+            }
+            None => false,
+        }
     }
 
     /// Starts working in another thread. This function moves the `GcManager` and returns a handler
@@ -309,11 +362,12 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             set_status_metrics(GcManagerState::Idle);
             self.wait_for_next_safe_point()?;
 
-            set_status_metrics(GcManagerState::Working);
-            self.gc_a_round()?;
-
-            if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
-                on_finished();
+            if self.need_gc_beside_compaction_filter() {
+                set_status_metrics(GcManagerState::Working);
+                self.gc_a_round()?;
+                if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
+                    on_finished();
+                }
             }
         }
     }
@@ -709,7 +763,12 @@ mod tests {
             cfg.poll_safe_point_interval = Duration::from_millis(100);
             cfg.always_check_safe_point = true;
 
-            let gc_manager = GcManager::new(cfg, Arc::new(AtomicU64::new(0)), worker.scheduler());
+            let gc_manager = GcManager::new(
+                cfg,
+                Arc::new(AtomicU64::new(0)),
+                GcWorkerConfigManager::default(),
+                worker.scheduler(),
+            );
             Self {
                 gc_manager: Some(gc_manager),
                 worker,
@@ -952,5 +1011,25 @@ mod tests {
                 ],
             );
         }
+    }
+
+    #[test]
+    fn test_gc_cron() {
+        let mut test_util = GcManagerTestUtil::new(BTreeMap::new());
+        let mut m = test_util.gc_manager.take().unwrap();
+        m.worker_cfg
+            .update(|cfg| cfg.enable_compaction_filter = true);
+
+        m.worker_cfg
+            .update(|cfg| cfg.traditional_gc_cron = "* * * * * * *".to_owned());
+        assert!(!m.need_gc_beside_compaction_filter());
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(m.need_gc_beside_compaction_filter());
+
+        m.worker_cfg
+            .update(|cfg| cfg.traditional_gc_cron = "* * * * * * 2018".to_owned());
+        assert!(!m.need_gc_beside_compaction_filter());
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(!m.need_gc_beside_compaction_filter());
     }
 }
