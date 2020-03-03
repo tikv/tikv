@@ -447,6 +447,7 @@ dependencies = [
  "futures 0.1.29",
  "grpcio",
  "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
+ "panic_hook",
  "pd_client",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
  "raftstore",
@@ -4307,8 +4308,6 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
  "failure",
- "num-derive",
- "num-traits",
  "tikv_alloc",
  "tipb",
 ]

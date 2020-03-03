@@ -22,7 +22,8 @@ use kvproto::raft_cmdpb::{
     StatusResponse,
 };
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+    ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
+    RegionLocalState,
 };
 use pd_client::PdClient;
 use protobuf::Message;
@@ -38,7 +39,7 @@ use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangePeer, ExecResult,
+    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
     RegionProposal,
 };
 use crate::store::metrics::*;
@@ -359,6 +360,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
+            CasualMessage::CaptureChange { cmd, callback } => self.on_capture_change(cmd, callback),
             CasualMessage::Test(cb) => cb(self.fsm),
         }
     }
@@ -392,6 +394,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        // Apply committed entries more quickly.
+        if self.fsm.peer.raft_group.get_store().committed_index()
+            > self.fsm.peer.raft_group.get_store().applied_index()
+        {
+            self.fsm.has_ready = true;
+        }
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -479,6 +487,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
         self.register_split_region_check_tick();
+    }
+
+    fn on_capture_change(&mut self, cmd: ChangeCmd, cb: Callback<RocksEngine>) {
+        if !self.fsm.peer.is_leader() {
+            cb.invoke_with_response(new_error(Error::NotLeader(
+                self.region_id(),
+                self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
+            )));
+            return;
+        }
+        self.ctx
+            .apply_router
+            .schedule_task(self.region_id(), ApplyTask::Change { cmd, cb })
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
@@ -809,7 +830,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_extra_msg() {
-            // now noop
+            self.on_extra_message(&msg);
             return Ok(());
         }
 
@@ -845,16 +866,31 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
-            self.register_raft_base_tick();
+            self.fsm.peer.should_wake_up = true;
+        }
+
+        if self.fsm.peer.should_wake_up {
+            self.reset_raft_tick(GroupState::Ordered);
         }
 
         self.fsm.has_ready = true;
         Ok(())
     }
 
+    fn on_extra_message(&mut self, msg: &RaftMessage) {
+        let extra_msg = msg.get_extra_msg();
+        match extra_msg.get_type() {
+            ExtraMessageType::MsgRegionWakeUp => {
+                self.reset_raft_tick(GroupState::Ordered);
+            }
+            ExtraMessageType::MsgWantRollbackMerge => (),
+        }
+    }
+
     fn reset_raft_tick(&mut self, state: GroupState) {
         self.fsm.group_state = state;
         self.fsm.missing_ticks = 0;
+        self.fsm.peer.should_wake_up = false;
         self.register_raft_base_tick();
     }
 
@@ -2318,8 +2354,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         bind_term(&mut resp, term);
         if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
             self.fsm.has_ready = true;
-            self.fsm.group_state = GroupState::Ordered;
-            self.register_raft_base_tick();
+        }
+
+        if self.fsm.peer.should_wake_up {
+            self.reset_raft_tick(GroupState::Ordered);
         }
 
         self.register_pd_heartbeat_tick();

@@ -25,12 +25,28 @@ use txn_types::TimeStamp;
 
 use cdc::{CdcObserver, Task};
 
+static INIT: Once = Once::new();
+
 pub fn init() {
-    use std::sync::*;
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        test_util::setup_for_ci();
+    INIT.call_once(test_util::setup_for_ci);
+}
+
+fn setup_fail<'a>() -> fail::FailScenario<'a> {
+    INIT.call_once(test_util::setup_for_ci);
+    fail::FailScenario::setup()
+}
+
+#[test]
+fn test_setup_fail() {
+    let _ = std::thread::spawn(move || {
+        let _ = setup_fail();
+        panic_hook::mute();
+        let _g = setup_fail();
+        panic!("Poison!");
     })
+    .join();
+
+    let _g = setup_fail();
 }
 
 pub struct TestSuite {
@@ -79,10 +95,10 @@ impl TestSuite {
         cluster.run();
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.rl();
-            let apply_router = (*sim).get_apply_router(*id);
+            let raft_router = (*sim).get_router(*id).unwrap();
             let cdc_ob = obs.get(&id).unwrap().clone();
             let mut cdc_endpoint =
-                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), apply_router, cdc_ob);
+                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), raft_router, cdc_ob);
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();

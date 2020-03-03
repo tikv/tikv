@@ -152,10 +152,12 @@ mod tests {
             Task::Deregister {
                 region_id,
                 downstream_id,
+                conn_id,
                 err,
             } => {
                 assert_eq!(region_id, 1);
                 assert!(downstream_id.is_none(), "{:?}", downstream_id);
+                assert!(conn_id.is_none(), "{:?}", conn_id);
                 assert!(err.is_some(), "{:?}", err);
             }
             _ => panic!("unexpected task"),

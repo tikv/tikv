@@ -126,7 +126,8 @@ impl Delegate {
         self.enabled.clone()
     }
 
-    pub fn subscribe(&mut self, downstream: Downstream) {
+    /// Return false if subscribe failed.
+    pub fn subscribe(&mut self, downstream: Downstream) -> bool {
         if let Some(region) = self.region.as_ref() {
             if let Err(e) = compare_region_epoch(
                 &downstream.region_epoch,
@@ -138,12 +139,13 @@ impl Delegate {
                 let err = Error::Request(e.into());
                 let change_data_error = self.error_event(err);
                 downstream.sink_event(change_data_error);
-                return;
+                return false;
             }
             self.downstreams.push(downstream);
         } else {
             self.pending.as_mut().unwrap().downstreams.push(downstream);
         }
+        true
     }
 
     pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
@@ -579,29 +581,27 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let (sink, rx) = batch::unbounded(1);
-        let events = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
-        let downstream = Downstream::new(String::new(), region_epoch);
+        let rx = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
+        let mut downstream = Downstream::new(String::new(), region_epoch);
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
-        delegate.subscribe();
+        delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
         let mut resolver = Resolver::new();
         resolver.init();
         delegate.on_region_ready(resolver, region);
 
-        let events_wrap = Cell::new(Some(events));
+        let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-            let (change_data, events) = events_wrap
-                .replace(None)
-                .unwrap()
-                .into_future()
-                .wait()
-                .unwrap();
-            events_wrap.set(Some(events));
-            let mut change_data = change_data.unwrap();
-            assert_eq!(change_data.events.len(), 1);
-            let change_data_event = &mut change_data.events[0];
+            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
+                Ok((events, rx)) => (events, rx),
+                Err(e) => panic!("unexpected recv error: {:?}", e.0),
+            };
+            rx_wrap.set(Some(rx));
+            let mut events = events.unwrap();
+            assert_eq!(events.len(), 1);
+            let change_data_event = &mut events[0];
             let event = change_data_event.event.take().unwrap();
             match event {
                 Event_oneof_event::Error(err) => err,
@@ -694,26 +694,26 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, events) = unbounded();
+        let (sink, rx) = batch::unbounded(1);
+        let rx = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
+        let mut downstream = Downstream::new(String::new(), region_epoch);
+        let downstream_id = downstream.get_id();
+        downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
-        let downstream = Downstream::new(String::new(), region_epoch, sink);
-        let downstream_id = downstream.id;
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
 
-        let events_wrap = Cell::new(Some(events));
+        let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-            let (change_data, events) = events_wrap
-                .replace(None)
-                .unwrap()
-                .into_future()
-                .wait()
-                .unwrap();
-            events_wrap.set(Some(events));
-            let mut change_data = change_data.unwrap();
-            assert_eq!(change_data.events.len(), 1);
-            let change_data_event = &mut change_data.events[0];
+            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
+                Ok((events, rx)) => (events, rx),
+                Err(e) => panic!("unexpected recv error: {:?}", e.0),
+            };
+            rx_wrap.set(Some(rx));
+            let mut events = events.unwrap();
+            assert_eq!(events.len(), 1);
+            let change_data_event = &mut events[0];
             assert_eq!(change_data_event.region_id, region_id);
             assert_eq!(change_data_event.index, 0);
             let event = change_data_event.event.take().unwrap();

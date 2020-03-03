@@ -10,8 +10,9 @@ use kvproto::cdcpb::*;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::coprocessor::{Cmd, CmdBatch, CmdObserver, ObserverContext, RoleObserver};
-use raftstore::store::fsm::{ApplyRouter, ApplyTask, ChangeCmd};
-use raftstore::store::msg::{Callback, ReadResponse};
+use raftstore::store::fsm::ChangeCmd;
+use raftstore::store::msg::{Callback, CasualMessage, ReadResponse};
+use raftstore::store::transport::CasualRouter;
 use resolved_ts::Resolver;
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
@@ -111,11 +112,11 @@ impl fmt::Debug for Task {
     }
 }
 
-pub struct Endpoint {
+pub struct Endpoint<T> {
     capture_regions: HashMap<u64, Delegate>,
     connections: HashMap<ConnID, Conn>,
     scheduler: Scheduler<Task>,
-    apply_router: ApplyRouter,
+    raft_router: T,
     observer: CdcObserver,
 
     pd_client: Arc<dyn PdClient>,
@@ -126,13 +127,13 @@ pub struct Endpoint {
     workers: ThreadPool,
 }
 
-impl Endpoint {
+impl<T: CasualRouter> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
-        apply_router: ApplyRouter,
+        raft_router: T,
         observer: CdcObserver,
-    ) -> Endpoint {
+    ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let ep = Endpoint {
             capture_regions: HashMap::default(),
@@ -141,7 +142,7 @@ impl Endpoint {
             pd_client,
             timer: SteadyTimer::default(),
             workers,
-            apply_router,
+            raft_router,
             observer,
             scan_batch_size: 1024,
             min_ts_interval: Duration::from_secs(10),
@@ -254,30 +255,43 @@ impl Endpoint {
             batch_size,
             build_resolver: enabled.is_some(),
         };
-        delegate.subscribe(downstream);
+        if !delegate.subscribe(downstream) {
+            return;
+        }
         let change_cmd = if let Some(enabled) = enabled {
             // The region has never been registered.
             // Subscribe region role change events.
             self.observer.subscribe_region(region_id);
 
-            ApplyTask::Change(ChangeCmd::RegisterObserver {
+            ChangeCmd::RegisterObserver {
                 region_id,
                 region_epoch: request.take_region_epoch(),
                 enabled,
-                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
-                    init.on_change_cmd(resp);
-                })),
-            })
+            }
         } else {
-            ApplyTask::Change(ChangeCmd::Snapshot {
+            ChangeCmd::Snapshot {
                 region_id,
                 region_epoch: request.take_region_epoch(),
-                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
+            }
+        };
+        if let Err(e) = self.raft_router.send(
+            region_id,
+            CasualMessage::CaptureChange {
+                cmd: change_cmd,
+                callback: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
                     init.on_change_cmd(resp);
                 })),
-            })
-        };
-        self.apply_router.schedule_task(region_id, change_cmd);
+            },
+        ) {
+            error!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
+            let deregister = Task::Deregister {
+                region_id,
+                downstream_id: Some(downstream_id),
+                conn_id: Some(conn_id),
+                err: Some(Error::Request(e.into())),
+            };
+            self.scheduler.schedule(deregister).unwrap();
+        }
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
@@ -311,6 +325,10 @@ impl Endpoint {
     fn on_region_ready(&mut self, region_id: u64, resolver: Resolver, region: Region) {
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             delegate.on_region_ready(resolver, region);
+            // Delegate may fail during handling pending batch.
+            if delegate.has_failed() {
+                self.capture_regions.remove(&region_id);
+            }
         } else {
             warn!("region not found on region ready (finish building resolver)"; "region_id" => region_id);
         }
@@ -445,6 +463,7 @@ impl Initializer {
                         done = true;
                     }
                     debug!("cdc scan entries"; "len" => entries.len());
+                    fail_point!("before_schedule_incremental_scan");
                     let scanned = Task::IncrementalScan {
                         region_id,
                         downstream_id,
@@ -526,7 +545,7 @@ impl Initializer {
     }
 }
 
-impl Runnable<Task> for Endpoint {
+impl<T: CasualRouter> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
