@@ -158,6 +158,7 @@ zipf = "5.0.1"
 "prost:0.5.0" = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
 "protobuf-build:0.10.0" = { git = "https://github.com/tikv/protobuf-build", rev="42e52b9311f7fb31bbbe089fef5a24ec0392f9ce" }
 "https://github.com/pingcap/kvproto.git#kvproto:0.0.2" = { git = "https://github.com/pingcap/kvproto.git", branch = "encryption" }
+"https://github.com/tikv/rust-rocksdb.git#rocksdb:0.3.0" = { path = "/home/stn/rust-rocksdb" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

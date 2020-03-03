@@ -1,6 +1,6 @@
 use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
-use std::io::Error as IoError;
+use std::io::{Error as IoError, ErrorKind};
 use std::{error, result};
 
 /// The error type for encryption.
@@ -36,6 +36,15 @@ impl_from! {
     IoError => Io,
     CrypterError => Crypter,
     ProtobufError => Proto,
+}
+
+impl From<Error> for IoError {
+    fn from(err: Error) -> IoError {
+        match err {
+            Error::Io(e) => e,
+            other => IoError::new(ErrorKind::Other, format!("{}", other)),
+        }
+    }
 }
 
 pub type Result<T> = result::Result<T, Error>;

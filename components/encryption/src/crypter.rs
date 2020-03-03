@@ -1,7 +1,18 @@
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo};
 use openssl::symm::{self, Cipher as OCipher};
+use rocksdb::DBEncryptionMethod;
 
 use crate::Result;
+
+pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DBEncryptionMethod {
+    match method {
+        EncryptionMethod::Plaintext => DBEncryptionMethod::Plaintext,
+        EncryptionMethod::Aes128Ctr => DBEncryptionMethod::Aes128Ctr,
+        EncryptionMethod::Aes192Ctr => DBEncryptionMethod::Aes192Ctr,
+        EncryptionMethod::Aes256Ctr => DBEncryptionMethod::Aes256Ctr,
+        EncryptionMethod::Unknown => DBEncryptionMethod::Unknown,
+    }
+}
 
 pub fn get_method_key_length(method: EncryptionMethod) -> usize {
     match method {

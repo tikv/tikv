@@ -1,13 +1,13 @@
 use std::collections::hash_map::{Entry, VacantEntry};
-use std::io::{Error as IoError, ErrorKind};
+use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
+use rocksdb::{EncryptionKeyManager, FileEncryptionInfo};
 
-use self::rockmock::*;
 use crate::crypter::*;
 use crate::encrypted_file::EncryptedFile;
 use crate::master_key::*;
@@ -223,9 +223,9 @@ impl DataKeyManager {
     }
 }
 
-impl KeyManager for DataKeyManager {
+impl EncryptionKeyManager for DataKeyManager {
     // Get key to open existing file.
-    fn get_file(&self, file_path: &str) -> Result<FileEncryptionInfo> {
+    fn get_file(&self, file_path: &str) -> IoResult<FileEncryptionInfo> {
         let dicts = self.dicts.read().unwrap();
         // TODO Should we return error if file is not found?
         // TODO Should we use Plaintext if key not found?
@@ -234,33 +234,32 @@ impl KeyManager for DataKeyManager {
         let data_key = dicts.get_key(key_id);
         let key = data_key.map(|k| k.key.clone()).unwrap_or_else(|| vec![]);
         let encrypted_file = FileEncryptionInfo {
-            key_id,
             key,
-            method: file.method,
+            method: encryption_method_to_db_encryption_method(file.method),
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
     }
 
-    fn new_file(&self, file_path: &str) -> Result<FileEncryptionInfo> {
+    fn new_file(&self, file_path: &str) -> IoResult<FileEncryptionInfo> {
         let mut dicts = self.dicts.write().unwrap();
         let (key_id, data_key) = dicts.current_data_key();
         let key = data_key.get_key().to_owned();
         let file = dicts.new_file(file_path, self.method, self.master_key.as_ref())?;
         let encrypted_file = FileEncryptionInfo {
-            key_id,
             key,
-            method: self.method,
+            method: encryption_method_to_db_encryption_method(file.method),
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
     }
 
-    fn delete_file(&self, file_path: &str) -> Result<()> {
+    fn delete_file(&self, file_path: &str) -> IoResult<()> {
         self.dicts
             .write()
             .unwrap()
-            .delete_file(file_path, self.master_key.as_ref())
+            .delete_file(file_path, self.master_key.as_ref())?;
+        Ok(())
     }
 }
 
@@ -363,26 +362,5 @@ mod tests {
             .rotate_key(1, DataKey::default(), manager.master_key.as_ref())
             .unwrap();
         assert!(!ok);
-    }
-}
-
-// Will be moved into rust-rocksdb
-mod rockmock {
-    use crate::{Error, Result};
-    use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo};
-
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct FileEncryptionInfo {
-        pub key_id: u64,
-        pub key: Vec<u8>,
-        pub method: EncryptionMethod, // Can be PLAINTEXT if file not found in file dictionary.
-        pub iv: Vec<u8>,
-    }
-
-    pub trait KeyManager {
-        // Get key to open existing file.
-        fn get_file(&self, file_path: &str) -> Result<FileEncryptionInfo>;
-        fn new_file(&self, file_path: &str) -> Result<FileEncryptionInfo>;
-        fn delete_file(&self, file_path: &str) -> Result<()>;
     }
 }

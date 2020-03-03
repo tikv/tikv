@@ -7,7 +7,7 @@ use crate::Result;
 /// Can be back by KMS, or a key read from a file. If file is used, it will
 /// prefix the result with the IV (nonce + initial counter) on encrypt,
 /// and decode the IV on decrypt.
-pub trait Backend {
+pub trait Backend: Sync + Send + 'static {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent>;
     fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>>;
 }

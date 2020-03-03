@@ -996,6 +996,7 @@ dependencies = [
  "openssl",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.2",
+ "rocksdb 0.3.0 (git+https://github.com/tikv/rust-rocksdb.git)",
  "slog",
  "slog-global",
  "tempfile",
@@ -1016,7 +1017,7 @@ dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
- "rocksdb",
+ "rocksdb 0.3.0 (git+https://github.com/tikv/rust-rocksdb.git)",
  "serde",
  "serde_derive",
  "slog",
@@ -1045,7 +1046,7 @@ dependencies = [
  "engine_traits",
  "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "rand 0.7.2",
- "rocksdb",
+ "rocksdb 0.3.0 (git+https://github.com/tikv/rust-rocksdb.git)",
  "slog",
  "slog-global",
  "tempfile",
@@ -1917,7 +1918,6 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1935,7 +1935,6 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3403,6 +3402,11 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 name = "rocksdb"
 version = "0.3.0"
 source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
+replace = "rocksdb 0.3.0"
+
+[[package]]
+name = "rocksdb"
+version = "0.3.0"
 dependencies = [
  "libc",
  "librocksdb_sys",
