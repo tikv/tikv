@@ -14,7 +14,7 @@ use tikv_util::collections::hash_set_with_capacity;
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 
 impl<'a> RocksCompactionJobInfo<'a> {
-    pub fn from_raw(raw: &'a RawCompactionJobInfo) -> RocksCompactionJobInfo {
+    pub fn from_raw(raw: &'a RawCompactionJobInfo) -> Self {
         RocksCompactionJobInfo(raw)
     }
 
