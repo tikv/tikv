@@ -1,6 +1,4 @@
-use kvproto::encryptionpb::{
-    DataKey, EncryptedContent, EncryptionMethod, FileDictionary, FileInfo,
-};
+use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod};
 
 use super::Backend;
 use crate::crypter::*;
@@ -25,11 +23,6 @@ impl FileBackend {
             ));
         }
         Ok(FileBackend { key, method })
-    }
-
-    // TODO support online master key rotation
-    pub fn rotate(&mut self) -> Result<()> {
-        unimplemented!()
     }
 }
 

@@ -1,4 +1,4 @@
-use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo};
+use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rocksdb::DBEncryptionMethod;
 

@@ -13,6 +13,7 @@ pub trait Backend: Sync + Send + 'static {
 }
 
 mod file;
+pub use self::file::FileBackend;
 // TODO support KMS
 
 #[derive(Default)]

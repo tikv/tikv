@@ -1,4 +1,4 @@
-use std::collections::hash_map::{Entry, VacantEntry};
+use std::collections::hash_map::Entry;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -99,7 +99,7 @@ impl Dicts {
         file.method = method;
         match self.file_dict.files.entry(file_path.to_owned()) {
             Entry::Vacant(e) => e.insert(file),
-            Entry::Occupied(e) => {
+            Entry::Occupied(_) => {
                 return Err(Error::Io(IoError::new(
                     ErrorKind::AlreadyExists,
                     format!("file already exists {}", file_path),
@@ -258,7 +258,7 @@ impl EncryptionKeyManager for DataKeyManager {
         let mut dicts = self.dicts.write().unwrap();
         // Rotate data key if necessary.
         dicts.maybe_rotate_data_key(self.method, self.master_key.as_ref())?;
-        let (key_id, data_key) = dicts.current_data_key();
+        let (_, data_key) = dicts.current_data_key();
         let key = data_key.get_key().to_owned();
         let file = dicts.new_file(file_path, self.method, self.master_key.as_ref())?;
         let encrypted_file = FileEncryptionInfo {
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_create_get_delete() {
-        let (_tmp, mut manager) = new_tmp_key_manager(None);
+        let (_tmp, manager) = new_tmp_key_manager(None);
 
         let new_file = manager.new_file("foo").unwrap();
         let get_file = manager.get_file("foo").unwrap();
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate() {
-        let (_tmp, mut manager) = new_tmp_key_manager(None);
+        let (_tmp, manager) = new_tmp_key_manager(None);
 
         let (key_id, key) = {
             let dicts = manager.dicts.read().unwrap();
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_persistence() {
-        let (tmp, mut manager) = new_tmp_key_manager(None);
+        let (tmp, manager) = new_tmp_key_manager(None);
 
         // Create a file and a datakey.
         manager.new_file("foo").unwrap();
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_dcit_rotate_key_collides() {
-        let (_tmp, mut manager) = new_tmp_key_manager(None);
+        let (_tmp, manager) = new_tmp_key_manager(None);
         let mut dict = manager.dicts.write().unwrap();
 
         let ok = dict

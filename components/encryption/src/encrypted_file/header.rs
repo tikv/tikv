@@ -1,12 +1,10 @@
-use std::io::{Read, Write};
-use std::sync::Arc;
+use std::io::Write;
 
 use crate::{Error, Result};
 use byteorder::{BigEndian, ByteOrder};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Version {
-    Unknown = 0,
     V1 = 1,
 }
 
@@ -52,12 +50,11 @@ impl Header {
         let mut digest = crc32fast::Hasher::new();
         digest.update(content);
         let crc32 = digest.finalize();
-        let header = Header {
+        Header {
             version: Version::V1,
             crc32,
             size,
-        };
-        header
+        }
     }
     pub fn parse(buf: &[u8]) -> Result<(Header, &[u8])> {
         if buf.len() < Header::SIZE {
@@ -161,7 +158,7 @@ mod tests {
         }
 
         {
-            let mut bytes_missing_content = header.to_bytes();
+            let bytes_missing_content = header.to_bytes();
             Header::parse(&bytes_missing_content).unwrap_err();
         }
 
@@ -169,15 +166,6 @@ mod tests {
             let mut bytes_bad_content = header.to_bytes();
             bytes_bad_content.extend_from_slice(&[7; 32]);
             Header::parse(&bytes_bad_content).unwrap_err();
-        }
-
-        {
-            let mut bad_version = header.clone();
-            bad_version.version = Version::Unknown;
-            let mut bytes = bad_version.to_bytes();
-            bytes.extend_from_slice(&content);
-
-            Header::parse(&bytes).unwrap_err();
         }
     }
 }

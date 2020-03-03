@@ -1,7 +1,5 @@
-use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
-use kvproto::encryptionpb::{
-    DataKey, EncryptedContent, EncryptionMethod, FileDictionary, FileInfo,
-};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use kvproto::encryptionpb::EncryptionMethod;
 use protobuf::ProtobufEnum;
 
 use crate::{Error, Result};
@@ -13,7 +11,7 @@ pub fn encode_ecryption_method(method: EncryptionMethod) -> Result<Vec<u8>> {
     let mut value = Vec::with_capacity(4); // Length of i32.
     value
         .write_i32::<BigEndian>(method as i32)
-        .map_err(|e| Error::Other(e.into()));
+        .map_err(|e| Error::Other(e.into()))?;
     Ok(value)
 }
 

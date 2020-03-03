@@ -1,14 +1,13 @@
 use std::fs::{rename, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
 
 use crate::master_key::*;
-use crate::{Error, Iv, Result};
+use crate::{Error, Result};
 
 mod header;
 use header::*;
