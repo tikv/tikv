@@ -447,6 +447,7 @@ dependencies = [
  "futures 0.1.29",
  "grpcio",
  "kvproto",
+ "panic_hook",
  "pd_client",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
  "raftstore",
@@ -1922,7 +1923,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#770e76ce67bdc1249432a814b3fbe6014d54d942"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#e2591a8e86d611402e9d29eaa5cbfbaa45310db9"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1940,7 +1941,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#770e76ce67bdc1249432a814b3fbe6014d54d942"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#e2591a8e86d611402e9d29eaa5cbfbaa45310db9"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3407,7 +3408,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#770e76ce67bdc1249432a814b3fbe6014d54d942"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#e2591a8e86d611402e9d29eaa5cbfbaa45310db9"
 dependencies = [
  "libc",
  "librocksdb_sys",

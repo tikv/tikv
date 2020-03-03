@@ -62,7 +62,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         let safe_point = Arc::clone(&gc_context.safe_point);
 
         let filter = Box::new(WriteCompactionFilter::new(db, safe_point));
-        unsafe { new_compaction_filter_raw(name, true, filter) }
+        unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
 
