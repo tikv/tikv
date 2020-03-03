@@ -3158,7 +3158,7 @@ mod tests {
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
     use engine::Peekable;
-    use engine::{WriteBatch, DB};
+    use engine::DB;
     use engine_rocks::RocksEngine;
     use engine_traits::Peekable as PeekableTrait;
     use kvproto::metapb::{self, RegionEpoch};
