@@ -264,8 +264,6 @@ pub fn least_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
 mod tests {
     use super::*;
 
-    use std::cmp::PartialEq;
-    use std::fmt::Debug;
     use std::i64;
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
@@ -904,32 +902,18 @@ mod tests {
             (vec![Some(0), Some(4), Some(8)], Some(8), Some(0)),
         ];
 
-        type Cases<T> = Vec<(Vec<Option<T>>, Option<T>, Option<T>)>;
+        for (args, greatest_exp, least_exp) in int_cases {
+            let greatest = RpnFnScalarEvaluator::new()
+                .push_params(args.clone())
+                .evaluate(ScalarFuncSig::GreatestInt)
+                .unwrap();
+            assert_eq!(greatest, greatest_exp);
 
-        fn do_test<T>(greatest_sig: ScalarFuncSig, least_sig: ScalarFuncSig, cases: Cases<T>)
-        where
-            T: Debug + PartialEq + Evaluable,
-            Option<T>: From<ScalarValue> + Into<ScalarValue>,
-        {
-            for (args, greatest_exp, least_exp) in cases {
-                let greatest = RpnFnScalarEvaluator::new()
-                    .push_params(args.clone())
-                    .evaluate(greatest_sig)
-                    .unwrap();
-                assert_eq!(greatest, greatest_exp);
-
-                let least = RpnFnScalarEvaluator::new()
-                    .push_params(args)
-                    .evaluate(least_sig)
-                    .unwrap();
-                assert_eq!(least, least_exp);
-            }
+            let least = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::LeastInt)
+                .unwrap();
+            assert_eq!(least, least_exp);
         }
-
-        do_test(
-            ScalarFuncSig::GreatestInt,
-            ScalarFuncSig::LeastInt,
-            int_cases,
-        );
     }
 }
