@@ -46,7 +46,7 @@ impl Charset for CharsetBinary {
     }
 }
 
-pub trait Collator {
+pub trait Collator: 'static + std::marker::Send + std::marker::Sync {
     type Charset: Charset;
 
     fn validate(bstr: &[u8]) -> Result<()>;
@@ -134,6 +134,13 @@ where
             inner,
             _phantom: PhantomData,
         }
+    }
+
+    #[inline]
+    #[allow(clippy::transmute_ptr_to_ptr)]
+    pub fn new_ref(inner: &T) -> Result<&Self> {
+        C::validate(inner.as_ref())?;
+        Ok(unsafe { std::mem::transmute(inner) })
     }
 
     #[inline]
