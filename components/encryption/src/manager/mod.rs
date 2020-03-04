@@ -77,19 +77,19 @@ impl Dicts {
         )
     }
 
-    fn get_file(&mut self, file_path: &str) -> &FileInfo {
-        if self.file_dict.files.get(file_path).is_none() {
+    fn get_file(&mut self, fname: &str) -> &FileInfo {
+        if self.file_dict.files.get(fname).is_none() {
             // Return Plaintext if file not found
             let mut file = FileInfo::default();
             file.method = EncryptionMethod::Plaintext;
-            self.file_dict.files.insert(file_path.to_owned(), file);
+            self.file_dict.files.insert(fname.to_owned(), file);
         }
-        self.file_dict.files.get(file_path).unwrap()
+        self.file_dict.files.get(fname).unwrap()
     }
 
     fn new_file(
         &mut self,
-        file_path: &str,
+        fname: &str,
         method: EncryptionMethod,
         master_key: &dyn Backend,
     ) -> Result<&FileInfo> {
@@ -97,24 +97,24 @@ impl Dicts {
         file.iv = Iv::new().as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
         file.method = method;
-        match self.file_dict.files.entry(file_path.to_owned()) {
+        match self.file_dict.files.entry(fname.to_owned()) {
             Entry::Vacant(e) => e.insert(file),
             Entry::Occupied(_) => {
                 return Err(Error::Io(IoError::new(
                     ErrorKind::AlreadyExists,
-                    format!("file already exists {}", file_path),
+                    format!("file already exists {}", fname),
                 )))
             }
         };
         self.save_file_dict(master_key)?;
-        Ok(self.file_dict.files.get(file_path).unwrap())
+        Ok(self.file_dict.files.get(fname).unwrap())
     }
 
-    fn delete_file(&mut self, file_path: &str, master_key: &dyn Backend) -> Result<()> {
-        self.file_dict.files.remove(file_path).ok_or_else(|| {
+    fn delete_file(&mut self, fname: &str, master_key: &dyn Backend) -> Result<()> {
+        self.file_dict.files.remove(fname).ok_or_else(|| {
             Error::Io(IoError::new(
                 ErrorKind::NotFound,
-                format!("file not found, {}", file_path),
+                format!("file not found, {}", fname),
             ))
         })?;
 
@@ -269,10 +269,10 @@ impl DataKeyManager {
 
 impl EncryptionKeyManager for DataKeyManager {
     // Get key to open existing file.
-    fn get_file(&self, file_path: &str) -> IoResult<FileEncryptionInfo> {
+    fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         let mut dicts = self.dicts.write().unwrap();
         let (method, key_id, iv) = {
-            let file = dicts.get_file(file_path);
+            let file = dicts.get_file(fname);
             (file.method, file.key_id, file.iv.to_owned())
         };
         // Fail if key is specified but not found.
@@ -297,13 +297,13 @@ impl EncryptionKeyManager for DataKeyManager {
         Ok(encrypted_file)
     }
 
-    fn new_file(&self, file_path: &str) -> IoResult<FileEncryptionInfo> {
+    fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         let mut dicts = self.dicts.write().unwrap();
         // Rotate data key if necessary.
         dicts.maybe_rotate_data_key(self.method, self.master_key.as_ref())?;
         let (_, data_key) = dicts.current_data_key();
         let key = data_key.get_key().to_owned();
-        let file = dicts.new_file(file_path, self.method, self.master_key.as_ref())?;
+        let file = dicts.new_file(fname, self.method, self.master_key.as_ref())?;
         let encrypted_file = FileEncryptionInfo {
             key,
             method: encryption_method_to_db_encryption_method(file.method),
@@ -312,11 +312,11 @@ impl EncryptionKeyManager for DataKeyManager {
         Ok(encrypted_file)
     }
 
-    fn delete_file(&self, file_path: &str) -> IoResult<()> {
+    fn delete_file(&self, fname: &str) -> IoResult<()> {
         self.dicts
             .write()
             .unwrap()
-            .delete_file(file_path, self.master_key.as_ref())?;
+            .delete_file(fname, self.master_key.as_ref())?;
         Ok(())
     }
 
