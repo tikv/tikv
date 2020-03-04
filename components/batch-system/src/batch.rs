@@ -85,10 +85,6 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
-    pub fn normals_mut(&mut self) -> &mut [Box<N>] {
-        &mut self.normals
-    }
-
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
             FsmTypes::Normal(n) => {
@@ -102,11 +98,6 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             FsmTypes::Empty => return false,
         }
         true
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.normals.len() + self.control.is_some() as usize
     }
 
     fn is_empty(&self) -> bool {
@@ -284,8 +275,12 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         // Fetch batch after every round is finished. It's helpful to protect regions
         // from becoming hungry if some regions are hot points.
         while self.fetch_batch(&mut batch) {
-            let mut hot_fsm_count = 0;
-            self.handler.begin(self.max_batch_size);
+            // If there is some region wait to be deal, we must deal with it even if it has overhead
+            // max size of batch. It's helpful to protect regions from becoming hungry
+            // if some regions are hot points.
+            let max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
+            self.handler.begin(max_batch_size);
+
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
                 if batch.control.as_ref().unwrap().is_stopped() {
@@ -294,40 +289,46 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.release_control(&self.router.control_box, len);
                 }
             }
-            // If there is some region wait to be deal, we must deal with it even if it has overhead
-            // max size of batch. It's helpful to protect regions from becoming hungry
-            // if some regions are hot points.
-            let max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
-            for i in 0..max_batch_size {
-                if i >= batch.normals.len() {
+
+            let mut hot_fsm_count = 0;
+            let mut fsm_cnt = 0;
+            while fsm_cnt < max_batch_size {
+                if fsm_cnt >= batch.normals.len() {
                     if !self.try_fetch_batch(&mut batch) {
-                        break;
+                        if fsm_cnt > 0 {
+                            self.handler.end(&mut batch.normals[0..fsm_cnt]);
+                        }
+                        return;
                     }
-                    if i >= batch.normals.len() {
+                    if fsm_cnt >= batch.normals.len() || batch.control.is_some() {
                         break;
                     }
                 }
-                let len = self.handler.handle_normal(&mut batch.normals[i]);
-                batch.counters[i] += 1;
-                if batch.normals[i].is_stopped() {
-                    reschedule_fsms.push((i, ReschedulePolicy::Remove));
+                let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);
+                batch.counters[fsm_cnt] += 1;
+                if batch.normals[fsm_cnt].is_stopped() {
+                    reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Remove));
                 } else {
-                    if batch.counters[i] > 3 {
+                    if batch.counters[fsm_cnt] > 3 {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the
                         // next time.
                         if hot_fsm_count % 2 == 0 {
-                            reschedule_fsms.push((i, ReschedulePolicy::Schedule));
+                            reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Schedule));
+                            fsm_cnt += 1;
                             continue;
                         }
                     }
                     if let Some(l) = len {
-                        reschedule_fsms.push((i, ReschedulePolicy::Release(l)));
+                        reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Release(l)));
                     }
                 }
+                fsm_cnt += 1;
             }
-            self.handler.end(batch.normals_mut());
+            if fsm_cnt > 0 {
+                self.handler.end(&mut batch.normals[0..fsm_cnt]);
+            }
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.
             while let Some((r, mark)) = reschedule_fsms.pop() {
