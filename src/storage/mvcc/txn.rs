@@ -349,6 +349,7 @@ impl<S: Snapshot> MvccTxn<S> {
         for_update_ts: TimeStamp,
         txn_size: u64,
         min_commit_ts: TimeStamp,
+        pipelined_pessimistic_lock: bool,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
         let (key, value) = mutation.into_key_value();
@@ -381,6 +382,19 @@ impl<S: Snapshot> MvccTxn<S> {
                 last_lock_ttl = lock.ttl;
             }
         } else if is_pessimistic_lock {
+            if !pipelined_pessimistic_lock {
+                // Pessimistic lock does not exist, the transaction should be aborted.
+                warn!(
+                    "prewrite failed (pessimistic lock not found)";
+                    "start_ts" => self.start_ts,
+                    "key" => %key
+                );
+                return Err(ErrorInner::PessimisticLockNotFound {
+                    start_ts: self.start_ts,
+                    key: key.into_raw()?,
+                }
+                .into());
+            }
             if let Some((commit_ts, _)) = self.reader.seek_write(&key, TimeStamp::max())? {
                 if commit_ts < self.start_ts {
                     // Used pipelined pessimistic lock acquiring in this txn but failed
