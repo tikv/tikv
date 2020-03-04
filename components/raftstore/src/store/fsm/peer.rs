@@ -572,7 +572,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(p) = self.fsm.peer.take_apply_proposals() {
             proposals.push(p);
         }
-        let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
+        let res = self.fsm.peer.handle_raft_ready(self.ctx);
         if let Some(r) = res {
             self.on_role_changed(&r.0);
             if !r.0.entries().is_empty() {
@@ -583,27 +583,32 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
-        let is_merging = self.fsm.peer.pending_merge_state.is_some();
-        let res = self
-            .fsm
-            .peer
-            .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
-        self.fsm.peer.handle_raft_ready_apply(self.ctx, ready);
-        let mut has_snapshot = false;
-        if let Some(apply_res) = res {
+    pub fn post_raft_ready(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
+        if !raft::is_empty_snap(ready.snapshot()) {
+            let apply_res = self
+                .fsm
+                .peer
+                .post_raft_ready_snapshot(self.ctx, &mut ready, invoke_ctx);
+
             self.on_ready_apply_snapshot(apply_res);
-            has_snapshot = true;
             self.register_raft_base_tick();
+
+            if self.fsm.peer.pending_merge_state.is_some() {
+                // After applying a snapshot, merge is rollbacked implicitly.
+                self.on_ready_rollback_merge(0, None);
+            }
+        } else {
+            self.fsm
+                .peer
+                .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
         }
+
+        self.fsm.peer.handle_raft_ready_apply(self.ctx, ready);
+
         if self.fsm.peer.leader_unreachable {
             self.fsm.group_state = GroupState::Chaos;
             self.register_raft_base_tick();
             self.fsm.peer.leader_unreachable = false;
-        }
-        if is_merging && has_snapshot {
-            // After applying a snapshot, merge is rollbacked implicitly.
-            self.on_ready_rollback_merge(0, None);
         }
     }
 

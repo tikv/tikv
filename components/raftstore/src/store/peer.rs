@@ -1071,7 +1071,7 @@ impl Peer {
         Some(region_proposal)
     }
 
-    pub fn handle_raft_ready_append<T: Transport, C>(
+    pub fn handle_raft_ready<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
     ) -> Option<(Ready, InvokeContext)> {
@@ -1205,7 +1205,7 @@ impl Peer {
             self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
         }
 
-        let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
+        let invoke_ctx = match self.mut_store().handle_ready(ctx, &ready) {
             Ok(r) => r,
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
@@ -1222,14 +1222,33 @@ impl Peer {
         ctx: &mut PollContext<T, C>,
         ready: &mut Ready,
         invoke_ctx: InvokeContext,
-    ) -> Option<ApplySnapResult> {
-        if invoke_ctx.has_snapshot() {
-            // When apply snapshot, there is no log applied and not compacted yet.
-            self.raft_log_size_hint = 0;
-        }
+    ) {
+        assert!(raft::is_empty_snap(ready.snapshot()));
+        self.mut_store().post_ready(invoke_ctx);
 
-        let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-        if apply_snap_result.is_some() && self.peer.get_is_learner() {
+        if !self.is_leader() {
+            fail_point!("raft_before_follower_send");
+            self.send(
+                &mut ctx.trans,
+                ready.messages.drain(..),
+                &mut ctx.raft_metrics.message,
+            );
+            ctx.need_flush_trans = true;
+        }
+    }
+
+    pub fn post_raft_ready_snapshot<T: Transport, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        ready: &mut Ready,
+        invoke_ctx: InvokeContext,
+    ) -> ApplySnapResult {
+        assert!(!raft::is_empty_snap(ready.snapshot()));
+        // When apply snapshot, there is no log applied and not compacted yet.
+        self.raft_log_size_hint = 0;
+
+        let apply_snap_result = self.mut_store().post_ready(invoke_ctx).unwrap();
+        if self.peer.get_is_learner() {
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
@@ -1250,22 +1269,11 @@ impl Peer {
             };
         }
 
-        if !self.is_leader() {
-            fail_point!("raft_before_follower_send");
-            if self.is_applying_snapshot() {
-                self.pending_messages = mem::replace(&mut ready.messages, vec![]);
-            } else {
-                self.send(
-                    &mut ctx.trans,
-                    ready.messages.drain(..),
-                    &mut ctx.raft_metrics.message,
-                );
-                ctx.need_flush_trans = true;
-            }
-        }
+        fail_point!("raft_before_follower_send");
+        self.pending_messages = mem::replace(&mut ready.messages, vec![]);
 
-        if apply_snap_result.is_some() {
-            self.activate(ctx);
+        self.activate(ctx);
+        {
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
@@ -1275,17 +1283,15 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_apply<T, C>(&mut self, ctx: &mut PollContext<T, C>, mut ready: Ready) {
-        // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
+        // Send the committed entries to apply fsm here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
-        // snapshot. If we call `handle_raft_committed_entries` directly, these updates
+        // snapshot. If we send the committed entries to apply fsm directly, these updates
         // will be written to disk. Because we apply snapshot asynchronously, so these
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if self.is_applying_snapshot() {
-            // Snapshot's metadata has been applied.
-            self.last_applying_idx = self.get_store().truncated_index();
-        } else {
+        let is_ready_snapshot = !raft::is_empty_snap(ready.snapshot());
+        if !is_ready_snapshot {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
@@ -1382,11 +1388,15 @@ impl Peer {
         self.apply_reads(ctx, &ready);
 
         self.raft_group.advance_append(ready);
-        if self.is_applying_snapshot() {
+
+        if is_ready_snapshot {
+            // Snapshot's metadata has been applied.
+            self.last_applying_idx = self.get_store().truncated_index();
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
         }
+
         self.proposals.gc();
     }
 

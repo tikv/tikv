@@ -540,7 +540,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     }
                 }
                 PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready, invoke_ctx);
+                    .post_raft_ready(ready, invoke_ctx);
             }
         }
         let dur = self.timer.elapsed();

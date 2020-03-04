@@ -281,11 +281,6 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn has_snapshot(&self) -> bool {
-        self.snap_region.is_some()
-    }
-
-    #[inline]
     pub fn save_raft_state_to(&self, raft_wb: &mut WriteBatch) -> Result<()> {
         raft_wb.put_msg(&keys::raft_state_key(self.region_id), &self.raft_state)?;
         Ok(())
@@ -1117,15 +1112,14 @@ impl PeerStorage {
     /// to update the memory states properly.
     // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
     // a requirement to advance the ready object properly later.
-    pub fn handle_raft_ready<H: HandleRaftReadyContext>(
+    pub fn handle_ready<H: HandleRaftReadyContext>(
         &mut self,
         ready_ctx: &mut H,
         ready: &Ready,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let snapshot_index = if raft::is_empty_snap(ready.snapshot()) {
-            0
-        } else {
+
+        if !raft::is_empty_snap(ready.snapshot()) {
             fail_point!("raft_before_apply_snap");
             self.apply_snapshot(
                 &mut ctx,
@@ -1134,9 +1128,7 @@ impl PeerStorage {
                 &ready_ctx.raft_wb(),
             )?;
             fail_point!("raft_after_apply_snap");
-
-            last_index(&ctx.raft_state)
-        };
+        }
 
         if ready.must_sync() {
             ready_ctx.set_sync_log(true);
@@ -1154,24 +1146,22 @@ impl PeerStorage {
             }
         }
 
-        // Save raft state if it has changed or peer has applied a snapshot.
-        if ctx.raft_state != self.raft_state || snapshot_index != 0 {
+        // Save raft state if it has changed.
+        if ctx.raft_state != self.raft_state {
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
-            if snapshot_index > 0 {
-                // in case of restart happen when we just write region state to Applying,
-                // but not write raft_local_state to raft rocksdb in time.
-                // we write raft state to default rocksdb, with last index set to snap index,
-                // in case of recv raft log after snapshot.
-                ctx.save_snapshot_raft_state_to(
-                    snapshot_index,
-                    &self.engines.kv,
-                    &mut ready_ctx.kv_wb_mut(),
-                )?;
-            }
         }
 
-        // only when apply snapshot
-        if snapshot_index != 0 {
+        if !raft::is_empty_snap(ready.snapshot()) {
+            // in case of restart happen when we just write region state to Applying,
+            // but not write raft_local_state to raft rocksdb in time.
+            // we write raft state to default rocksdb, with last index set to snap index,
+            // in case of recv raft log after snapshot.
+            ctx.save_snapshot_raft_state_to(
+                ctx.raft_state.get_last_index(),
+                &self.engines.kv,
+                &mut ready_ctx.kv_wb_mut(),
+            )?;
+
             ctx.save_apply_state_to(&self.engines.kv, &mut ready_ctx.kv_wb_mut())?;
         }
 
@@ -1191,7 +1181,7 @@ impl PeerStorage {
         // cleanup data before scheduling apply task
         if self.is_initialized() {
             if let Err(e) = self.clear_extra_data(self.region()) {
-                // No need panic here, when applying snapshot, the deletion will be tried
+                // No need to panic here, when applying snapshot, the deletion will be tried
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
                 // store is restarted.
