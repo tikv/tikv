@@ -16,9 +16,10 @@ use grpcio::{
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
+use protobuf::Message;
 use raftstore::router::RaftStoreRouter;
 use tikv_util::collections::{HashMap, HashMapEntry};
-use tikv_util::mpsc::batch::{self, Sender as BatchSender};
+use tikv_util::mpsc::batch::{self, BatchCollector, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
@@ -64,7 +65,21 @@ impl Conn {
         let client2 = client1.clone();
 
         let (tx, rx) = batch::unbounded::<RaftMessage>(RAFT_MSG_NOTIFY_SIZE);
-        let rx = batch::BatchReceiver::new(rx, RAFT_MSG_MAX_BATCH_SIZE, Vec::new, |v, e| v.push(e));
+        struct RaftMsgCollector(usize);
+        impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
+            fn collect(&mut self, v: &mut Vec<RaftMessage>, e: RaftMessage) -> Option<RaftMessage> {
+                let msg_size = e.compute_size() as usize;
+                if self.0 > 0 && self.0 + msg_size >= MAX_GRPC_SEND_MSG_LEN as usize {
+                    return Some(e);
+                }
+                self.0 += msg_size;
+                v.push(e);
+                None
+            }
+        }
+        let rx =
+            batch::BatchReceiver::new(rx, RAFT_MSG_MAX_BATCH_SIZE, Vec::new, RaftMsgCollector(0));
+
         // Use a mutex to make compiler happy.
         let rx1 = Arc::new(Mutex::new(rx));
         let rx2 = Arc::clone(&rx1);
@@ -88,7 +103,7 @@ impl Conn {
                         if status == RpcStatusCode::UNIMPLEMENTED =>
                     {
                         // Fallback to raft RPC.
-                        warn!("batch_raft fail, fallback to raft");
+                        warn!("batch_raft is unimplemented, fallback to raft");
                         let (sink, receiver) = client2.raft().unwrap();
                         let msgs = Reusable(rx2)
                             .map(|msgs| {
