@@ -24,14 +24,14 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
             let engine = Arc::new(Mutex::new(engine.clone()));
             Builder::from_config(config)
                 .name_prefix(name)
-                .on_tick(move || metrics::tls_flush(&reporter))
+                .on_tick(move || metrics::tls_flush(&reporter, None))
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(move || {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
                     unsafe {
                         destroy_tls_engine::<E>();
                     }
-                    metrics::tls_flush(&reporter2)
+                    metrics::tls_flush(&reporter2, None)
                 })
                 .build()
         })

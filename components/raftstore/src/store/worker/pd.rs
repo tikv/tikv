@@ -1209,9 +1209,8 @@ impl KeyRange {
         }
     }
 
-    fn contains(&self, key: &[u8]) ->bool{
-        return key.cmp(&self.start_key) == Ordering::Greater &&
-            key.cmp(&self.end_key) == Ordering::Less
+    fn contains(&self, key: &[u8]) -> bool {
+        key.cmp(&self.start_key) == Ordering::Greater && key.cmp(&self.end_key) == Ordering::Less
     }
 }
 
@@ -1252,9 +1251,10 @@ impl Recorder {
         for mut sample in self.samples.iter_mut() {
             if key_range.contains(&sample.key) {
                 sample.contained += 1;
-            } else if sample.key.cmp(&key_range.start_key)==Ordering::Less {
+            } else if sample.key.cmp(&key_range.start_key) == Ordering::Less {
                 sample.right += 1;
-            } else { // key range is to the left sample key
+            } else {
+                // key range is to the left sample key
                 sample.left += 1;
             }
         }
@@ -1312,11 +1312,11 @@ pub struct SplitHubInfo {
     pub split_score: f64,
 }
 
-impl SplitHubInfo{
-    pub fn default() -> SplitHubInfo{
-        let (_tx,rx) = mpsc::channel();
+impl SplitHubInfo {
+    pub fn default() -> SplitHubInfo {
+        let (_tx, rx) = mpsc::channel();
         SplitHubInfo {
-            receiver:rx,
+            receiver: rx,
             qps_threshold: DEFAULT_QPS_THRESHOLD,
             split_score: DEFAULT_SPLIT_SCORE,
         }

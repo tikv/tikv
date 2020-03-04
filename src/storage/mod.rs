@@ -233,8 +233,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
-                let command_duration = tikv_util::time::Instant::now_coarse();
 
+                if let Ok(key) = key.to_owned().into_raw() {
+                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, b"");
+                }
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
@@ -289,8 +293,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
-                let command_duration = tikv_util::time::Instant::now_coarse();
 
+                for get in &gets {
+                    if let Ok(key) = get.key.to_owned().into_raw() {
+                        tls_collect_qps(get.ctx.get_region_id(), get.ctx.get_peer(), &key, b"");
+                    }
+                }
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
@@ -344,8 +354,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
-                let command_duration = tikv_util::time::Instant::now_coarse();
 
+                for key in &keys {
+                    if let Ok(key) = key.to_owned().into_raw() {
+                        tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, b"");
+                    }
+                }
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -415,8 +431,21 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
-                let command_duration = tikv_util::time::Instant::now_coarse();
 
+                if let Ok(start_key) = start_key.to_owned().into_raw() {
+                    let mut key = vec![];
+                    if let Some(end_key) = &end_key {
+                        if let Ok(end_key) = end_key.to_owned().into_raw() {
+                            key = end_key;
+                        }
+                    }
+                    if reverse_scan {
+                        tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &start_key);
+                    }
+                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key);
+                }
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -555,6 +584,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
+                tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, b"");
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -597,6 +628,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
+
+                for get in &gets {
+                    if let Ok(key) = get.key.to_owned().into_raw() {
+                        // todo no raw?
+                        tls_collect_qps(get.ctx.get_region_id(), get.ctx.get_peer(), &key, b"");
+                    }
+                }
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -632,6 +671,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
+
+                for key in &keys {
+                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, b"");
+                }
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -876,8 +920,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
     /// Scan raw keys in a range.
     ///
-    /// If `reverse` is false, the range is [`key`, `end_key`); otherwise, the range is
-    /// [`end_key`, `key`) and it scans from `key` and goes backwards. If `end_key` is `None`, it
+    /// If `reverse_scan` is false, the range is [`start_key`, `end_key`); otherwise, the range is
+    /// [`end_key`, `start_key`) and it scans from `start_key` and goes backwards. If `end_key` is `None`, it
     /// means unbounded.
     ///
     /// This function scans at most `limit` keys.
@@ -888,11 +932,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         ctx: Context,
         cf: String,
-        key: Vec<u8>,
+        start_key: Vec<u8>,
         end_key: Option<Vec<u8>>,
         limit: usize,
         key_only: bool,
-        reverse: bool,
+        reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_scan";
         let priority = ctx.get_priority();
@@ -901,6 +945,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
+                {
+                    let mut key = vec![];
+                    if let Some(end_key) = &end_key {
+                        key = end_key.to_vec();
+                    }
+                    if reverse_scan {
+                        tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &start_key);
+                    }
+                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key);
+                }
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
@@ -908,11 +962,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let end_key = end_key.map(Key::from_encoded);
 
                     let mut statistics = Statistics::default();
-                    let result = if reverse {
+                    let result = if reverse_scan {
                         Self::reverse_raw_scan(
                             &snapshot,
                             &cf,
-                            &Key::from_encoded(key),
+                            &Key::from_encoded(start_key),
                             end_key,
                             limit,
                             &mut statistics,
@@ -923,7 +977,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         Self::forward_raw_scan(
                             &snapshot,
                             &cf,
-                            &Key::from_encoded(key),
+                            &Key::from_encoded(start_key),
                             end_key,
                             limit,
                             &mut statistics,
@@ -995,7 +1049,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ranges: Vec<KeyRange>,
         each_limit: usize,
         key_only: bool,
-        reverse: bool,
+        reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_scan";
         let priority = ctx.get_priority();
@@ -1004,12 +1058,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
+                {
+                    let ranges = ranges.clone();
+                    for range in ranges.iter() {
+                        let start_key = &range.start_key;
+                        let end_key = &range.end_key;
+                        if reverse_scan {
+                            tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &end_key, &start_key);
+                        }
+                        tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &end_key);
+                    }
+                }
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
-                    if !Self::check_key_ranges(&ranges, reverse) {
+                    if !Self::check_key_ranges(&ranges, reverse_scan) {
                         return Err(box_err!("Invalid KeyRanges"));
                     };
                     let mut result = Vec::new();
@@ -1026,7 +1091,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
-                        let pairs = if reverse {
+                        let pairs = if reverse_scan {
                             Self::reverse_raw_scan(
                                 &snapshot,
                                 &cf,

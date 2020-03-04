@@ -22,8 +22,8 @@ use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRout
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::{SplitCheckRunner, SplitHubInfo};
 use raftstore::store::{Callback, LocalReader, SnapManager};
+use raftstore::store::{SplitCheckRunner, SplitHubInfo};
 use raftstore::Result;
 use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
 use tikv::coprocessor;

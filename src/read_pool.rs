@@ -226,7 +226,7 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
     }
 
     fn flush_metrics(&self) {
-        crate::storage::metrics::tls_flush(&self.reporter);
+        crate::storage::metrics::tls_flush(&self.reporter, Some(&self.sender));
         crate::coprocessor::metrics::tls_flush(&self.reporter, Some(&self.sender));
     }
 }
@@ -351,8 +351,8 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let (tx,_rx) = mpsc::channel();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine,tx);
+        let (tx, _rx) = mpsc::channel();
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine, tx);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
