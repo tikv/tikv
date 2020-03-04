@@ -139,7 +139,7 @@ fn main() {
         .arg(
             Arg::with_name("enable-dynamic-config")
                 .long("enable-dynamic-config")
-                .help("switch of online config change feature"),
+                .help("Enable dynamic configuration change"),
         )
         .get_matches();
 
