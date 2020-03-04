@@ -14,11 +14,6 @@ enum DataLost {
     /// A leader can't lost both the committed entries and commit index
     /// at the same time.
     LeaderCommit,
-    /// A follower loses committed entries and commit index.
-    ///
-    /// This can happen when the follower receives committed entries and
-    /// commit index at the same batch.
-    FollowerAppend,
     /// A follower loses commit index.
     FollowerCommit,
     /// All the nodes loses data.
@@ -39,31 +34,20 @@ where
         DataLost::FollowerCommit => RegionPacketFilter::new(1, 3)
             .msg_type(MessageType::MsgAppendResponse)
             .direction(Direction::Recv),
-        DataLost::FollowerAppend => RegionPacketFilter::new(1, 1)
-            .msg_type(MessageType::MsgAppend)
-            .direction(Direction::Recv),
     };
     cluster.add_send_filter(CloneFilterFactory(filter));
     let last_index = cluster.raft_local_state(1, 1).get_last_index();
     action(cluster);
-    if mode != DataLost::FollowerAppend {
-        cluster.wait_last_index(1, 1, last_index + 1, Duration::from_secs(3));
-    } else {
-        cluster.wait_last_index(1, 2, last_index + 1, Duration::from_secs(3));
-    }
+    cluster.wait_last_index(1, 1, last_index + 1, Duration::from_secs(3));
     let mut snaps = vec![];
     snaps.push((1, RocksSnapshot::new(cluster.get_raft_engine(1))));
     if mode == DataLost::AllLost {
+        cluster.wait_last_index(1, 2, last_index + 1, Duration::from_secs(3));
         snaps.push((2, RocksSnapshot::new(cluster.get_raft_engine(2))));
+        cluster.wait_last_index(1, 3, last_index + 1, Duration::from_secs(3));
         snaps.push((3, RocksSnapshot::new(cluster.get_raft_engine(3))));
     }
     cluster.clear_send_filters();
-    if mode == DataLost::FollowerAppend {
-        let filter = RegionPacketFilter::new(1, 1)
-            .direction(Direction::Send)
-            .msg_type(MessageType::MsgAppendResponse);
-        cluster.add_send_filter(CloneFilterFactory(filter));
-    }
     check(cluster);
     for (id, _) in &snaps {
         cluster.stop_node(*id);
@@ -88,6 +72,7 @@ where
 /// state. TiKV should be able to recognize the situation and start normally.
 fn test_early_apply(mode: DataLost) {
     let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.early_apply = true;
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster);
@@ -137,11 +122,6 @@ fn test_leader_early_apply() {
 #[test]
 fn test_follower_commit_early_apply() {
     test_early_apply(DataLost::FollowerCommit)
-}
-
-#[test]
-fn test_follower_append_early_apply() {
-    test_early_apply(DataLost::FollowerAppend)
 }
 
 #[test]
