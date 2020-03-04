@@ -374,12 +374,11 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = track(handle_request_future, &mut tracker);
         let result = handle_request_future.await;
 
-        // // There might be errors when handling requests. In this case, we still need its
-        // // execution metrics.
-        // let mut storage_stats = Statistics::default();
-        // handler.collect_scan_statistics(&mut storage_stats);
-
-        // tracker.on_finish_item(Some(storage_stats));
+        // There might be errors when handling requests. In this case, we still need its
+        // execution metrics.
+        let mut storage_stats = Statistics::default();
+        handler.collect_scan_statistics(&mut storage_stats);
+        tracker.collect_storage_statistics(storage_stats);
         let exec_details = tracker.get_item_exec_details();
 
         tracker.on_finish_all_items();
