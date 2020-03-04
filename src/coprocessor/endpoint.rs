@@ -27,6 +27,7 @@ use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
+use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
@@ -367,16 +368,18 @@ impl<E: Engine> Endpoint<E> {
         };
 
         tracker.on_begin_all_items();
-        tracker.on_begin_item();
+        // tracker.on_begin_item();
 
-        let result = handler.handle_request().await;
+        let handle_request_future = handler.handle_request();
+        let handle_request_future = track(handle_request_future, &mut tracker);
+        let result = handle_request_future.await;
 
-        // There might be errors when handling requests. In this case, we still need its
-        // execution metrics.
-        let mut storage_stats = Statistics::default();
-        handler.collect_scan_statistics(&mut storage_stats);
+        // // There might be errors when handling requests. In this case, we still need its
+        // // execution metrics.
+        // let mut storage_stats = Statistics::default();
+        // handler.collect_scan_statistics(&mut storage_stats);
 
-        tracker.on_finish_item(Some(storage_stats));
+        // tracker.on_finish_item(Some(storage_stats));
         let exec_details = tracker.get_item_exec_details();
 
         tracker.on_finish_all_items();
