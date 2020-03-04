@@ -14,3 +14,4 @@ mod test_stale_peer;
 mod test_stale_read;
 mod test_storage;
 mod test_transfer_leader;
+mod test_early_apply;
