@@ -38,7 +38,7 @@ pub fn new_event_feed(
 ) -> (
     ClientDuplexSender<ChangeDataRequest>,
     Rc<Cell<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
-    impl Fn(bool) -> Event_oneof_event,
+    impl Fn(bool) -> Vec<Event>,
 ) {
     let (req_tx, resp_rx) = client.event_feed().unwrap();
     let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
@@ -52,12 +52,18 @@ pub fn new_event_feed(
         };
         event_feed.set(Some(events));
         let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
+        let mut events = change_data.take_events().into_vec();
+        if !keep_resolved_ts {
+            events.retain(|e| {
+                if let Event_oneof_event::ResolvedTs(_) = e.event.as_ref().unwrap() {
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        if !events.is_empty() {
+            return events;
         }
     };
     (req_tx, event_feed_wrap, receive_event)

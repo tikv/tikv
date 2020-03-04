@@ -306,7 +306,6 @@ impl<T: CasualRouter> Endpoint<T> {
                 self.capture_regions.remove(&region_id);
             }
         }
-        self.flush_all();
     }
 
     pub fn on_incremental_scan(
@@ -579,6 +578,7 @@ impl<T: CasualRouter> Runnable<Task> for Endpoint<T> {
                 validate(self.capture_regions.get(&region_id));
             }
         }
+        self.flush_all();
     }
 }
 

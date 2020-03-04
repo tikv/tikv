@@ -30,7 +30,7 @@ fn test_failed_pending_batch() {
     req.region_id = region.get_id();
     req.set_region_epoch(region.get_region_epoch().clone());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let _ = req_tx
+    let req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
@@ -40,8 +40,9 @@ fn test_failed_pending_batch() {
     sleep_ms(200);
     fail::remove(incremental_scan_fp);
 
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
@@ -49,8 +50,9 @@ fn test_failed_pending_batch() {
         }
         _ => panic!("unknown event"),
     }
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
@@ -62,11 +64,10 @@ fn test_failed_pending_batch() {
     // Ensure it is old region.
     assert_eq!(req.get_region_id(), region.get_id());
     req.set_region_epoch(region.get_region_epoch().clone());
-    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    event_feed_wrap.replace(Some(resp_rx));
-    let event = receive_event(false);
-    match event {
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
@@ -90,7 +91,7 @@ fn test_region_ready_after_deregister() {
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Sleep for a while to make sure the region has been subscribed
     std::thread::sleep(Duration::from_millis(300));
 

@@ -29,10 +29,9 @@ fn test_cdc_basic() {
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    for _ in 0..2 {
-        let event = receive_event(true);
-        match event {
+    let req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    receive_event(true).into_iter().for_each(|e| {
+        match e.event.unwrap() {
             // Even if there is no write,
             // resolved ts should be advanced regularly.
             Event_oneof_event::ResolvedTs(ts) => assert_ne!(0, ts),
@@ -45,7 +44,7 @@ fn test_cdc_basic() {
             }
             _ => panic!("unknown event"),
         }
-    }
+    });
 
     // There must be a delegate.
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
@@ -67,8 +66,9 @@ fn test_cdc_basic() {
     mutation.key = k.clone().into_bytes();
     mutation.value = v.into_bytes();
     suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
             assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
@@ -80,19 +80,21 @@ fn test_cdc_basic() {
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut counter = 0;
     loop {
-        let event = receive_event(true);
         // Even if there is no write,
         // resolved ts should be advanced regularly.
-        if let Event_oneof_event::ResolvedTs(_) = event {
-            counter += 1;
-            if counter > 5 {
-                break;
+        for e in receive_event(true) {
+            if let Event_oneof_event::ResolvedTs(_) = e.event.unwrap() {
+                counter += 1;
             }
+        }
+        if counter > 5 {
+            break;
         }
     }
     suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
             assert_eq!(entries.entries[0].get_type(), EventLogType::Commit);
@@ -103,8 +105,9 @@ fn test_cdc_basic() {
     // Split region 1
     let region1 = suite.cluster.get_region(&[]);
     suite.cluster.must_split(&region1, b"key2");
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
@@ -120,16 +123,14 @@ fn test_cdc_basic() {
         ))
         .unwrap();
 
-    // The second stream.
+    // request again.
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    event_feed_wrap.replace(Some(resp_rx));
-    let event = receive_event(false);
-
-    match event {
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
@@ -148,7 +149,7 @@ fn test_cdc_basic() {
         ))
         .unwrap();
 
-    // Drop event_feed2 and cancel its server streaming.
+    // Drop stream and cancel its server streaming.
     event_feed_wrap.as_ref().replace(None);
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
@@ -166,10 +167,11 @@ fn test_cdc_basic() {
     req.region_id = 1;
     req.set_region_epoch(Default::default()); // Zero region epoch.
     let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
@@ -190,13 +192,14 @@ fn test_cdc_not_leader() {
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let _ = req_tx
+    let req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
     // Make sure region 1 is registered.
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
@@ -241,8 +244,9 @@ fn test_cdc_not_leader() {
         .find(|p| *p != leader)
         .unwrap();
     suite.cluster.must_transfer_leader(1, peer);
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
         }
@@ -267,12 +271,11 @@ fn test_cdc_not_leader() {
         .unwrap();
     rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
-    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let event = receive_event(false);
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
     // Should failed with not leader error.
-    match event {
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
         }
@@ -296,10 +299,11 @@ fn test_cdc_stale_epoch_after_region_ready() {
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Make sure region 1 is registered.
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
@@ -314,12 +318,11 @@ fn test_cdc_stale_epoch_after_region_ready() {
     req.region_id = 1;
     req.set_region_epoch(Default::default()); // zero epoch is always stale.
 
-    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let feed1_holder = event_feed_wrap.replace(Some(resp_rx));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Must receive epoch not match error.
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
@@ -327,11 +330,22 @@ fn test_cdc_stale_epoch_after_region_ready() {
     }
 
     // Must not receive any error on event feed 1.
-    event_feed_wrap.as_ref().replace(feed1_holder);
-    let event = receive_event(true);
-    match event {
-        Event_oneof_event::ResolvedTs(ts) => assert_ne!(0, ts),
-        _ => panic!("unknown event"),
+    let mut counter = 0;
+    loop {
+        // Even if there is no write,
+        // resolved ts should be advanced regularly.
+        for e in receive_event(true) {
+            match e.event.unwrap() {
+                Event_oneof_event::ResolvedTs(ts) => {
+                    assert_ne!(0, ts);
+                    counter += 1;
+                }
+                _ => panic!("unknown event"),
+            }
+        }
+        if counter > 5 {
+            break;
+        }
     }
 
     // Cancel event feed before finishing test.
@@ -367,9 +381,10 @@ fn test_cdc_scan() {
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let event = receive_event(false);
-    match event {
+    let req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 2, "{:?}", events);
+    match events.remove(0).event.unwrap() {
         // Batch size is set to 2.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
@@ -390,8 +405,7 @@ fn test_cdc_scan() {
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
     }
-    let event = receive_event(false);
-    match event {
+    match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
@@ -420,12 +434,28 @@ fn test_cdc_scan() {
     req.region_id = 1;
     req.checkpoint_ts = checkpoint_ts.into_inner();
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let event_feed1 = event_feed_wrap.replace(Some(resp_rx));
-
-    let event = receive_event(false);
-    match event {
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
+        // Batch size is set to 2.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
+            assert_eq!(e.get_op_type(), EventRowOpType::Put, "{:?}", es);
+            assert_eq!(e.start_ts, 4, "{:?}", es);
+            assert_eq!(e.commit_ts, 6, "{:?}", es);
+            assert_eq!(e.key, k, "{:?}", es);
+            assert_eq!(e.value, v, "{:?}", es);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    }
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
         // Batch size is set to 2.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
@@ -448,8 +478,9 @@ fn test_cdc_scan() {
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
     }
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
@@ -462,8 +493,6 @@ fn test_cdc_scan() {
     }
 
     event_feed_wrap.as_ref().replace(None);
-    drop(event_feed1);
-
     suite.stop();
 }
 
@@ -475,10 +504,11 @@ fn test_cdc_tso_failure() {
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Make sure region 1 is registered.
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
@@ -492,11 +522,21 @@ fn test_cdc_tso_failure() {
     suite.cluster.pd_client.trigger_tso_failure();
 
     // Make sure resolved ts can be advanced normally even with few tso failures.
-    for _ in 0..10 {
-        let event = receive_event(true);
-        match event {
-            Event_oneof_event::ResolvedTs(ts) => assert_ne!(0, ts),
-            _ => panic!("unknown event"),
+    let mut counter = 0;
+    loop {
+        // Even if there is no write,
+        // resolved ts should be advanced regularly.
+        for e in receive_event(true) {
+            match e.event.unwrap() {
+                Event_oneof_event::ResolvedTs(ts) => {
+                    assert_ne!(0, ts);
+                    counter += 1;
+                }
+                _ => panic!("unknown event"),
+            }
+        }
+        if counter > 10 {
+            break;
         }
     }
 
@@ -513,14 +553,14 @@ fn test_region_split() {
     req.region_id = region.get_id();
     req.set_region_epoch(region.get_region_epoch().clone());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let _ = req_tx
+    let req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
-
     // Make sure region 1 is registered.
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
@@ -532,8 +572,9 @@ fn test_region_split() {
     }
     // Split region.
     suite.cluster.must_split(&region, b"k0");
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
@@ -545,11 +586,10 @@ fn test_region_split() {
     assert_eq!(req.get_region_id(), region.get_id());
     req.set_region_epoch(region.get_region_epoch().clone());
 
-    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
-    let _ = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    event_feed_wrap.replace(Some(resp_rx));
-    let event = receive_event(false);
-    match event {
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
