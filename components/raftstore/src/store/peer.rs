@@ -1071,6 +1071,9 @@ impl Peer {
     /// there are two nodes, previous logs can still be committed by leader alone. Those logs
     /// can't be applied early. After introducing joint consensus, the node number can be
     /// undetermined. So here check whether log is persisted on disk instead.
+    ///
+    /// Only apply existing logs has another benefit that we don't need to deal with snapshots
+    /// that are older than apply index as apply index <= last index <= index of snapshot.
     pub fn can_early_apply(&self, term: u64, index: u64) -> bool {
         self.get_store().last_index() >= index && self.get_store().last_term() >= term
     }
@@ -1414,9 +1417,13 @@ impl Peer {
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
-        } else if self.get_store().applied_index() > self.get_store().committed_index() {
-            self.raft_group
-                .advance_apply(self.get_store().committed_index());
+        } else {
+            let applied_index = self.get_store().applied_index();
+            let raft_applied_index = self.raft_group.raft.raft_log.applied;
+            let committed_index = self.get_store().committed_index();
+            if applied_index > raft_applied_index && raft_applied_index < committed_index {
+                self.raft_group.advance_apply(committed_index);
+            }
         }
         self.proposals.gc();
     }
