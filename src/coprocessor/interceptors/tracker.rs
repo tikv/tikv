@@ -7,8 +7,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::coprocessor::tracker::Tracker as CopTracker;
-use crate::coprocessor::RequestHandler;
-use crate::storage::Statistics;
 
 pub fn track<'a, F: Future + 'a>(
     fut: F,

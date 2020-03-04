@@ -2572,6 +2572,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "pin-project"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7804a463a8d9572f13453c516a5faea534a2403d7ced2f0c7e100eeff072772c"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "385322a45f2ecf3410c68d2a549a4a2685e8051d0f278e39743ff4e451cb9b3f"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4354,6 +4374,7 @@ dependencies = [
  "panic_hook",
  "parking_lot 0.10.0",
  "pd_client",
+ "pin-project",
  "pprof",
  "procinfo",
  "prometheus",

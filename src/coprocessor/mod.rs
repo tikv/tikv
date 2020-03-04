@@ -24,6 +24,7 @@ mod checksum;
 pub mod dag;
 mod endpoint;
 mod error;
+mod interceptors;
 pub mod local_metrics;
 pub(crate) mod metrics;
 pub mod readpool_impl;

@@ -107,6 +107,10 @@ impl Tracker {
         self.current_stage = TrackerState::ItemFinished;
     }
 
+    pub fn collect_storage_statistics(&mut self, storage_stats: Statistics) {
+        self.total_storage_stats.add(&storage_stats);
+    }
+
     /// Get current item's ExecDetail according to previous collected metrics.
     /// TiDB asks for ExecDetail to be printed in its log.
     pub fn get_item_exec_details(&self) -> kvrpcpb::ExecDetails {

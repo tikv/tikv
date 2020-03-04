@@ -94,6 +94,7 @@ more-asserts = "0.1"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 pd_client = { path = "components/pd_client" }
+pin-project = "0.4.8"
 prost = "0.5.0"
 pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
