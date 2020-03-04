@@ -508,6 +508,11 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
         fail_point!("raft_before_save");
+        fail_point!(
+            "raft_before_save_on_store_1",
+            self.poll_ctx.store_id() == 1,
+            |_| {}
+        );
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);

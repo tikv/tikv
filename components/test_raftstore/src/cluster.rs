@@ -14,10 +14,10 @@ use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedSta
 use raft::eraftpb::ConfChangeType;
 use tempfile::{Builder, TempDir};
 
-use engine::{Engines, Peekable, WriteBatch, DB};
 use engine::rocks::{self, Writable};
-use engine_traits::{CF_RAFT, CF_DEFAULT, Iterable};
+use engine::{Engines, Peekable, WriteBatch, DB};
 use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{Iterable, CF_DEFAULT, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
