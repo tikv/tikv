@@ -254,6 +254,7 @@ impl Simulator for NodeCluster {
             importer,
             split_check_worker,
             Box::new(config_client) as _,
+            SplitHubInfo::default(),
         )?;
         assert!(engines
             .kv

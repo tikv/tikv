@@ -6,7 +6,6 @@ use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
-use std::thread;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -1209,6 +1208,11 @@ impl KeyRange {
             qps: 0,
         }
     }
+
+    fn contains(&self, key: &[u8]) ->bool{
+        return key.cmp(&self.start_key) == Ordering::Greater &&
+            key.cmp(&self.end_key) == Ordering::Less
+    }
 }
 
 pub struct Recorder {
@@ -1246,14 +1250,12 @@ impl Recorder {
 
     fn sample(&mut self, key_range: &KeyRange) {
         for mut sample in self.samples.iter_mut() {
-            if sample.key.cmp(&key_range.start_key) == Ordering::Less {
-                sample.left += 1;
-            } else if !key_range.end_key.is_empty()
-                && sample.key.cmp(&key_range.end_key) == Ordering::Greater
-            {
-                sample.right += 1;
-            } else {
+            if key_range.contains(&sample.key) {
                 sample.contained += 1;
+            } else if sample.key.cmp(&key_range.start_key)==Ordering::Less {
+                sample.right += 1;
+            } else { // key range is to the left sample key
+                sample.left += 1;
             }
         }
     }
@@ -1308,6 +1310,17 @@ pub struct SplitHubInfo {
     pub receiver: mpsc::Receiver<SplitHub>,
     pub qps_threshold: u32,
     pub split_score: f64,
+}
+
+impl SplitHubInfo{
+    pub fn default() -> SplitHubInfo{
+        let (_tx,rx) = mpsc::channel();
+        SplitHubInfo {
+            receiver:rx,
+            qps_threshold: DEFAULT_QPS_THRESHOLD,
+            split_score: DEFAULT_SPLIT_SCORE,
+        }
+    }
 }
 
 pub struct SplitHub {
@@ -1385,7 +1398,7 @@ impl SplitHub {
                     };
                     split_infos.push(split_info);
                     self.region_recorder.remove(region_id);
-                    info!("reporter_key";"region_id"=>*region_id,"thread_id"=>format!("{:?}",thread::current().id()));
+                    info!("load base split region";"region_id"=>*region_id);
                 }
             } else {
                 self.region_recorder.remove_entry(region_id);
@@ -1418,7 +1431,8 @@ mod tests {
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
             let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
-            if let Err(e) = stats_monitor.start() {
+
+            if let Err(e) = stats_monitor.start(SplitHubInfo::default()) {
                 error!("failed to start stats collector, error = {:?}", e);
             }
 
@@ -1484,6 +1498,29 @@ mod tests {
         assert!(total_cpu_usages > 90);
 
         pd_worker.stop();
+    }
+
+    #[test]
+    fn test_key_range() {
+        let key_range = KeyRange::new(b"a", b"c");
+        assert_eq!(key_range.contains(b"b"), true);
+        let key_range = KeyRange::new(b"a", b"");
+        assert_eq!(key_range.contains(b"b"), false);
+    }
+
+    #[test]
+    fn test_sample() {
+        let mut recorder = Recorder::new();
+        recorder.samples.push(Sample::new(b"b"));
+        let key_range = KeyRange::new(b"a", b"c");
+        recorder.sample(&key_range);
+        assert_eq!(recorder.samples[0].contained, 1);
+        let key_range = KeyRange::new(b"a", b"");
+        recorder.sample(&key_range);
+        assert_eq!(recorder.samples[0].left, 1);
+        let key_range = KeyRange::new(b"c", b"");
+        recorder.sample(&key_range);
+        assert_eq!(recorder.samples[0].right, 1);
     }
 
     #[test]

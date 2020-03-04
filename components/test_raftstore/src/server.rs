@@ -22,7 +22,7 @@ use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRout
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::SplitCheckRunner;
+use raftstore::store::{SplitCheckRunner, SplitHubInfo};
 use raftstore::store::{Callback, LocalReader, SnapManager};
 use raftstore::Result;
 use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
@@ -322,6 +322,7 @@ impl Simulator for ServerCluster {
             importer.clone(),
             split_check_worker,
             Box::new(config_client) as _,
+            SplitHubInfo::default(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
