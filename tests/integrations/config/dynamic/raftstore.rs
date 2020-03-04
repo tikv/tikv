@@ -72,7 +72,7 @@ fn start_raftstore(
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-    let mut cfg_controller = ConfigController::new(cfg, Default::default());
+    let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
     cfg_controller.register(
         Module::Raftstore,
         Box::new(RaftstoreConfigManager(cfg_track.clone())),

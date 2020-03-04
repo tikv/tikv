@@ -231,7 +231,7 @@ impl TiKVServer {
 
         config.write_into_metrics();
 
-        ConfigController::new(config, version)
+        ConfigController::new(config, version, true)
     }
 
     fn connect_to_pd_cluster(
