@@ -26,8 +26,8 @@ use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
+use crate::coprocessor::interceptors::limit_concurrency;
 use crate::coprocessor::metrics::*;
-use crate::coprocessor::time_limiter::limit_time;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 
@@ -336,7 +336,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_item();
 
         let result = if let Some(semaphore) = &semaphore {
-            limit_time(handler.handle_request(), semaphore, LIGHT_TASK_THRESHOLD).await
+            limit_concurrency(handler.handle_request(), semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
             handler.handle_request().await
         };
