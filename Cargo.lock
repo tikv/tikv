@@ -461,6 +461,7 @@ dependencies = [
  "tikv_util",
  "tokio-threadpool",
  "txn_types",
+ "util",
 ]
 
 [[package]]
@@ -4904,6 +4905,24 @@ dependencies = [
  "idna 0.2.0",
  "matches",
  "percent-encoding 2.1.0",
+]
+
+[[package]]
+name = "util"
+version = "0.0.1"
+dependencies = [
+ "cdc",
+ "futures 0.1.29",
+ "grpcio",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "test_raftstore",
+ "test_util",
+ "tikv",
+ "tikv_util",
+ "txn_types",
 ]
 
 [[package]]

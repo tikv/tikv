@@ -58,7 +58,13 @@ tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }
 test_util = { path = "../test_util" }
 panic_hook = { path = "../panic_hook" }
+util = {path = "tests/util" }
 
 [[test]]
 name = "integrations"
 path = "tests/integrations/mod.rs"
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
