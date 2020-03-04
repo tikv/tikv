@@ -2,6 +2,12 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.11]
+### Bugfixes
+- Optimize the log output by removing unnecessary logs [#6657](https://github.com/tikv/tikv/pull/6657)
+- Fix the panic that might occur when the peer is removed under high loads [#6704](https://github.com/tikv/tikv/pull/6704)
+- Fix the issue that Hibernate Regions are not waken up in some cases [#6732](https://github.com/tikv/tikv/pull/6732) [#6738](https://github.com/tikv/tikv/pull/6738)
+
 ## [3.0.10]
 - Raftstore
     - Fix the system panic issue #6460 or data loss issue #5981 caused by Region merge failure [#6614](https://github.com/tikv/tikv/pull/6614)
