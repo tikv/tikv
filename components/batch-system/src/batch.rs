@@ -257,7 +257,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 return batch.push(fsm);
             }
         }
-        return true;
+        true
     }
 
     fn try_fetch_batch(&mut self, batch: &mut Batch<N, C>) -> bool {
@@ -295,12 +295,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             while fsm_cnt < max_batch_size {
                 if fsm_cnt >= batch.normals.len() {
                     if !self.try_fetch_batch(&mut batch) {
-                        if fsm_cnt > 0 {
-                            self.handler.end(&mut batch.normals[0..fsm_cnt]);
-                        }
+                        self.handler.end(&mut batch.normals[0..fsm_cnt]);
                         return;
                     }
-                    if fsm_cnt >= batch.normals.len() || batch.control.is_some() {
+                    if fsm_cnt >= batch.normals.len() {
                         break;
                     }
                 }
@@ -326,9 +324,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
                 fsm_cnt += 1;
             }
-            if fsm_cnt > 0 {
-                self.handler.end(&mut batch.normals[0..fsm_cnt]);
-            }
+            self.handler.end(&mut batch.normals[0..fsm_cnt]);
+
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.
             while let Some((r, mark)) = reschedule_fsms.pop() {
