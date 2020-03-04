@@ -879,10 +879,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_extra_message(&mut self, msg: &RaftMessage) {
         let extra_msg = msg.get_extra_msg();
-        match extra_msg.get_type() {
-            ExtraMessageType::MsgRegionWakeUp => {
-                self.reset_raft_tick(GroupState::Ordered);
-            }
+        if let ExtraMessageType::MsgRegionWakeUp = extra_msg.get_type() {
+            self.reset_raft_tick(GroupState::Ordered);
         }
     }
 
