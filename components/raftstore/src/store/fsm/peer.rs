@@ -606,6 +606,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
+        if !self.ctx.cfg.early_apply {
+            self.handle_raft_ready_apply(&mut ready, &invoke_ctx);
+        }
         let res = self
             .fsm
             .peer

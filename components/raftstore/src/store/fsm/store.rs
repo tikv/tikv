@@ -490,7 +490,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx.need_flush_trans = false;
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
-        if ready_cnt != 0 {
+        if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
             let mut batch_pos = 0;
             let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, vec![]);
             for (ready, invoke_ctx) in &mut ready_res {
