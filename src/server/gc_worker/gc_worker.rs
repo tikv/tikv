@@ -750,9 +750,10 @@ impl<E: Engine> GcWorker<E> {
         &self,
         cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
-        let db = self.local_storage.clone().unwrap();
         let safe_point = Arc::new(AtomicU64::new(0));
-        init_compaction_filter(db, Arc::clone(&safe_point), self.config_manager.clone());
+        if let Some(db) = self.local_storage.clone() {
+            init_compaction_filter(db, Arc::clone(&safe_point), self.config_manager.clone());
+        }
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
