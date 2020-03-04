@@ -4,6 +4,7 @@ use rocksdb::DBEncryptionMethod;
 
 use crate::Result;
 
+#[cfg(not(feature = "prost-codec"))]
 pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DBEncryptionMethod {
     match method {
         EncryptionMethod::Plaintext => DBEncryptionMethod::Plaintext,
@@ -11,6 +12,19 @@ pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DB
         EncryptionMethod::Aes192Ctr => DBEncryptionMethod::Aes192Ctr,
         EncryptionMethod::Aes256Ctr => DBEncryptionMethod::Aes256Ctr,
         EncryptionMethod::Unknown => DBEncryptionMethod::Unknown,
+    }
+}
+
+#[cfg(feature = "prost-codec")]
+pub fn encryption_method_to_db_encryption_method(
+    method: i32, /* EncryptionMethod */
+) -> DBEncryptionMethod {
+    match method {
+        1/* EncryptionMethod::Plaintext */ => DBEncryptionMethod::Plaintext,
+        2/* EncryptionMethod::Aes128Ctr */ => DBEncryptionMethod::Aes128Ctr,
+        3/* EncryptionMethod::Aes192Ctr */ => DBEncryptionMethod::Aes192Ctr,
+        4/* EncryptionMethod::Aes256Ctr */ => DBEncryptionMethod::Aes256Ctr,
+        _/* EncryptionMethod::Unknown */ => DBEncryptionMethod::Unknown,
     }
 }
 

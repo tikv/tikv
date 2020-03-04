@@ -291,9 +291,9 @@ checksum = "46afbd2983a5d5a7bd740ccb198caf5b82f45c40c09c0eed36052d91cb92e719"
 
 [[package]]
 name = "bitflags"
-version = "1.1.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d155346769a6855b86399e9bc3814ab343cd3d62c7e985113d46a0ec3c281fd"
+checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
 
 [[package]]
 name = "blake2b_simd"
@@ -1859,7 +1859,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=encryption#964fb1c99f04412905fb7458aeab78726d8cd299"
+source = "git+https://github.com/pingcap/kvproto.git?branch=encryption#48f3612eda0d135d2a7e126cf46322d84029da71"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -2915,16 +2915,16 @@ replace = "protobuf 2.8.0 (git+https://github.com/pingcap/rust-protobuf?rev=b67d
 [[package]]
 name = "protobuf-build"
 version = "0.10.0"
-source = "git+https://github.com/tikv/protobuf-build?rev=42e52b9311f7fb31bbbe089fef5a24ec0392f9ce#42e52b9311f7fb31bbbe089fef5a24ec0392f9ce"
+source = "git+https://github.com/tikv/protobuf-build?rev=1fe5d77689d9691b7917215f3a1d32968115cc02#1fe5d77689d9691b7917215f3a1d32968115cc02"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
- "prost-build 0.5.0",
+ "prost-build 0.6.1",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf-codegen 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "quote 0.6.13",
+ "quote 1.0.2",
  "regex",
- "syn 0.15.44",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -2932,7 +2932,7 @@ name = "protobuf-build"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "211897988382ac761fa302992638ec837b544df73e6fb2ffc022c8515a0563f2"
-replace = "protobuf-build 0.10.0 (git+https://github.com/tikv/protobuf-build?rev=42e52b9311f7fb31bbbe089fef5a24ec0392f9ce)"
+replace = "protobuf-build 0.10.0 (git+https://github.com/tikv/protobuf-build?rev=1fe5d77689d9691b7917215f3a1d32968115cc02)"
 
 [[package]]
 name = "protobuf-codegen"
@@ -4360,6 +4360,7 @@ dependencies = [
  "crc64fast",
  "crossbeam",
  "derive_more",
+ "encryption",
  "engine",
  "engine_panic",
  "engine_rocks",

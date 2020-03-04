@@ -1,5 +1,6 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use kvproto::encryptionpb::EncryptionMethod;
+#[cfg(not(feature = "prost-codec"))]
 use protobuf::ProtobufEnum;
 
 use crate::{Error, Result};

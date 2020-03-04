@@ -81,7 +81,7 @@ impl Dicts {
         if self.file_dict.files.get(fname).is_none() {
             // Return Plaintext if file not found
             let mut file = FileInfo::default();
-            file.method = EncryptionMethod::Plaintext;
+            file.method = EncryptionMethod::Plaintext.into();
             self.file_dict.files.insert(fname.to_owned(), file);
         }
         self.file_dict.files.get(fname).unwrap()
@@ -96,7 +96,7 @@ impl Dicts {
         let mut file = FileInfo::default();
         file.iv = Iv::new().as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
-        file.method = method;
+        file.method = method.into();
         match self.file_dict.files.entry(fname.to_owned()) {
             Entry::Vacant(e) => e.insert(file),
             Entry::Occupied(_) => {
@@ -215,7 +215,7 @@ impl Dicts {
             let (key_id, key) = generate_data_key(method);
             let mut data_key = DataKey::default();
             data_key.key = key;
-            data_key.method = method;
+            data_key.method = method.into();
             data_key.creation_time = creation_time;
             data_key.was_exposed = false;
 
@@ -276,7 +276,7 @@ impl EncryptionKeyManager for DataKeyManager {
             (file.method, file.key_id, file.iv.to_owned())
         };
         // Fail if key is specified but not found.
-        let key = if method == EncryptionMethod::Plaintext {
+        let key = if method == EncryptionMethod::Plaintext.into() {
             vec![]
         } else {
             match dicts.get_key(key_id) {
