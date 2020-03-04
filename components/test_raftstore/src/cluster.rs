@@ -10,15 +10,20 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
+use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedState};
+use raft::eraftpb::ConfChangeType;
 use tempfile::{Builder, TempDir};
 
-use engine::rocks;
-use engine::rocks::DB;
-use engine::Engines;
-use engine::Peekable;
-use engine_rocks::RocksEngine;
-use engine_traits::CF_DEFAULT;
+//use engine::rocks;
+//use engine::rocks::DB;
+//use engine::Engines;
+//use engine::Peekable;
+//use engine_rocks::RocksEngine;
+use engine::rocks::{self, Writable, WriteBatch, DB};
+use engine::{Engines, Peekable};
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::Iterable;
+use engine_traits::{CF_DEFAULT, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -688,6 +693,63 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn async_request(
+        &mut self,
+        mut req: RaftCmdRequest,
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        let region_id = req.get_header().get_region_id();
+        let leader = self.leader_of_region(region_id).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        let (cb, rx) = make_cb(&req);
+        self.sim
+            .rl()
+            .async_command_on_node(leader.get_store_id(), req, cb)?;
+        Ok(rx)
+    }
+
+    pub fn async_put(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        let mut region = self.get_region(key);
+        let reqs = vec![new_put_cmd(key, value)];
+        let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
+        self.async_request(put)
+    }
+
+    pub fn async_remove_peer(
+        &mut self,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        let region = self
+            .pd_client
+            .get_region_by_id(region_id)
+            .wait()
+            .unwrap()
+            .unwrap();
+        let remove_peer = new_change_peer_request(ConfChangeType::RemoveNode, peer);
+        let req = new_admin_request(region_id, region.get_region_epoch(), remove_peer);
+        self.async_request(req)
+    }
+
+    pub fn async_add_peer(
+        &mut self,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        let region = self
+            .pd_client
+            .get_region_by_id(region_id)
+            .wait()
+            .unwrap()
+            .unwrap();
+        let add_peer = new_change_peer_request(ConfChangeType::AddNode, peer);
+        let req = new_admin_request(region_id, region.get_region_epoch(), add_peer);
+        self.async_request(req)
+    }
+
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
         self.must_put_cf("default", key, value);
     }
@@ -795,11 +857,103 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
+        self.apply_state(region_id, store_id).take_truncated_state()
+    }
+
+    pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
+        let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
-            .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &keys::apply_state_key(region_id))
+            .get_msg_cf::<RaftApplyState>(CF_RAFT, &key)
             .unwrap()
             .unwrap()
-            .take_truncated_state()
+    }
+
+    pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> raft_serverpb::RaftLocalState {
+        let key = keys::raft_state_key(region_id);
+        self.get_raft_engine(store_id)
+            .get_msg::<raft_serverpb::RaftLocalState>(&key)
+            .unwrap()
+            .unwrap()
+    }
+
+    pub fn wait_last_index(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        expected: u64,
+        timeout: Duration,
+    ) {
+        let timer = Instant::now();
+        loop {
+            let raft_state = self.raft_local_state(region_id, store_id);
+            let cur_index = raft_state.get_last_index();
+            if cur_index >= expected {
+                return;
+            }
+            if timer.elapsed() >= timeout {
+                panic!(
+                    "[region {}] last index still not reach {}: {:?}",
+                    region_id, expected, raft_state
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub fn restore_kv_meta(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
+        let (meta_start, meta_end) = (
+            keys::region_meta_prefix(region_id),
+            keys::region_meta_prefix(region_id + 1),
+        );
+        let kv_wb = WriteBatch::new();
+        RocksEngine::from_ref(&self.engines[&store_id].kv)
+            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, _| {
+                kv_wb.delete(k).unwrap();
+                Ok(true)
+            })
+            .unwrap();
+        snap.scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, v| {
+            kv_wb.put(k, v).unwrap();
+            Ok(true)
+        })
+        .unwrap();
+
+        let (raft_start, raft_end) = (
+            keys::region_raft_prefix(region_id),
+            keys::region_raft_prefix(region_id + 1),
+        );
+        RocksEngine::from_ref(&self.engines[&store_id].kv)
+            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |k, _| {
+                kv_wb.delete(k).unwrap();
+                Ok(true)
+            })
+            .unwrap();
+        snap.scan_cf(CF_RAFT, &raft_start, &raft_end, false, |k, v| {
+            kv_wb.put(k, v).unwrap();
+            Ok(true)
+        })
+        .unwrap();
+        self.engines[&store_id].kv.write(&kv_wb).unwrap();
+    }
+
+    pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
+        let raft_wb = WriteBatch::new();
+        let (raft_start, raft_end) = (
+            keys::region_raft_prefix(region_id),
+            keys::region_raft_prefix(region_id + 1),
+        );
+        RocksEngine::from_ref(&self.engines[&store_id].raft)
+            .scan(&raft_start, &raft_end, false, |k, _| {
+                raft_wb.delete(k).unwrap();
+                Ok(true)
+            })
+            .unwrap();
+        snap.scan(&raft_start, &raft_end, false, |k, v| {
+            raft_wb.put(k, v).unwrap();
+            Ok(true)
+        })
+        .unwrap();
+        self.engines[&store_id].raft.write(&raft_wb).unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
