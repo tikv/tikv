@@ -13,6 +13,12 @@
 ## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
+## File to store slow logs.
+## If "log-file" is set, but this is not set, the slow logs will be appeneded
+## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
+## will be appended to stderr.
+# slow-log-file = ""
+
 ## Timespan between rotating the log files.
 ## Once this timespan passes, log files will be rotated, i.e. existing log file will have a
 ## timestamp appended to its name and a new file will be created.
