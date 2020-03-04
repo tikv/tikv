@@ -1061,6 +1061,20 @@ impl Peer {
         false
     }
 
+    /// Whether a log can be applied before writing raft batch.
+    ///
+    /// If TiKV crashes, it's possible apply index > commit index. If logs are still
+    /// available in other nodes, it's possible to be recovered. But for singleton, logs are
+    /// only available on single node, logs are gone forever.
+    ///
+    /// Note we can't just check singleton. Because conf change takes effect on apply, so even
+    /// there are two nodes, previous logs can still be committed by leader alone. Those logs
+    /// can't be applied early. After introducing joint consensus, the node number can be
+    /// undetermined. So here check whether log is persisted on disk instead.
+    pub fn can_early_apply(&self, term: u64, index: u64) -> bool {
+        self.get_store().last_index() >= index && self.get_store().last_term() >= term
+    }
+
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
         if self.apply_proposals.is_empty() {
             return None;

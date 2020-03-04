@@ -418,7 +418,7 @@ fn validate_states(raft_state: &RaftLocalState, apply_state: &RaftApplyState) ->
             apply_state
         ));
     }
-    if commit_index < apply_state.get_last_commit_index() {
+    if commit_index < apply_state.get_last_commit_index() || apply_index > last_index {
         return Err(box_err!(
             "raft state {:?} not match apply state {:?} and can't be recovered,",
             raft_state,
@@ -659,6 +659,11 @@ impl PeerStorage {
     #[inline]
     pub fn last_index(&self) -> u64 {
         last_index(&self.raft_state)
+    }
+
+    #[inline]
+    pub fn last_term(&self) -> u64 {
+        self.last_term
     }
 
     #[inline]
