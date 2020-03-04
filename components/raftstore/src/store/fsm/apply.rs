@@ -418,7 +418,7 @@ impl ApplyContext {
                     });
             }
             self.sync_log_hint = false;
-            for w in 0..self.cur_wb + 1 {
+            for w in 0..=self.cur_wb {
                 let data_size = self.kv_wbs[w].data_size();
                 if data_size > APPLY_WB_SHRINK_SIZE {
                     // Control the memory usage for the WriteBatch.
