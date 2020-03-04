@@ -29,6 +29,7 @@ pub fn init_compaction_filter(
     safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
 ) {
+    info!("initialize GC context for compaction filter");
     let mut gc_context = GC_CONTEXT.lock().unwrap();
     *gc_context = Some(GcContext {
         db,

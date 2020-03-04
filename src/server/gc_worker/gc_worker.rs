@@ -751,6 +751,7 @@ impl<E: Engine> GcWorker<E> {
         cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
         let safe_point = Arc::new(AtomicU64::new(0));
+        info!("start_auto_gc, has_local_storage: {}", self.local_storage.is_some());
         if let Some(db) = self.local_storage.clone() {
             init_compaction_filter(db, Arc::clone(&safe_point), self.config_manager.clone());
         }
@@ -771,7 +772,7 @@ impl<E: Engine> GcWorker<E> {
     pub fn start(&mut self) -> Result<()> {
         let runner = GcRunner::new(
             self.engine.clone(),
-            self.local_storage.take(),
+            self.local_storage.clone(),
             self.raft_store_router.take(),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.region_info_accessor.take(),
