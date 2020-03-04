@@ -27,6 +27,7 @@ use raftstore::{
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
         new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
+        SplitHubInfo,
     },
 };
 use std::{
@@ -34,7 +35,7 @@ use std::{
     fmt,
     fs::File,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{mpsc, Arc, Mutex},
     thread::JoinHandle,
     time::Duration,
 };
@@ -420,14 +421,13 @@ impl TiKVServer {
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
+        let (tx, rx) = mpsc::channel();
         let unified_read_pool = if self.config.readpool.unify_read_pool {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                self.config.server.split_qps_threshold,
-                self.config.server.split_score,
-
+                tx,
             ))
         } else {
             None
@@ -542,6 +542,11 @@ impl TiKVServer {
         );
 
         let raft_router = node.get_router();
+        let hub_info = SplitHubInfo {
+            receiver: rx,
+            qps_threshold: self.config.server.split_qps_threshold,
+            split_score: self.config.server.split_score,
+        };
 
         node.start(
             engines.engines.clone(),
@@ -553,6 +558,7 @@ impl TiKVServer {
             importer.clone(),
             split_check_worker,
             Box::new(config_client) as _,
+            hub_info,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

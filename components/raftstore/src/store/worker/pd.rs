@@ -1,11 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
+use std::thread;
 use std::thread::{Builder, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use futures::sync::oneshot;
 use futures::Future;
@@ -25,6 +28,7 @@ use raft::eraftpb::ConfChangeType;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
+use crate::store::metrics::*;
 use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::Callback;
@@ -32,11 +36,13 @@ use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
 use pd_client::metrics::*;
 use pd_client::{ConfigClient, Error, PdClient, RegionStat};
+use rand::Rng;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
+use txn_types::Key;
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
 #[derive(Default, Debug, Clone)]
@@ -58,20 +64,12 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     // saves the flow statistics of different region.
     // TODO: maybe we need to return a Result later?
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
-
-    fn split(&self, split_infos: Vec<SplitInfo>);
 }
 
 impl FlowStatsReporter for Scheduler<Task> {
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
-        }
-    }
-
-    fn split(&self, split_infos: Vec<SplitInfo>) {
-        if let Err(e) = self.schedule(Task::ToAskSplit { split_infos }) {
-            error!("Failed to send split infos"; "err" => ?e);
         }
     }
 }
@@ -283,11 +281,16 @@ fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         .collect()
 }
 
+const DEFAULT_QPS_INFO_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_COLLECT_INTERVAL: Duration = Duration::from_secs(1);
+
 struct StatsMonitor {
     scheduler: Scheduler<Task>,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
-    interval: Duration,
+    thread_info_interval: Duration,
+    qps_info_interval: Duration,
+    collect_interval: Duration,
 }
 
 impl StatsMonitor {
@@ -296,38 +299,80 @@ impl StatsMonitor {
             scheduler,
             handle: None,
             sender: None,
-            interval,
+            thread_info_interval: interval,
+            qps_info_interval: DEFAULT_QPS_INFO_INTERVAL,
+            collect_interval: DEFAULT_COLLECT_INTERVAL,
         }
     }
 
-    pub fn start(&mut self) -> Result<(), io::Error> {
+    pub fn start(&mut self, hub_info: SplitHubInfo) -> Result<(), io::Error> {
+        let mut timer_cnt = 0;
+        let collect_interval = self.collect_interval;
+        let thread_info_interval = self
+            .thread_info_interval
+            .div_duration_f64(self.collect_interval) as i32;
+        let qps_info_interval = self
+            .qps_info_interval
+            .div_duration_f64(self.collect_interval) as i32;
+
         let (tx, rx) = mpsc::channel();
-        let interval = self.interval;
-        let scheduler = self.scheduler.clone();
         self.sender = Some(tx);
+
+        let scheduler = self.scheduler.clone();
+        let receiver = hub_info.receiver;
+        let mut unify_hub = SplitHub::new();
+        unify_hub.qps_threshold = hub_info.qps_threshold;
+        unify_hub.split_score = hub_info.split_score;
+
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
                 let mut thread_stats = ThreadInfoStatistics::new();
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
+                    if timer_cnt % thread_info_interval == 0 {
+                        thread_stats.record();
+                        let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
+                        let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
+                        let write_io_rates =
+                            convert_record_pairs(thread_stats.get_write_io_rates());
 
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                    thread_stats.record();
-
-                    let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
-                    let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
-                    let write_io_rates = convert_record_pairs(thread_stats.get_write_io_rates());
-
-                    let task = Task::StoreInfos {
-                        cpu_usages,
-                        read_io_rates,
-                        write_io_rates,
-                    };
-                    if let Err(e) = scheduler.schedule(task) {
-                        error!(
-                            "failed to send store infos to pd worker";
-                            "err" => ?e,
-                        );
+                        let task = Task::StoreInfos {
+                            cpu_usages,
+                            read_io_rates,
+                            write_io_rates,
+                        };
+                        if let Err(e) = scheduler.schedule(task) {
+                            error!(
+                                "failed to send store infos to pd worker";
+                                "err" => ?e,
+                            );
+                        }
                     }
+                    if timer_cnt % qps_info_interval == 0 {
+                        while let Ok(mut other_hub) = receiver.try_recv() {
+                            unify_hub.update(&mut other_hub);
+                        }
+
+                        let (top, split_infos) = unify_hub.flush();
+                        let task = Task::ToAskSplit { split_infos };
+                        if let Err(e) = scheduler.schedule(task) {
+                            error!(
+                                "failed to send split infos to pd worker";
+                                "err" => ?e,
+                            );
+                        }
+
+                        for i in 0..TOP_N {
+                            if i < top.len() {
+                                READ_QPS_TOPN
+                                    .with_label_values(&[&i.to_string()])
+                                    .set(top[i] as f64);
+                            } else {
+                                READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
+                            }
+                        }
+                    }
+                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
                 }
             })?;
 
@@ -378,10 +423,11 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
+        hub_info: SplitHubInfo,
     ) -> Runner<T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
-        if let Err(e) = stats_monitor.start() {
+        if let Err(e) = stats_monitor.start(hub_info) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
@@ -1124,6 +1170,233 @@ fn send_destroy_peer_message(
     }
 }
 
+const DEFAULT_QPS_THRESHOLD: u32 = 500;
+const DETECT_TIMES: u32 = 10;
+pub const TOP_N: usize = 10;
+const DETECT_INTERVAL: Duration = Duration::from_secs(1);
+const MIN_SAMPLE_NUM: i32 = 100;
+const DEFAULT_SPLIT_SCORE: f64 = 0.25;
+
+pub struct Sample {
+    pub key: Vec<u8>,
+    pub left: i32,
+    pub contained: i32,
+    pub right: i32,
+}
+
+impl Sample {
+    fn new(key: &[u8]) -> Sample {
+        Sample {
+            key: key.to_owned(),
+            left: 0,
+            contained: 0,
+            right: 0,
+        }
+    }
+}
+
+pub struct KeyRange {
+    pub start_key: Vec<u8>,
+    pub end_key: Vec<u8>,
+    pub qps: u64,
+}
+
+impl KeyRange {
+    fn new(start_key: &[u8], end_key: &[u8]) -> KeyRange {
+        KeyRange {
+            start_key: start_key.to_owned(),
+            end_key: end_key.to_owned(),
+            qps: 0,
+        }
+    }
+}
+
+pub struct Recorder {
+    pub samples: Vec<Sample>,
+    pub times: u32,
+    pub count: u64,
+    pub create_time: SystemTime,
+}
+
+impl Recorder {
+    fn new() -> Recorder {
+        Recorder {
+            samples: vec![],
+            times: 0,
+            count: 0,
+            create_time: SystemTime::now(),
+        }
+    }
+
+    fn record(&mut self, key_ranges: &[KeyRange]) {
+        self.times += 1;
+        for key_range in key_ranges.iter() {
+            self.count += 1;
+            if self.samples.len() < 20 {
+                self.samples.push(Sample::new(&key_range.start_key));
+            } else {
+                self.sample(key_range);
+                let i = rand::thread_rng().gen_range(0, self.count) as usize;
+                if i < 20 {
+                    self.samples[i] = Sample::new(&key_range.start_key);
+                }
+            }
+        }
+    }
+
+    fn sample(&mut self, key_range: &KeyRange) {
+        for mut sample in self.samples.iter_mut() {
+            if sample.key.cmp(&key_range.start_key) == Ordering::Less {
+                sample.left += 1;
+            } else if !key_range.end_key.is_empty()
+                && sample.key.cmp(&key_range.end_key) == Ordering::Greater
+            {
+                sample.right += 1;
+            } else {
+                sample.contained += 1;
+            }
+        }
+    }
+
+    fn split_key(&self, split_score: f64) -> Vec<u8> {
+        if self.times < DETECT_TIMES {
+            return vec![];
+        }
+        let mut best_index: i32 = -1;
+        let mut best_score = split_score;
+        for index in 0..self.samples.len() {
+            let sample = &self.samples[index];
+            if sample.contained + sample.left + sample.right < MIN_SAMPLE_NUM {
+                continue;
+            }
+            let diff = (sample.left - sample.right) as f64;
+            let balance_score = diff.abs() / (sample.left + sample.right) as f64;
+            if balance_score < best_score {
+                best_index = index as i32;
+                best_score = balance_score;
+            }
+        }
+        if best_index >= 0 {
+            return self.samples[best_index as usize].key.clone();
+        }
+        return vec![];
+    }
+}
+
+pub struct RegionInfo {
+    pub peer: metapb::Peer,
+    pub qps: u32,
+}
+
+impl RegionInfo {
+    fn new() -> RegionInfo {
+        RegionInfo {
+            qps: 0,
+            peer: metapb::Peer::default(),
+        }
+    }
+
+    fn add(&mut self, peer: &metapb::Peer, num: u32) {
+        if self.peer != *peer {
+            self.peer = peer.clone();
+        }
+        self.qps += num;
+    }
+}
+
+pub struct SplitHubInfo {
+    pub receiver: mpsc::Receiver<SplitHub>,
+    pub qps_threshold: u32,
+    pub split_score: f64,
+}
+
+pub struct SplitHub {
+    pub region_qps: HashMap<u64, RegionInfo>,
+    pub region_keys: HashMap<u64, Vec<KeyRange>>,
+    pub region_recorder: HashMap<u64, Recorder>,
+    pub qps_threshold: u32,
+    pub split_score: f64,
+}
+
+impl SplitHub {
+    pub fn new() -> SplitHub {
+        SplitHub {
+            region_qps: HashMap::default(),
+            region_keys: HashMap::default(),
+            region_recorder: HashMap::default(),
+            qps_threshold: DEFAULT_QPS_THRESHOLD,
+            split_score: DEFAULT_SPLIT_SCORE,
+        }
+    }
+
+    fn add_qps(&mut self, region_id: u64, peer: &metapb::Peer, num: u32) {
+        let region_info = self
+            .region_qps
+            .entry(region_id)
+            .or_insert_with(RegionInfo::new);
+        region_info.add(peer, num);
+    }
+
+    fn add_key_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
+        let key_ranges = self.region_keys.entry(region_id).or_insert_with(|| vec![]);
+        (*key_ranges).push(KeyRange::new(start_key, end_key));
+    }
+
+    pub fn add(&mut self, region_id: u64, peer: &metapb::Peer, start_key: &[u8], end_key: &[u8]) {
+        self.add_qps(region_id, peer, 1);
+        self.add_key_range(region_id, start_key, end_key);
+    }
+
+    fn update(&mut self, other: &mut SplitHub) {
+        for (region_id, region_info) in other.region_qps.iter() {
+            self.add_qps(*region_id, &(*region_info).peer, (*region_info).qps);
+        }
+        for (region_id, other_key_ranges) in other.region_keys.iter_mut() {
+            let key_ranges = self.region_keys.entry(*region_id).or_insert_with(|| vec![]);
+            (*key_ranges).append(other_key_ranges);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.region_keys.clear();
+        self.region_qps.clear();
+        self.region_recorder.retain(|_, recorder| {
+            recorder.create_time.elapsed().unwrap() < DETECT_INTERVAL * DETECT_TIMES * 10
+        });
+    }
+
+    pub fn flush(&mut self) -> (Vec<u32>, Vec<SplitInfo>) {
+        let mut split_infos = Vec::default();
+        let mut top = BinaryHeap::with_capacity(TOP_N as usize);
+        for (region_id, region_info) in self.region_qps.iter() {
+            let qps = (*region_info).qps;
+            if qps > self.qps_threshold {
+                let recorder = self
+                    .region_recorder
+                    .entry(*region_id)
+                    .or_insert_with(Recorder::new);
+                recorder.record(self.region_keys.get(region_id).unwrap());
+                let key = recorder.split_key(self.split_score);
+                if !key.is_empty() {
+                    let split_info = SplitInfo {
+                        region_id: *region_id,
+                        split_key: Key::from_raw(&key).into_encoded(),
+                        peer: (*region_info).peer.clone(),
+                    };
+                    split_infos.push(split_info);
+                    self.region_recorder.remove(region_id);
+                    info!("reporter_key";"region_id"=>*region_id,"thread_id"=>format!("{:?}",thread::current().id()));
+                }
+            } else {
+                self.region_recorder.remove_entry(region_id);
+            }
+            top.push(qps);
+        }
+        self.clear();
+        (top.into_vec(), split_infos)
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
@@ -1211,5 +1484,42 @@ mod tests {
         assert!(total_cpu_usages > 90);
 
         pd_worker.stop();
+    }
+
+    #[test]
+    fn test_recorder() {
+        let mut recorder = Recorder::new();
+
+        let key_range = KeyRange::new(b"a", b"b");
+        recorder.record(&[key_range]);
+        assert_eq!(recorder.samples.len(), 1);
+        assert_eq!(recorder.samples[0].contained, 1);
+
+        let mut key_ranges: Vec<KeyRange> = Vec::new();
+
+        key_ranges.push(KeyRange::new(b"a", b"b"));
+        key_ranges.push(KeyRange::new(b"b", b"c"));
+        key_ranges.push(KeyRange::new(b"c", b"d"));
+        key_ranges.push(KeyRange::new(b"d", b""));
+
+        for _ in 0..50 {
+            recorder.record(key_ranges.as_slice());
+        }
+
+        assert_eq!(recorder.samples.len(), 20);
+        assert_eq!(recorder.split_key(DEFAULT_SPLIT_SCORE), b"c");
+    }
+
+    #[test]
+    fn test_hub() {
+        let mut hub = SplitHub::new();
+        for i in 0..100 {
+            hub.add(1, &metapb::Peer::default(), b"a", b"b");
+            hub.add(1, &metapb::Peer::default(), b"b", b"");
+            let (_, split_infos) = hub.flush();
+            if (i + 1) % DETECT_TIMES == 0 {
+                assert_eq!(split_infos.len(), 1);
+            }
+        }
     }
 }

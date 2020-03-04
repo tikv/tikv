@@ -230,4 +230,11 @@ lazy_static! {
             "tikv_raftstore_read_index_pending",
             "pending read index count"
         ).unwrap();
+
+    pub static ref READ_QPS_TOPN: GaugeVec =
+        register_gauge_vec!(
+            "tikv_read_qps_topn",
+            "tikv_read_qps_topn",
+        &["order"]
+        ).unwrap();
 }

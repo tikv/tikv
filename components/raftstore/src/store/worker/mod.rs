@@ -16,7 +16,8 @@ pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
 pub use self::pd::{
-    DynamicConfig, FlowStatistics, FlowStatsReporter, Runner as PdRunner, SplitInfo, Task as PdTask,
+    DynamicConfig, FlowStatistics, FlowStatsReporter, Runner as PdRunner, SplitHub, SplitHubInfo,
+    SplitInfo, Task as PdTask,
 };
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::read::{LocalReader, Progress as ReadProgress, ReadDelegate};

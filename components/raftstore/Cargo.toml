@@ -61,6 +61,7 @@ pd_client = { path = "../pd_client" }
 prost = { version = "0.5.0", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.2"
+rand = "0.6.5"
 raft = { version = "0.6.0-alpha", default-features = false }
 serde = "1.0"
 serde_derive = "1.0"
