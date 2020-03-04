@@ -41,8 +41,11 @@ fn test_failed_pending_batch() {
     fail::remove(incremental_scan_fp);
 
     let mut events = receive_event(false);
-    assert_eq!(events.len(), 1, "{:?}", events);
-    match events.pop().unwrap().event.unwrap() {
+    if events.len() == 1 {
+        events.extend(receive_event(false).into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events);
+    match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
@@ -50,8 +53,6 @@ fn test_failed_pending_batch() {
         }
         _ => panic!("unknown event"),
     }
-    let mut events = receive_event(false);
-    assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
