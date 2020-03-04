@@ -368,7 +368,6 @@ impl<E: Engine> Endpoint<E> {
         };
 
         tracker.on_begin_all_items();
-        // tracker.on_begin_item();
 
         let handle_request_future = handler.handle_request();
         let handle_request_future = track(handle_request_future, &mut tracker);

@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use pin_project::pin_project;
-use std::boxed::Box;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -10,7 +9,7 @@ use crate::coprocessor::tracker::Tracker as CopTracker;
 
 pub fn track<'a, F: Future + 'a>(
     fut: F,
-    cop_tracker: &'a mut Box<CopTracker>,
+    cop_tracker: &'a mut CopTracker,
 ) -> impl Future<Output = F::Output> + 'a {
     Tracker::new(fut, cop_tracker)
 }
@@ -22,14 +21,14 @@ where
 {
     #[pin]
     fut: F,
-    cop_tracker: &'a mut Box<CopTracker>,
+    cop_tracker: &'a mut CopTracker,
 }
 
 impl<'a, F> Tracker<'a, F>
 where
     F: Future,
 {
-    fn new(fut: F, cop_tracker: &'a mut Box<CopTracker>) -> Self {
+    fn new(fut: F, cop_tracker: &'a mut CopTracker) -> Self {
         Tracker { fut, cop_tracker }
     }
 }
