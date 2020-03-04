@@ -308,7 +308,7 @@ fn test_dispatch_change() {
 
 #[test]
 fn test_restart_with_invalid_cfg_on_pd() {
-    let pd_client =  Arc::new(MockPdClient::new());
+    let pd_client = Arc::new(MockPdClient::new());
     let id = "localhost:1080";
     let mut cfg = TiKvConfig::default();
     cfg.storage.data_dir = {
