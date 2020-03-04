@@ -56,7 +56,6 @@ where
     for (id, snap) in &snaps {
         cluster.restore_raft(1, *id, snap);
     }
-    cluster.clear_send_filters();
     for (id, _) in &snaps {
         cluster.run_node(*id).unwrap();
     }
@@ -114,17 +113,74 @@ fn test_early_apply(mode: DataLost) {
     }
 }
 
+/// Tests whether the cluster can recover from leader lost its commit index.
 #[test]
 fn test_leader_early_apply() {
     test_early_apply(DataLost::LeaderCommit)
 }
 
+/// Tests whether the cluster can recover from follower lost its commit index.
 #[test]
 fn test_follower_commit_early_apply() {
     test_early_apply(DataLost::FollowerCommit)
 }
 
+/// Tests whether the cluster can recover from all nodes lost their commit index.
 #[test]
 fn test_all_node_crash() {
     test_early_apply(DataLost::AllLost)
+}
+
+/// Tests if apply index inside raft is updated correctly.
+///
+/// If index is not updated, raft will reject to campaign on timeout.
+#[test]
+fn test_update_internal_apply_index() {
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.early_apply = true;
+    cluster.pd_client.disable_default_operator();
+    // So compact log will not be triggered automatically.
+    configure_for_request_snapshot(&mut cluster);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+
+    let filter = RegionPacketFilter::new(1, 3)
+        .msg_type(MessageType::MsgAppendResponse)
+        .direction(Direction::Recv);
+    cluster.add_send_filter(CloneFilterFactory(filter));
+    let last_index = cluster.raft_local_state(1, 1).get_last_index();
+    cluster.async_remove_peer(1, new_peer(4, 4)).unwrap();
+    cluster.async_put(b"k2", b"v2").unwrap();
+    let mut snaps = vec![];
+    for i in 1..3 {
+        cluster.wait_last_index(1, i, last_index + 2, Duration::from_secs(3));
+        snaps.push((i, RocksSnapshot::new(cluster.get_raft_engine(1))));
+    }
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+
+    // Simulate data lost in raft cf.
+    for (id, snap) in &snaps {
+        cluster.stop_node(*id);
+        cluster.restore_raft(1, *id, &snap);
+        cluster.run_node(*id).unwrap();
+    }
+
+    let region = cluster.get_region(b"k1");
+    // Issues a heartbeat to followers so they will re-commit the logs.
+    let resp = read_on_peer(
+        &mut cluster,
+        new_peer(3, 3),
+        region.clone(),
+        b"k1",
+        true,
+        Duration::from_secs(3),
+    )
+    .unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    cluster.stop_node(3);
+    cluster.must_put(b"k3", b"v3");
 }

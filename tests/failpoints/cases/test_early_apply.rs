@@ -45,7 +45,7 @@ fn test_singleton_early_apply() {
     cluster.async_put(b"k4", b"v4").unwrap();
     fail::cfg(store_1_fp, "off").unwrap();
     // Sleep a bit to wait for the failpoint being waken up.
-    thread::sleep(Duration::from_millis(1));
+    thread::sleep(Duration::from_millis(5));
     fail::cfg(store_1_fp, "pause").unwrap();
     must_get_equal(&cluster.get_engine(1), b"k1", b"v2");
     must_get_none(&cluster.get_engine(1), b"k4");
@@ -53,6 +53,7 @@ fn test_singleton_early_apply() {
     must_get_equal(&cluster.get_engine(1), b"k4", b"v4");
 }
 
+/// Tests whether disabling early apply really works.
 #[test]
 fn test_disable_early_apply() {
     let guard = crate::setup();
