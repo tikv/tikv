@@ -76,6 +76,9 @@ impl Conn {
                 v.push(e);
                 None
             }
+            fn reset(&mut self) {
+                self.0 = 0;
+            }
         }
         let rx =
             batch::BatchReceiver::new(rx, RAFT_MSG_MAX_BATCH_SIZE, Vec::new, RaftMsgCollector(0));

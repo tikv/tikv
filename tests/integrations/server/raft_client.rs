@@ -11,6 +11,7 @@ use grpcio::{
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
 use raftstore::router::RaftStoreBlackHole;
+use raft::eraftpb::Entry;
 use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
@@ -141,6 +142,58 @@ fn test_raft_client_reconnect() {
 
     check_f(300, || counter.load(Ordering::SeqCst) == 100);
     assert_eq!(counter.load(Ordering::SeqCst), 100);
+
+    drop(mock_server);
+    pool.shutdown().wait().unwrap();
+}
+
+#[test]
+fn test_batch_size_limit() {
+    #[derive(Clone)]
+    struct MockKvForRaft(Arc<AtomicUsize>);
+
+    impl MockKvService for MockKvForRaft {
+        fn batch_raft(
+            &mut self,
+            ctx: RpcContext<'_>,
+            stream: RequestStream<BatchRaftMessage>,
+            sink: ClientStreamingSink<Done>,
+        ) {
+            let counter = Arc::clone(&self.0);
+            ctx.spawn(
+                stream
+                    .for_each(move |msgs| {
+                        let len = msgs.msgs.len();
+                        counter.fetch_add(len, Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .map_err(|_| drop(sink)),
+            );
+        }
+    }
+
+    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let mut raft_client = get_raft_client(&pool);
+    let counter = Arc::new(AtomicUsize::new(0));
+
+    let service = MockKvForRaft(Arc::clone(&counter));
+    let (mock_server, port) = create_mock_server(service, 50000, 50300).unwrap();
+    let addr = format!("localhost:{}", port);
+
+    // `send` should success.
+    for _ in 0..10 {
+        // 5M per RaftMessage.
+        let mut raft_m = RaftMessage::default();
+        for _ in 0..(5 * 1024) {
+            let mut e = Entry::default();
+            e.set_data(vec![b'a'; 1024]);
+            raft_m.mut_message().mut_entries().push(e);
+        }
+        raft_client.send(1, &addr, raft_m).unwrap();
+    }
+    raft_client.flush();
+
+    check_f(300, || counter.load(Ordering::SeqCst) == 10);
 
     drop(mock_server);
     pool.shutdown().wait().unwrap();

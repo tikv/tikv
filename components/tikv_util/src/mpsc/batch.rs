@@ -372,8 +372,16 @@ mod tests {
     #[test]
     fn test_batch_receiver() {
         let (tx, rx) = unbounded::<u64>(4);
-        let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), |v, e| v.push(e));
 
+	struct VecCollector;
+	impl BatchCollector<Vec<u64>, u64> for VecCollector {
+	    fn collect(&mut self, v: &mut Vec<u64>, e: u64) -> Option<u64> {
+		v.push(e);
+		None
+	    }
+	}
+
+        let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), VecCollector);
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter_spawned = Arc::clone(&msg_counter);
         let (nty, polled) = mpsc::sync_channel(1);
