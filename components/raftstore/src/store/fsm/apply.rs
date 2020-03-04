@@ -3887,9 +3887,8 @@ mod tests {
                 .build();
             entries.push(put_entry);
         }
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries)));
         router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries, 11)));
-        for _ in 0..WRITE_BATCH_MAX_KEYS {
+        for _ in 0..WRITE_MAX_BATCH_SIZE {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         let index = WRITE_MAX_BATCH_SIZE + 11;
@@ -3945,7 +3944,7 @@ mod tests {
             .put(b"k3", b"v1")
             .epoch(1, 3)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![put_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![put_entry], 0)));
         fetch_apply_res(&rx);
         // It must receive nothing because no region registered.
         cmdbatch_rx
@@ -3966,7 +3965,7 @@ mod tests {
             .put(b"k0", b"v0")
             .epoch(1, 3)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 1)));
         // Register cmd observer to region 1.
         let enabled = Arc::new(AtomicBool::new(true));
         router.schedule_task(
@@ -3992,7 +3991,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&router, 3, 1, capture_tx)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 2)));
         fetch_apply_res(&rx);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -4010,7 +4009,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(1, 2, vec![put_entry1, put_entry2])),
+            Msg::apply(Apply::new(1, 2, vec![put_entry1, put_entry2], 3)),
         );
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(2, cmd_batch.len());
@@ -4021,7 +4020,7 @@ mod tests {
             .put(b"k2", b"v2")
             .epoch(1, 3)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
+        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 5)));
         // Must not receive new cmd.
         cmdbatch_rx
             .recv_timeout(Duration::from_millis(100))
