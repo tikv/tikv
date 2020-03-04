@@ -381,7 +381,7 @@ fn test_cdc_scan() {
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut events = receive_event(false);
     assert_eq!(events.len(), 2, "{:?}", events);
     match events.remove(0).event.unwrap() {
@@ -434,28 +434,15 @@ fn test_cdc_scan() {
     req.region_id = 1;
     req.checkpoint_ts = checkpoint_ts.into_inner();
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let (req_tx, resp_rx) = suite.get_cdc_client(1).event_feed().unwrap();
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    event_feed_wrap.as_ref().replace(Some(resp_rx));
     let mut events = receive_event(false);
-    assert_eq!(events.len(), 1, "{:?}", events);
-    match events.pop().unwrap().event.unwrap() {
-        // Batch size is set to 2.
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
-            assert_eq!(e.get_op_type(), EventRowOpType::Put, "{:?}", es);
-            assert_eq!(e.start_ts, 4, "{:?}", es);
-            assert_eq!(e.commit_ts, 6, "{:?}", es);
-            assert_eq!(e.key, k, "{:?}", es);
-            assert_eq!(e.value, v, "{:?}", es);
-        }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    if events.len() == 1 {
+        events.extend(receive_event(false).into_iter());
     }
-    let mut events = receive_event(false);
-    assert_eq!(events.len(), 1, "{:?}", events);
-    match events.pop().unwrap().event.unwrap() {
+    assert_eq!(events.len(), 2, "{:?}", events);
+    match events.remove(0).event.unwrap() {
         // Batch size is set to 2.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
@@ -478,7 +465,6 @@ fn test_cdc_scan() {
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
     }
-    let mut events = receive_event(false);
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
