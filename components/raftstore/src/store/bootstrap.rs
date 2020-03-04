@@ -8,7 +8,7 @@ use crate::Result;
 use engine::rocks;
 use engine::rocks::Writable;
 use engine::{Engines, Iterable, Mutable, WriteBatch, DB};
-use engine::{CF_DEFAULT, CF_RAFT};
+use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
@@ -111,7 +111,7 @@ mod tests {
     use engine::rocks;
     use engine::Engines;
     use engine::Peekable;
-    use engine::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
 
     #[test]
     fn test_bootstrap() {

@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
-use prometheus_static_metric::make_static_metric;
+use prometheus_static_metric::*;
 
 use tikv_util::metrics::TLSMetricGroup;
 
@@ -28,6 +28,16 @@ make_static_metric! {
     pub struct LocalCoprExecutorCount: LocalIntCounter {
         "type" => ExecutorName,
     }
+
+    pub label_enum AcquireSemaphoreType {
+        acquired_generic,
+        acquired_heavy,
+        unacquired,
+    }
+
+    pub struct CoprAcquireSemaphoreTypeCounterVec: IntCounter {
+        "type" => AcquireSemaphoreType,
+    }
 }
 
 lazy_static::lazy_static! {
@@ -37,6 +47,14 @@ lazy_static::lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref COPR_ACQUIRE_SEMAPHORE_TYPE: CoprAcquireSemaphoreTypeCounterVec =
+        register_static_int_counter_vec!(
+            CoprAcquireSemaphoreTypeCounterVec,
+            "tikv_coprocessor_acquire_semaphore_type",
+            "The acquire type of the coprocessor semaphore",
+            &["type"],
+        )
+        .unwrap();
 }
 
 thread_local! {

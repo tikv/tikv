@@ -2,10 +2,10 @@
 
 use tidb_query_codegen::rpn_fn;
 
+use crate::codec::collation::*;
 use crate::codec::data_type::*;
 use crate::expr_util;
 use crate::Result;
-use expr_util::collation::*;
 
 #[rpn_fn]
 #[inline]

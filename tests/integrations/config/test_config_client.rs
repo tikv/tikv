@@ -81,19 +81,22 @@ impl MockPdClient {
 
 impl ConfigClient for MockPdClient {
     fn register_config(&self, id: String, v: Version, cfg: String) -> Result<CreateResponse> {
-        let old = self
+        let Config {
+            version, content, ..
+        } = self
             .configs
             .lock()
             .unwrap()
-            .insert(id.clone(), Config::new(v.clone(), cfg.clone(), Vec::new()));
-        assert!(old.is_none(), format!("id {} already be registered", id));
+            .entry(id)
+            .or_insert_with(|| Config::new(v, cfg, Vec::new()))
+            .clone();
 
         let mut status = Status::default();
         status.set_code(StatusCode::Ok);
         let mut resp = CreateResponse::default();
         resp.set_status(status);
-        resp.set_config(cfg);
-        resp.set_version(v);
+        resp.set_config(content);
+        resp.set_version(version);
         Ok(resp)
     }
 
@@ -300,4 +303,34 @@ fn test_dispatch_change() {
     );
     // config change should also dispatch to raftstore config manager
     assert_eq!(mgr.0.lock().unwrap().raft_log_gc_threshold, 2000);
+}
+
+#[test]
+fn test_restart_with_invalid_cfg_on_pd() {
+    let pd_client = Arc::new(MockPdClient::new());
+    let id = "localhost:1080";
+
+    // register config
+    let mut cfg_handler = pd_client.clone().register(id, TiKvConfig::default());
+
+    // update config on pd side and refresh local config
+    pd_client.update_cfg(id, |cfg| {
+        cfg.raft_store.raft_log_gc_threshold = 100;
+    });
+    cfg_handler.refresh_config(pd_client.as_ref()).unwrap();
+    let valid_cfg = cfg_handler.get_config().clone();
+
+    // update to invalid config on pd side
+    pd_client.update_cfg(id, |cfg| {
+        cfg.raft_store.raft_log_gc_threshold = 0;
+    });
+
+    // restart config handler
+    let cfg_handler = pd_client.register(id, TiKvConfig::default());
+    // should use last valid config
+    assert_eq!(
+        cfg_handler.get_config().raft_store.raft_log_gc_threshold,
+        100
+    );
+    assert_eq!(cfg_handler.get_config(), &valid_cfg)
 }

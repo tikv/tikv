@@ -463,6 +463,46 @@ pub fn round_dec(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
     }
 }
 
+#[inline]
+#[rpn_fn]
+pub fn truncate_real_with_int(arg0: &Option<Real>, arg1: &Option<Int>) -> Result<Option<Real>> {
+    match (arg0, arg1) {
+        (&Some(x), &Some(d)) => {
+            let d = if d >= 0 {
+                d.min(i64::from(i32::max_value())) as i32
+            } else {
+                d.max(i64::from(i32::min_value())) as i32
+            };
+            Ok(Some(truncate_real(x, d)))
+        }
+        _ => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_real_with_uint(arg0: &Option<Real>, arg1: &Option<Int>) -> Result<Option<Real>> {
+    match (arg0, arg1) {
+        (&Some(x), &Some(d)) => {
+            let d = (d as u64).min(i32::max_value() as u64) as i32;
+            Ok(Some(truncate_real(x, d)))
+        }
+        _ => Ok(None),
+    }
+}
+
+pub fn truncate_real(x: Real, d: i32) -> Real {
+    let shift = 10_f64.powi(d);
+    let tmp = x * shift;
+    if *tmp == 0_f64 {
+        Real::from(0_f64)
+    } else if tmp.is_infinite() {
+        x
+    } else {
+        Real::from(tmp.trunc() / shift)
+    }
+}
+
 thread_local! {
    static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
@@ -471,6 +511,8 @@ thread_local! {
 mod tests {
     use std::str::FromStr;
     use std::{f64, i64};
+    use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -1424,6 +1466,46 @@ mod tests {
                 .evaluate::<Decimal>(ScalarFuncSig::RoundDec)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_truncate_real() {
+        let test_cases = vec![
+            (-1.23, 0, false, -1.0),
+            (1.58, 0, false, 1.0),
+            (1.298, 1, false, 1.2),
+            (123.2, -1, false, 120.0),
+            (123.2, 100, false, 123.2),
+            (123.2, -100, false, 0.0),
+            (123.2, i64::max_value(), false, 123.2),
+            (123.2, i64::min_value(), false, 0.0),
+            (123.2, u64::max_value() as i64, true, 123.2),
+            (-1.23, 0, false, -1.0),
+            (
+                1.797693134862315708145274237317043567981e+308,
+                2,
+                false,
+                1.797693134862315708145274237317043567981e+308,
+            ),
+        ];
+        for (lhs, rhs, rhs_is_unsigned, expected) in test_cases {
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(lhs)))
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
+                .evaluate::<Real>(ScalarFuncSig::TruncateReal)
+                .unwrap();
+
+            assert_eq!(output, Some(Real::from(expected)));
         }
     }
 }

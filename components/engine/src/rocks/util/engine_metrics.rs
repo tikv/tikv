@@ -1,14 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// TODO: Need delete this defs after move the event_listener into engine_rocks.
 use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 use std::i64;
-
-use crate::CF_DEFAULT;
 
 use crate::rocks::{
     self, DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
     HistogramData, DB,
 };
+use engine_traits::CF_DEFAULT;
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem";
@@ -1355,7 +1355,7 @@ mod tests {
     use tempfile::Builder;
 
     use crate::rocks;
-    use crate::ALL_CFS;
+    use engine_traits::ALL_CFS;
 
     #[test]
     fn test_flush() {
