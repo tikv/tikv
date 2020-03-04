@@ -110,6 +110,12 @@ These are the clients for TiKV:
 
 If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/reference/clients/go/).
 
+## Security
+
+### Security Audit
+
+A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security Audit.pdf).
+
 ## Communication
 
 Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT.md). Here is an excerpt:
