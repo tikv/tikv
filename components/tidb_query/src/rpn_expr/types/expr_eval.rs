@@ -1,15 +1,26 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
 use tipb::FieldType;
 
 use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
+use crate::batch::runner::BATCH_MAX_SIZE;
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
 use crate::expr::EvalContext;
 use crate::Result;
+
+/// Identical logical row is a special case in expression evaluation that
+/// the rows in physical_value are continuous and in order.
+static IDENTICAL_LOGICAL_ROWS: [usize; BATCH_MAX_SIZE] = {
+    let mut logical_rows = [0; BATCH_MAX_SIZE];
+    let mut row = 0;
+    while row < logical_rows.len() {
+        logical_rows[row] = row;
+        row += 1;
+    }
+    logical_rows
+};
 
 /// Represents a vector value node in the RPN stack.
 ///
@@ -24,7 +35,6 @@ pub enum RpnStackNodeVectorValue<'a> {
     Generated {
         // TODO: Maybe box it can be faster.
         physical_value: VectorValue,
-        logical_rows: Arc<[usize]>,
     },
     Ref {
         physical_value: &'a VectorValue,
@@ -44,7 +54,9 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     /// Gets a reference to the logical rows.
     pub fn logical_rows(&self) -> &[usize] {
         match self {
-            RpnStackNodeVectorValue::Generated { logical_rows, .. } => &logical_rows,
+            RpnStackNodeVectorValue::Generated { physical_value } => {
+                &IDENTICAL_LOGICAL_ROWS[0..physical_value.len()]
+            }
             RpnStackNodeVectorValue::Ref { logical_rows, .. } => logical_rows,
         }
     }
@@ -207,11 +219,8 @@ impl RpnExpression {
         output_rows: usize,
     ) -> Result<RpnStackNode<'a>> {
         assert!(output_rows > 0);
+        assert!(output_rows <= BATCH_MAX_SIZE);
         let mut stack = Vec::with_capacity(self.len());
-        // Logical rows for generated columns
-        // TODO: Eliminate allocation
-        let identity_logical_rows: Vec<_> = (0..output_rows).collect();
-        let identity_logical_rows = Arc::from(identity_logical_rows);
 
         for node in self.as_ref() {
             match node {
@@ -256,7 +265,6 @@ impl RpnExpression {
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Generated {
                             physical_value: ret,
-                            logical_rows: Arc::clone(&identity_logical_rows),
                         },
                         field_type: ret_field_type,
                     });

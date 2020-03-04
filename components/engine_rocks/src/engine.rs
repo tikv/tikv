@@ -63,12 +63,12 @@ impl KvEngine for RocksEngine {
             .map_err(Error::Engine)
     }
 
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        Self::WriteBatch::with_capacity(Arc::clone(&self.0), cap)
-    }
-
     fn write_batch(&self) -> Self::WriteBatch {
         Self::WriteBatch::new(Arc::clone(&self.0))
+    }
+
+    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
+        Self::WriteBatch::with_capacity(Arc::clone(&self.0), cap)
     }
 
     fn snapshot(&self) -> RocksSnapshot {

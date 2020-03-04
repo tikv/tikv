@@ -14,10 +14,10 @@ use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedSta
 use raft::eraftpb::ConfChangeType;
 use tempfile::{Builder, TempDir};
 
-use engine::rocks::{self, Writable, WriteBatch, DB};
-use engine::{Engines, Peekable, CF_DEFAULT, CF_RAFT};
+use engine::{Engines, Peekable, WriteBatch, DB};
+use engine::rocks::{self, Writable};
+use engine_traits::{CF_RAFT, CF_DEFAULT, Iterable};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::Iterable;
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -857,7 +857,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
-            .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &key)
+            .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &key)
             .unwrap()
             .unwrap()
     }

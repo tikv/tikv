@@ -16,11 +16,6 @@ pub enum Error {
     #[fail(display = "Coprocessor task terminated due to exceeding the deadline")]
     DeadlineExceeded,
 
-    #[fail(
-        display = "Coprocessor task is cancelled due to exceeding the execution time limit (will retry)"
-    )]
-    ExecutionTimeLimitExceeded,
-
     #[fail(display = "Coprocessor task canceled due to exceeding max pending tasks")]
     MaxPendingTasksExceeded,
 

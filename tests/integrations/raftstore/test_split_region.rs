@@ -12,7 +12,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use engine::Iterable;
-use engine::CF_WRITE;
+use engine_traits::CF_WRITE;
 use keys::data_key;
 use pd_client::PdClient;
 use raftstore::store::{Callback, WriteResponse};

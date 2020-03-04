@@ -2,7 +2,9 @@
 
 use std::cmp::Ordering;
 
+use match_template::match_template;
 use tidb_query_datatype::EvalType;
+use tipb::FieldType;
 
 use super::*;
 
@@ -173,6 +175,34 @@ impl<'a> ScalarValueRef<'a> {
                 ScalarValueRef::TT(_) => EvalType::TT,
             }
         }
+    }
+
+    #[inline]
+    pub fn cmp_sort_key(
+        &self,
+        other: &ScalarValueRef,
+        field_type: &FieldType,
+    ) -> crate::codec::Result<Ordering> {
+        use crate::codec::collation::{match_template_collator, Collator};
+        use tidb_query_datatype::{Collation, FieldTypeAccessor};
+
+        Ok(match_template! {
+            TT = [Int, Real, Decimal, DateTime, Duration, Json],
+            match (self, other) {
+                (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => v1.cmp(v2),
+                (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(None)) => Ordering::Equal,
+                (ScalarValueRef::Bytes(Some(_)), ScalarValueRef::Bytes(None)) => Ordering::Greater,
+                (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(Some(_))) => Ordering::Less,
+                (ScalarValueRef::Bytes(Some(v1)), ScalarValueRef::Bytes(Some(v2))) => {
+                    match_template_collator! {
+                        TT, match field_type.collation()? {
+                            Collation::TT => TT::sort_compare(v1, v2)?
+                        }
+                    }
+                }
+                _ => panic!("Cannot compare two ScalarValueRef in different type"),
+            }
+        })
     }
 }
 

@@ -610,7 +610,10 @@ mod tests {
 
     use engine_traits::{collect, name_to_cf, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS};
     use engine_traits::{Error as TraitError, SstWriterBuilder, TablePropertiesExt};
-    use engine_traits::{ExternalSstFileInfo, SstExt};
+    use engine_traits::{
+        ExternalSstFileInfo, SstExt, TableProperties, TablePropertiesCollection,
+        UserCollectedProperties,
+    };
     use tempfile::Builder;
     use test_sst_importer::{
         new_sst_reader, new_sst_writer, new_test_engine, PROP_TEST_MARKER_CF_NAME,
@@ -1140,8 +1143,8 @@ mod tests {
             let start = keys::data_key(b"");
             let end = keys::data_end_key(b"");
             let collection = db.get_range_properties_cf(cf, &start, &end).unwrap();
-            assert!(!collection.get_raw().is_empty());
-            for (_, v) in &**collection.get_raw() {
+            assert!(!collection.is_empty());
+            for (_, v) in collection.iter() {
                 assert!(!v.user_collected_properties().is_empty());
                 assert_eq!(
                     v.user_collected_properties()

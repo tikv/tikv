@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use engine::CF_DEFAULT;
+use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 

@@ -24,10 +24,12 @@ required-features = ["test-runner"]
 
 [[bench]]
 name = "router"
+path = "benches/router.rs"
 harness = false
 required-features = ["test-runner"]
 
 [[bench]]
 name = "batch-system"
+path = "benches/batch-system.rs"
 harness = false
 required-features = ["test-runner"]

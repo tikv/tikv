@@ -4,18 +4,16 @@ version = "0.0.1"
 publish = false
 edition = "2018"
 
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = ["tidb_query/protobuf-codec"]
+prost-codec = ["tidb_query/prost-codec"]
+
 [lib]
 path = "mod.rs"
 
-# Due to some complexity in the way fuzz targets are built, we need to depend on some upstream crates
-# here in order to pass the "protobuf-codec" feature. If you want to fuzz with Prost, you'll need to
-# s/protobuf-codec/prost-codec/g
 [dependencies]
 byteorder = "1"
 failure = "0.1"
-grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored", "protobuf-codec" ], default-features = false }
-kvproto = { git = "https://github.com/busyjay/kvproto.git", branch = "set-apply-term", default-features = false, features = [ "protobuf-codec" ] }
-protobuf-build = { version = "0.10", default-features = false, features = ["grpcio-protobuf-codec"] }
 tidb_query = { path = "../../components/tidb_query" }
 tikv_util = { path = "../../components/tikv_util" }
-tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false, features = [ "protobuf-codec" ] }

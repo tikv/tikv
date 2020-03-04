@@ -13,9 +13,9 @@ use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
-use engine::CF_DEFAULT;
 use engine::*;
 use engine_traits::IterOptions;
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use external_storage::*;
 use kvproto::backup::*;
 use kvproto::import_sstpb::*;
@@ -303,7 +303,7 @@ impl TestSuite {
 }
 
 // Extrat CF name from sst name.
-fn name_to_cf(name: &str) -> engine::CfName {
+fn name_to_cf(name: &str) -> CfName {
     if name.contains(CF_DEFAULT) {
         CF_DEFAULT
     } else if name.contains(CF_WRITE) {
@@ -621,15 +621,19 @@ fn test_backup_raw_meta() {
     let mut checksum = 0;
     let mut total_kvs = 0;
     let mut total_bytes = 0;
+    let mut total_size = 0;
     for f in files {
         checksum ^= f.get_crc64xor();
         total_kvs += f.get_total_kvs();
         total_bytes += f.get_total_bytes();
+        total_size += f.get_size();
     }
     assert_eq!(total_kvs, key_count + 1);
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);
+    assert_eq!(total_size, 1611);
+    // please update this number (must be > 0) when the test failed
 
     suite.stop();
 }

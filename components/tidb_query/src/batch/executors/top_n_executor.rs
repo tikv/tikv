@@ -47,6 +47,9 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
 
     order_exprs: Box<[RpnExpression]>,
 
+    /// This field stores the field type of the results evaluated by the exprs in `order_exprs`.
+    order_exprs_field_type: Box<[FieldType]>,
+
     /// Whether or not it is descending order for each order by column.
     order_is_desc: Box<[bool]>,
 
@@ -88,10 +91,16 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     ) -> Self {
         assert_eq!(order_exprs.len(), order_is_desc.len());
 
+        let order_exprs_field_type: Vec<FieldType> = order_exprs
+            .iter()
+            .map(|expr| expr.ret_field_type(src.schema()).clone())
+            .collect();
+
         Self {
             heap: BinaryHeap::new(),
             eval_columns_buffer_unsafe: Box::new(Vec::new()),
             order_exprs: order_exprs.into_boxed_slice(),
+            order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
             n,
 
@@ -110,7 +119,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     ) -> Result<Self> {
         assert_eq!(order_exprs_def.len(), order_is_desc.len());
 
-        let mut order_exprs = Vec::with_capacity(order_exprs_def.len());
+        let mut order_exprs: Vec<RpnExpression> = Vec::with_capacity(order_exprs_def.len());
         let mut ctx = EvalContext::new(config.clone());
         for def in order_exprs_def {
             order_exprs.push(RpnExpressionBuilder::build_from_expr_tree(
@@ -119,6 +128,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                 src.schema().len(),
             )?);
         }
+        let order_exprs_field_type: Vec<FieldType> = order_exprs
+            .iter()
+            .map(|expr| expr.ret_field_type(src.schema()).clone())
+            .collect();
 
         Ok(Self {
             // Avoid large N causing OOM
@@ -126,6 +139,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             // Simply large enough to avoid repeated allocations
             eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
             order_exprs: order_exprs.into_boxed_slice(),
+            order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
             n,
 
@@ -191,28 +205,35 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         for logical_row_index in 0..pinned_source_data.logical_rows.len() {
             let row = HeapItemUnsafe {
                 order_is_desc_ptr: (&*self.order_is_desc).into(),
+                order_exprs_field_type_ptr: (&*self.order_exprs_field_type).into(),
                 source_data: pinned_source_data.clone(),
                 eval_columns_buffer_ptr: (&*self.eval_columns_buffer_unsafe).into(),
                 eval_columns_offset: eval_offset,
                 logical_row_index,
             };
-            self.heap_add_row(row);
+            self.heap_add_row(row)?;
         }
 
         Ok(())
     }
 
-    fn heap_add_row(&mut self, row: HeapItemUnsafe) {
+    fn heap_add_row(&mut self, row: HeapItemUnsafe) -> Result<()> {
         if self.heap.len() < self.n {
+            // HeapItemUnsafe must be checked valid to compare in advance, or else it may
+            // panic inside BinaryHeap.
+            row.cmp_sort_key(&row)?;
+
             // Push into heap when heap is not full.
             self.heap.push(row);
         } else {
             // Swap the greatest row in the heap if this row is smaller than that row.
             let mut greatest_row = self.heap.peek_mut().unwrap();
-            if row.cmp(&greatest_row) == Ordering::Less {
+            if row.cmp_sort_key(&greatest_row)? == Ordering::Less {
                 *greatest_row = row;
             }
         }
+
+        Ok(())
     }
 
     #[allow(clippy::clone_on_copy)]
@@ -342,6 +363,9 @@ struct HeapItemUnsafe {
     /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
     order_is_desc_ptr: NonNull<[bool]>,
 
+    /// A pointer to the `order_exprs_field_type` field in `order_exprs`.
+    order_exprs_field_type_ptr: NonNull<[FieldType]>,
+
     /// The source data that evaluated column in this structure is using.
     source_data: Arc<HeapItemSourceData>,
 
@@ -362,20 +386,23 @@ impl HeapItemUnsafe {
         unsafe { self.order_is_desc_ptr.as_ref() }
     }
 
+    fn get_order_exprs_field_type(&self) -> &[FieldType] {
+        unsafe { self.order_exprs_field_type_ptr.as_ref() }
+    }
+
     fn get_eval_columns(&self, len: usize) -> &[RpnStackNode<'_>] {
         let offset_begin = self.eval_columns_offset;
         let offset_end = offset_begin + len;
         let vec_buf = unsafe { self.eval_columns_buffer_ptr.as_ref() };
         &vec_buf[offset_begin..offset_end]
     }
-}
 
-impl Ord for HeapItemUnsafe {
-    fn cmp(&self, other: &Self) -> Ordering {
+    fn cmp_sort_key(&self, other: &Self) -> Result<Ordering> {
         // Only debug assert because this function is called pretty frequently.
         debug_assert_eq!(self.get_order_is_desc(), other.get_order_is_desc());
 
         let order_is_desc = self.get_order_is_desc();
+        let order_exprs_field_type = self.get_order_exprs_field_type();
         let columns_len = order_is_desc.len();
         let eval_columns_lhs = self.get_eval_columns(columns_len);
         let eval_columns_rhs = other.get_eval_columns(columns_len);
@@ -388,19 +415,27 @@ impl Ord for HeapItemUnsafe {
 
             // There is panic inside, but will never panic, since the data type of corresponding
             // column should be consistent for each `HeapItemUnsafe`.
-            let ord = lhs.cmp(&rhs);
+            let ord = lhs.cmp_sort_key(&rhs, &order_exprs_field_type[column_idx])?;
 
             if ord == Ordering::Equal {
                 continue;
             }
             if !order_is_desc[column_idx] {
-                return ord;
+                return Ok(ord);
             } else {
-                return ord.reverse();
+                return Ok(ord.reverse());
             }
         }
 
-        Ordering::Equal
+        Ok(Ordering::Equal)
+    }
+}
+
+/// WARN: HeapItemUnsafe implements partial ordering. It panics when Collator fails to parse.
+/// So make sure that it is valid before putting it into a heap.
+impl Ord for HeapItemUnsafe {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.cmp_sort_key(other).unwrap()
     }
 }
 
@@ -422,7 +457,8 @@ impl Eq for HeapItemUnsafe {}
 mod tests {
     use super::*;
 
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::{Collation, FieldTypeTp};
 
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::expr::EvalWarnings;
@@ -771,6 +807,237 @@ mod tests {
                 Real::new(-5.0).ok(),
                 None,
                 Real::new(4.0).ok()
+            ]
+        );
+        assert!(r.is_drained.unwrap());
+    }
+
+    /// Builds an executor that will return these data:
+    ///
+    /// == Schema ==
+    /// Col0 (Bytes[Utf8Mb4GeneralCi])      Col1(Bytes[Utf8Mb4Bin])     Col2(Bytes[Binary])
+    /// == Call #1 ==
+    /// "aa"                                "aaa"                       "áaA"
+    /// NULL                                NULL                        "Aa"
+    /// "aa"                                "aa"                        NULL
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// "áaA"                               "áa"                        NULL
+    /// "áa"                                "áaA"                       "aa"
+    /// "Aa"                                NULL                        "aaa"
+    /// "aaa"                               "Aa"                        "áa"
+    /// (drained)
+    fn make_bytes_src_executor() -> MockExecutor {
+        MockExecutor::new(
+            vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4GeneralCi)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Binary)
+                    .into(),
+            ],
+            vec![
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Bytes(vec![Some(b"aa".to_vec()), None, Some(b"aa".to_vec())]),
+                        VectorValue::Bytes(vec![Some(b"aa".to_vec()), None, Some(b"aaa".to_vec())]),
+                        VectorValue::Bytes(vec![
+                            None,
+                            Some(b"Aa".to_vec()),
+                            Some("áaA".as_bytes().to_vec()),
+                        ]),
+                    ]),
+                    logical_rows: vec![2, 1, 0],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Bytes(vec![
+                            Some("áaA".as_bytes().to_vec()),
+                            Some("áa".as_bytes().to_vec()),
+                            Some(b"Aa".to_vec()),
+                            Some(b"aaa".to_vec()),
+                        ]),
+                        VectorValue::Bytes(vec![
+                            Some("áa".as_bytes().to_vec()),
+                            Some("áaA".as_bytes().to_vec()),
+                            None,
+                            Some(b"Aa".to_vec()),
+                        ]),
+                        VectorValue::Bytes(vec![
+                            None,
+                            Some(b"aa".to_vec()),
+                            Some(b"aaa".to_vec()),
+                            Some("áa".as_bytes().to_vec()),
+                        ]),
+                    ]),
+                    logical_rows: vec![0, 1, 2, 3],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn test_bytes_1() {
+        // Order by multiple expressions with collation, data len > n.
+        //
+        // mysql> select * from t order by col1 desc, col3 desc, col2 limit 5;
+        // +------+--------+--------+
+        // | col1 | col2   | col3   |
+        // +------+--------+--------+
+        // | aaa  | Aa     | áa     |
+        // | áaA  | áa     | <null> |
+        // | aa   | aaa    | áaA    |
+        // | Aa   | <null> | aaa    |
+        // | áa   | áaA    | aa     |
+        // +------+--------+--------+
+
+        let src_exec = make_bytes_src_executor();
+
+        let mut exec = BatchTopNExecutor::new_for_test(
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new().push_column_ref(0).build(),
+                RpnExpressionBuilder::new().push_column_ref(2).build(),
+                RpnExpressionBuilder::new().push_column_ref(1).build(),
+            ],
+            vec![true, true, false],
+            5,
+        );
+
+        let r = exec.next_batch(1);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+        assert_eq!(r.physical_columns.rows_len(), 5);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert_eq!(
+            r.physical_columns[0].decoded().as_bytes_slice(),
+            &[
+                Some(b"aaa".to_vec()),
+                Some("áaA".as_bytes().to_vec()),
+                Some(b"aa".to_vec()),
+                Some(b"Aa".to_vec()),
+                Some("áa".as_bytes().to_vec()),
+            ]
+        );
+        assert_eq!(
+            r.physical_columns[1].decoded().as_bytes_slice(),
+            &[
+                Some(b"Aa".to_vec()),
+                Some("áa".as_bytes().to_vec()),
+                Some(b"aaa".to_vec()),
+                None,
+                Some("áaA".as_bytes().to_vec()),
+            ]
+        );
+        assert_eq!(
+            r.physical_columns[2].decoded().as_bytes_slice(),
+            &[
+                Some("áa".as_bytes().to_vec()),
+                None,
+                Some("áaA".as_bytes().to_vec()),
+                Some(b"aaa".to_vec()),
+                Some(b"aa".to_vec()),
+            ]
+        );
+        assert!(r.is_drained.unwrap());
+    }
+
+    #[test]
+    fn test_bytes_2() {
+        // Order by multiple expressions with collation, data len > n.
+        //
+        // mysql> select * from test order by col1, col2, col3 limit 5;
+        // +--------+--------+--------+
+        // | col1   | col2   | col3   |
+        // +--------+--------+--------+
+        // | <null> | <null> | Aa     |
+        // | Aa     | <null> | aaa    |
+        // | aa     | aa     | <null> |
+        // | aa     | aaa    | áaA    |
+        // | áa     | áaA    | aa     |
+        // +--------+--------+--------+
+
+        let src_exec = make_bytes_src_executor();
+
+        let mut exec = BatchTopNExecutor::new_for_test(
+            src_exec,
+            vec![
+                RpnExpressionBuilder::new().push_column_ref(0).build(),
+                RpnExpressionBuilder::new().push_column_ref(1).build(),
+                RpnExpressionBuilder::new().push_column_ref(2).build(),
+            ],
+            vec![false, false, false],
+            5,
+        );
+
+        let r = exec.next_batch(1);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+        assert_eq!(r.physical_columns.rows_len(), 5);
+        assert_eq!(r.physical_columns.columns_len(), 3);
+        assert_eq!(
+            r.physical_columns[0].decoded().as_bytes_slice(),
+            &[
+                None,
+                Some(b"Aa".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(b"aa".to_vec()),
+                Some("áa".as_bytes().to_vec()),
+            ]
+        );
+        assert_eq!(
+            r.physical_columns[1].decoded().as_bytes_slice(),
+            &[
+                None,
+                None,
+                Some(b"aa".to_vec()),
+                Some(b"aaa".to_vec()),
+                Some("áaA".as_bytes().to_vec()),
+            ]
+        );
+        assert_eq!(
+            r.physical_columns[2].decoded().as_bytes_slice(),
+            &[
+                Some(b"Aa".to_vec()),
+                Some(b"aaa".to_vec()),
+                None,
+                Some("áaA".as_bytes().to_vec()),
+                Some(b"aa".to_vec()),
             ]
         );
         assert!(r.is_drained.unwrap());

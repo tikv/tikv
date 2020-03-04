@@ -4,14 +4,17 @@ version = "0.1.0"
 edition = "2018"
 publish = false
 
+[features]
+protobuf-codec = ["kvproto/protobuf-codec"]
+prost-codec = ["kvproto/prost-codec"]
+
 [dependencies]
 byteorder = "1.2"
 derive_more = "0.15.0"
 failure = "0.1"
 hex = "0.3"
 kvproto = { git = "https://github.com/busyjay/kvproto.git", branch = "set-apply-term", default-features = false }
-
-tikv_alloc = { path = "../tikv_alloc", default-features = false }
+tikv_alloc = { path = "../tikv_alloc" }
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }

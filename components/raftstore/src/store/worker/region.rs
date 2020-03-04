@@ -12,9 +12,9 @@ use std::u64;
 use engine::rocks;
 use engine::rocks::Writable;
 use engine::WriteBatch;
-use engine::CF_RAFT;
 use engine::{util as engine_util, Engines, Mutable, Peekable};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_traits::CF_RAFT;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -28,7 +28,9 @@ use crate::store::transport::CasualRouter;
 use crate::store::{
     self, check_abort, ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
 };
-use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use yatp::pool::{Builder, ThreadPool};
+use yatp::task::future::TaskCell;
+
 use tikv_util::time;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
@@ -522,9 +524,8 @@ impl<R: CasualRouter> SnapContext<R> {
 }
 
 pub struct Runner<R> {
-    pool: ThreadPool<DefaultContext>,
+    pool: ThreadPool<TaskCell>,
     ctx: SnapContext<R>,
-
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task>,
@@ -541,9 +542,10 @@ impl<R: CasualRouter> Runner<R> {
         router: R,
     ) -> Runner<R> {
         Runner {
-            pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
-                .thread_count(GENERATE_POOL_SIZE)
-                .build(),
+            pool: Builder::new(thd_name!("snap-generator"))
+                .max_thread_count(GENERATE_POOL_SIZE)
+                .build_future_pool(),
+
             ctx: SnapContext {
                 engines,
                 mgr,
@@ -602,8 +604,10 @@ where
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
-                self.pool
-                    .execute(move |_| ctx.handle_gen(region_id, raft_snap, kv_snap, notifier))
+
+                self.pool.spawn(async move {
+                    ctx.handle_gen(region_id, raft_snap, kv_snap, notifier);
+                });
             }
             task @ Task::Apply { .. } => {
                 // to makes sure appling snapshots in order.
@@ -636,9 +640,7 @@ where
     }
 
     fn shutdown(&mut self) {
-        if let Err(e) = self.pool.stop() {
-            warn!("Stop threadpool failed"; "err" => %e);
-        }
+        self.pool.shutdown();
     }
 }
 
@@ -689,8 +691,8 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, Writable, WriteBatch};
     use engine::Engines;
     use engine::{Mutable, Peekable};
-    use engine::{CF_DEFAULT, CF_RAFT};
     use engine_rocks::RocksSnapshot;
+    use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;

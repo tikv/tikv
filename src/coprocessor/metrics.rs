@@ -8,7 +8,6 @@ use tikv_util::collections::HashMap;
 
 use prometheus::local::*;
 use prometheus::*;
-use prometheus_static_metric::*;
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
@@ -68,26 +67,6 @@ lazy_static! {
         "Total bytes of response body"
     )
     .unwrap();
-    pub static ref COPR_ACQUIRE_SEMAPHORE_TYPE: CoprAcquireSemaphoreResultCounterVec =
-        register_static_int_counter_vec!(
-            CoprAcquireSemaphoreResultCounterVec,
-            "tikv_coprocessor_acquire_semaphore_type",
-            "The acquire type of the coprocessor semaphore",
-            &["type"],
-        )
-        .unwrap();
-}
-
-make_static_metric! {
-    pub label_enum AcquireSemaphoreType {
-        acquired_generic,
-        acquired_heavy,
-        unacquired,
-    }
-
-    pub struct CoprAcquireSemaphoreResultCounterVec: IntCounter {
-        "type" => AcquireSemaphoreType,
-    }
 }
 
 pub struct CopLocalMetrics {
