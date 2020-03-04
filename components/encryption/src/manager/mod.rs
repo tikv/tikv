@@ -114,11 +114,54 @@ impl Dicts {
         self.file_dict.files.remove(file_path).ok_or_else(|| {
             Error::Io(IoError::new(
                 ErrorKind::NotFound,
-                format!("file is not found, {}", file_path),
+                format!("file not found, {}", file_path),
             ))
         })?;
 
         // TOOD GC unused data keys.
+        self.save_file_dict(master_key)
+    }
+
+    fn link_file(
+        &mut self,
+        src_fname: &str,
+        dst_fname: &str,
+        master_key: &dyn Backend,
+    ) -> Result<()> {
+        let file = self
+            .file_dict
+            .files
+            .get(src_fname)
+            .cloned()
+            .ok_or_else(|| {
+                Error::Io(IoError::new(
+                    ErrorKind::NotFound,
+                    format!("file not found, {}", src_fname),
+                ))
+            })?;
+        if self.file_dict.files.get(dst_fname).is_some() {
+            return Err(Error::Io(IoError::new(
+                ErrorKind::AlreadyExists,
+                format!("file already exists, {}", dst_fname),
+            )));
+        }
+        self.file_dict.files.insert(dst_fname.to_owned(), file);
+        self.save_file_dict(master_key)
+    }
+
+    fn rename_file(
+        &mut self,
+        src_fname: &str,
+        dst_fname: &str,
+        master_key: &dyn Backend,
+    ) -> Result<()> {
+        let file = self.file_dict.files.remove(src_fname).ok_or_else(|| {
+            Error::Io(IoError::new(
+                ErrorKind::NotFound,
+                format!("file not found, {}", src_fname),
+            ))
+        })?;
+        self.file_dict.files.insert(dst_fname.to_owned(), file);
         self.save_file_dict(master_key)
     }
 
@@ -276,6 +319,22 @@ impl EncryptionKeyManager for DataKeyManager {
             .delete_file(file_path, self.master_key.as_ref())?;
         Ok(())
     }
+
+    fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
+        self.dicts
+            .write()
+            .unwrap()
+            .link_file(src_fname, dst_fname, self.master_key.as_ref())?;
+        Ok(())
+    }
+
+    fn rename_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
+        self.dicts
+            .write()
+            .unwrap()
+            .rename_file(src_fname, dst_fname, self.master_key.as_ref())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +384,43 @@ mod tests {
             .files
             .insert("foo".to_owned(), file);
         manager.get_file("foo").unwrap_err();
+    }
+
+    #[test]
+    fn test_key_manager_link() {
+        let (_tmp, manager) = new_tmp_key_manager(None);
+
+        let file = manager.new_file("foo").unwrap();
+        manager.link_file("foo", "foo1").unwrap();
+
+        // Must be the same.
+        let file1 = manager.get_file("foo1").unwrap();
+        assert_eq!(file1, file);
+
+        // Source file not exists.
+        manager.link_file("not exists", "not exists1").unwrap_err();
+        // Target file already exists.
+        manager.new_file("foo2").unwrap();
+        manager.link_file("foo2", "foo1").unwrap_err();
+    }
+
+    #[test]
+    fn test_key_manager_rename() {
+        let (_tmp, mut manager) = new_tmp_key_manager(None);
+
+        manager.method = EncryptionMethod::Aes192Ctr;
+        let file = manager.new_file("foo").unwrap();
+        manager.rename_file("foo", "foo1").unwrap();
+
+        // Must be the same.
+        let file1 = manager.get_file("foo1").unwrap();
+        assert_eq!(file1, file);
+
+        // foo must not exist (should be plaintext)
+        manager.rename_file("foo", "foo2").unwrap_err();
+        let file2 = manager.get_file("foo").unwrap();
+        assert_ne!(file2, file);
+        assert_eq!(file2.method, DBEncryptionMethod::Plaintext);
     }
 
     #[test]
