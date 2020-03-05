@@ -1210,7 +1210,10 @@ impl KeyRange {
     }
 
     fn contains(&self, key: &[u8]) -> bool {
-        key.cmp(&self.start_key) == Ordering::Greater && key.cmp(&self.end_key) == Ordering::Less
+        if self.end_key.is_empty(){
+            return key.cmp(&self.start_key) == Ordering::Equal
+        }
+        key.cmp(&self.start_key) != Ordering::Less && key.cmp(&self.end_key) != Ordering::Greater
     }
 }
 
@@ -1512,9 +1515,16 @@ mod tests {
     fn test_sample() {
         let mut recorder = Recorder::new();
         recorder.samples.push(Sample::new(b"b"));
+
+        // scan
         let key_range = KeyRange::new(b"a", b"c");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].contained, 1);
+        //get
+        let key_range = KeyRange::new(b"b", b"");
+        recorder.sample(&key_range);
+        assert_eq!(recorder.samples[0].contained, 2);
+
         let key_range = KeyRange::new(b"a", b"");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].left, 1);
@@ -1526,23 +1536,14 @@ mod tests {
     #[test]
     fn test_recorder() {
         let mut recorder = Recorder::new();
-
-        let key_range = KeyRange::new(b"a", b"b");
-        recorder.record(&[key_range]);
-        assert_eq!(recorder.samples.len(), 1);
-        assert_eq!(recorder.samples[0].contained, 1);
-
         let mut key_ranges: Vec<KeyRange> = Vec::new();
-
         key_ranges.push(KeyRange::new(b"a", b"b"));
         key_ranges.push(KeyRange::new(b"b", b"c"));
         key_ranges.push(KeyRange::new(b"c", b"d"));
         key_ranges.push(KeyRange::new(b"d", b""));
-
         for _ in 0..50 {
             recorder.record(key_ranges.as_slice());
         }
-
         assert_eq!(recorder.samples.len(), 20);
         assert_eq!(recorder.split_key(DEFAULT_SPLIT_SCORE), b"c");
     }
@@ -1552,7 +1553,6 @@ mod tests {
         let mut hub = SplitHub::new();
         for i in 0..100 {
             hub.add(1, &metapb::Peer::default(), b"a", b"b");
-            hub.add(1, &metapb::Peer::default(), b"b", b"");
             let (_, split_infos) = hub.flush();
             if (i + 1) % DETECT_TIMES == 0 {
                 assert_eq!(split_infos.len(), 1);
