@@ -157,7 +157,7 @@ dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
-	bash scripts/check-sse4_2.sh
+	@python scripts/check-bins.py --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
@@ -236,7 +236,10 @@ run-test:
 
 .PHONY: test
 test: run-test
-	bash scripts/check-bins-for-jemalloc.sh
+	@if [[ "`uname`" = "Linux" ]]; then \
+		env EXTRA_CARGO_ARGS="--message-format=json-render-diagnostics -q --no-run" make run-test |\
+                python scripts/check-bins.py --check-tests; \
+	fi
 
 ## Static analysis
 ## ---------------
