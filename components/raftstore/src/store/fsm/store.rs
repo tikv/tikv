@@ -4,8 +4,9 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
-use engine::{WriteBatch, WriteOptions, DB};
-use engine_rocks::RocksEngine;
+use engine::DB;
+use engine_rocks::{Compat, RocksEngine, RocksWriteBatch};
+use engine_traits::{KvEngine, Mutable as MutableTrait, WriteBatch, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -55,7 +56,7 @@ use crate::store::{
 };
 use crate::Result;
 use engine::Engines;
-use engine::{Iterable, Mutable, Peekable};
+use engine::{Iterable, Peekable};
 use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{ConfigClient, PdClient};
@@ -221,8 +222,8 @@ pub struct PollContext<T, C: 'static> {
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
     pub engines: Engines,
-    pub kv_wb: WriteBatch,
-    pub raft_wb: WriteBatch,
+    pub kv_wb: RocksWriteBatch,
+    pub raft_wb: RocksWriteBatch,
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
@@ -234,22 +235,22 @@ pub struct PollContext<T, C: 'static> {
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
     #[inline]
-    fn kv_wb(&self) -> &WriteBatch {
+    fn kv_wb(&self) -> &RocksWriteBatch {
         &self.kv_wb
     }
 
     #[inline]
-    fn kv_wb_mut(&mut self) -> &mut WriteBatch {
+    fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
         &mut self.kv_wb
     }
 
     #[inline]
-    fn raft_wb(&self) -> &WriteBatch {
+    fn raft_wb(&self) -> &RocksWriteBatch {
         &self.raft_wb
     }
 
     #[inline]
-    fn raft_wb_mut(&mut self) -> &mut WriteBatch {
+    fn raft_wb_mut(&mut self) -> &mut RocksWriteBatch {
         &mut self.raft_wb
     }
 
@@ -498,13 +499,14 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx
                 .engines
                 .kv
+                .c()
                 .write_opt(&self.poll_ctx.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
-                self.poll_ctx.kv_wb = WriteBatch::with_capacity(4 * 1024);
+                self.poll_ctx.kv_wb = self.poll_ctx.engines.kv.c().write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.kv_wb.clear();
             }
@@ -516,13 +518,19 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx
                 .engines
                 .raft
+                .c()
                 .write_opt(&self.poll_ctx.raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
-                self.poll_ctx.raft_wb = WriteBatch::with_capacity(4 * 1024);
+                self.poll_ctx.raft_wb = self
+                    .poll_ctx
+                    .engines
+                    .raft
+                    .c()
+                    .write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.raft_wb.clear();
             }
@@ -738,8 +746,8 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut region_peers = vec![];
 
         let t = Instant::now();
-        let mut kv_wb = WriteBatch::default();
-        let mut raft_wb = WriteBatch::default();
+        let mut kv_wb = self.engines.kv.c().write_batch();
+        let mut raft_wb = self.engines.raft.c().write_batch();
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
@@ -800,11 +808,11 @@ impl<T, C> RaftPollerBuilder<T, C> {
         })?;
 
         if !kv_wb.is_empty() {
-            self.engines.kv.write(&kv_wb).unwrap();
+            self.engines.kv.c().write(&kv_wb).unwrap();
             self.engines.kv.sync_wal().unwrap();
         }
         if !raft_wb.is_empty() {
-            self.engines.raft.write(&raft_wb).unwrap();
+            self.engines.raft.c().write(&raft_wb).unwrap();
             self.engines.raft.sync_wal().unwrap();
         }
 
@@ -842,8 +850,8 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
     fn clear_stale_meta(
         &self,
-        kv_wb: &mut WriteBatch,
-        raft_wb: &mut WriteBatch,
+        kv_wb: &mut RocksWriteBatch,
+        raft_wb: &mut RocksWriteBatch,
         origin_state: &RegionLocalState,
     ) {
         let region = origin_state.get_region();
@@ -857,8 +865,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
             .unwrap();
         let key = keys::region_state_key(region.get_id());
-        let handle = rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT).unwrap();
-        kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();
+        kv_wb.put_msg_cf(CF_RAFT, &key, origin_state).unwrap();
     }
 
     /// `clear_stale_data` clean up all possible garbage data.
@@ -920,8 +927,8 @@ where
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
-            kv_wb: WriteBatch::default(),
-            raft_wb: WriteBatch::with_capacity(4 * 1024),
+            kv_wb: self.engines.kv.c().write_batch(),
+            raft_wb: self.engines.raft.c().write_batch_with_cap(4 * 1024),
             pending_count: 0,
             sync_log: false,
             has_ready: false,

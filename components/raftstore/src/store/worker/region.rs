@@ -10,11 +10,10 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine::rocks;
-use engine::rocks::Writable;
-use engine::WriteBatch;
-use engine::{util as engine_util, Engines, Mutable, Peekable};
+use engine::{util as engine_util, Engines, Peekable};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
+use engine_traits::{KvEngine, Mutable};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -342,12 +341,11 @@ impl<R: CasualRouter> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let wb = WriteBatch::default();
+        let wb = self.engines.kv.c().write_batch();
         region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT));
-        box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
-        box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(&wb).unwrap_or_else(|e| {
+        box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
+        box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
+        self.engines.kv.c().write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -688,10 +686,11 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
     use engine::rocks;
-    use engine::rocks::{ColumnFamilyOptions, Writable, WriteBatch};
+    use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine::{Mutable, Peekable};
-    use engine_rocks::RocksSnapshot;
+    use engine::Peekable;
+    use engine_rocks::{Compat, RocksSnapshot};
+    use engine_traits::{KvEngine, Mutable};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
@@ -868,8 +867,7 @@ mod tests {
             s3.save().unwrap();
 
             // set applying state
-            let wb = WriteBatch::default();
-            let handle = engine.kv.cf_handle(CF_RAFT).unwrap();
+            let wb = engine.kv.c().write_batch();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
                 .kv
@@ -877,8 +875,8 @@ mod tests {
                 .unwrap()
                 .unwrap();
             region_state.set_state(PeerState::Applying);
-            wb.put_msg_cf(handle, &region_key, &region_state).unwrap();
-            engine.kv.write(&wb).unwrap();
+            wb.put_msg_cf(CF_RAFT, &region_key, &region_state).unwrap();
+            engine.kv.c().write(&wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
