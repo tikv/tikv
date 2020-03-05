@@ -1924,7 +1924,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#e2591a8e86d611402e9d29eaa5cbfbaa45310db9"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#4be309382bfb7b7a19fa7e95b0ed62b20ec3a959"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1942,7 +1942,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#e2591a8e86d611402e9d29eaa5cbfbaa45310db9"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#4be309382bfb7b7a19fa7e95b0ed62b20ec3a959"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3409,7 +3409,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#e2591a8e86d611402e9d29eaa5cbfbaa45310db9"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-improve#4be309382bfb7b7a19fa7e95b0ed62b20ec3a959"
 dependencies = [
  "libc",
  "librocksdb_sys",
