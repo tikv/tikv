@@ -125,9 +125,20 @@ fn bench_receiver_stream_batch(b: &mut Bencher) {
         });
     }
 
-    let mut rx = Some(mpsc::batch::BatchReceiver::new(rx, 32, Vec::new, |v, t| {
-        v.push(t)
-    }));
+    struct VecCollector;
+    impl mpsc::batch::BatchCollector<Vec<i32>, i32> for VecCollector {
+        fn collect(&mut self, v: &mut Vec<i32>, e: i32) -> Option<i32> {
+            v.push(e);
+            None
+        }
+    }
+
+    let mut rx = Some(mpsc::batch::BatchReceiver::new(
+        rx,
+        32,
+        Vec::new,
+        VecCollector,
+    ));
 
     b.iter(|| {
         let mut count = 0;
