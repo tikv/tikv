@@ -447,6 +447,7 @@ dependencies = [
  "futures 0.1.29",
  "grpcio",
  "kvproto",
+ "panic_hook",
  "pd_client",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
  "raftstore",
@@ -1903,7 +1904,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
+source = "git+https://github.com/tikv/rust-rocksdb.git#20f5bef7261e6a41d8491ee9d5306564a926ee12"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1921,7 +1922,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
+source = "git+https://github.com/tikv/rust-rocksdb.git#20f5bef7261e6a41d8491ee9d5306564a926ee12"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3388,7 +3389,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
+source = "git+https://github.com/tikv/rust-rocksdb.git#20f5bef7261e6a41d8491ee9d5306564a926ee12"
 dependencies = [
  "libc",
  "librocksdb_sys",

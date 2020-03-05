@@ -538,7 +538,7 @@ impl TiKVServer {
             self.pd_client.clone(),
         );
 
-        let apply_router = node.get_apply_router();
+        let raft_router = node.get_router();
 
         node.start(
             engines.engines.clone(),
@@ -569,7 +569,7 @@ impl TiKVServer {
         let cdc_endpoint = cdc::Endpoint::new(
             self.pd_client.clone(),
             cdc_worker.scheduler(),
-            apply_router,
+            raft_router,
             cdc_ob,
         );
         cdc_worker

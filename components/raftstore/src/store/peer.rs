@@ -8,10 +8,9 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
-use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{KvEngine, Peekable, Snapshot};
+use engine_traits::{KvEngine, Peekable, Snapshot, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -455,11 +454,10 @@ impl Peer {
         );
 
         // Set Tombstone state explicitly
-        let kv_wb = WriteBatch::default();
-        let raft_wb = WriteBatch::default();
+        let kv_wb = ctx.engines.kv.c().write_batch();
+        let raft_wb = ctx.engines.raft.c().write_batch();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
         write_peer_state(
-            &ctx.engines.kv,
             &kv_wb,
             &region,
             PeerState::Tombstone,
@@ -468,8 +466,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
-        ctx.engines.write_kv_opt(&kv_wb, &write_opts)?;
-        ctx.engines.write_raft_opt(&raft_wb, &write_opts)?;
+        ctx.engines.kv.c().write_opt(&kv_wb, &write_opts)?;
+        ctx.engines.raft.c().write_opt(&raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -1992,6 +1990,7 @@ impl Peer {
             poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
             cmd_resp::bind_error(&mut err_resp, e);
             cb.invoke_with_response(err_resp);
+            self.should_wake_up = true;
             return false;
         }
 
@@ -2037,6 +2036,7 @@ impl Peer {
                 self.bcast_wake_up_message(&mut poll_ctx.trans);
                 self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
             }
+            self.should_wake_up = true;
             cb.invoke_with_response(err_resp);
             return false;
         }
@@ -2585,9 +2585,6 @@ impl Peer {
             send_msg.set_from_peer(self.peer.clone());
             send_msg.set_region_epoch(self.region().get_region_epoch().clone());
             send_msg.set_to_peer(peer.clone());
-            send_msg
-                .mut_message()
-                .set_index(self.raft_group.get_store().committed_index());
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
             if let Err(e) = trans.send(send_msg) {

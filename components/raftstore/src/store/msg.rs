@@ -13,8 +13,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
 
-use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
+use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::fsm::PeerFsm;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
@@ -225,6 +225,11 @@ pub enum CasualMessage<E: KvEngine> {
     RegionOverlapped,
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
+    /// Capture the changes of the region.
+    CaptureChange {
+        cmd: ChangeCmd,
+        callback: Callback<RocksEngine>,
+    },
 
     /// A test only message, it is useful when we want to access
     /// peer's internal state.
@@ -266,6 +271,7 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
+            CasualMessage::CaptureChange { .. } => write!(fmt, "CaptureChange"),
             CasualMessage::Test(_) => write!(fmt, "Test"),
         }
     }

@@ -257,9 +257,9 @@ mod tests {
     use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
-    use engine::{WriteBatch, DB};
+    use engine::DB;
     use engine_rocks::Compat;
-    use engine_traits::CFHandleExt;
+    use engine_traits::{CFHandleExt, KvEngine, Mutable};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
@@ -286,23 +286,23 @@ mod tests {
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
 
         // Generate the first SST file.
-        let wb = WriteBatch::default();
+        let wb = db.c().write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
-            wb.put_cf(handle, k.as_bytes(), b"whatever content")
+            wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(&wb).unwrap();
+        db.c().write(&wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
-        let wb = WriteBatch::default();
+        let wb = db.c().write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
-            wb.put_cf(handle, k.as_bytes(), b"whatever content")
+            wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(&wb).unwrap();
+        db.c().write(&wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
         // Get the total SST files size.

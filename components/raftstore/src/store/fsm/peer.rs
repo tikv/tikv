@@ -39,7 +39,7 @@ use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangePeer, ExecResult,
+    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
     RegionProposal,
 };
 use crate::store::metrics::*;
@@ -365,6 +365,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
+            CasualMessage::CaptureChange { cmd, callback } => self.on_capture_change(cmd, callback),
             CasualMessage::Test(cb) => cb(self.fsm),
         }
     }
@@ -491,6 +492,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
         self.register_split_region_check_tick();
+    }
+
+    fn on_capture_change(&mut self, cmd: ChangeCmd, cb: Callback<RocksEngine>) {
+        if !self.fsm.peer.is_leader() {
+            cb.invoke_with_response(new_error(Error::NotLeader(
+                self.region_id(),
+                self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
+            )));
+            return;
+        }
+        self.ctx
+            .apply_router
+            .schedule_task(self.region_id(), ApplyTask::Change { cmd, cb })
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
@@ -854,12 +868,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
         self.fsm.peer.step(self.ctx, msg.take_message())?;
-        if self.fsm.peer.should_wake_up {
-            self.reset_raft_tick(GroupState::Ordered);
-        }
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
+            self.fsm.peer.should_wake_up = true;
+        }
+
+        if self.fsm.peer.should_wake_up {
             self.reset_raft_tick(GroupState::Ordered);
         }
 
@@ -871,9 +886,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let extra_msg = msg.get_extra_msg();
         match extra_msg.get_type() {
             ExtraMessageType::MsgRegionWakeUp => {
-                if msg.get_message().get_index() < self.fsm.peer.get_store().committed_index() {
-                    self.reset_raft_tick(GroupState::Ordered);
-                }
+                self.reset_raft_tick(GroupState::Ordered);
             }
         }
     }
