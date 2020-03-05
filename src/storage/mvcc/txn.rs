@@ -1044,6 +1044,13 @@ mod tests {
     }
 
     #[test]
+    fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"k1";
+        assert!(try_pessimistic_prewrite_check_not_exists(&engine, k, k, 3).is_err())
+    }
+
+    #[test]
     fn test_rollback_lock_optimistic() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
