@@ -197,6 +197,7 @@ members = [
   "components/cdc",
   "components/raftstore",
   "components/into_other",
+  "components/cdc/tests/util",
 ]
 default-members = ["cmd"]
 

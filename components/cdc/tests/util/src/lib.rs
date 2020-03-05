@@ -7,13 +7,15 @@ use std::time::Duration;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender};
-#[cfg(not(feature = "prost-codec"))]
-use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
-    create_change_data,
-    event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataClient, ChangeDataRequest,
+    create_change_data, event::Event as Event_oneof_event, ChangeDataClient, ChangeDataEvent,
+    ChangeDataRequest, Event,
+};
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::cdcpb::{
+    create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest, Event,
+    Event_oneof_event,
 };
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
@@ -52,7 +54,7 @@ pub fn new_event_feed(
         };
         event_feed.set(Some(events));
         let mut change_data = change_data.unwrap();
-        let mut events = change_data.take_events().into_vec();
+        let mut events: Vec<_> = change_data.take_events().into();
         if !keep_resolved_ts {
             events.retain(|e| {
                 if let Event_oneof_event::ResolvedTs(_) = e.event.as_ref().unwrap() {
@@ -217,16 +219,23 @@ impl TestSuite {
             })
     }
 
-    pub fn get_cdc_client(&mut self, region_id: u64) -> &ChangeDataClient {
+    pub fn get_region_cdc_client(&mut self, region_id: u64) -> &ChangeDataClient {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
         let store_id = leader.get_store_id();
         let addr = self.cluster.sim.rl().get_addr(store_id).to_owned();
         let env = self.env.clone();
-        self.cdc_cli
-            .entry(leader.get_store_id())
-            .or_insert_with(|| {
-                let channel = ChannelBuilder::new(env).connect(&addr);
-                ChangeDataClient::new(channel)
-            })
+        self.cdc_cli.entry(store_id).or_insert_with(|| {
+            let channel = ChannelBuilder::new(env).connect(&addr);
+            ChangeDataClient::new(channel)
+        })
+    }
+
+    pub fn get_store_cdc_client(&mut self, store_id: u64) -> &ChangeDataClient {
+        let addr = self.cluster.sim.rl().get_addr(store_id).to_owned();
+        let env = self.env.clone();
+        self.cdc_cli.entry(store_id).or_insert_with(|| {
+            let channel = ChannelBuilder::new(env).connect(&addr);
+            ChangeDataClient::new(channel)
+        })
     }
 }

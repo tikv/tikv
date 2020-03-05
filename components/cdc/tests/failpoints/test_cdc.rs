@@ -14,8 +14,8 @@ use kvproto::cdcpb::{
 };
 use raft::StateRole;
 use raftstore::coprocessor::{ObserverContext, RoleObserver};
+use test_cdc_util::*;
 use test_raftstore::sleep_ms;
-use util::*;
 
 #[test]
 fn test_failed_pending_batch() {
@@ -29,8 +29,8 @@ fn test_failed_pending_batch() {
     let mut req = ChangeDataRequest::default();
     req.region_id = region.get_id();
     req.set_region_epoch(region.get_region_epoch().clone());
-    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
-    let req_tx = req_tx
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
@@ -65,6 +65,8 @@ fn test_failed_pending_batch() {
     // Ensure it is old region.
     assert_eq!(req.get_region_id(), region.get_id());
     req.set_region_epoch(region.get_region_epoch().clone());
+    let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1, "{:?}", events);
@@ -91,7 +93,7 @@ fn test_region_ready_after_deregister() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_cdc_client(1));
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Sleep for a while to make sure the region has been subscribed
     std::thread::sleep(Duration::from_millis(300));

@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::Error as RaftStoreError;
-use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
 
 use crate::endpoint::Task;

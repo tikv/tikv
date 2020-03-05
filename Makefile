@@ -281,11 +281,11 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 clippy: pre-clippy
-	@cargo clippy --all --exclude cdc --exclude backup --exclude tests --exclude cmd \
+	@cargo clippy --all --exclude cdc --exclude test_cdc_util --exclude backup --exclude tests --exclude cmd --exclude test_cdc_util \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--all-targets --no-default-features \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
-	@for pkg in "components/cdc" "components/backup" "cmd" "tests"; do \
+	@for pkg in "components/cdc" "components/cdc/tests/util" "components/backup" "cmd" "tests"; do \
 		cd $$pkg && \
 		cargo clippy --all-targets --no-default-features \
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \

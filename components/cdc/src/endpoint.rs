@@ -9,7 +9,7 @@ use futures::future::{lazy, Future};
 use kvproto::cdcpb::*;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
-use raftstore::coprocessor::{Cmd, CmdBatch, CmdObserver, ObserverContext, RoleObserver};
+use raftstore::coprocessor::CmdBatch;
 use raftstore::store::fsm::ChangeCmd;
 use raftstore::store::msg::{Callback, CasualMessage, ReadResponse};
 use raftstore::store::transport::CasualRouter;
@@ -225,10 +225,11 @@ impl<T: CasualRouter> Endpoint<T> {
             Some(conn) => conn,
             None => return,
         };
+        downstream.set_sink(conn.get_sink());
         if !conn.subscribe(request.get_region_id(), downstream.get_id()) {
+            downstream.sink_duplicate_error(request.get_region_id());
             return;
         }
-        downstream.set_sink(conn.get_sink());
 
         let region_id = request.region_id;
         info!("cdc register region"; "region_id" => region_id);

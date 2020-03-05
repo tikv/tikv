@@ -4,18 +4,21 @@ use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-#[cfg(not(feature = "prost-codec"))]
-use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
+    error::DuplicateRequest as ErrorDuplicateRequest,
     event::{
-        row::OpType as EventRowOpType, Entries as EventEntries, Error as EventError,
-        Event as Event_oneof_event, LogType as EventLogType, Row as EventRow,
+        row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
+        LogType as EventLogType, Row as EventRow,
     },
-    ChangeDataEvent, Event,
+    Error as EventError, Event,
+};
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::cdcpb::{
+    Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventRow,
+    EventRowOpType, Event_oneof_event,
 };
 
-use futures::sync::mpsc::*;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -28,7 +31,6 @@ use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, TimeStamp};
 
-use crate::service::ConnID;
 use crate::Error;
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
@@ -80,6 +82,17 @@ impl Downstream {
 
     pub fn get_id(&self) -> DownstreamID {
         self.id
+    }
+
+    pub fn sink_duplicate_error(&self, region_id: u64) {
+        let mut change_data_event = Event::default();
+        let mut cdc_err = EventError::default();
+        let mut err = ErrorDuplicateRequest::default();
+        err.set_region_id(region_id);
+        cdc_err.set_duplicate_request(err);
+        change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
+        change_data_event.region_id = region_id;
+        self.sink_event(change_data_event);
     }
 }
 
@@ -548,24 +561,12 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::rocks::*;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::Snapshot;
     use futures::{Future, Stream};
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
-    use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::router::RaftStoreRouter;
-    use raftstore::store::{Callback, CasualMessage, ReadResponse, RegionSnapshot, SignificantMsg};
-    use raftstore::Result as RaftStoreResult;
     use std::cell::Cell;
-    use std::sync::Arc;
-    use tikv::server::RaftKv;
     use tikv::storage::mvcc::test_util::*;
-    use tikv::storage::mvcc::tests::*;
-    use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender};
-    use tikv_util::mpsc::{bounded, Sender as UtilSender};
+    use tikv_util::mpsc::batch::{self, BatchReceiver};
 
     // TODO add test_txn once cdc observer is ready.
     // https://github.com/overvenus/tikv/blob/447d10ae80b5b7fc58a4bef4631874a11237fdcf/components/cdc/src/delegate.rs#L615-L701

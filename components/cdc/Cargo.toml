@@ -14,6 +14,7 @@ protobuf-codec = [
   "raftstore/protobuf-codec",
   "tikv/protobuf-codec",
   "txn_types/protobuf-codec",
+  "test_cdc_util/protobuf-codec",
 ]
 prost-codec = [
   "engine_rocks/prost-codec",
@@ -24,6 +25,7 @@ prost-codec = [
   "raftstore/prost-codec",
   "tikv/prost-codec",
   "txn_types/prost-codec",
+  "test_cdc_util/prost-codec",
 ]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
@@ -58,7 +60,7 @@ tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }
 test_util = { path = "../test_util" }
 panic_hook = { path = "../panic_hook" }
-util = {path = "tests/util" }
+test_cdc_util = {path = "tests/util" }
 
 [[test]]
 name = "integrations"

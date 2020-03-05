@@ -1,13 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
-use futures::sync::mpsc;
 use futures::{Future, Sink, Stream};
 use grpcio::*;
-use kvproto::cdcpb::*;
-use tikv_util::collections::HashSet;
+use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
+use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender};
 use tikv_util::worker::*;
 
@@ -31,7 +30,7 @@ impl ConnID {
 pub struct Conn {
     id: ConnID,
     sink: BatchSender<Event>,
-    downstreams: HashSet<(u64, DownstreamID)>,
+    downstreams: HashMap<u64, DownstreamID>,
 }
 
 impl Conn {
@@ -39,7 +38,7 @@ impl Conn {
         Conn {
             id: ConnID::new(),
             sink,
-            downstreams: HashSet::default(),
+            downstreams: HashMap::default(),
         }
     }
 
@@ -47,7 +46,7 @@ impl Conn {
         self.id
     }
 
-    pub fn take_downstreams(self) -> HashSet<(u64, DownstreamID)> {
+    pub fn take_downstreams(self) -> HashMap<u64, DownstreamID> {
         self.downstreams
     }
 
@@ -56,11 +55,17 @@ impl Conn {
     }
 
     pub fn subscribe(&mut self, region_id: u64, downstream_id: DownstreamID) -> bool {
-        self.downstreams.insert((region_id, downstream_id))
+        match self.downstreams.entry(region_id) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(v) => {
+                v.insert(downstream_id);
+                true
+            }
+        }
     }
 
     pub fn unsubscribe(&mut self, region_id: u64, downstream_id: DownstreamID) {
-        self.downstreams.remove(&(region_id, downstream_id));
+        assert_eq!(self.downstreams.remove(&region_id).unwrap(), downstream_id);
     }
 
     pub fn flush(&self) {
