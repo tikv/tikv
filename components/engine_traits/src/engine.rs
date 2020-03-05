@@ -4,6 +4,11 @@ use std::fmt::Debug;
 
 use crate::*;
 
+// FIXME: Revisit the remaining types and methods on KvEngine. Some of these are
+// here for lack of somewhere better to put them at the time of writing.
+// Consider moving everything into other traits and making KvEngine essentially
+// a trait typedef.
+
 pub trait KvEngine:
     Peekable
     + Mutable
@@ -22,9 +27,9 @@ pub trait KvEngine:
     type Snapshot: Snapshot<Self>;
     type WriteBatch: WriteBatch;
 
-    fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()>;
+    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()>;
     fn write(&self, wb: &Self::WriteBatch) -> Result<()> {
-        self.write_opt(&WriteOptions::default(), wb)
+        self.write_opt(wb, &WriteOptions::default())
     }
     fn write_batch(&self) -> Self::WriteBatch;
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
