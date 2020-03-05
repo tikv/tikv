@@ -213,14 +213,18 @@ pub mod tests {
     use super::*;
     use crate::storage::kv::RocksEngine;
     use engine::rocks::util::{compact_range, get_cf_handle};
+    use engine::rocks::Writable;
 
     pub fn gc_by_compact(engine: &RocksEngine, _: &[u8], safe_point: u64) {
         let kv = engine.get_rocksdb();
+        // Put a new key-value pair to ensure compaction can be triggered correctly.
+        let handle = get_cf_handle(&kv, "write").unwrap();
+        kv.put_cf(handle, b"k1", b"v1").unwrap();
+
         let safe_point = Arc::new(AtomicU64::new(safe_point));
         let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
         cfg.0.update(|v| v.enable_compaction_filter = true);
         init_compaction_filter(Arc::clone(&kv), safe_point, cfg);
-        let handle = get_cf_handle(&kv, "write").unwrap();
         compact_range(&kv, handle, None, None, false, 1);
     }
 }
