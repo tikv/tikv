@@ -8,10 +8,9 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
-use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{KvEngine, Peekable, Snapshot};
+use engine_traits::{KvEngine, Peekable, Snapshot, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -455,11 +454,10 @@ impl Peer {
         );
 
         // Set Tombstone state explicitly
-        let kv_wb = WriteBatch::default();
-        let raft_wb = WriteBatch::default();
+        let kv_wb = ctx.engines.kv.c().write_batch();
+        let raft_wb = ctx.engines.raft.c().write_batch();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
         write_peer_state(
-            &ctx.engines.kv,
             &kv_wb,
             &region,
             PeerState::Tombstone,
@@ -468,8 +466,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
-        ctx.engines.write_kv_opt(&kv_wb, &write_opts)?;
-        ctx.engines.write_raft_opt(&raft_wb, &write_opts)?;
+        ctx.engines.kv.c().write_opt(&kv_wb, &write_opts)?;
+        ctx.engines.raft.c().write_opt(&raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
