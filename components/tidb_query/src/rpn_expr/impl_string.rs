@@ -1633,14 +1633,8 @@ mod tests {
             (Some(b"".to_vec()), Some(0)),
             (Some("CAFÉ".as_bytes().to_vec()), Some(5)),
             (Some("数据库".as_bytes().to_vec()), Some(9)),
-            (
-                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
-                Some(41),
-            ),
-            (
-                Some("قاعدة البيانات".as_bytes().to_vec()),
-                Some(27),
-            ),
+            (Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()), Some(41)),
+            (Some("قاعدة البيانات".as_bytes().to_vec()), Some(27)),
             (None, None),
         ];
 
@@ -1661,14 +1655,8 @@ mod tests {
             (Some(b"".to_vec()), Some(0)),
             (Some("CAFÉ".as_bytes().to_vec()), Some(4)),
             (Some("数据库".as_bytes().to_vec()), Some(3)),
-            (
-                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
-                Some(22),
-            ),
-            (
-                Some("قاعدة البيانات".as_bytes().to_vec()),
-                Some(14),
-            ),
+            (Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()), Some(22)),
+            (Some("قاعدة البيانات".as_bytes().to_vec()), Some(14)),
             (None, None),
         ];
 
@@ -1680,5 +1668,4 @@ mod tests {
             assert_eq!(output, expected_output);
         }
     }
-
 }
