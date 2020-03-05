@@ -11,7 +11,7 @@ use txn_types::{Key, Lock, Mutation, TimeStamp};
 use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
 use crate::storage::txn::latch::{self, Latches};
-use crate::storage::types::{MvccInfo, StorageCallbackType, TxnStatus};
+use crate::storage::types::{MvccInfo, PessimisticLockRes, StorageCallbackType, TxnStatus};
 use crate::storage::Result;
 
 /// Store Transaction scheduler commands.
@@ -85,7 +85,7 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
     }
 }
 
-impl From<PessimisticLockRequest> for TypedCommand<Vec<Result<()>>> {
+impl From<PessimisticLockRequest> for TypedCommand<Result<PessimisticLockRes>> {
     fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()
@@ -107,6 +107,7 @@ impl From<PessimisticLockRequest> for TypedCommand<Vec<Result<()>>> {
             req.get_is_first_lock(),
             req.get_for_update_ts().into(),
             WaitTimeout::from_encoded(req.get_wait_timeout()),
+            req.get_return_values(),
             req.take_context(),
         )
     }
@@ -370,7 +371,7 @@ command! {
     /// Acquire a Pessimistic lock on the keys.
     ///
     /// This can be rolled back with a [`PessimisticRollback`](CommandKind::PessimisticRollback) command.
-    AcquirePessimisticLock -> Vec<Result<()>> {
+    AcquirePessimisticLock -> Result<PessimisticLockRes> {
         /// The set of keys to lock.
         keys: Vec<(Key, bool)>,
         /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
@@ -382,6 +383,9 @@ command! {
         for_update_ts: TimeStamp,
         /// Time to wait for lock released in milliseconds when encountering locks.
         wait_timeout: Option<WaitTimeout>,
+        /// If it is true, TiKV will return values of the keys if no error, so TiDB can cache the values for
+        /// later read in the same transaction.
+        return_values: bool,
     }
 }
 

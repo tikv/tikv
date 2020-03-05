@@ -1,9 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::TryFrom;
+use std::hash::Hash;
 use std::sync::Arc;
 
+use tidb_query_datatype::Collation;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::box_try;
 use tikv_util::collections::HashMap;
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
@@ -13,12 +16,12 @@ use crate::batch::executors::util::aggr_executor::*;
 use crate::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::codec::collation::{match_template_collator, SortKey};
 use crate::codec::data_type::*;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::storage::IntervalRange;
 use crate::Result;
-use tikv_util::box_try;
 
 pub macro match_template_hashable($t:tt, $($tail:tt)*) {
     match_template::match_template! {
@@ -163,7 +166,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             states: Vec::with_capacity(1024),
             groups,
             group_by_exp,
-            group_by_field_type: Some(group_by_field_type),
+            group_by_field_type,
             states_offset_each_logical_row: Vec::with_capacity(
                 crate::batch::runner::BATCH_MAX_SIZE,
             ),
@@ -218,16 +221,14 @@ pub struct FastHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
     groups: Groups,
     group_by_exp: RpnExpression,
-    group_by_field_type: Option<FieldType>,
+    group_by_field_type: FieldType,
     states_offset_each_logical_row: Vec<usize>,
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImpl {
     #[inline]
     fn prepare_entities(&mut self, entities: &mut Entities<Src>) {
-        entities
-            .schema
-            .push(self.group_by_field_type.take().unwrap());
+        entities.schema.push(self.group_by_field_type.clone());
     }
 
     #[inline]
@@ -252,8 +253,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         let group_by_physical_vec = group_by_value.as_ref();
         let group_by_logical_rows = group_by_value.logical_rows();
 
-        match_template_hashable! {
-            TT, match group_by_physical_vec {
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match group_by_physical_vec {
                 VectorValue::TT(v) => {
                     if let Groups::TT(group) = &mut self.groups {
                         calc_groups_each_row(
@@ -262,8 +264,34 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                             &entities.each_aggr_fn,
                             group,
                             &mut self.states,
-                            &mut self.states_offset_each_logical_row
-                        );
+                            &mut self.states_offset_each_logical_row,
+                            |val| Ok(val)
+                        )?;
+                    } else {
+                        panic!();
+                    }
+                },
+                VectorValue::Bytes(v) => {
+                    if let Groups::Bytes(group) = &mut self.groups {
+                        match_template_collator!(
+                            TT,
+                            match self.group_by_field_type.collation().map_err(crate::codec::Error::from)? {
+                                Collation::TT => {
+                                    #[allow(clippy::transmute_ptr_to_ptr)]
+                                    let group: &mut HashMap<Option<SortKey<Bytes, TT>>, usize> =
+                                        unsafe { std::mem::transmute(group) };
+                                    calc_groups_each_row(
+                                        v,
+                                        group_by_logical_rows,
+                                        &entities.each_aggr_fn,
+                                        group,
+                                        &mut self.states,
+                                        &mut self.states_offset_each_logical_row,
+                                        |val| Ok(SortKey::map_option(val)?)
+                                    )?;
+                                }
+                            }
+                        )
                     } else {
                         panic!();
                     }
@@ -329,16 +357,21 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 }
 
-fn calc_groups_each_row<T: Evaluable + Eq + std::hash::Hash>(
+fn calc_groups_each_row<T, S, F>(
     physical_column: &[Option<T>],
     logical_rows: &[usize],
     aggr_fns: &[Box<dyn AggrFunction>],
-    group: &mut HashMap<Option<T>, usize>,
+    group: &mut HashMap<Option<S>, usize>,
     states: &mut Vec<Box<dyn AggrFunctionState>>,
     states_offset_each_logical_row: &mut Vec<usize>,
-) {
+    map_to_sort_key: F,
+) -> Result<()>
+where
+    S: Hash + Eq + Clone,
+    F: Fn(&Option<T>) -> Result<&Option<S>>,
+{
     for physical_idx in logical_rows {
-        let val = &physical_column[*physical_idx];
+        let val = map_to_sort_key(&physical_column[*physical_idx])?;
 
         // Not using the entry API so that when entry exists there is no clone.
         match group.get(val) {
@@ -357,6 +390,8 @@ fn calc_groups_each_row<T: Evaluable + Eq + std::hash::Hash>(
             }
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -464,7 +499,7 @@ mod tests {
                 .as_real_slice()
                 .iter()
                 .map(|v| {
-                    use std::hash::{Hash, Hasher};
+                    use std::hash::Hasher;
                     let mut s = std::collections::hash_map::DefaultHasher::new();
                     v.hash(&mut s);
                     s.finish()
@@ -504,6 +539,118 @@ mod tests {
             assert_eq!(
                 &ordered_column,
                 &[Real::new(7.0).ok(), Real::new(1.5).ok(), None]
+            );
+        }
+    }
+
+    #[test]
+    fn test_collation() {
+        use tipb::ExprType;
+        use tipb_helper::ExprDefBuilder;
+
+        // This test creates a hash aggregation executor with the following aggregate functions:
+        // - COUNT(col_0)
+        // - AVG(col_1)
+        // And group by:
+        // - col_4
+
+        let group_by_exp = || RpnExpressionBuilder::new().push_column_ref(4).build();
+
+        let aggr_definitions = vec![
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
+                .build(),
+            ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+                .build(),
+        ];
+
+        let exec_fast = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                group_by_exp(),
+                aggr_definitions.clone(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![group_by_exp()],
+                aggr_definitions.clone(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
+            vec![Box::new(exec_fast), Box::new(exec_slow)];
+
+        for exec_builder in executor_builders {
+            let src_exec = make_src_executor_1();
+            let mut exec = exec_builder(src_exec);
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let mut r = exec.next_batch(1);
+            // col_4 can result in [NULL, "aa", "aaa"], thus there will be three groups.
+            assert_eq!(&r.logical_rows, &[0, 1, 2]);
+            assert_eq!(r.physical_columns.rows_len(), 3);
+            assert_eq!(r.physical_columns.columns_len(), 4); // 3 result column, 1 group by column
+
+            // Let's check group by column first. Group by column is decoded in fast hash agg,
+            // but not decoded in slow hash agg. So decode it anyway.
+            r.physical_columns[3]
+                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[3])
+                .unwrap();
+
+            // The row order is not defined. Let's sort it by the group by column before asserting.
+            let mut sort_column: Vec<(usize, _)> = r.physical_columns[3]
+                .decoded()
+                .as_bytes_slice()
+                .iter()
+                .enumerate()
+                .collect();
+            sort_column.sort_by(|a, b| a.1.cmp(&b.1));
+
+            // Use the order of the sorted column to sort other columns
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.physical_columns[3].decoded().as_bytes_slice()[*idx].clone())
+                .collect();
+            assert_eq!(
+                &ordered_column,
+                &[None, Some(b"aa".to_vec()), Some(b"aaa".to_vec())]
+            );
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
+                .collect();
+            assert_eq!(&ordered_column, &[Some(0), Some(0), Some(2)]);
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
+                .collect();
+            assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2)]);
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.physical_columns[2].decoded().as_real_slice()[*idx])
+                .collect();
+            assert_eq!(
+                &ordered_column,
+                &[
+                    Real::new(4.5).ok(),
+                    Real::new(1.0).ok(),
+                    Real::new(6.5).ok()
+                ]
             );
         }
     }

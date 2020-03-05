@@ -79,19 +79,9 @@ impl ScalarFunc {
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
-        match self.field_type.as_accessor().collation() {
-            Collation::Utf8GeneralCi => {
-                self.compare_string_with_collator::<CollatorUtf8Mb4GeneralCi>(ctx, row, op)
-            }
-            Collation::Utf8Mb4GeneralCi => {
-                self.compare_string_with_collator::<CollatorUtf8Mb4GeneralCi>(ctx, row, op)
-            }
-            Collation::Utf8Mb4Bin => {
-                self.compare_string_with_collator::<CollatorUtf8Mb4Bin>(ctx, row, op)
-            }
-            Collation::Binary => self.compare_string_with_collator::<CollatorBinary>(ctx, row, op),
-            Collation::Utf8Bin => {
-                self.compare_string_with_collator::<CollatorUtf8Mb4Bin>(ctx, row, op)
+        match_template_collator! {
+            TT, match self.field_type.as_accessor().collation()? {
+                Collation::TT => self.compare_string_with_collator::<TT>(ctx, row, op)
             }
         }
     }
