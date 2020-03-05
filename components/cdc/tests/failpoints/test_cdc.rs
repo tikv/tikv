@@ -9,9 +9,8 @@ use grpcio::WriteFlags;
 use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
-    create_change_data,
-    event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataClient, ChangeDataEvent, ChangeDataRequest,
+    event::{Event as Event_oneof_event, LogType as EventLogType},
+    ChangeDataRequest,
 };
 use raft::StateRole;
 use raftstore::coprocessor::{ObserverContext, RoleObserver};
