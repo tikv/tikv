@@ -193,7 +193,7 @@ fn test_cdc_not_leader() {
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = req_tx
+    let req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
@@ -272,11 +272,7 @@ fn test_cdc_not_leader() {
         .unwrap();
     rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
-    let (req_tx, resp_rx) = suite
-        .get_store_cdc_client(leader.get_store_id())
-        .event_feed()
-        .unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    // Try to subscribe again.
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1);

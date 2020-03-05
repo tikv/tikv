@@ -22,8 +22,8 @@ fn test_failed_pending_batch() {
     let _guard = super::setup_fail();
     let mut suite = TestSuite::new(3);
 
-    let incremental_scan_fp = "before_schedule_incremental_scan";
-    fail::cfg(incremental_scan_fp, "pause").unwrap();
+    let fp = "before_schedule_incremental_scan";
+    fail::cfg(fp, "pause").unwrap();
 
     let region = suite.cluster.get_region(&[]);
     let mut req = ChangeDataRequest::default();
@@ -38,7 +38,7 @@ fn test_failed_pending_batch() {
     suite.cluster.must_split(&region, b"k0");
     // Wait for receiving split cmd.
     sleep_ms(200);
-    fail::remove(incremental_scan_fp);
+    fail::remove(fp);
 
     let mut events = receive_event(false);
     if events.len() == 1 {
@@ -85,6 +85,7 @@ fn test_failed_pending_batch() {
 
 #[test]
 fn test_region_ready_after_deregister() {
+    let _guard = super::setup_fail();
     let mut suite = TestSuite::new(1);
 
     let fp = "cdc_incremental_scan_start";

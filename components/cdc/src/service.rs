@@ -18,6 +18,7 @@ static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
 const CDC_MSG_NOTIFY_SIZE: usize = 8;
 
+/// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ConnID(usize);
 
@@ -64,8 +65,8 @@ impl Conn {
         }
     }
 
-    pub fn unsubscribe(&mut self, region_id: u64, downstream_id: DownstreamID) {
-        assert_eq!(self.downstreams.remove(&region_id).unwrap(), downstream_id);
+    pub fn unsubscribe(&mut self, region_id: u64) {
+        self.downstreams.remove(&region_id);
     }
 
     pub fn flush(&self) {
@@ -155,7 +156,6 @@ impl ChangeData for Service {
 
         let scheduler = self.scheduler.clone();
         ctx.spawn(recv_req.then(move |res| {
-            // Unregister this downstream only.
             // Unregister this downstream only.
             if let Err(e) = scheduler.schedule(Task::Deregister {
                 region_id: 0,

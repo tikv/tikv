@@ -178,7 +178,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                     is_last = delegate.unsubscribe(id, err);
                 }
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    conn.unsubscribe(region_id, id);
+                    conn.unsubscribe(region_id);
                 }
                 if is_last {
                     self.capture_regions.remove(&region_id);
@@ -190,6 +190,9 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                     delegate.fail(err);
                     is_last = true;
                 }
+                self.connections
+                    .iter_mut()
+                    .for_each(|(_, conn)| conn.unsubscribe(region_id));
             }
             (None, None, Some(conn_id)) => {
                 if let Some(conn) = self.connections.remove(&conn_id) {
