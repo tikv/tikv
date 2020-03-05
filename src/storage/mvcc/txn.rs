@@ -351,7 +351,9 @@ impl<S: Snapshot> MvccTxn<S> {
         min_commit_ts: TimeStamp,
     ) -> Result<()> {
         if mutation.should_not_write() {
-            return Err(box_err!("cannot handle checkNotExists in pessimistic prewrite"))
+            return Err(box_err!(
+                "cannot handle checkNotExists in pessimistic prewrite"
+            ));
         }
         let lock_type = LockType::from_mutation(&mutation);
         let (key, value) = mutation.into_key_value();
