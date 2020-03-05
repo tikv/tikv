@@ -1321,9 +1321,9 @@ impl Peer {
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
-                        ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                            (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
-                        ));
+                        if let Ok(x) = (ctx.current_time.unwrap() - propose_time).to_std() {
+                            ctx.raft_metrics.commit_log.observe(duration_to_sec(x));
+                        }
                         self.maybe_renew_leader_lease(propose_time, ctx, None);
                         lease_to_be_updated = false;
                     }
