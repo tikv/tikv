@@ -4,8 +4,14 @@ use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod};
 
 use super::metadata::*;
 use super::Backend;
-use crate::crypter::*;
-use crate::{AesCtrCrypter, Error, Iv, Result};
+use crate::crypter::{self, AesCtrCrypter, Iv};
+use crate::{Error, Result};
+
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+
+use hex;
 
 pub struct FileBackend {
     method: EncryptionMethod,
@@ -13,18 +19,34 @@ pub struct FileBackend {
 }
 
 impl FileBackend {
-    pub fn new(method: EncryptionMethod, key: Vec<u8>) -> Result<FileBackend> {
-        if key.len() != get_method_key_length(method) {
-            return Err(Error::Other(
-                format!(
-                    "encryption method and key length mismatch, expect {} get {}",
-                    get_method_key_length(method),
-                    key.len()
-                )
-                .into(),
-            ));
-        }
-        Ok(FileBackend { key, method })
+    pub fn new<P: AsRef<Path>>(method: EncryptionMethod, path: P) -> Result<FileBackend> {
+        let key = match method {
+            EncryptionMethod::Unknown => return Err(Error::UnknownEncryption),
+            EncryptionMethod::Plaintext => vec![],
+            _ => {
+                let key_len = crypter::get_method_key_length(method) as u64;
+                let mut file = File::open(path)?;
+                // Check file size to avoid reading a gigantic file accidentally.
+                let file_len = file.metadata()?.len();
+                if file_len != key_len * 2 {
+                    return Err(Error::Other(
+                        format!(
+                            "mismatch master key file size, expected {}, actual {}.",
+                            key_len * 2,
+                            file_len,
+                        )
+                        .into(),
+                    ));
+                }
+                let mut content = vec![];
+                let read_len = file.read_to_end(&mut content)? as u64;
+                assert_eq!(read_len, key_len * 2);
+                hex::decode(content).map_err(|e| {
+                    Error::Other(format!("failed to decode master key from file: {}", e).into())
+                })?
+            }
+        };
+        Ok(FileBackend { method, key })
     }
 
     fn encrypt_content(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {

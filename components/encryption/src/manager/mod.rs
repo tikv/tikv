@@ -10,10 +10,11 @@ use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
 
-use crate::crypter::*;
+use crate::config::MasterKeyConfig;
+use crate::crypter::{self, Iv};
 use crate::encrypted_file::EncryptedFile;
-use crate::master_key::*;
-use crate::{Error, Iv, Result};
+use crate::master_key::{Backend, PlaintextBackend};
+use crate::{Error, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
@@ -26,25 +27,60 @@ struct Dicts {
 }
 
 impl Dicts {
-    fn open(path: &str, rotation_period: Duration, master_key: &dyn Backend) -> Result<Dicts> {
+    fn new(path: &str, rotation_period: Duration) -> Dicts {
+        Dicts {
+            file_dict: FileDictionary::default(),
+            key_dict: KeyDictionary {
+                current_key_id: 0,
+                ..Default::default()
+            },
+            rotation_period,
+            base: Path::new(path).to_owned(),
+        }
+    }
+
+    fn open(
+        path: &str,
+        rotation_period: Duration,
+        master_key: &dyn Backend,
+    ) -> Result<Option<Dicts>> {
         let base = Path::new(path);
+
         // File dict is saved in plaintext.
         let file_file = EncryptedFile::new(base, FILE_DICT_NAME);
-        let file_bytes = file_file.read(&PlainTextBackend::default())?;
-        let mut file_dict = FileDictionary::default();
-        file_dict.merge_from_bytes(&file_bytes)?;
+        let plaintext = MasterKeyConfig::Plaintext.create_backend()?;
+        let file_bytes = file_file.read(plaintext.as_ref()).map_err(|e| {
+            if let Error::EncryptedFile(inner) = e {
+                Error::Other(inner)
+            } else {
+                e
+            }
+        })?;
 
         let key_file = EncryptedFile::new(base, KEY_DICT_NAME);
         let key_bytes = key_file.read(master_key)?;
-        let mut key_dict = KeyDictionary::default();
-        key_dict.merge_from_bytes(&key_bytes)?;
 
-        Ok(Dicts {
-            file_dict,
-            key_dict,
-            rotation_period,
-            base: base.to_owned(),
-        })
+        match (file_bytes, key_bytes) {
+            (None, None) => Ok(None),
+            (None, _) => Err(Error::Other(
+                format!("file dictionary missing, path = {}", path).into(),
+            )),
+            (_, None) => Err(Error::Other(
+                format!("key dictionary missing, path = {}", path).into(),
+            )),
+            (Some(file_bytes), Some(key_bytes)) => {
+                let mut file_dict = FileDictionary::default();
+                file_dict.merge_from_bytes(&file_bytes)?;
+                let mut key_dict = KeyDictionary::default();
+                key_dict.merge_from_bytes(&key_bytes)?;
+                Ok(Some(Dicts {
+                    file_dict,
+                    key_dict,
+                    rotation_period,
+                    base: base.to_owned(),
+                }))
+            }
+        }
     }
 
     fn save_key_dict(&mut self, master_key: &dyn Backend) -> Result<()> {
@@ -63,7 +99,7 @@ impl Dicts {
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = self.file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
-        file.write(&file_bytes, &PlainTextBackend::default())?;
+        file.write(&file_bytes, &PlaintextBackend::default())?;
         Ok(())
     }
 
@@ -230,7 +266,7 @@ fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
     use rand::{rngs::OsRng, RngCore};
 
     let key_id = OsRng.next_u64();
-    let key_length = get_method_key_length(method);
+    let key_length = crypter::get_method_key_length(method);
     let mut key = vec![0; key_length];
     OsRng.fill_bytes(&mut key);
     (key_id, key)
@@ -245,19 +281,66 @@ pub struct DataKeyManager {
 
 impl DataKeyManager {
     pub fn new(
-        master_key: Arc<dyn Backend>,
+        master_key_config: &MasterKeyConfig,
+        previous_master_key_config: &MasterKeyConfig,
         method: EncryptionMethod,
         rotation_period: Duration,
         dict_path: &str,
-    ) -> Result<DataKeyManager> {
-        let mut dicts = Dicts::open(dict_path, rotation_period, master_key.as_ref())?;
+    ) -> Result<Option<DataKeyManager>> {
+        let master_key = master_key_config.create_backend()?;
+        let mut dicts = match (
+            Dicts::open(dict_path, rotation_period, master_key.as_ref()),
+            method,
+        ) {
+            // Encryption is disabled.
+            (Ok(None), EncryptionMethod::Plaintext) => {
+                info!("encryption is disabled.");
+                return Ok(None);
+            }
+            // Encryption is being enabled.
+            (Ok(None), _) => {
+                info!("encryption is being enabled. method = {:?}", method);
+                Dicts::new(dict_path, rotation_period)
+            }
+            // Encryption was enabled and master key didn't change.
+            (Ok(Some(dicts)), _) => {
+                info!("encryption is enabled. method = {:?}", method);
+                dicts
+            }
+            // Failed to decrypt the dictionaries using master key. Could be master key being
+            // rotated. Try the previous master key.
+            (Err(Error::EncryptedFile(e_current)), _) => {
+                warn!(
+                    "failed to open encryption metadata using master key. \
+                      could be master key being rotated. \
+                      current master key: {:?}, previous master key: {:?}",
+                    master_key_config, previous_master_key_config
+                );
+                let previous_master_key = previous_master_key_config.create_backend()?;
+                Dicts::open(dict_path, rotation_period, previous_master_key.as_ref())
+                    .map_err(|e| {
+                        if let Error::EncryptedFile(e_previous) = e {
+                            Error::DictDecrypt(e_current, e_previous)
+                        } else {
+                            e
+                        }
+                    })?
+                    .ok_or(Error::Other(
+                        format!(
+                            "Fallback to previous master key but find dictionaries to be empty."
+                        )
+                        .into(),
+                    ))?
+            }
+            // Error.
+            (Err(e), _) => return Err(e),
+        };
         dicts.maybe_rotate_data_key(method, master_key.as_ref())?;
-        let manager = DataKeyManager {
+        Ok(Some(DataKeyManager {
             dicts: Arc::new(RwLock::new(dicts)),
             master_key,
             method,
-        };
-        Ok(manager)
+        }))
     }
 }
 
@@ -285,7 +368,7 @@ impl EncryptionKeyManager for DataKeyManager {
         };
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: encryption_method_to_db_encryption_method(method),
+            method: crypter::encryption_method_to_db_encryption_method(method),
             iv,
         };
         Ok(encrypted_file)
@@ -300,7 +383,7 @@ impl EncryptionKeyManager for DataKeyManager {
         let file = dicts.new_file(fname, self.method)?;
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: encryption_method_to_db_encryption_method(file.method),
+            method: crypter::encryption_method_to_db_encryption_method(file.method),
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
@@ -341,13 +424,14 @@ mod tests {
         backend: Option<Arc<dyn Backend>>,
     ) -> (tempfile::TempDir, DataKeyManager) {
         let tmp = temp.unwrap_or_else(|| tempfile::TempDir::new().unwrap());
-        let master_key = backend.unwrap_or_else(|| Arc::new(PlainTextBackend::default()));
+        let master_key = backend.unwrap_or_else(|| Arc::new(PlaintextBackend::default()));
         let manager = DataKeyManager::new(
             master_key,
             EncryptionMethod::Aes256Ctr,
             Duration::from_secs(60),
             tmp.path().as_os_str().to_str().unwrap(),
         )
+        .unwrap()
         .unwrap();
         (tmp, manager)
     }
@@ -407,7 +491,7 @@ mod tests {
     fn test_key_manager_rename() {
         let (_tmp, mut manager) = new_tmp_key_manager(None, None);
 
-        manager.method = EncryptionMethod::Aes192Ctr;
+        Arc::get_mut(&mut manager).unwrap().method = EncryptionMethod::Aes192Ctr;
         let file = manager.new_file("foo").unwrap();
         manager.rename_file("foo", "foo1").unwrap();
 
@@ -577,7 +661,7 @@ mod tests {
 
         // Change it insecure backend and save dicts,
         // must set expose for all keys.
-        let insecure = Arc::new(PlainTextBackend::default());
+        let insecure = Arc::new(PlaintextBackend::default());
         let ok = dicts
             .rotate_key(100, DataKey::default(), insecure.as_ref())
             .unwrap();

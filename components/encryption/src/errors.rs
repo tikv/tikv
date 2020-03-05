@@ -18,6 +18,18 @@ pub enum Error {
     Crypter(CrypterError),
     #[fail(display = "Protobuf error {}", _0)]
     Proto(ProtobufError),
+    #[fail(display = "Unknown encryption error")]
+    UnknownEncryption,
+    #[fail(
+        display = "Current master key error {}, previous master key error {}.",
+        _0, _1
+    )]
+    DictDecrypt(
+        Box<dyn error::Error + Sync + Send>,
+        Box<dyn error::Error + Sync + Send>,
+    ),
+    #[fail(display = "Encrypted file error {}", _0)]
+    EncryptedFile(Box<dyn error::Error + Sync + Send>),
 }
 
 macro_rules! impl_from {

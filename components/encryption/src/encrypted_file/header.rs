@@ -58,6 +58,7 @@ impl Header {
             size,
         }
     }
+
     pub fn parse(buf: &[u8]) -> Result<(Header, &[u8])> {
         if buf.len() < Header::SIZE {
             return Err(Error::Other(
@@ -69,39 +70,13 @@ impl Header {
                 .into(),
             ));
         }
-
         // Version (1 bytes) | Reserved  (3 bytes)
         let version = Version::from(buf[0])?;
         // Crc32  (4 bytes)
         let crc32 = BigEndian::read_u32(&buf[4..8]);
         // Content size (8 bytes)
         let size = BigEndian::read_u64(&buf[8..Header::SIZE]);
-
         let content = &buf[Header::SIZE..];
-        if content.len() as u64 != size {
-            return Err(Error::Other(
-                format!(
-                    "file corrupted! content size mismatch {} != {}",
-                    size,
-                    content.len(),
-                )
-                .into(),
-            ));
-        }
-
-        let mut digest = crc32fast::Hasher::new();
-        digest.update(content);
-        let crc32_checksum = digest.finalize();
-        if crc32_checksum != crc32 {
-            return Err(Error::Other(
-                format!(
-                    "file corrupted! crc32 mismatch {} != {}",
-                    crc32, crc32_checksum
-                )
-                .into(),
-            ));
-        }
-
         let header = Header {
             version,
             crc32,
@@ -124,6 +99,23 @@ impl Header {
 
         buf.to_vec()
     }
+
+    pub fn verify(&self, content: &[u8]) -> Result<()> {
+        if self.size != content.len() as u64 {
+            return Err(Error::EncryptedFile(
+                format!("content size mismatch {} != {}", self.size, content.len()).into(),
+            ));
+        }
+        let mut digest = crc32fast::Hasher::new();
+        digest.update(content);
+        let crc32 = digest.finalize();
+        if self.crc32 != crc32 {
+            return Err(Error::EncryptedFile(
+                format!("crc mismatch {} != {}", self.crc32, crc32).into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -143,32 +135,5 @@ mod tests {
         assert_eq!(empty_header, header1);
         let empty: Vec<u8> = vec![];
         assert_eq!(content1, empty.as_slice())
-    }
-
-    // TODO fuzz parse and to_bytes
-    #[test]
-    fn test_crc32_size() {
-        let content = [5; 32];
-        let header = Header::new(&content);
-
-        {
-            let mut bytes = header.to_bytes();
-            bytes.extend_from_slice(&content);
-
-            let (header1, content1) = Header::parse(&bytes).unwrap();
-            assert_eq!(header, header1);
-            assert_eq!(content, content1)
-        }
-
-        {
-            let bytes_missing_content = header.to_bytes();
-            Header::parse(&bytes_missing_content).unwrap_err();
-        }
-
-        {
-            let mut bytes_bad_content = header.to_bytes();
-            bytes_bad_content.extend_from_slice(&[7; 32]);
-            Header::parse(&bytes_bad_content).unwrap_err();
-        }
     }
 }

@@ -18,14 +18,15 @@ pub trait Backend: Sync + Send + 'static {
 }
 
 mod file;
-pub use self::file::FileBackend;
 mod metadata;
+
+pub use self::file::FileBackend;
 // TODO support KMS
 
 #[derive(Default)]
-pub(crate) struct PlainTextBackend {}
+pub(crate) struct PlaintextBackend {}
 
-impl Backend for PlainTextBackend {
+impl Backend for PlaintextBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
         let mut content = EncryptedContent::default();
         content.set_content(plaintext.to_owned());

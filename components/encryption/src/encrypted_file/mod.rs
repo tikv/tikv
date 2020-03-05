@@ -8,6 +8,7 @@ use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
 
+use crate::failure::Fail;
 use crate::master_key::*;
 use crate::{Error, Result};
 
@@ -31,8 +32,8 @@ impl<'a> EncryptedFile<'a> {
         EncryptedFile { base, name }
     }
 
-    /// Read and decrypt the file.
-    pub fn read(&self, master_key: &dyn Backend) -> Result<Vec<u8>> {
+    /// Read and decrypt the file. Return none if file doesn't exist.
+    pub fn read(&self, master_key: &dyn Backend) -> Result<Option<Vec<u8>>> {
         let res = OpenOptions::new()
             .read(true)
             .open(self.base.join(self.name));
@@ -40,16 +41,20 @@ impl<'a> EncryptedFile<'a> {
             Ok(mut f) => {
                 let mut buf = Vec::new();
                 f.read_to_end(&mut buf)?;
-                let (_, content) = Header::parse(&buf)?;
+                let (header, content) = Header::parse(&buf)?;
+                println!("read encrypted len {}", content.len());
                 let mut encrypted_content = EncryptedContent::default();
                 encrypted_content.merge_from_bytes(content)?;
-                let plaintext = master_key.decrypt(&encrypted_content)?;
+                let plaintext = master_key
+                    .decrypt(&encrypted_content)
+                    .map_err(|e| Error::EncryptedFile(Box::new(e.compat())))?;
+                header.verify(&plaintext)?;
 
-                Ok(plaintext)
+                Ok(Some(plaintext))
             }
             Err(e) => {
                 if e.kind() == ErrorKind::NotFound {
-                    return Ok(Vec::new());
+                    return Ok(None);
                 }
                 Err(Error::Io(e))
             }
@@ -73,7 +78,8 @@ impl<'a> EncryptedFile<'a> {
             .encrypt(&plaintext_content)?
             .write_to_bytes()
             .unwrap();
-        let header = Header::new(&encrypted_content);
+        println!("write encrypted len {}", encrypted_content.len());
+        let header = Header::new(plaintext_content);
         tmp_file.write_all(&header.to_bytes())?;
         tmp_file.write_all(&encrypted_content)?;
         tmp_file.sync_all()?;
@@ -101,11 +107,14 @@ mod tests {
         assert_eq!(file.base, tmp.path());
         assert_eq!(file.name, "encrypted");
 
-        let content = [5; 32];
-        file.write(&content, &PlainTextBackend::default()).unwrap();
+        let content = b"test content";
+        file.write(content, &PlainTextBackend::default()).unwrap();
         drop(file);
 
         let file = EncryptedFile::new(tmp.path(), "encrypted");
-        assert_eq!(file.read(&PlainTextBackend::default()).unwrap(), &content);
+        assert_eq!(
+            file.read(&PlainTextBackend::default()).unwrap().unwrap(),
+            content
+        );
     }
 }
