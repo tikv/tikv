@@ -3,13 +3,15 @@
 use crate::config::StorageReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use crate::storage::metrics;
-use std::sync::{Arc, Mutex};
+use raftstore::store::SplitHub;
+use std::sync::{mpsc, Arc, Mutex};
 use tikv_util::future_pool::{Builder, Config, FuturePool};
 
 pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &StorageReadPoolConfig,
     reporter: R,
     engine: E,
+    sender: mpsc::Sender<SplitHub>,
 ) -> Vec<FuturePool> {
     let names = vec!["store-read-low", "store-read-normal", "store-read-high"];
     let configs: Vec<Config> = config.to_future_pool_configs();
@@ -22,16 +24,18 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
             let reporter = reporter.clone();
             let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
+            let sender1 = Arc::new(Mutex::new(sender.clone()));
+            let sender2 = Arc::new(Mutex::new(sender.clone()));
             Builder::from_config(config)
                 .name_prefix(name)
-                .on_tick(move || metrics::tls_flush(&reporter, None))
+                .on_tick(move || metrics::tls_flush(&reporter, &sender1.lock().unwrap()))
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(move || {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
                     unsafe {
                         destroy_tls_engine::<E>();
                     }
-                    metrics::tls_flush(&reporter2, None)
+                    metrics::tls_flush(&reporter2, &sender2.lock().unwrap())
                 })
                 .build()
         })

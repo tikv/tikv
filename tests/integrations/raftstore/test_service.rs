@@ -18,7 +18,7 @@ use engine::*;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::{SnapManager, SplitHubInfo};
+use raftstore::store::{SnapManager, SplitHubConfig};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::config::ConfigHandler;
@@ -930,7 +930,7 @@ fn test_double_run_node() {
             importer,
             Worker::new("split"),
             Box::new(config_client),
-            SplitHubInfo::default(),
+            SplitHubConfig::default(),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

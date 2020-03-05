@@ -40,7 +40,7 @@ thread_local! {
     );
 }
 
-pub fn tls_flush<R: FlowStatsReporter>(reporter: &R, sender: Option<&mpsc::Sender<SplitHub>>) {
+pub fn tls_flush<R: FlowStatsReporter>(reporter: &R, sender: &mpsc::Sender<SplitHub>) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
@@ -67,11 +67,9 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R, sender: Option<&mpsc::Sende
             reporter.report_read_stats(read_stats);
         }
 
-        if let Some(sender) = sender {
-            let mut hub = SplitHub::new();
-            mem::swap(&mut hub, &mut m.local_hub);
-            sender.send(hub).unwrap();
-        }
+        let mut hub = SplitHub::new();
+        mem::swap(&mut hub, &mut m.local_hub);
+        sender.send(hub).unwrap();
     });
 }
 

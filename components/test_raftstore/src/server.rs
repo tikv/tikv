@@ -23,7 +23,7 @@ use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{Callback, LocalReader, SnapManager};
-use raftstore::store::{SplitCheckRunner, SplitHubInfo};
+use raftstore::store::{SplitCheckRunner, SplitHubConfig};
 use raftstore::Result;
 use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
 use tikv::coprocessor;
@@ -322,7 +322,7 @@ impl Simulator for ServerCluster {
             importer.clone(),
             split_check_worker,
             Box::new(config_client) as _,
-            SplitHubInfo::default(),
+            SplitHubConfig::default(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

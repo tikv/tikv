@@ -27,7 +27,7 @@ use raftstore::{
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
         new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
-        SplitHubInfo,
+        SplitHubConfig,
     },
 };
 use std::{
@@ -427,7 +427,7 @@ impl TiKVServer {
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                tx,
+                tx.clone(),
             ))
         } else {
             None
@@ -440,6 +440,7 @@ impl TiKVServer {
                 &self.config.readpool.storage,
                 pd_sender.clone(),
                 engines.engine.clone(),
+                tx.clone(),
             ));
             storage_read_pools.handle()
         };
@@ -476,6 +477,7 @@ impl TiKVServer {
                 &self.config.readpool.coprocessor,
                 pd_sender.clone(),
                 engines.engine.clone(),
+                tx,
             ));
             cop_read_pools.handle()
         };
@@ -542,7 +544,7 @@ impl TiKVServer {
         );
 
         let raft_router = node.get_router();
-        let hub_info = SplitHubInfo {
+        let hub_config = SplitHubConfig {
             receiver: rx,
             qps_threshold: self.config.server.split_qps_threshold,
             split_score: self.config.server.split_score,
@@ -558,7 +560,7 @@ impl TiKVServer {
             importer.clone(),
             split_check_worker,
             Box::new(config_client) as _,
-            hub_info,
+            hub_config,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

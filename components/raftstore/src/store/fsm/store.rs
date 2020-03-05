@@ -48,7 +48,7 @@ use crate::store::util::is_initial_msg;
 use crate::store::worker::{
     CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask, CompactRunner, CompactTask,
     ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
-    ReadDelegate, RegionRunner, RegionTask, SplitCheckTask, SplitHubInfo,
+    ReadDelegate, RegionRunner, RegionTask, SplitCheckTask, SplitHubConfig,
 };
 use crate::store::DynamicConfig;
 use crate::store::PdTask;
@@ -998,7 +998,7 @@ impl RaftBatchSystem {
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         dyn_cfg: Box<dyn DynamicConfig>,
-        hub_info: SplitHubInfo,
+        hub_config: SplitHubConfig,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1044,7 +1044,7 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        self.start_system(workers, region_peers, builder, dyn_cfg, hub_info)?;
+        self.start_system(workers, region_peers, builder, dyn_cfg, hub_config)?;
         Ok(())
     }
 
@@ -1054,7 +1054,7 @@ impl RaftBatchSystem {
         region_peers: Vec<SenderFsmPair<RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
         dyn_cfg: Box<dyn DynamicConfig>,
-        hub_info: SplitHubInfo,
+        hub_config: SplitHubConfig,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1146,7 +1146,7 @@ impl RaftBatchSystem {
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
-            hub_info,
+            hub_config,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 

@@ -304,7 +304,7 @@ impl StatsMonitor {
         }
     }
 
-    pub fn start(&mut self, hub_info: SplitHubInfo) -> Result<(), io::Error> {
+    pub fn start(&mut self, hub_config: SplitHubConfig) -> Result<(), io::Error> {
         let mut timer_cnt = 0;
         let collect_interval = self.collect_interval;
         let thread_info_interval = self
@@ -318,10 +318,10 @@ impl StatsMonitor {
         self.sender = Some(tx);
 
         let scheduler = self.scheduler.clone();
-        let receiver = hub_info.receiver;
+        let receiver = hub_config.receiver;
         let mut unify_hub = SplitHub::new();
-        unify_hub.qps_threshold = hub_info.qps_threshold;
-        unify_hub.split_score = hub_info.split_score;
+        unify_hub.qps_threshold = hub_config.qps_threshold;
+        unify_hub.split_score = hub_config.split_score;
 
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
@@ -422,11 +422,11 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
-        hub_info: SplitHubInfo,
+        hub_config: SplitHubConfig,
     ) -> Runner<T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
-        if let Err(e) = stats_monitor.start(hub_info) {
+        if let Err(e) = stats_monitor.start(hub_config) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
@@ -1306,16 +1306,16 @@ impl RegionInfo {
     }
 }
 
-pub struct SplitHubInfo {
+pub struct SplitHubConfig {
     pub receiver: mpsc::Receiver<SplitHub>,
     pub qps_threshold: u32,
     pub split_score: f64,
 }
 
-impl SplitHubInfo {
-    pub fn default() -> SplitHubInfo {
+impl SplitHubConfig {
+    pub fn default() -> SplitHubConfig {
         let (_tx, rx) = mpsc::channel();
-        SplitHubInfo {
+        SplitHubConfig {
             receiver: rx,
             qps_threshold: DEFAULT_QPS_THRESHOLD,
             split_score: DEFAULT_SPLIT_SCORE,
@@ -1432,7 +1432,7 @@ mod tests {
         ) -> RunnerTest {
             let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
 
-            if let Err(e) = stats_monitor.start(SplitHubInfo::default()) {
+            if let Err(e) = stats_monitor.start(SplitHubConfig::default()) {
                 error!("failed to start stats collector, error = {:?}", e);
             }
 
