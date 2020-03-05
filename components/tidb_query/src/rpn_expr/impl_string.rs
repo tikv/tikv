@@ -409,6 +409,24 @@ pub fn find_in_set(s: &Option<Bytes>, str_list: &Option<Bytes>) -> Result<Option
     })
 }
 
+#[rpn_fn]
+#[inline]
+pub fn char_length(bs: &Option<Bytes>) -> Result<Option<Int>> {
+    Ok(bs.as_ref().map(|b| b.len() as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn char_length_utf8(bs: &Option<Bytes>) -> Result<Option<Int>> {
+    match bs.as_ref() {
+        Some(bytes) => match str::from_utf8(bytes) {
+            Ok(str) => Ok(Some(str.chars().count() as i64)),
+            Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+        },
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1606,4 +1624,61 @@ mod tests {
             assert_eq!(got, exp);
         }
     }
+
+    #[test]
+    fn test_char_length() {
+        let cases = vec![
+            (Some(b"HELLO".to_vec()), Some(5)),
+            (Some(b"123".to_vec()), Some(3)),
+            (Some(b"".to_vec()), Some(0)),
+            (Some("CAFÉ".as_bytes().to_vec()), Some(5)),
+            (Some("数据库".as_bytes().to_vec()), Some(9)),
+            (
+                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                Some(41),
+            ),
+            (
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+                Some(27),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expected_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::CharLength)
+                .unwrap();
+            assert_eq!(output, expected_output);
+        }
+    }
+
+    #[test]
+    fn test_char_length_utf8() {
+        let cases = vec![
+            (Some(b"HELLO".to_vec()), Some(5)),
+            (Some(b"123".to_vec()), Some(3)),
+            (Some(b"".to_vec()), Some(0)),
+            (Some("CAFÉ".as_bytes().to_vec()), Some(4)),
+            (Some("数据库".as_bytes().to_vec()), Some(3)),
+            (
+                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                Some(22),
+            ),
+            (
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+                Some(14),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expected_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::CharLengthUtf8)
+                .unwrap();
+            assert_eq!(output, expected_output);
+        }
+    }
+
 }
