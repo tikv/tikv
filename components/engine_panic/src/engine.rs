@@ -15,7 +15,7 @@ impl KvEngine for PanicEngine {
     type Snapshot = PanicSnapshot;
     type WriteBatch = PanicWriteBatch;
 
-    fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()> {
+    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
         panic!()
     }
     fn write_batch(&self) -> Self::WriteBatch {
@@ -55,17 +55,20 @@ impl Peekable for PanicEngine {
 }
 
 impl Mutable for PanicEngine {
-    fn put_opt(&self, opts: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         panic!()
     }
-    fn put_cf_opt(&self, opts: &WriteOptions, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         panic!()
     }
 
-    fn delete_opt(&self, opts: &WriteOptions, key: &[u8]) -> Result<()> {
+    fn delete(&self, key: &[u8]) -> Result<()> {
         panic!()
     }
-    fn delete_cf_opt(&self, opts: &WriteOptions, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
+        panic!()
+    }
+    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         panic!()
     }
 }
