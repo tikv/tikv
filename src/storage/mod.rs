@@ -1064,7 +1064,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let start_key = &range.start_key;
                         let end_key = &range.end_key;
                         if reverse_scan {
-                            tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &end_key, &start_key);
+                            tls_collect_qps(
+                                ctx.get_region_id(),
+                                ctx.get_peer(),
+                                &end_key,
+                                &start_key,
+                            );
                         }
                         tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &end_key);
                     }
