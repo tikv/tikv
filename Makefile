@@ -215,8 +215,8 @@ docker-tag-with-git-tag:
 # Run tests under a variety of conditions. This should pass before
 # submitting pull requests. Note though that the CI system tests TiKV
 # through its own scripts and does not use this rule.
-.PHONY: run_test
-run_test:
+.PHONY: run-test
+run-test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
 	# The special linux case below is testing the mem-profiling
@@ -235,9 +235,8 @@ run_test:
 	fi
 
 .PHONY: test
-test: run_test
+test: run-test
 	bash scripts/check-bins-for-jemalloc.sh
-	bash scripts/check-udeps.sh
 
 ## Static analysis
 ## ---------------
@@ -293,6 +292,10 @@ pre-audit:
 # Check for security vulnerabilities
 audit: pre-audit
 	cargo audit
+
+.PHONY: check-udeps
+check-udeps:
+	bash scripts/check-udeps.sh
 
 FUZZER ?= Honggfuzz
 
