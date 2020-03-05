@@ -115,7 +115,7 @@ pub struct Endpoint<T> {
     workers: ThreadPool,
 }
 
-impl<T: CasualRouter> Endpoint<T> {
+impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -478,7 +478,7 @@ impl Initializer {
     }
 }
 
-impl<T: CasualRouter> Runnable<Task> for Endpoint<T> {
+impl<T: CasualRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
