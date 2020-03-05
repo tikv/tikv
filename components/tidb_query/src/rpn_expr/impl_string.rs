@@ -1667,5 +1667,26 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expected_output);
         }
+
+        let invalid_utf8_cases: Vec<Vec<u8>> = vec![
+            vec![0xc0],
+            vec![0xf6],
+            vec![0x00, 0x9f],
+            vec![0xc3, 0x28],
+            vec![0xe2, 0x28, 0xa1],
+            vec![0xe2, 0x82, 0x28],
+            vec![0xf0, 0x28, 0x8c, 0xbc],
+            vec![0xf0, 0x90, 0x28, 0xbc],
+            vec![0xf0, 0x28, 0x8c, 0x28],
+            vec![0xf8, 0xa1, 0xa1, 0xa1, 0xa0],
+            vec![0xfc, 0xa1, 0xa1, 0xa1, 0xa1, 0xa0],
+        ];
+
+        for arg in invalid_utf8_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<i64>(ScalarFuncSig::CharLengthUtf8);
+            assert!(output.is_err());
+        }
     }
 }
