@@ -942,8 +942,6 @@ impl PeerStorage {
             "state" => ?ctx.apply_state,
         );
 
-        fail_point!("before_apply_snap_update_region", |_| { Ok(()) });
-
         ctx.snap_region = Some(region);
         Ok(())
     }
@@ -1147,7 +1145,7 @@ impl PeerStorage {
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
         }
 
-        if !raft::is_empty_snap(ready.snapshot()) {
+        if is_ready_snapshot {
             // in case of restart happen when we just write region state to Applying,
             // but not write raft_local_state to raft rocksdb in time.
             // we write raft state to default rocksdb, with last index set to snap index,

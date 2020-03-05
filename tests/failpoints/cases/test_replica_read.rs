@@ -170,7 +170,7 @@ fn test_read_before_init() {
     cluster.pd_client.must_none_pending_peer(p2);
     must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
 
-    fail::cfg("before_apply_snap_update_region", "return").unwrap();
+    fail::cfg("before_check_snapshot", "return").unwrap();
     // Add peer 3
     let p3 = new_peer(3, 3);
     cluster.pd_client.must_add_peer(r1, p3.clone());

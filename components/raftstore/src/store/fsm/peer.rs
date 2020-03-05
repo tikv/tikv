@@ -1179,6 +1179,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let snap_enc_start_key = enc_start_key(&snap_region);
         let snap_enc_end_key = enc_end_key(&snap_region);
 
+        fail_point!("before_check_snapshot", |_| Ok(Some(key.clone())));
+
         if snap_region
             .get_peers()
             .iter()
