@@ -26,6 +26,8 @@ use tokio_timer::timer::Handle;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
+// When merge raft messages into a batch message, leave a buffer.
+const GRPC_SEND_MSG_BUF: usize = 1024;
 
 const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 const RAFT_MSG_NOTIFY_SIZE: usize = 8;
@@ -248,7 +250,7 @@ struct RaftMsgCollector(usize);
 impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
     fn collect(&mut self, v: &mut Vec<RaftMessage>, e: RaftMessage) -> Option<RaftMessage> {
         let msg_size = e.compute_size() as usize;
-        if self.0 > 0 && self.0 + msg_size >= MAX_GRPC_SEND_MSG_LEN as usize {
+        if self.0 > 0 && self.0 + msg_size + GRPC_SEND_MSG_BUF >= MAX_GRPC_SEND_MSG_LEN as usize {
             self.0 = 0;
             return Some(e);
         }
