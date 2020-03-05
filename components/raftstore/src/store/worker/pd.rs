@@ -1208,13 +1208,6 @@ impl KeyRange {
             qps: 0,
         }
     }
-
-    fn contains(&self, key: &[u8]) -> bool {
-        if self.end_key.is_empty(){
-            return key.cmp(&self.start_key) == Ordering::Equal
-        }
-        key.cmp(&self.start_key) != Ordering::Less && key.cmp(&self.end_key) != Ordering::Greater
-    }
 }
 
 pub struct Recorder {
@@ -1236,13 +1229,14 @@ impl Recorder {
 
     fn record(&mut self, key_ranges: &[KeyRange]) {
         self.times += 1;
+        let mut rng = rand::thread_rng();
         for key_range in key_ranges.iter() {
             self.count += 1;
             if self.samples.len() < 20 {
                 self.samples.push(Sample::new(&key_range.start_key));
             } else {
                 self.sample(key_range);
-                let i = rand::thread_rng().gen_range(0, self.count) as usize;
+                let i = rng.gen_range(0, self.count) as usize;
                 if i < 20 {
                     self.samples[i] = Sample::new(&key_range.start_key);
                 }
@@ -1252,18 +1246,20 @@ impl Recorder {
 
     fn sample(&mut self, key_range: &KeyRange) {
         for mut sample in self.samples.iter_mut() {
-            if key_range.contains(&sample.key) {
-                sample.contained += 1;
-            } else if sample.key.cmp(&key_range.start_key) == Ordering::Less {
+            // we think key range is full open interval, such as (a,b) or (a,"").
+            if sample.key.cmp(&key_range.start_key) != Ordering::Greater {
                 sample.right += 1;
-            } else {
-                // key range is to the left sample key
+            } else if key_range.end_key.is_empty()
+                || sample.key.cmp(&key_range.end_key) != Ordering::Less
+            {
                 sample.left += 1;
+            } else {
+                sample.contained += 1;
             }
         }
     }
 
-    fn split_key(&self, split_score: f64) -> Vec<u8> {
+    fn split_key(&self, split_score: f64, min_sample_num: i32) -> Vec<u8> {
         if self.times < DETECT_TIMES {
             return vec![];
         }
@@ -1271,7 +1267,7 @@ impl Recorder {
         let mut best_score = split_score;
         for index in 0..self.samples.len() {
             let sample = &self.samples[index];
-            if sample.contained + sample.left + sample.right < MIN_SAMPLE_NUM {
+            if sample.contained + sample.left + sample.right < min_sample_num {
                 continue;
             }
             let diff = (sample.left - sample.right) as f64;
@@ -1332,6 +1328,8 @@ pub struct SplitHub {
     pub region_recorder: HashMap<u64, Recorder>,
     pub qps_threshold: u32,
     pub split_score: f64,
+    pub interval: Duration,
+    pub min_sample_num: i32,
 }
 
 impl SplitHub {
@@ -1342,6 +1340,8 @@ impl SplitHub {
             region_recorder: HashMap::default(),
             qps_threshold: DEFAULT_QPS_THRESHOLD,
             split_score: DEFAULT_SPLIT_SCORE,
+            interval: DETECT_INTERVAL,
+            min_sample_num: MIN_SAMPLE_NUM,
         }
     }
 
@@ -1392,7 +1392,7 @@ impl SplitHub {
                     .entry(*region_id)
                     .or_insert_with(Recorder::new);
                 recorder.record(self.region_keys.get(region_id).unwrap());
-                let key = recorder.split_key(self.split_score);
+                let key = recorder.split_key(self.split_score, self.min_sample_num);
                 if !key.is_empty() {
                     let split_info = SplitInfo {
                         region_id: *region_id,
@@ -1504,33 +1504,41 @@ mod tests {
     }
 
     #[test]
-    fn test_key_range() {
-        let key_range = KeyRange::new(b"a", b"c");
-        assert_eq!(key_range.contains(b"b"), true);
-        let key_range = KeyRange::new(b"a", b"");
-        assert_eq!(key_range.contains(b"b"), false);
-    }
-
-    #[test]
     fn test_sample() {
         let mut recorder = Recorder::new();
-        recorder.samples.push(Sample::new(b"b"));
+        recorder.samples.push(Sample::new(b"c"));
 
-        // scan
+        let key_range = KeyRange::new(b"a", b"b");
+        recorder.sample(&key_range);
+        assert_eq!(recorder.samples[0].left, 1);
+
         let key_range = KeyRange::new(b"a", b"c");
         recorder.sample(&key_range);
-        assert_eq!(recorder.samples[0].contained, 1);
-        //get
-        let key_range = KeyRange::new(b"b", b"");
+        assert_eq!(recorder.samples[0].left, 2);
+
+        let key_range = KeyRange::new(b"a", b"d");
         recorder.sample(&key_range);
-        assert_eq!(recorder.samples[0].contained, 2);
+        assert_eq!(recorder.samples[0].contained, 1);
+
+        let key_range = KeyRange::new(b"c", b"d");
+        recorder.sample(&key_range);
+        assert_eq!(recorder.samples[0].right, 1);
+
+        let key_range = KeyRange::new(b"d", b"e");
+        recorder.sample(&key_range);
+        assert_eq!(recorder.samples[0].right, 2);
 
         let key_range = KeyRange::new(b"a", b"");
         recorder.sample(&key_range);
-        assert_eq!(recorder.samples[0].left, 1);
+        assert_eq!(recorder.samples[0].left, 3);
+
         let key_range = KeyRange::new(b"c", b"");
         recorder.sample(&key_range);
-        assert_eq!(recorder.samples[0].right, 1);
+        assert_eq!(recorder.samples[0].right, 3);
+
+        let key_range = KeyRange::new(b"d", b"");
+        recorder.sample(&key_range);
+        assert_eq!(recorder.samples[0].right, 4);
     }
 
     #[test]
@@ -1545,17 +1553,35 @@ mod tests {
             recorder.record(key_ranges.as_slice());
         }
         assert_eq!(recorder.samples.len(), 20);
-        assert_eq!(recorder.split_key(DEFAULT_SPLIT_SCORE), b"c");
+
+        let split_key = recorder.split_key(DEFAULT_SPLIT_SCORE, MIN_SAMPLE_NUM);
+        if split_key != b"c" {
+            for sample_key in recorder.samples {
+                assert_ne!(sample_key.key, b"c");
+            }
+        }
     }
 
     #[test]
     fn test_hub() {
         let mut hub = SplitHub::new();
+        hub.interval = Duration::from_secs(65535); // avoid gc
+        hub.qps_threshold = 1;
+        hub.min_sample_num = 0;
         for i in 0..100 {
-            hub.add(1, &metapb::Peer::default(), b"a", b"b");
+            for _ in 0..100 {
+                hub.add(1, &metapb::Peer::default(), b"a", b"b");
+                hub.add(1, &metapb::Peer::default(), b"b", b"c");
+            }
             let (_, split_infos) = hub.flush();
             if (i + 1) % DETECT_TIMES == 0 {
                 assert_eq!(split_infos.len(), 1);
+                assert_eq!(
+                    Key::from_encoded(split_infos[0].split_key.clone())
+                        .into_raw()
+                        .unwrap(),
+                    b"b"
+                );
             }
         }
     }
