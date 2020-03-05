@@ -114,7 +114,7 @@ If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/refe
 
 ### Security Audit
 
-A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security Audit.pdf).
+A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security-Audit.pdf).
 
 ## Communication
 
