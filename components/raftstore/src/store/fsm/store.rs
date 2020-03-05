@@ -3,11 +3,12 @@
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
-use engine::rocks::CompactionJobInfo;
 use engine::DB;
-use engine_rocks::{RocksCompactionJobInfo Compat, RocksEngine, RocksWriteBatch};
-use engine_traits::{KvEngine, Mutable, WriteBatch, WriteOptions};
-use engine_traits::{CompactionJobInfo,CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch};
+use engine_traits::{
+    CompactionJobInfo, KvEngine, Mutable, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
+};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
