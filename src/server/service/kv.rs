@@ -832,20 +832,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         };
 
         let thread_load = Arc::clone(&self.grpc_thread_load);
-        struct BatchRespCollector;
-        impl BatchCollector<BatchCommandsResponse, (u64, BatchCommandsResponseResponse)>
-            for BatchRespCollector
-        {
-            fn collect(
-                &mut self,
-                v: &mut BatchCommandsResponse,
-                e: (u64, BatchCommandsResponseResponse),
-            ) -> Option<(u64, BatchCommandsResponseResponse)> {
-                v.mut_request_ids().push(e.0);
-                v.mut_responses().push(e.1);
-                None
-            }
-        }
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
@@ -1590,6 +1576,21 @@ pub mod batch_commands_request {
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
+
+struct BatchRespCollector;
+impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
+for BatchRespCollector
+{
+    fn collect(
+        &mut self,
+        v: &mut BatchCommandsResponse,
+        e: (u64, batch_commands_response::Response),
+        ) -> Option<(u64, batch_commands_response::Response)> {
+        v.mut_request_ids().push(e.0);
+        v.mut_responses().push(e.1);
+        None
+    }
+}
 
 #[cfg(test)]
 mod tests {

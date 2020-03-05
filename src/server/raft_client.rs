@@ -65,21 +65,6 @@ impl Conn {
         let client2 = client1.clone();
 
         let (tx, rx) = batch::unbounded::<RaftMessage>(RAFT_MSG_NOTIFY_SIZE);
-        struct RaftMsgCollector(usize);
-        impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
-            fn collect(&mut self, v: &mut Vec<RaftMessage>, e: RaftMessage) -> Option<RaftMessage> {
-                let msg_size = e.compute_size() as usize;
-                if self.0 > 0 && self.0 + msg_size >= MAX_GRPC_SEND_MSG_LEN as usize {
-                    return Some(e);
-                }
-                self.0 += msg_size;
-                v.push(e);
-                None
-            }
-            fn reset(&mut self) {
-                self.0 = 0;
-            }
-        }
         let rx =
             batch::BatchReceiver::new(rx, RAFT_MSG_MAX_BATCH_SIZE, Vec::new, RaftMsgCollector(0));
 
@@ -258,6 +243,22 @@ impl<T: RaftStoreRouter> RaftClient<T> {
         }
         RAFT_MESSAGE_FLUSH_COUNTER.inc_by(i64::from(counter));
         RAFT_MESSAGE_DELAY_FLUSH_COUNTER.inc_by(i64::from(delay_counter));
+    }
+}
+
+// Collect raft messages into a vector so that we can merge them into one message later.
+// `MAX_GRPC_SEND_MSG_LEN` will be considered when collecting.
+struct RaftMsgCollector(usize);
+impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
+    fn collect(&mut self, v: &mut Vec<RaftMessage>, e: RaftMessage) -> Option<RaftMessage> {
+        let msg_size = e.compute_size() as usize;
+        if self.0 > 0 && self.0 + msg_size >= MAX_GRPC_SEND_MSG_LEN as usize {
+            self.0 = 0;
+            return Some(e);
+        }
+        self.0 += msg_size;
+        v.push(e);
+        None
     }
 }
 

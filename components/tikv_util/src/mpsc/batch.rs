@@ -244,10 +244,8 @@ impl<T> Stream for Receiver<T> {
 /// A Collector Used in `BatchReceiver`.
 pub trait BatchCollector<Collection, Elem> {
     /// If `elem` is collected into `collection` successfully, return `None`.
-    /// Otherwise return `elem` back.
+    /// Otherwise return `elem` back, and `collection` should be spilled out.
     fn collect(&mut self, collection: &mut Collection, elem: Elem) -> Option<Elem>;
-    /// `reset` will be called after a batch is spilled out.
-    fn reset(&mut self) {}
 }
 
 /// `BatchReceiver` is a `futures::Stream`, which returns a batched type.
@@ -308,7 +306,6 @@ impl<T, E, I: Fn() -> E, C: BatchCollector<E, T>> Stream for BatchReceiver<T, E,
             return Ok(Async::NotReady);
         }
         let elem = self.elem.take();
-        self.collector.reset();
         if let Some(m) = received {
             let collection = self.elem.get_or_insert_with(&self.initializer);
             assert!(self.collector.collect(collection, m).is_none());
