@@ -205,9 +205,7 @@ impl<T: CasualRouter> Endpoint<T> {
                         });
                 }
             }
-            _ => {
-                unreachable!();
-            }
+            _ => unreachable!(),
         }
         if is_last {
             // Unsubscribe region role change events.
