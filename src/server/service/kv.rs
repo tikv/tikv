@@ -1579,13 +1579,13 @@ pub use kvproto::tikvpb::batch_commands_response;
 
 struct BatchRespCollector;
 impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
-for BatchRespCollector
+    for BatchRespCollector
 {
     fn collect(
         &mut self,
         v: &mut BatchCommandsResponse,
         e: (u64, batch_commands_response::Response),
-        ) -> Option<(u64, batch_commands_response::Response)> {
+    ) -> Option<(u64, batch_commands_response::Response)> {
         v.mut_request_ids().push(e.0);
         v.mut_responses().push(e.1);
         None
