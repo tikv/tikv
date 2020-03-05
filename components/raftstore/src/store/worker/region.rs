@@ -218,7 +218,7 @@ struct SnapContext<R> {
     router: R,
 }
 
-impl<R: CasualRouter> SnapContext<R> {
+impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     /// Generates the snapshot of the Region.
     fn generate_snap(
         &self,
@@ -529,7 +529,7 @@ pub struct Runner<R> {
     pending_applies: VecDeque<Task>,
 }
 
-impl<R: CasualRouter> Runner<R> {
+impl<R: CasualRouter<RocksEngine>> Runner<R> {
     pub fn new(
         engines: Engines,
         mgr: SnapManager,
@@ -589,7 +589,7 @@ impl<R: CasualRouter> Runner<R> {
 
 impl<R> Runnable<Task> for Runner<R>
 where
-    R: CasualRouter + Send + Clone + 'static,
+    R: CasualRouter<RocksEngine> + Send + Clone + 'static,
 {
     fn run(&mut self, task: Task) {
         match task {
@@ -650,7 +650,7 @@ pub enum Event {
 
 impl<R> RunnableWithTimer<Task, Event> for Runner<R>
 where
-    R: CasualRouter + Send + Clone + 'static,
+    R: CasualRouter<RocksEngine> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
