@@ -1635,6 +1635,8 @@ mod tests {
             (Some("数据库".as_bytes().to_vec()), Some(9)),
             (Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()), Some(41)),
             (Some("قاعدة البيانات".as_bytes().to_vec()), Some(27)),
+            (Some(vec![0x00, 0x9f, 0x92, 0x96]), Some(4)), // invalid utf8
+            (Some(b"Hello\xF0\x90\x80World".to_vec()), Some(13)), // invalid utf8
             (None, None),
         ];
 
