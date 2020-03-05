@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use engine::rocks;
 use engine::rocks::DB;
 use engine::Range;
-use engine_rocks::Compat;
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::LARGE_CFS;
 use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
@@ -108,7 +108,7 @@ pub struct SizeCheckObserver<C> {
     router: Arc<Mutex<C>>,
 }
 
-impl<C: CasualRouter> SizeCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine>> SizeCheckObserver<C> {
     pub fn new(router: C) -> SizeCheckObserver<C> {
         SizeCheckObserver {
             router: Arc::new(Mutex::new(router)),
@@ -118,7 +118,7 @@ impl<C: CasualRouter> SizeCheckObserver<C> {
 
 impl<C: Send> Coprocessor for SizeCheckObserver<C> {}
 
-impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -342,6 +342,7 @@ pub mod tests {
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine_rocks::RocksEngine;
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
@@ -357,7 +358,7 @@ pub mod tests {
     use super::*;
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
