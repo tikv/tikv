@@ -1775,6 +1775,9 @@ pub struct TiKvConfig {
     pub slow_log_file: String,
 
     #[config(skip)]
+    pub slow_log_threshold: ReadableDuration,
+
+    #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
 
     #[config(skip)]
@@ -1833,6 +1836,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             slow_log_file: "".to_owned(),
+            slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,

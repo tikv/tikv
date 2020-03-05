@@ -404,10 +404,16 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
         }
+        let elapsed = t.elapsed();
         RAFT_EVENT_DURATION
             .with_label_values(&[tick.tag()])
-            .observe(duration_to_sec(t.elapsed()) as f64);
-        slow_log!(t, "[store {}] handle timeout {:?}", self.fsm.store.id, tick);
+            .observe(duration_to_sec(elapsed) as f64);
+        slow_log!(
+            elapsed,
+            "[store {}] handle timeout {:?}",
+            self.fsm.store.id,
+            tick
+        );
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg>) {
@@ -560,7 +566,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             .observe(duration_to_sec(dur) as f64);
 
         slow_log!(
-            self.timer,
+            dur,
             "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
              snapshots",
             self.tag,

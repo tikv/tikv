@@ -86,7 +86,7 @@ pub trait Runnable<T: Display> {
             let task_str = format!("{}", t);
             let timer = SlowTimer::new();
             self.run(t);
-            slow_log!(timer, "handle task {}", task_str);
+            slow_log!(timer.elapsed(), "handle task {}", task_str);
         }
     }
 

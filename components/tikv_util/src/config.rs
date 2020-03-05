@@ -939,7 +939,7 @@ impl<T> Tracker<T> {
                 Err(_) => {
                     let t = SlowTimer::new();
                     let value = self.inner.value.read().unwrap();
-                    slow_log!(t, "{} tracker get updated value", self.tag);
+                    slow_log!(t.elapsed(), "{} tracker get updated value", self.tag);
                     Some(value)
                 }
             }

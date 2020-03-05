@@ -76,7 +76,11 @@ pub fn initial_logger(config: &TiKvConfig) {
                     e
                 );
             });
-            let drainer = logger::LogDispatcher::new(drainer, slow_log_drainer);
+            let drainer = logger::LogDispatcher::new(
+                drainer,
+                slow_log_drainer,
+                config.slow_log_threshold.as_millis(),
+            );
             logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
                 fatal!("failed to initialize log: {}", e);
             });

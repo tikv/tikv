@@ -90,14 +90,19 @@ macro_rules! box_try {
     }};
 }
 
-/// Logs slow operations with `warn!`.
+/// Logs slow operations by `warn!`.
+/// The final log level depends on the given `cost` and `slow_log_threshold`
 #[macro_export]
 macro_rules! slow_log {
-    ($t:expr, $($arg:tt)*) => {{
+    (T $t:expr, $($arg:tt)*) => {{
         if $t.is_slow() {
-            warn!(#"slow_log", $($arg)*; "takes" => ?$t.elapsed());
+            warn!(#"slow_log_by_timer", $($arg)*; "takes" => ?$t.elapsed());
         }
+    }};
+    ($n:expr, $($arg:tt)*) => {{
+        warn!(#"slow_log", $($arg)*; "takes" => $crate::time::duration_to_ms($n));
     }}
+
 }
 
 /// Makes a thread name with an additional tag inherited from the current thread.

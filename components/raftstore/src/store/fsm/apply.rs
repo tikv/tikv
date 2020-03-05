@@ -481,10 +481,11 @@ impl ApplyContext {
 
         self.host.on_flush_apply();
 
-        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        let elapsed = t.elapsed();
+        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
         slow_log!(
-            t,
+            elapsed,
             "{} handle ready {} committed entries",
             self.tag,
             self.committed_count

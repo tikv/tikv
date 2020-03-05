@@ -243,11 +243,17 @@ where
 pub struct LogDispatcher<N: Drain, S: Drain> {
     normal: N,
     slow: S,
+    // The minimum operation cost to output slow logs to `slow`
+    slow_threshold: u64,
 }
 
 impl<N: Drain, S: Drain> LogDispatcher<N, S> {
-    pub fn new(normal: N, slow: S) -> Self {
-        Self { normal, slow }
+    pub fn new(normal: N, slow: S, slow_threshold: u64) -> Self {
+        Self {
+            normal,
+            slow,
+            slow_threshold,
+        }
     }
 }
 
@@ -261,7 +267,21 @@ where
 
     fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         match record.tag() {
-            "slow_log" => self.slow.log(record, values),
+            "slow_log" => {
+                let mut s = SlowCostSerializer { cost: None };
+                let kv = record.kv();
+                let _ = kv.serialize(record, &mut s);
+                if let Some(cost) = s.cost {
+                    if cost > self.slow_threshold {
+                        return self.slow.log(record, values);
+                    }
+                } else {
+                    return self.slow.log(record, values);
+                }
+                Ok(())
+            }
+            // Slow log detected by SlowTimer. Log it anyway.
+            "slow_log_by_timer" => self.slow.log(record, values),
             _ => self.normal.log(record, values),
         }
     }
@@ -330,6 +350,23 @@ fn write_log_fields(
     serializer.finish()?;
 
     Ok(())
+}
+
+struct SlowCostSerializer {
+    // None means input record without key `takes`
+    cost: Option<u64>,
+}
+
+impl slog::ser::Serializer for SlowCostSerializer {
+    fn emit_arguments(&mut self, key: Key, val: &fmt::Arguments<'_>) -> slog::Result {
+        if key == "takes" {
+            match format!("{}", val).parse() {
+                Ok(v) => self.cost = Some(v),
+                _ => return Err(fmt::Error {}.into()),
+            };
+        }
+        Ok(())
+    }
 }
 
 struct Serializer<'a> {
@@ -627,33 +664,45 @@ mod tests {
     }
 
     #[test]
-    fn test_log_diverter() {
+    fn test_slow_log_dispatcher() {
         let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
-        let drain = LogDispatcher::new(normal, slow).fuse();
+        let drain = LogDispatcher::new(normal, slow, 100).fuse();
         let logger = slog::Logger::root_typed(drain, slog_o!());
-        let normal_expected = "Hello World!";
-        let slow_expected = "Hello Slow World!";
-        slog_info!(logger, "{}", normal_expected);
-        slog_info!(logger, #"slow_log", "{}", slow_expected);
+        slog_info!(logger, "Hello World");
+        slog_info!(logger, #"slow_log", "nothing");
+        slog_info!(logger, #"slow_log", "🆗"; "takes" => 30);
+        slog_info!(logger, #"slow_log", "🐢"; "takes" => 200);
+        slog_info!(logger, #"slow_log", "without cost"; "a" => "b");
+        slog_info!(logger, #"slow_log_by_timer", "⏰");
+        slog_info!(logger, #"slow_log_by_timer", "⏰"; "takes" => 1000);
         let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
         NORMAL_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
             let output = from_utf8(&*buffer).unwrap();
             let output_segments = re.captures(output).unwrap();
-            assert_eq!(
-                output_segments["msg"].to_owned(),
-                "[\"".to_owned() + normal_expected + "\"]"
-            );
+            assert_eq!(output_segments["msg"].to_owned(), r#"["Hello World"]"#);
         });
+        let slow_expect = r#"[nothing]
+[🐢] [takes=200]
+["without cost"] [a=b]
+[⏰]
+[⏰] [takes=1000]
+"#;
         SLOW_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
             let output = from_utf8(&*buffer).unwrap();
-            let output_segments = re.captures(output).unwrap();
-            assert_eq!(
-                output_segments["msg"].to_owned(),
-                "[\"".to_owned() + slow_expected + "\"]"
-            );
+            let expect_re = Regex::new(r"(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
+            assert_eq!(output.lines().count(), slow_expect.lines().count());
+            for (output, expect) in output.lines().zip(slow_expect.lines()) {
+                let output_segments = re.captures(output).unwrap();
+                let expect_segments = expect_re.captures(expect).unwrap();
+                assert_eq!(&output_segments["msg"], &expect_segments["msg"]);
+                assert_eq!(
+                    expect_segments.name("kvs").map(|s| s.as_str()),
+                    output_segments.name("kvs").map(|s| s.as_str())
+                );
+            }
         });
     }
 }
