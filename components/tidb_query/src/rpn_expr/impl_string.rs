@@ -420,7 +420,7 @@ pub fn char_length(bs: &Option<Bytes>) -> Result<Option<Int>> {
 pub fn char_length_utf8(bs: &Option<Bytes>) -> Result<Option<Int>> {
     match bs.as_ref() {
         Some(bytes) => match str::from_utf8(bytes) {
-            Ok(str) => Ok(Some(str.chars().count() as i64)),
+            Ok(s) => Ok(Some(s.chars().count() as i64)),
             Err(err) => Err(box_err!("invalid input value: {:?}", err)),
         },
         _ => Ok(None),
