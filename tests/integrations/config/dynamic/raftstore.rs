@@ -4,6 +4,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use engine::rocks;
+use engine_rocks::RocksEngine;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -58,7 +59,12 @@ fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
 
 fn start_raftstore(
     cfg: TiKvConfig,
-) -> (ConfigController, RaftRouter, ApplyRouter, RaftBatchSystem) {
+) -> (
+    ConfigController,
+    RaftRouter<RocksEngine>,
+    ApplyRouter,
+    RaftBatchSystem,
+) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
     let (_, engines) = create_tmp_engine("store-config");
     let host = CoprocessorHost::default();
@@ -100,7 +106,7 @@ fn start_raftstore(
     (cfg_controller, raft_router, system.apply_router(), system)
 }
 
-fn validate_store<F>(router: &RaftRouter, f: F)
+fn validate_store<F>(router: &RaftRouter<RocksEngine>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {

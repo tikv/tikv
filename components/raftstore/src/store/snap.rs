@@ -13,6 +13,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
+use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use futures_executor::block_on;
@@ -1034,7 +1035,7 @@ struct SnapManagerCore {
     snap_size: Arc<AtomicU64>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter>) {
+fn notify_stats(ch: Option<&RaftRouter<RocksEngine>>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
             error!(
@@ -1050,13 +1051,13 @@ fn notify_stats(ch: Option<&RaftRouter>) {
 pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
-    router: Option<RaftRouter>,
+    router: Option<RaftRouter<RocksEngine>>,
     limiter: Limiter,
     max_total_size: u64,
 }
 
 impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter>) -> Self {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<RocksEngine>>) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 
@@ -1401,7 +1402,11 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter>) -> SnapManager {
+    pub fn build<T: Into<String>>(
+        &self,
+        path: T,
+        router: Option<RaftRouter<RocksEngine>>,
+    ) -> SnapManager {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
         } else {

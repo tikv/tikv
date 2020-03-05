@@ -7,8 +7,11 @@ use std::sync::{Arc, Mutex};
 use super::GcWorkerConfigManager;
 use engine::rocks::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
-    DBCompactionFilter, Writable, WriteBatch, WriteOptions, DB,
+    DBCompactionFilter, WriteOptions, DB,
 };
+use engine_rocks::RocksWriteBatch;
+use engine_traits::Mutable;
+use engine_traits::WriteBatch;
 use tikv_util::time::Instant;
 use txn_types::{Key, WriteRef, WriteType};
 
@@ -71,7 +74,7 @@ struct WriteCompactionFilter {
     safe_point: Arc<AtomicU64>,
     db: Arc<DB>,
 
-    write_batch: WriteBatch,
+    write_batch: RocksWriteBatch,
     key_prefix: Vec<u8>,
     remove_older: bool,
 
@@ -86,11 +89,11 @@ struct WriteCompactionFilter {
 
 impl WriteCompactionFilter {
     fn new(db: Arc<DB>, safe_point: Arc<AtomicU64>) -> Self {
+        let wb = RocksWriteBatch::with_capacity(Arc::clone(&db), DEFAULT_DELETE_BATCH_SIZE);
         WriteCompactionFilter {
             safe_point,
             db,
-
-            write_batch: WriteBatch::with_capacity(DEFAULT_DELETE_BATCH_SIZE),
+            write_batch: wb,
             key_prefix: vec![],
             remove_older: false,
 
@@ -109,7 +112,9 @@ impl WriteCompactionFilter {
         if self.write_batch.data_size() > DEFAULT_DELETE_BATCH_SIZE {
             let mut opts = WriteOptions::new();
             opts.set_sync(false);
-            self.db.write_opt(&self.write_batch, &opts).unwrap();
+            self.db
+                .write_opt(self.write_batch.as_inner(), &opts)
+                .unwrap();
             self.write_batch.clear();
         }
     }
@@ -120,7 +125,9 @@ impl Drop for WriteCompactionFilter {
         if !self.write_batch.is_empty() {
             let mut opts = WriteOptions::new();
             opts.set_sync(true);
-            self.db.write_opt(&self.write_batch, &opts).unwrap();
+            self.db
+                .write_opt(self.write_batch.as_inner(), &opts)
+                .unwrap();
         }
         info!(
             "WriteCompactionFilter uses {}s", self.start.elapsed_secs();

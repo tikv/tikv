@@ -751,7 +751,10 @@ impl<E: Engine> GcWorker<E> {
         cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
         let safe_point = Arc::new(AtomicU64::new(0));
-        info!("start_auto_gc, has_local_storage: {}", self.local_storage.is_some());
+        info!(
+            "start_auto_gc, has_local_storage: {}",
+            self.local_storage.is_some()
+        );
         if let Some(db) = self.local_storage.clone() {
             init_compaction_filter(db, Arc::clone(&safe_point), self.config_manager.clone());
         }
