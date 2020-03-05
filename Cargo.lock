@@ -455,7 +455,6 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
- "test_cdc_util",
  "test_raftstore",
  "test_util",
  "tikv",
@@ -4063,24 +4062,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96d6098003bde162e4277c70665bd87c326f5a0c3f3fbfb285787fa482d54e6e"
 dependencies = [
  "wincolor",
-]
-
-[[package]]
-name = "test_cdc_util"
-version = "0.0.1"
-dependencies = [
- "cdc",
- "futures 0.1.29",
- "grpcio",
- "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
- "raftstore",
- "slog",
- "slog-global",
- "test_raftstore",
- "test_util",
- "tikv",
- "tikv_util",
- "txn_types",
 ]
 
 [[package]]

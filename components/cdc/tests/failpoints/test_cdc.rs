@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use std::time::Duration;
 
+use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
 use grpcio::WriteFlags;
@@ -14,7 +15,6 @@ use kvproto::cdcpb::{
 };
 use raft::StateRole;
 use raftstore::coprocessor::{ObserverContext, RoleObserver};
-use test_cdc_util::*;
 use test_raftstore::sleep_ms;
 
 #[test]

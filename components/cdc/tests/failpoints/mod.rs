@@ -3,10 +3,9 @@ mod test_cdc;
 
 use fail;
 use panic_hook;
-use test_cdc_util;
 
 fn setup_fail<'a>() -> fail::FailScenario<'a> {
-    test_cdc_util::init();
+    crate::init();
     fail::FailScenario::setup()
 }
 

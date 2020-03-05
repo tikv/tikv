@@ -1,4 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
+#[cfg(feature = "failpoints")]
+mod failpoints;
+mod integrations;
+
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
@@ -27,7 +32,6 @@ use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
 use cdc::{CdcObserver, Task};
-
 static INIT: Once = Once::new();
 
 pub fn init() {

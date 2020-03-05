@@ -3,6 +3,7 @@
 use std::sync::*;
 use std::time::Duration;
 
+use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
 use grpcio::WriteFlags;
@@ -15,7 +16,6 @@ use kvproto::cdcpb::{
 };
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
-use test_cdc_util::*;
 use test_raftstore::sleep_ms;
 
 use cdc::Task;
