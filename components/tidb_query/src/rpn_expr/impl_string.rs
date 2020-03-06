@@ -412,13 +412,15 @@ pub fn find_in_set(s: &Option<Bytes>, str_list: &Option<Bytes>) -> Result<Option
 #[rpn_fn]
 #[inline]
 pub fn trim_1_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
-    match arg.as_ref() {
-        Some(bytes) => match str::from_utf8(bytes) {
-            Ok(s) => Ok(Some(s.trim_matches(' ').to_string().into_bytes())),
-            Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-        },
-        _ => Ok(None),
-    }
+    Ok(arg.as_ref().map(|bytes| {
+        let l_pos = bytes.iter().position(|&x| x != SPACE);
+        if let Some(i) = l_pos {
+            let r_pos = bytes.iter().rposition(|&x| x != SPACE);
+            bytes[i..=r_pos.unwrap()].to_vec()
+        } else {
+            Vec::new()
+        }
+    }))
 }
 
 #[rpn_fn]
@@ -1642,6 +1644,7 @@ mod tests {
         let test_cases = vec![
             (None, None),
             (Some("   bar   "), Some("bar")),
+            (Some("   b   "), Some("b")),
             (Some("   b   ar   "), Some("b   ar")),
             (Some("bar"), Some("bar")),
             (Some("    "), Some("")),
