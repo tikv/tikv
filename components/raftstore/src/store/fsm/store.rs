@@ -639,13 +639,13 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 }
             }
         }
+        if self.poll_ctx.current_time.is_none() {
+            self.poll_ctx.current_time.replace(monotonic_raw_now());
+        }
         let mut delegate = StoreFsmDelegate {
             fsm: store,
             ctx: &mut self.poll_ctx,
         };
-        if self.poll_ctx.current_time.is_none() {
-            self.poll_ctx.current_time.replace(monotonic_raw_now());
-        }
         delegate.handle_msgs(&mut self.store_msg_buf);
         expected_msg_count
     }
@@ -659,7 +659,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             |_| unreachable!()
         );
 
-        self.poll_ctx.current_time.replace(monotonic_raw_now());
         while self.peer_msg_buf.len() < self.messages_per_tick {
             match peer.receiver.try_recv() {
                 // TODO: we may need a way to optimize the message copy.
@@ -688,6 +687,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 }
             }
         }
+        self.poll_ctx.current_time.replace(monotonic_raw_now());
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
         delegate.collect_ready(&mut self.pending_proposals);

@@ -657,6 +657,9 @@ impl PerfStatisticsWrite {
     }
 
     pub fn start(&mut self, level: i32) {
+        if level <= 2 {
+            return;
+        }
         PerfContext::get().reset();
         let perf_level = match level {
             0 => PerfLevel::Uninitialized,
@@ -690,10 +693,10 @@ impl PerfStatisticsWrite {
 
         self.metric
             .with_label_values(&["write_wal"])
-            .observe((wal_time - self.wal_time) as f64 / 1000000.0);
+            .observe((wal_time - self.wal_time) as f64 / 1_000_000_000.0);
         self.metric
             .with_label_values(&["write_memtable"])
-            .observe((memtable_time - self.memtable_time) as f64 / 1000000.0);
+            .observe((memtable_time - self.memtable_time) as f64 / 1_000_000_000.0);
         self.metric
             .with_label_values(&["write_pre_and_post_process"])
             .observe((pre_time - self.write_pre_and_post_process_time) as f64 / 1000000.0);

@@ -87,8 +87,6 @@ impl Handler {
                 Err(_) => break,
             }
         }
-        // We assume that every key costs 10us on writing into memtable.
-        sleep(Duration::from_micros(batch_size as u64 * 10));
         Some(0)
     }
 }
@@ -112,8 +110,6 @@ impl PollHandler<Runner, Runner> for Handler {
         let mut c = self.metrics.lock().unwrap();
         *c += self.local;
         self.local = HandleMetrics::default();
-        // We assume that every write_batch cost 500us on writing wal on disk.
-        sleep(Duration::from_micros(500));
     }
 }
 
