@@ -28,7 +28,7 @@ use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
-use tikv_util::{collections::HashMap, time::SlowTimer};
+use tikv_util::{collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{with_tls_engine, Engine, Result as EngineResult};
@@ -263,7 +263,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
-        let t = SlowTimer::new();
+        let t = Instant::now_coarse();
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
             task_contexts.push(Mutex::new(Default::default()));

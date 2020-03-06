@@ -63,7 +63,7 @@ use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
@@ -395,7 +395,7 @@ struct StoreFsmDelegate<'a, T: 'static, C: 'static> {
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     fn on_tick(&mut self, tick: StoreTick) {
-        let t = SlowTimer::new();
+        let t = TiInstant::now_coarse();
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(),
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
@@ -470,7 +470,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     store_msg_buf: Vec<StoreMsg>,
     peer_msg_buf: Vec<PeerMsg>,
     previous_metrics: RaftMetrics,
-    timer: SlowTimer,
+    timer: TiInstant,
     poll_ctx: PollContext<T, C>,
     pending_proposals: Vec<RegionProposal>,
     messages_per_tick: usize,
@@ -588,7 +588,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         if self.pending_proposals.capacity() == 0 {
             self.pending_proposals = Vec::with_capacity(batch_size);
         }
-        self.timer = SlowTimer::new();
+        self.timer = TiInstant::now_coarse();
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
@@ -942,7 +942,7 @@ where
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             previous_metrics: ctx.raft_metrics.clone(),
-            timer: SlowTimer::new(),
+            timer: TiInstant::now_coarse(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             pending_proposals: Vec::new(),
