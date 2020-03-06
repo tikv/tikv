@@ -25,7 +25,7 @@ use crate::codec::{
     Error, Result,
 };
 
-use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag};
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::FieldType;
 
 use crate::expr::EvalContext;
@@ -57,14 +57,28 @@ impl Column {
             value: value.into(),
         }
     }
-    pub fn new_unsigned(id: i64, value: impl Into<ScalarValue>) -> Self {
-        let mut ft = FieldType::default();
-        ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
-        Column {
-            id,
-            ft,
-            value: value.into(),
-        }
+
+    pub fn ft(&self) -> &FieldType {
+        &self.ft
+    }
+
+    pub fn with_tp(mut self, tp: FieldTypeTp) -> Self {
+        self.ft.as_mut_accessor().set_tp(tp);
+        self
+    }
+
+    pub fn is_unsigned(&self) -> bool {
+        self.ft.is_unsigned()
+    }
+
+    pub fn with_unsigned(mut self) -> Self {
+        self.ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
+        self
+    }
+
+    pub fn with_decimal(mut self, decimal: isize) -> Self {
+        self.ft.as_mut_accessor().set_decimal(decimal);
+        self
     }
 }
 
@@ -95,7 +109,7 @@ pub trait RowEncoder: NumberEncoder {
 
         for col in non_null_cols {
             non_null_ids.push(col.id);
-            value_wtr.write_value(ctx, col)?;
+            value_wtr.write_value(ctx, &col)?;
             offsets.push(value_wtr.len());
         }
         if value_wtr.len() > (u16::MAX as usize) {
@@ -153,26 +167,26 @@ pub trait RowEncoder: NumberEncoder {
 
 impl<T: BufferWriter> RowEncoder for T {}
 
-trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
+pub trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
     #[inline]
-    fn write_value(&mut self, ctx: &mut EvalContext, col: Column) -> Result<()> {
-        match col.value {
-            ScalarValue::Int(Some(v)) if col.ft.is_unsigned() => {
-                self.encode_u64(v as u64).map_err(Error::from)
+    fn write_value(&mut self, ctx: &mut EvalContext, col: &Column) -> Result<()> {
+        match &col.value {
+            ScalarValue::Int(Some(v)) if col.is_unsigned() => {
+                self.encode_u64(*v as u64).map_err(Error::from)
             }
-            ScalarValue::Int(Some(v)) => self.encode_i64(v).map_err(Error::from),
+            ScalarValue::Int(Some(v)) => self.encode_i64(*v).map_err(Error::from),
             ScalarValue::Decimal(Some(v)) => {
                 let (prec, frac) = v.prec_and_frac();
-                self.write_decimal(&v, prec, frac)?;
+                self.write_decimal(v, prec, frac)?;
                 Ok(())
             }
-            ScalarValue::Real(Some(v)) => self.encode_u64(v.to_bits()).map_err(Error::from),
-            ScalarValue::Bytes(Some(v)) => self.write_bytes(&v).map_err(Error::from),
+            ScalarValue::Real(Some(v)) => self.write_f64(v.into_inner()).map_err(Error::from),
+            ScalarValue::Bytes(Some(v)) => self.write_bytes(v).map_err(Error::from),
             ScalarValue::DateTime(Some(v)) => {
                 self.encode_u64(v.to_packed_u64(ctx)?).map_err(Error::from)
             }
             ScalarValue::Duration(Some(v)) => self.encode_i64(v.to_nanos()).map_err(Error::from),
-            ScalarValue::Json(Some(v)) => self.write_json(&v),
+            ScalarValue::Json(Some(v)) => self.write_json(v.as_ref()),
             _ => unreachable!(),
         }
     }
@@ -214,7 +228,7 @@ mod tests {
     #[test]
     fn test_encode_unsigned() {
         let cols = vec![
-            Column::new_unsigned(1, std::u64::MAX as i64),
+            Column::new(1, std::u64::MAX as i64).with_unsigned(),
             Column::new(2, -1),
         ];
         let exp: Vec<u8> = vec![
@@ -232,7 +246,7 @@ mod tests {
             Column::new(1, 1000),
             Column::new(12, 2),
             Column::new(33, ScalarValue::Int(None)),
-            Column::new_unsigned(3, 3),
+            Column::new(3, 3).with_unsigned(),
             Column::new(8, 32767),
             Column::new(7, b"abc".to_vec()),
             Column::new(9, 1.8),
@@ -249,15 +263,16 @@ mod tests {
 
         let exp = vec![
             128, 0, 11, 0, 1, 0, 1, 3, 6, 7, 8, 9, 12, 13, 14, 15, 16, 33, 2, 0, 3, 0, 11, 0, 14,
-            0, 16, 0, 24, 0, 25, 0, 33, 0, 36, 0, 65, 0, 69, 0, 232, 3, 3, 205, 204, 204, 204, 204,
-            204, 252, 191, 97, 98, 99, 255, 127, 205, 204, 204, 204, 204, 204, 252, 63, 2, 0, 0, 0,
-            135, 51, 230, 158, 25, 1, 0, 129, 1, 1, 0, 0, 0, 28, 0, 0, 0, 19, 0, 0, 0, 3, 0, 12,
-            22, 0, 0, 0, 107, 101, 121, 5, 118, 97, 108, 117, 101, 0, 202, 154, 59,
+            0, 16, 0, 24, 0, 25, 0, 33, 0, 36, 0, 65, 0, 69, 0, 232, 3, 3, 64, 3, 51, 51, 51, 51,
+            51, 50, 97, 98, 99, 255, 127, 191, 252, 204, 204, 204, 204, 204, 205, 2, 0, 0, 0, 135,
+            51, 230, 158, 25, 1, 0, 129, 1, 1, 0, 0, 0, 28, 0, 0, 0, 19, 0, 0, 0, 3, 0, 12, 22, 0,
+            0, 0, 107, 101, 121, 5, 118, 97, 108, 117, 101, 0, 202, 154, 59,
         ];
+
         let mut buf = vec![];
         buf.write_row(&mut EvalContext::default(), cols).unwrap();
 
-        assert_eq!(buf, exp);
+        assert_eq!(exp, buf);
     }
 
     #[test]

@@ -63,7 +63,7 @@ impl Table {
         for col_id in &self.idxs[&index] {
             let col = self.column_by_id(*col_id).unwrap();
             let mut c_info = ColumnInfo::default();
-            c_info.set_tp(col.col_type);
+            c_info.set_tp(col.col_field_type());
             c_info.set_column_id(col.id);
             if col.id == self.handle_id {
                 c_info.set_pk_handle(true);

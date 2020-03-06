@@ -1,8 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore;
-use crate::raftstore::errors::DiscardReason;
-use crate::raftstore::router::RaftStoreRouter;
 use crate::server;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
@@ -16,6 +13,8 @@ use grpcio::{ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environ
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::TikvClient;
 use raft::SnapshotStatus;
+use raftstore::errors::DiscardReason;
+use raftstore::router::RaftStoreRouter;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicI32, Ordering};

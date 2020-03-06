@@ -316,6 +316,17 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn to_seconds(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.invalid_zero() {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .map(|_| None);
+        }
+        Ok(Some(t.second_number()))
+    }
+
+    #[inline]
     pub fn date_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if lhs.invalid_zero() {
@@ -358,7 +369,7 @@ impl ScalarFunc {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = std::str::from_utf8(&arg1)?;
-        let arg1 = match MyDuration::parse(&arg1, Time::parse_fsp(s)) {
+        let arg1 = match MyDuration::parse(ctx, &arg1, Time::parse_fsp(s)) {
             Ok(arg1) => arg1,
             Err(_) => return Ok(None),
         };
@@ -405,7 +416,7 @@ impl ScalarFunc {
         let arg0 = try_opt!(self.children[0].eval_duration(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = std::str::from_utf8(&arg1)?;
-        let arg1 = match MyDuration::parse(&arg1, Time::parse_fsp(s)) {
+        let arg1 = match MyDuration::parse(ctx, &arg1, Time::parse_fsp(s)) {
             Ok(arg1) => arg1,
             Err(_) => return Ok(None),
         };
@@ -452,7 +463,7 @@ impl ScalarFunc {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = std::str::from_utf8(&arg1)?;
-        let arg1 = match MyDuration::parse(&arg1, Time::parse_fsp(s)) {
+        let arg1 = match MyDuration::parse(ctx, &arg1, Time::parse_fsp(s)) {
             Ok(arg1) => arg1,
             Err(_) => return Ok(None),
         };
@@ -499,7 +510,7 @@ impl ScalarFunc {
         let arg0 = try_opt!(self.children[0].eval_duration(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = std::str::from_utf8(&arg1)?;
-        let arg1 = match MyDuration::parse(&arg1, Time::parse_fsp(s)) {
+        let arg1 = match MyDuration::parse(ctx, &arg1, Time::parse_fsp(s)) {
             Ok(arg1) => arg1,
             Err(_) => return Ok(None),
         };
@@ -717,7 +728,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg, fsp, h, m, s, ms) in cases {
-            let d = Datum::Dur(Duration::parse(arg.as_bytes(), fsp).unwrap());
+            let d = Datum::Dur(Duration::parse(&mut ctx, arg.as_bytes(), fsp).unwrap());
             test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Hour, d.clone(), Datum::I64(h));
             test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Minute, d.clone(), Datum::I64(m));
             test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Second, d.clone(), Datum::I64(s));
@@ -729,7 +740,7 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Second, Datum::Null);
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, Datum::Null);
         // test zero case
-        let d = Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap());
+        let d = Datum::Dur(Duration::parse(&mut ctx, b"0 00:00:00.0", 0).unwrap());
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Hour, d.clone(), Datum::I64(0));
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Minute, d.clone(), Datum::I64(0));
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Second, d.clone(), Datum::I64(0));
@@ -1298,6 +1309,30 @@ mod tests {
     }
 
     #[test]
+    fn test_to_seconds() {
+        let cases = vec![
+            ("950501", 62966505600),
+            ("2009-11-29", 63426672000),
+            ("2009-11-29 13:43:32", 63426721412),
+            ("09-11-29 13:43:32", 63426721412),
+            ("99-11-29 13:43:32", 63111102212),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let time = Datum::Time(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::ToSeconds, time, Datum::I64(exp));
+        }
+
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::ToSeconds, Datum::Null);
+
+        let datetime =
+            Datum::Time(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 6, true).unwrap());
+        // test ZERO case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::ToSeconds, datetime);
+    }
+
+    #[test]
     fn test_date_diff() {
         let cases = vec![
             (
@@ -1377,7 +1412,9 @@ mod tests {
                     &mut ctx,
                     ScalarFuncSig::AddDatetimeAndDuration,
                     arg1,
-                    Datum::Dur(Duration::parse(arg2.as_bytes(), 6).unwrap()),
+                    Datum::Dur(
+                        Duration::parse(&mut EvalContext::default(), arg2.as_bytes(), 6).unwrap(),
+                    ),
                     exp,
                 );
             }
@@ -1387,7 +1424,9 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::SubDatetimeAndDuration,
                 exp,
-                Datum::Dur(Duration::parse(arg2.as_bytes(), 6).unwrap()),
+                Datum::Dur(
+                    Duration::parse(&mut EvalContext::default(), arg2.as_bytes(), 6).unwrap(),
+                ),
                 arg1,
             );
         }
@@ -1395,7 +1434,7 @@ mod tests {
         let cases = vec![
             (
                 Datum::Null,
-                Datum::Dur(Duration::parse(b"11:30:45.123456", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"11:30:45.123456", 6).unwrap()),
                 Datum::Null,
             ),
             (Datum::Null, Datum::Null, Datum::Null),
@@ -1412,7 +1451,7 @@ mod tests {
                 Datum::Time(
                     Time::parse_datetime(&mut ctx, "2019-01-01 01:00:00", 6, true).unwrap(),
                 ),
-                Datum::Dur(Duration::parse(b"-01:01:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"-01:01:00", 6).unwrap()),
                 Datum::Time(
                     Time::parse_datetime(&mut ctx, "2018-12-31 23:59:00", 6, true).unwrap(),
                 ),
@@ -1481,7 +1520,9 @@ mod tests {
         let cases = vec![
             (
                 Datum::Null,
-                Datum::Dur(Duration::parse(b"11:30:45.123456", 6).unwrap()),
+                Datum::Dur(
+                    Duration::parse(&mut EvalContext::default(), b"11:30:45.123456", 6).unwrap(),
+                ),
                 Datum::Null,
             ),
             (Datum::Null, Datum::Null, Datum::Null),
@@ -1562,16 +1603,16 @@ mod tests {
             test_ok_case_two_arg(
                 &mut ctx,
                 ScalarFuncSig::AddDurationAndDuration,
-                Datum::Dur(Duration::parse(arg1.as_ref(), 6).unwrap()),
-                Datum::Dur(Duration::parse(arg2.as_ref(), 6).unwrap()),
-                Datum::Dur(Duration::parse(exp.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), arg1.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), arg2.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), exp.as_ref(), 6).unwrap()),
             );
             test_ok_case_two_arg(
                 &mut ctx,
                 ScalarFuncSig::SubDurationAndDuration,
-                Datum::Dur(Duration::parse(exp.as_ref(), 6).unwrap()),
-                Datum::Dur(Duration::parse(arg2.as_ref(), 6).unwrap()),
-                Datum::Dur(Duration::parse(arg1.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), exp.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), arg2.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), arg1.as_ref(), 6).unwrap()),
             );
         }
 
@@ -1579,7 +1620,7 @@ mod tests {
         let cases = vec![
             (
                 Datum::Null,
-                Datum::Dur(Duration::parse(b"11:30:45.123456", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"11:30:45.123456", 6).unwrap()),
                 Datum::Null,
             ),
             (Datum::Null, Datum::Null, Datum::Null),
@@ -1589,13 +1630,13 @@ mod tests {
                 zero_duration.clone(),
             ),
             (
-                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
                 zero_duration.clone(),
-                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
             ),
             (
-                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
-                Datum::Dur(Duration::parse(b"-01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"-01:00:00", 6).unwrap()),
                 zero_duration,
             ),
         ];
@@ -1633,16 +1674,16 @@ mod tests {
             test_ok_case_two_arg(
                 &mut ctx,
                 ScalarFuncSig::AddDurationAndString,
-                Datum::Dur(Duration::parse(arg1.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), arg1.as_ref(), 6).unwrap()),
                 Datum::Bytes(arg2.as_bytes().to_vec()),
-                Datum::Dur(Duration::parse(exp.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), exp.as_ref(), 6).unwrap()),
             );
             test_ok_case_two_arg(
                 &mut ctx,
                 ScalarFuncSig::SubDurationAndString,
-                Datum::Dur(Duration::parse(exp.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), exp.as_ref(), 6).unwrap()),
                 Datum::Bytes(arg2.as_bytes().to_vec()),
-                Datum::Dur(Duration::parse(arg1.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), arg1.as_ref(), 6).unwrap()),
             );
         }
 
@@ -1663,15 +1704,15 @@ mod tests {
             (
                 zero_duration.clone(),
                 Datum::Bytes(b"01:00:00".to_vec()),
-                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
             ),
             (
-                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
                 zero_duration_string,
-                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
             ),
             (
-                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
                 Datum::Bytes(b"-01:00:00".to_vec()),
                 zero_duration,
             ),
@@ -1696,14 +1737,14 @@ mod tests {
         test_ok_case_two_arg(
             &mut ctx,
             ScalarFuncSig::AddDurationAndString,
-            Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+            Datum::Dur(Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap()),
             Datum::Bytes(b"xxx".to_vec()),
             Datum::Null,
         );
         test_ok_case_two_arg(
             &mut ctx,
             ScalarFuncSig::SubDurationAndString,
-            Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+            Datum::Dur(Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap()),
             Datum::Bytes(b"xxx".to_vec()),
             Datum::Null,
         );

@@ -5,6 +5,8 @@ use std::fmt;
 use tipb::ColumnInfo;
 use tipb::FieldType;
 
+use crate::error::DataTypeError;
+
 /// Valid values of `tipb::FieldType::tp` and `tipb::ColumnInfo::tp`.
 ///
 /// `FieldType` is the field type of a column defined by schema.
@@ -96,20 +98,30 @@ impl From<FieldTypeTp> for ColumnInfo {
 /// Valid values of `tipb::FieldType::collate` and
 /// `tipb::ColumnInfo::collation`.
 ///
-/// The default value is `UTF8Bin`.
+/// Legacy Utf8Bin collator (was the default) does not pad. For compatibility,
+/// all new collation with padding behavior is negative.
 #[derive(PartialEq, Debug, Clone, Copy)]
 #[repr(i32)]
 pub enum Collation {
     Binary = 63,
-    UTF8Bin = 83, // Default
+    Utf8Mb4Bin = -46,
+    Utf8Mb4BinNoPadding = 46,
+    Utf8Mb4GeneralCi = -45,
 }
 
 impl Collation {
-    fn from_i32(i: i32) -> Option<Collation> {
-        match i {
-            63 => Some(Collation::Binary),
-            83 => Some(Collation::UTF8Bin),
-            _ => None,
+    /// Parse from collation id.
+    ///
+    /// These are magic numbers defined in tidb, where positive numbers are for legacy
+    /// compatibility, and all new clusters with padding configuration enabled will
+    /// use negative numbers to indicate the padding behavior.
+    pub fn from_i32(n: i32) -> Result<Self, DataTypeError> {
+        match n {
+            -33 | -45 => Ok(Collation::Utf8Mb4GeneralCi),
+            -46 | -83 => Ok(Collation::Utf8Mb4Bin),
+            -63 | 63 => Ok(Collation::Binary),
+            n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
+            n => Err(DataTypeError::UnsupportedCollation { code: n }),
         }
     }
 }
@@ -157,7 +169,7 @@ pub trait FieldTypeAccessor {
 
     fn set_decimal(&mut self, decimal: isize) -> &mut dyn FieldTypeAccessor;
 
-    fn collation(&self) -> Collation;
+    fn collation(&self) -> Result<Collation, DataTypeError>;
 
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor;
 
@@ -234,7 +246,10 @@ pub trait FieldTypeAccessor {
     /// Please refer to `IsBinaryStr` in TiDB.
     #[inline]
     fn is_binary_string_like(&self) -> bool {
-        self.collation() == Collation::Binary && self.is_string_like()
+        self.collation()
+            .map(|col| col == Collation::Binary)
+            .unwrap_or(false)
+            && self.is_string_like()
     }
 
     /// Whether this type is a non-binary-string-like type.
@@ -242,7 +257,10 @@ pub trait FieldTypeAccessor {
     /// Please refer to `IsNonBinaryStr` in TiDB.
     #[inline]
     fn is_non_binary_string_like(&self) -> bool {
-        self.collation() != Collation::Binary && self.is_string_like()
+        self.collation()
+            .map(|col| col != Collation::Binary)
+            .unwrap_or(true)
+            && self.is_string_like()
     }
 
     /// Whether the flag contains `FieldTypeFlag::UNSIGNED`
@@ -298,8 +316,8 @@ impl FieldTypeAccessor for FieldType {
     }
 
     #[inline]
-    fn collation(&self) -> Collation {
-        Collation::from_i32(self.get_collate()).unwrap_or(Collation::UTF8Bin)
+    fn collation(&self) -> Result<Collation, DataTypeError> {
+        Collation::from_i32(self.get_collate())
     }
 
     #[inline]
@@ -355,8 +373,8 @@ impl FieldTypeAccessor for ColumnInfo {
     }
 
     #[inline]
-    fn collation(&self) -> Collation {
-        Collation::from_i32(self.get_collation()).unwrap_or(Collation::UTF8Bin)
+    fn collation(&self) -> Result<Collation, DataTypeError> {
+        Collation::from_i32(self.get_collation())
     }
 
     #[inline]

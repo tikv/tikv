@@ -20,7 +20,7 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use spin::Mutex;
+use parking_lot::Mutex;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -530,6 +530,7 @@ mod tests {
                 false,
                 TimeStamp::default(),
                 Some(WaitTimeout::Default),
+                false,
                 Context::default(),
             )
             .into(),

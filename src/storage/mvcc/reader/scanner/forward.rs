@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use engine::CF_DEFAULT;
+use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
 
@@ -472,11 +472,15 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                         write: entry_write,
                     });
                 }
-                WriteType::Delete if self.output_delete => {
-                    break Some(TxnEntry::Commit {
-                        default: (Vec::new(), Vec::new()),
-                        write: (write_key.to_vec(), write_value.to_vec()),
-                    });
+                WriteType::Delete => {
+                    if self.output_delete {
+                        break Some(TxnEntry::Commit {
+                            default: (Vec::new(), Vec::new()),
+                            write: (write_key.to_vec(), write_value.to_vec()),
+                        });
+                    } else {
+                        break None;
+                    }
                 }
                 _ => {}
             }
@@ -689,19 +693,18 @@ where
     }
 }
 
-#[cfg(test)]
-mod test_util {
+pub mod test_util {
     use super::*;
     use crate::storage::mvcc::Write;
 
     #[derive(Default)]
     pub struct EntryBuilder {
-        key: Vec<u8>,
-        value: Vec<u8>,
-        primary: Vec<u8>,
-        start_ts: TimeStamp,
-        commit_ts: TimeStamp,
-        for_update_ts: TimeStamp,
+        pub key: Vec<u8>,
+        pub value: Vec<u8>,
+        pub primary: Vec<u8>,
+        pub start_ts: TimeStamp,
+        pub commit_ts: TimeStamp,
+        pub for_update_ts: TimeStamp,
     }
 
     impl EntryBuilder {
@@ -785,6 +788,15 @@ mod test_util {
             TxnEntry::Prewrite {
                 default: (key, value),
                 lock: (lock_key.into_encoded(), lock_value.to_bytes()),
+            }
+        }
+        pub fn build_rollback(&self) -> TxnEntry {
+            let write_key = Key::from_raw(&self.key).append_ts(self.start_ts.into());
+            let write_value = Write::new(WriteType::Rollback, self.start_ts, None);
+            // For now, rollback is enclosed in Commit.
+            TxnEntry::Commit {
+                default: (vec![], vec![]),
+                write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
             }
         }
     }
@@ -1420,14 +1432,16 @@ mod latest_entry_tests {
 
         // Scanning entries in (10, 15] should get None
         check(15, 10, true, vec![]);
-        // Scanning entries without delete in (7, 10]  should get None
+        // Scanning entries without delete in (7, 10] should get None
         check(10, 7, false, vec![]);
-        // Scanning entries include delete in (7, 10]  should get entry_b_10
+        // Scanning entries include delete in (7, 10] should get entry_b_10
         check(10, 7, true, vec![&entry_b_10]);
         // Scanning entries include delete in (3, 10] should get a_7 and b_10
         check(10, 3, true, vec![&entry_a_7, &entry_b_10]);
         // Scanning entries in (0, 5] should get a_3 and b_1
         check(5, 0, true, vec![&entry_a_3, &entry_b_1]);
+        // Scanning entries without delete in (0, 10] should get a_7
+        check(10, 0, false, vec![&entry_a_7]);
     }
 }
 

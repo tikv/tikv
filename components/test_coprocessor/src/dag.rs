@@ -84,6 +84,7 @@ impl DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut item = ByItem::default();
         let mut expr = Expr::default();
+        expr.set_field_type(col.as_field_type());
         expr.set_tp(ExprType::ColumnRef);
         expr.mut_val().encode_i64(col_offset).unwrap();
         item.set_expr(expr);
@@ -92,19 +93,23 @@ impl DAGSelect {
         self
     }
 
-    pub fn count(mut self) -> DAGSelect {
-        let mut expr = Expr::default();
-        expr.set_tp(ExprType::Count);
-        self.aggregate.push(expr);
-        self
+    pub fn count(self, col: &Column) -> DAGSelect {
+        self.aggr_col(col, ExprType::Count)
     }
 
     pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut col_expr = Expr::default();
+        col_expr.set_field_type(col.as_field_type());
         col_expr.set_tp(ExprType::ColumnRef);
         col_expr.mut_val().encode_i64(col_offset).unwrap();
         let mut expr = Expr::default();
+        let mut expr_ft = col.as_field_type();
+        // Avg will contains two auxiliary columns (sum, count) and the sum should be a `Decimal`
+        if aggr_t == ExprType::Avg || aggr_t == ExprType::Sum {
+            expr_ft.set_tp(0xf6); // FieldTypeTp::NewDecimal
+        }
+        expr.set_field_type(expr_ft);
         expr.set_tp(aggr_t);
         expr.mut_children().push(col_expr);
         self.aggregate.push(expr);
@@ -147,6 +152,7 @@ impl DAGSelect {
         for col in cols {
             let offset = offset_for_column(&self.cols, col.id);
             let mut expr = Expr::default();
+            expr.set_field_type(col.as_field_type());
             expr.set_tp(ExprType::ColumnRef);
             expr.mut_val().encode_i64(offset).unwrap();
             self.group_by.push(expr);

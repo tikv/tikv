@@ -4,6 +4,16 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[features]
+protobuf-codec = [
+  "tidb_query_datatype/protobuf-codec",
+  "tipb/protobuf-codec"
+]
+prost-codec = [
+  "tidb_query_datatype/prost-codec",
+  "tipb/prost-codec"
+]
+
 [dependencies]
 codec = { path = "../codec" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }

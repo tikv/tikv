@@ -93,7 +93,49 @@ impl_into!(bool, Bool);
 impl_into!(String, String);
 impl_into!(ConfigChange, Module);
 
-/// the Configuration trait
+pub struct RollbackCollector<'a, 'b, T> {
+    pub cfg: &'a T,
+    change: &'b mut ConfigChange,
+}
+
+impl<'a, 'b, T> RollbackCollector<'a, 'b, T> {
+    pub fn new(cfg: &'a T, change: &'b mut ConfigChange) -> Self {
+        RollbackCollector { cfg, change }
+    }
+
+    pub fn push(&mut self, name: String, val: impl Into<ConfigValue>) {
+        self.change.insert(name, val.into());
+    }
+}
+
+#[macro_export]
+macro_rules! rollback_or {
+    ($rollback: ident, $($name: ident),+ , $err: block) => {{
+        let err = $err;
+        if let Some(rb_collector) = &mut $rollback {
+            $(
+                rb_collector.push(
+                    stringify!($name).to_owned(),
+                    rb_collector.cfg.$name.clone()
+                );
+            )*
+            warn!("Invalid config"; "err" => ?err)
+        } else { return err; }
+    }};
+    ($rollback: ident, $name: ident, $valid_or_rb: expr, $else_branch: expr) => {
+        if let Some(rb_collector) = &mut $rollback {
+            let mut r = std::collections::HashMap::new();
+            let sub_rb_collector = RollbackCollector::new(&rb_collector.cfg.$name, &mut r);
+            let _ = $valid_or_rb(Some(sub_rb_collector));
+            if !r.is_empty() {
+                rb_collector.push(stringify!($name).to_owned(), r);
+            }
+        } else {$else_branch;}
+    };
+}
+
+/// The Configuration trait
+///
 /// There are four type of fields inside derived Configuration struct:
 /// 1. `#[config(skip)]` field, these fields will not return
 /// by `diff` method and have not effect of `update` method
@@ -113,6 +155,12 @@ pub trait Configuration<'a> {
     /// Get encoder that can be serialize with `serde::Serializer`
     /// with the disappear of `#[config(hidden)]` field
     fn get_encoder(&'a self) -> Self::Encoder;
+}
+
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+pub trait ConfigManager: Send {
+    fn dispatch(&mut self, _: ConfigChange) -> Result<()>;
 }
 
 #[cfg(test)]

@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::DATA_KEY_PREFIX_LEN;
-pub use crate::rocks::{DBIterator, ReadOptions, TableFilter, TableProperties, DB};
+pub use crate::rocks::{DBIterator, ReadOptions, TableFilter, DB};
 use crate::Result;
+use rocksdb::TableProperties;
 use tikv_util::codec::number;
 use tikv_util::keybuilder::KeyBuilder;
 

@@ -2,14 +2,14 @@
 
 use std::fs;
 use std::io;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::*;
 
 use fail;
 
+use raftstore::store::*;
 use test_raftstore::*;
-use tikv::raftstore::store::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 

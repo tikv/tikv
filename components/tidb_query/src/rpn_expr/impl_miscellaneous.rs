@@ -239,11 +239,21 @@ mod tests {
     fn test_json_any_value() {
         let test_cases = vec![
             (vec![], None),
-            (vec![Json::U64(1)], Some(Json::U64(1))),
-            (vec![Json::U64(1), Json::U64(2)], Some(Json::U64(1))),
             (
-                vec![Json::U64(1), Json::U64(2), Json::U64(3)],
-                Some(Json::U64(1)),
+                vec![Json::from_u64(1).unwrap()],
+                Some(Json::from_u64(1).unwrap()),
+            ),
+            (
+                vec![Json::from_u64(1).unwrap(), Json::from_u64(2).unwrap()],
+                Some(Json::from_u64(1).unwrap()),
+            ),
+            (
+                vec![
+                    Json::from_u64(1).unwrap(),
+                    Json::from_u64(2).unwrap(),
+                    Json::from_u64(3).unwrap(),
+                ],
+                Some(Json::from_u64(1).unwrap()),
             ),
         ];
 

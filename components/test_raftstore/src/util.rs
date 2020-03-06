@@ -19,20 +19,21 @@ use raft::eraftpb::ConfChangeType;
 use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::{CompactionJobInfo, DB};
 use engine::*;
+use engine_rocks::CompactionListener;
 use engine_rocks::RocksEngine;
+use raftstore::store::fsm::RaftRouter;
+use raftstore::store::*;
+use raftstore::Result;
 use tikv::config::*;
-use tikv::raftstore::store::fsm::RaftRouter;
-use tikv::raftstore::store::*;
-use tikv::raftstore::Result;
 use tikv::server::{lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig};
 use tikv::storage::config::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::storage::kv::CompactionListener;
 use tikv_util::config::*;
-use tikv_util::escape;
+use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
-pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_RAFT};
+pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -149,6 +150,9 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         // Considering connection selection algo is involved, maybe
         // use 2 or larger value here?
         grpc_raft_conn_num: 1,
+        // Disable stats concurrency. procinfo performs too bad without optimization,
+        // disable it to save CPU for real tests.
+        stats_concurrency: 0,
         ..ServerConfig::default()
     }
 }
@@ -157,8 +161,9 @@ pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
         unify_read_pool: false,
         unified: UnifiedReadPoolConfig {
-            min_thread_count: 0,
-            max_thread_count: 0,
+            min_thread_count: 1,
+            max_thread_count: 1,
+            ..UnifiedReadPoolConfig::default()
         },
         storage: StorageReadPoolConfig {
             high_concurrency: 1,
@@ -444,6 +449,33 @@ pub fn read_on_peer<T: Simulator>(
     cluster.call_command(request, timeout)
 }
 
+pub fn async_read_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+    replica_read: bool,
+) -> mpsc::Receiver<RaftCmdResponse> {
+    let node_id = peer.get_id();
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    request.mut_header().set_replica_read(replica_read);
+    let (tx, rx) = mpsc::sync_channel(1);
+    let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
+    cluster
+        .sim
+        .wl()
+        .async_command_on_node(node_id, request, cb)
+        .unwrap();
+    rx
+}
+
 pub fn read_index_on_peer<T: Simulator>(
     cluster: &mut Cluster<T>,
     peer: metapb::Peer,
@@ -515,7 +547,7 @@ fn dummpy_filter(_: &CompactionJobInfo) -> bool {
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    router: RaftRouter,
+    router: RaftRouter<RocksEngine>,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine
@@ -560,6 +592,13 @@ pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+}
+
+pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Uses long check interval to make leader keep sleeping during tests.
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
 }
 
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

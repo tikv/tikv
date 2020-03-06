@@ -9,6 +9,8 @@ unify-read-pool = true
 [readpool.unified]
 min-thread-count = 5
 max-thread-count = 10
+stack-size = "20MB"
+max-tasks-per-worker = 2200
 
 [readpool.storage]
 high-concurrency = 1

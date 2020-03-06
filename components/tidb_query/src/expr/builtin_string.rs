@@ -213,7 +213,7 @@ impl ScalarFunc {
                 Cow::Owned(val) => Ok(Some(Cow::Owned(val[i..].to_owned()))),
             }
         } else {
-            Ok(Some(Cow::Owned(b"".to_vec())))
+            Ok(Some(Cow::Borrowed(b"")))
         }
     }
 
@@ -231,7 +231,7 @@ impl ScalarFunc {
                 Cow::Owned(val) => Ok(Some(Cow::Owned(val[..val.len() - i].to_owned()))),
             }
         } else {
-            Ok(Some(Cow::Owned(b"".to_vec())))
+            Ok(Some(Cow::Borrowed(b"")))
         }
     }
 
@@ -263,7 +263,7 @@ impl ScalarFunc {
         let i = try_opt!(self.children[1].eval_int(ctx, row));
         let (i, length_positive) = i64_to_usize(i, self.children[1].is_unsigned());
         if !length_positive || i == 0 {
-            return Ok(Some(Cow::Owned(b"".to_vec())));
+            return Ok(Some(Cow::Borrowed(b"")));
         }
         if s.chars().count() > i {
             let t = s.chars();
@@ -304,7 +304,7 @@ impl ScalarFunc {
         let i = try_opt!(self.children[1].eval_int(ctx, row));
         let (i, length_positive) = i64_to_usize(i, self.children[1].is_unsigned());
         if !length_positive || i == 0 {
-            return Ok(Some(Cow::Owned(b"".to_vec())));
+            return Ok(Some(Cow::Borrowed(b"")));
         }
         let len = s.chars().count();
         if len > i {
@@ -319,17 +319,23 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn upper_utf8<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        Ok(Some(Cow::Owned(s.to_uppercase().into_bytes())))
+    }
+
+    #[inline]
     pub fn upper<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        if self.children[0].field_type().is_binary_string_like() {
-            let s = try_opt!(self.children[0].eval_string(ctx, row));
-            return Ok(Some(s));
-        }
-        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        Ok(Some(Cow::Owned(s.to_uppercase().into_bytes())))
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        Ok(Some(s))
     }
 
     #[inline]
@@ -973,6 +979,24 @@ impl ScalarFunc {
             factor *= 256;
         }
         Ok(Some(result))
+    }
+
+    #[inline]
+    pub fn find_in_set<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let str_list = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        if str_list.is_empty() {
+            return Ok(Some(0));
+        }
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        Ok(str_list
+            .split(',')
+            .position(|str_in_set| str_in_set == s)
+            .map(|p| p as i64 + 1)
+            .or(Some(0)))
     }
 }
 
@@ -1733,8 +1757,7 @@ mod tests {
     }
 
     #[test]
-    fn test_upper() {
-        // Test non-binary string case
+    fn test_upper_utf8() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -1763,13 +1786,15 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (input, exp) in cases {
             let input = datum_expr(input);
-            let op = scalar_func_expr(ScalarFuncSig::Upper, &[input]);
+            let op = scalar_func_expr(ScalarFuncSig::UpperUtf8, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
+    }
 
-        // Test binary string case
+    #[test]
+    fn test_upper() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -3583,5 +3608,35 @@ mod tests {
 
         let got = eval_func(ScalarFuncSig::Ord, &[Datum::Null]).unwrap();
         assert_eq!(got, Datum::Null);
+    }
+
+    #[test]
+    fn test_find_in_set() {
+        let cases = vec![
+            ("foo", "foo,bar", 1),
+            ("foo", "foobar,bar", 0),
+            (" foo ", "foo, foo ", 2),
+            ("", "foo,bar,", 3),
+            ("", "", 0),
+            ("a,b", "a,b,c", 0),
+        ];
+
+        for (s, sl, expect) in cases {
+            let sl = Datum::Bytes(sl.as_bytes().to_vec());
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::FindInSet, &[s, sl]).unwrap();
+            assert_eq!(got, Datum::I64(expect))
+        }
+
+        let null_cases = vec![
+            (Datum::Bytes(b"foo".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Null, Datum::Bytes(b"bar".to_vec()), Datum::Null),
+            (Datum::Null, Datum::Null, Datum::Null),
+        ];
+
+        for (s, sl, exp) in null_cases {
+            let got = eval_func(ScalarFuncSig::FindInSet, &[s, sl]).unwrap();
+            assert_eq!(got, exp);
+        }
     }
 }

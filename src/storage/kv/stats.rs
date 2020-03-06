@@ -1,11 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanInfo};
-use tikv_util::collections::HashMap;
-use tikv_util::worker::FutureScheduler;
 
-use crate::raftstore::store::PdTask;
+pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
 
 const STAT_TOTAL: &str = "total";
 const STAT_PROCESSED: &str = "processed";
@@ -29,35 +27,6 @@ pub struct CfStatistics {
     pub seek_for_prev: usize,
     pub over_seek_bound: usize,
     pub flow_stats: FlowStatistics,
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct FlowStatistics {
-    pub read_keys: usize,
-    pub read_bytes: usize,
-}
-
-// Reports flow statistics to outside.
-pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
-    // Reports read flow statistics, the argument `read_stats` is a hash map
-    // saves the flow statistics of different region.
-    // TODO: maybe we need to return a Result later?
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
-}
-
-impl FlowStatsReporter for FutureScheduler<PdTask> {
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
-        if let Err(e) = self.schedule(PdTask::ReadStats { read_stats }) {
-            error!("Failed to send read flow statistics"; "err" => ?e);
-        }
-    }
-}
-
-impl FlowStatistics {
-    pub fn add(&mut self, other: &Self) {
-        self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
-        self.read_keys = self.read_keys.saturating_add(other.read_keys);
-    }
 }
 
 impl CfStatistics {

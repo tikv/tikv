@@ -12,12 +12,12 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use engine::Iterable;
-use engine::CF_WRITE;
+use engine_traits::CF_WRITE;
 use keys::data_key;
 use pd_client::PdClient;
+use raftstore::store::{Callback, WriteResponse};
+use raftstore::Result;
 use test_raftstore::*;
-use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::raftstore::Result;
 use tikv_util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;

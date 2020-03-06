@@ -9,7 +9,9 @@ use tipb::FieldType;
 
 use super::data_type::*;
 use crate::codec::datum;
-use crate::codec::mysql::{DecimalDecoder, DecimalEncoder, JsonDecoder, JsonEncoder};
+use crate::codec::mysql::{
+    DecimalDecoder, DecimalEncoder, DurationDecoder, JsonDecoder, JsonEncoder, TimeDecoder,
+};
 use crate::codec::{Error, Result};
 use crate::expr::EvalContext;
 
@@ -17,7 +19,13 @@ use crate::expr::EvalContext;
 ///
 /// The types this decoder outputs are not fully 1:1 mapping to evaluable types.
 pub trait DatumPayloadDecoder:
-    NumberDecoder + CompactByteDecoder + MemComparableByteDecoder + JsonDecoder + DecimalDecoder
+    NumberDecoder
+    + CompactByteDecoder
+    + MemComparableByteDecoder
+    + DurationDecoder
+    + TimeDecoder
+    + DecimalDecoder
+    + JsonDecoder
 {
     #[inline]
     fn read_datum_payload_i64(&mut self) -> Result<i64> {
@@ -69,6 +77,42 @@ pub trait DatumPayloadDecoder:
     fn read_datum_payload_compact_bytes(&mut self) -> Result<Vec<u8>> {
         self.read_compact_bytes().map_err(|_| {
             Error::InvalidDataType("Failed to decode datum payload as compact bytes".to_owned())
+        })
+    }
+
+    #[inline]
+    fn read_datum_payload_datetime_int(
+        &mut self,
+        ctx: &mut EvalContext,
+        field_type: &FieldType,
+    ) -> Result<DateTime> {
+        self.read_time_int(ctx, field_type).map_err(|_| {
+            Error::InvalidDataType("Failed to decode datum payload as datetime".to_owned())
+        })
+    }
+
+    #[inline]
+    fn read_datum_payload_datetime_varint(
+        &mut self,
+        ctx: &mut EvalContext,
+        field_type: &FieldType,
+    ) -> Result<DateTime> {
+        self.read_time_varint(ctx, field_type).map_err(|_| {
+            Error::InvalidDataType("Failed to decode datum payload as datetime".to_owned())
+        })
+    }
+
+    #[inline]
+    fn read_datum_payload_duration_int(&mut self, field_type: &FieldType) -> Result<Duration> {
+        self.read_duration_int(field_type).map_err(|_| {
+            Error::InvalidDataType("Failed to decode datum payload as duration".to_owned())
+        })
+    }
+
+    #[inline]
+    fn read_datum_payload_duration_varint(&mut self, field_type: &FieldType) -> Result<Duration> {
+        self.read_duration_varint(field_type).map_err(|_| {
+            Error::InvalidDataType("Failed to decode datum payload as duration".to_owned())
         })
     }
 
@@ -134,7 +178,7 @@ pub trait DatumPayloadEncoder:
 
     #[inline]
     fn write_datum_payload_json(&mut self, v: &Json) -> Result<()> {
-        self.write_json(v).map_err(|_| {
+        self.write_json(v.as_ref()).map_err(|_| {
             Error::InvalidDataType("Failed to encode datum payload from json".to_owned())
         })
     }
@@ -182,6 +226,7 @@ pub trait DatumFlagAndPayloadEncoder: BufferWriter + DatumPayloadEncoder {
 
     fn write_datum_decimal(&mut self, val: &Decimal) -> Result<()> {
         self.write_u8(datum::DECIMAL_FLAG)?;
+        // FIXME: prec and frac should come from field type?
         let (prec, frac) = val.prec_and_frac();
         self.write_datum_payload_decimal(val, prec, frac)?;
         Ok(())
@@ -194,10 +239,14 @@ pub trait DatumFlagAndPayloadEncoder: BufferWriter + DatumPayloadEncoder {
         Ok(())
     }
 
-    fn write_datum_duration(&mut self, val: Duration) -> Result<()> {
+    fn write_datum_duration_int(&mut self, val: Duration) -> Result<()> {
         self.write_u8(datum::DURATION_FLAG)?;
         self.write_datum_payload_i64(val.to_nanos())?;
         Ok(())
+    }
+
+    fn write_datum_datetime_int(&mut self, val: DateTime, ctx: &mut EvalContext) -> Result<()> {
+        self.write_datum_u64(val.to_packed_u64(ctx)?)
     }
 
     fn write_datum_json(&mut self, val: &Json) -> Result<()> {
@@ -245,12 +294,12 @@ pub trait EvaluableDatumEncoder: DatumFlagAndPayloadEncoder {
         val: DateTime,
         ctx: &mut EvalContext,
     ) -> Result<()> {
-        self.write_datum_u64(val.to_packed_u64(ctx)?)
+        self.write_datum_datetime_int(val, ctx)
     }
 
     #[inline]
     fn write_evaluable_datum_duration(&mut self, val: Duration) -> Result<()> {
-        self.write_datum_duration(val)
+        self.write_datum_duration_int(val)
     }
 
     #[inline]
@@ -272,25 +321,6 @@ pub trait ColumnIdDatumEncoder: DatumFlagAndPayloadEncoder {
 impl<T: BufferWriter> ColumnIdDatumEncoder for T {}
 
 // TODO: Refactor the code below to be a EvaluableDatumDecoder.
-
-#[inline]
-fn decode_duration_from_i64(v: i64, field_type: &FieldType) -> Result<Duration> {
-    Duration::from_nanos(v, field_type.as_accessor().decimal() as i8)
-        .map_err(|_| Error::InvalidDataType("Failed to decode i64 as duration".to_owned()))
-}
-
-#[inline]
-fn decode_date_time_from_uint(
-    v: u64,
-    ctx: &mut EvalContext,
-    field_type: &FieldType,
-) -> Result<DateTime> {
-    use std::convert::TryInto;
-
-    let fsp = field_type.decimal() as i8;
-    let time_type = field_type.as_accessor().tp().try_into()?;
-    DateTime::from_packed_u64(ctx, v, time_type, fsp)
-}
 
 pub fn decode_int_datum(mut raw_datum: &[u8]) -> Result<Option<Int>> {
     if raw_datum.is_empty() {
@@ -394,17 +424,13 @@ pub fn decode_date_time_datum(
     match flag {
         datum::NIL_FLAG => Ok(None),
         // In index, it's flag is `UINT`. See TiDB's `encode()`.
-        datum::UINT_FLAG => {
-            let v = raw_datum.read_datum_payload_u64()?;
-            let v = decode_date_time_from_uint(v, ctx, field_type)?;
-            Ok(Some(v))
-        }
+        datum::UINT_FLAG => Ok(Some(
+            raw_datum.read_datum_payload_datetime_int(ctx, field_type)?,
+        )),
         // In record, it's flag is `VAR_UINT`. See TiDB's `flatten()` and `encode()`.
-        datum::VAR_UINT_FLAG => {
-            let v = raw_datum.read_datum_payload_var_u64()?;
-            let v = decode_date_time_from_uint(v, ctx, field_type)?;
-            Ok(Some(v))
-        }
+        datum::VAR_UINT_FLAG => Ok(Some(
+            raw_datum.read_datum_payload_datetime_varint(ctx, field_type)?,
+        )),
         _ => Err(Error::InvalidDataType(format!(
             "Unsupported datum flag {} for DateTime vector",
             flag
@@ -426,17 +452,11 @@ pub fn decode_duration_datum(
     match flag {
         datum::NIL_FLAG => Ok(None),
         // In index, it's flag is `DURATION`. See TiDB's `encode()`.
-        datum::DURATION_FLAG => {
-            let v = raw_datum.read_datum_payload_i64()?;
-            let v = decode_duration_from_i64(v, field_type)?;
-            Ok(Some(v))
-        }
+        datum::DURATION_FLAG => Ok(Some(raw_datum.read_datum_payload_duration_int(field_type)?)),
         // In record, it's flag is `VAR_INT`. See TiDB's `flatten()` and `encode()`.
-        datum::VAR_INT_FLAG => {
-            let v = raw_datum.read_datum_payload_var_i64()?;
-            let v = decode_duration_from_i64(v, field_type)?;
-            Ok(Some(v))
-        }
+        datum::VAR_INT_FLAG => Ok(Some(
+            raw_datum.read_datum_payload_duration_varint(field_type)?,
+        )),
         _ => Err(Error::InvalidDataType(format!(
             "Unsupported datum flag {} for Duration vector",
             flag

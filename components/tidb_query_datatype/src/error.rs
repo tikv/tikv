@@ -4,4 +4,7 @@
 pub enum DataTypeError {
     #[fail(display = "Unsupported type: {}", name)]
     UnsupportedType { name: String },
+
+    #[fail(display = "Unsupported collation code: {}", code)]
+    UnsupportedCollation { code: i32 },
 }

@@ -41,6 +41,12 @@ quick_error! {
             description("CF name not found")
             display("CF {} not found", name)
         }
+        Codec(err: tikv_util::codec::Error) {
+            from()
+            cause(err)
+            description("Codec error")
+            display("Codec {}", err)
+        }
     }
 }
 

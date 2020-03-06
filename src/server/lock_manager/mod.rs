@@ -7,7 +7,8 @@ mod metrics;
 pub mod waiter_manager;
 
 pub use self::config::{Config, LockManagerConfigManager};
-pub use self::deadlock::Service as DeadlockService;
+pub use self::deadlock::{Scheduler as DetectorScheduler, Service as DeadlockService};
+pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -15,18 +16,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use self::deadlock::{Detector, RoleChangeNotifier, Scheduler as DetectorScheduler};
-use self::waiter_manager::{Scheduler as WaiterMgrScheduler, WaiterManager};
-use crate::raftstore::coprocessor::CoprocessorHost;
+use self::deadlock::{Detector, RoleChangeNotifier};
+use self::waiter_manager::WaiterManager;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{
     lock_manager::{Lock, LockManager as LockManagerTrait, WaitTimeout},
     ProcessResult, StorageCallback,
 };
+use raftstore::coprocessor::CoprocessorHost;
 
+use parking_lot::Mutex;
 use pd_client::PdClient;
-use spin::Mutex;
 use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
@@ -276,7 +277,7 @@ mod tests {
     use self::metrics::*;
     use self::waiter_manager::tests::*;
     use super::*;
-    use crate::raftstore::coprocessor::RegionChangeEvent;
+    use raftstore::coprocessor::RegionChangeEvent;
     use tikv_util::security::SecurityConfig;
 
     use std::thread;
@@ -336,7 +337,7 @@ mod tests {
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
             2900,
             3200,
         );
@@ -455,7 +456,7 @@ mod tests {
             None,
         );
         assert_elapsed(
-            || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
+            || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
             0,
             200,
         );

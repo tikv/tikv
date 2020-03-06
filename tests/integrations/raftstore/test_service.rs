@@ -15,16 +15,17 @@ use raft::eraftpb;
 
 use engine::rocks::Writable;
 use engine::*;
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::fsm::store::StoreMeta;
+use raftstore::store::SnapManager;
 use tempfile::Builder;
 use test_raftstore::*;
+use tikv::config::ConfigHandler;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv_util::worker::FutureWorker;
+use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
@@ -144,22 +145,20 @@ fn must_kv_commit(
     assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
 }
 
-fn must_physical_scan_lock(client: &TikvClient, ctx: Context, max_ts: u64) -> Vec<LockInfo> {
+fn must_physical_scan_lock(
+    client: &TikvClient,
+    ctx: Context,
+    max_ts: u64,
+    start_key: &[u8],
+    limit: usize,
+) -> Vec<LockInfo> {
     let mut req = PhysicalScanLockRequest::default();
     req.set_context(ctx);
     req.set_max_ts(max_ts);
-    let rx = client.physical_scan_lock(&req).unwrap();
-    rx.map(|mut resp| {
-        assert!(resp.get_error().is_empty());
-        resp.take_locks()
-    })
-    .collect()
-    .wait()
-    .unwrap()
-    .into_iter()
-    .map(|v| v.into_iter())
-    .flatten()
-    .collect()
+    req.set_start_key(start_key.to_owned());
+    req.set_limit(limit as _);
+    let mut resp = client.physical_scan_lock(&req).unwrap();
+    resp.take_locks().into()
 }
 
 #[test]
@@ -499,6 +498,7 @@ fn test_coprocessor() {
 fn test_physical_scan_lock() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
 
+    // Generate kvs like k10, v10, ts=10; k11, v11, ts=11; ...
     let kv: Vec<_> = (10..20)
         .map(|i| (i, vec![b'k', i as u8], vec![b'v', i as u8]))
         .collect();
@@ -532,18 +532,25 @@ fn test_physical_scan_lock() {
     };
 
     check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 30),
+        &must_physical_scan_lock(&client, ctx.clone(), 30, b"", 100),
         &all_locks,
     );
     check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 15),
+        &must_physical_scan_lock(&client, ctx.clone(), 15, b"", 100),
         &all_locks[0..=5],
     );
     check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 10),
+        &must_physical_scan_lock(&client, ctx.clone(), 10, b"", 100),
         &all_locks[0..1],
     );
-    check_result(&must_physical_scan_lock(&client, ctx, 9), &[]);
+    check_result(
+        &must_physical_scan_lock(&client, ctx.clone(), 9, b"", 100),
+        &[],
+    );
+    check_result(
+        &must_physical_scan_lock(&client, ctx, 30, &[b'k', 13], 5),
+        &all_locks[3..8],
+    );
 }
 
 #[test]
@@ -910,6 +917,8 @@ fn test_double_run_node() {
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
     let cfg_controller = Default::default();
+    let config_client =
+        ConfigHandler::start(String::new(), cfg_controller, pd_worker.scheduler()).unwrap();
     let e = node
         .start(
             engines,
@@ -919,10 +928,103 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
-            cfg_controller,
+            Worker::new("split"),
+            Box::new(config_client),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
     drop(sim);
     cluster.shutdown();
+}
+
+fn kv_pessimistic_lock(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    ts: u64,
+    for_update_ts: u64,
+    return_values: bool,
+) -> PessimisticLockResponse {
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx);
+    let primary = keys[0].clone();
+    let mut mutations = vec![];
+    for key in keys {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::PessimisticLock);
+        mutation.set_key(key);
+        mutations.push(mutation);
+    }
+    req.set_mutations(mutations.into());
+    req.primary_lock = primary;
+    req.start_version = ts;
+    req.for_update_ts = for_update_ts;
+    req.lock_ttl = 20;
+    req.is_first_lock = false;
+    req.return_values = return_values;
+    client.kv_pessimistic_lock(&req).unwrap()
+}
+
+fn must_kv_pessimistic_rollback(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let mut req = PessimisticRollbackRequest::default();
+    req.set_context(ctx);
+    req.set_keys(vec![key].into_iter().collect());
+    req.start_version = ts;
+    req.for_update_ts = ts;
+    let resp = client.kv_pessimistic_rollback(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+}
+
+#[test]
+fn test_pessimistic_lock() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+
+    // Prewrite
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
+
+    // KeyIsLocked
+    for &return_values in &[false, true] {
+        let resp =
+            kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], 20, 20, return_values);
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert_eq!(resp.errors.len(), 1);
+        assert!(resp.errors[0].has_locked());
+        assert!(resp.values.is_empty());
+    }
+
+    must_kv_commit(&client, ctx.clone(), vec![k.clone()], 10, 30, 30);
+
+    // WriteConflict
+    for &return_values in &[false, true] {
+        let resp =
+            kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], 20, 20, return_values);
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert_eq!(resp.errors.len(), 1);
+        assert!(resp.errors[0].has_conflict());
+        assert!(resp.values.is_empty());
+    }
+
+    // Return multiple values
+    for &return_values in &[false, true] {
+        let resp = kv_pessimistic_lock(
+            &client,
+            ctx.clone(),
+            vec![k.clone(), b"nonexsit".to_vec()],
+            40,
+            40,
+            true,
+        );
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.errors.is_empty());
+        if return_values {
+            assert_eq!(resp.get_values().to_vec(), vec![v.clone(), vec![]]);
+        }
+        must_kv_pessimistic_rollback(&client, ctx.clone(), k.clone(), 40);
+    }
 }

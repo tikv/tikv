@@ -2,11 +2,11 @@
 
 use kvproto::raft_serverpb::RaftMessage;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::Transport;
-use crate::raftstore::Result as RaftStoreResult;
 use crate::server::raft_client2::RaftStreamPool;
 use crate::server::resolve::StoreAddrResolver;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::Transport;
+use raftstore::Result as RaftStoreResult;
 
 pub struct ServerTransport<T, S>
 where

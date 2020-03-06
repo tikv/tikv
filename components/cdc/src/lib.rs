@@ -9,6 +9,8 @@
 extern crate slog_global;
 #[macro_use]
 extern crate failure;
+#[macro_use(fail_point)]
+extern crate fail;
 
 mod delegate;
 mod endpoint;
@@ -18,4 +20,5 @@ mod service;
 
 pub use endpoint::{Endpoint, Task};
 pub use errors::{Error, Result};
+pub use observer::CdcObserver;
 pub use service::Service;

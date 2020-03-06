@@ -144,7 +144,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     use tidb_query_datatype::FieldTypeAccessor;
 
     for column in columns_info {
-        if column.has_pk_handle() {
+        if column.get_pk_handle() {
             box_try!(EvalType::try_from(column.as_accessor().tp()));
         }
     }

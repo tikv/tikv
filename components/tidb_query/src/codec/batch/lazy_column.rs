@@ -6,7 +6,8 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
-use crate::codec::data_type::VectorValue;
+use crate::codec::chunk::{ChunkColumnEncoder, Column};
+use crate::codec::data_type::{match_template_evaluable, VectorValue};
 use crate::codec::datum_codec::RawDatumDecoder;
 use crate::codec::Result;
 use crate::expr::EvalContext;
@@ -196,17 +197,17 @@ impl LazyBatchColumn {
     }
 
     /// Returns maximum encoded size.
-    pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> Result<usize> {
+    pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> usize {
         match self {
-            LazyBatchColumn::Raw(v) => Ok(v.total_len()),
+            LazyBatchColumn::Raw(v) => v.total_len(),
             LazyBatchColumn::Decoded(v) => v.maximum_encoded_size(logical_rows),
         }
     }
 
     /// Returns maximum encoded size in chunk format.
-    pub fn maximum_encoded_size_chunk(&self, logical_rows: &[usize]) -> Result<usize> {
+    pub fn maximum_encoded_size_chunk(&self, logical_rows: &[usize]) -> usize {
         match self {
-            LazyBatchColumn::Raw(v) => Ok(v.total_len()),
+            LazyBatchColumn::Raw(v) => v.total_len() * 2,
             LazyBatchColumn::Decoded(v) => v.maximum_encoded_size_chunk(logical_rows),
         }
     }
@@ -227,6 +228,24 @@ impl LazyBatchColumn {
             }
             LazyBatchColumn::Decoded(ref v) => v.encode(row_index, field_type, ctx, output),
         }
+    }
+
+    /// Encodes into Chunk format.
+    // FIXME: Use BufferWriter.
+    pub fn encode_chunk(
+        &self,
+        ctx: &mut EvalContext,
+        logical_rows: &[usize],
+        field_type: &FieldType,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        let column = match self {
+            LazyBatchColumn::Raw(v) => Column::from_raw_datums(field_type, v, logical_rows, ctx)?,
+            LazyBatchColumn::Decoded(ref v) => {
+                Column::from_vector_value(field_type, v, logical_rows)?
+            }
+        };
+        output.write_chunk_column(&column)
     }
 }
 

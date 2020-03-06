@@ -2,7 +2,7 @@
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::Range;
-use engine::CF_WRITE;
+use engine_traits::CF_WRITE;
 use keys::{data_key, DATA_MAX_KEY};
 use test_raftstore::*;
 use tikv::storage::mvcc::{TimeStamp, Write, WriteType};

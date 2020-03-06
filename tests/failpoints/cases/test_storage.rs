@@ -16,7 +16,7 @@ use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInne
 use tikv::storage::*;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
-use txn_types::*;
+use txn_types::{Mutation, TimeStamp};
 
 #[test]
 fn test_scheduler_leader_change_twice() {
@@ -28,9 +28,7 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilder::from_engine(engine0.clone())
-        .build()
-        .unwrap();
+    let storage0 = TestStorageBuilder::from_engine(engine0).build().unwrap();
 
     let mut ctx0 = Context::default();
     ctx0.set_region_id(region0.get_id());
@@ -94,12 +92,12 @@ fn test_server_catching_api_error() {
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
 
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx.clone());
     let mut mutation = kvrpcpb::Mutation::default();
-    mutation.op = Op::Put;
+    mutation.op = Op::Put.into();
     mutation.key = b"k3".to_vec();
     mutation.value = b"v3".to_vec();
     prewrite_req.set_mutations(vec![mutation].into_iter().collect());
@@ -116,7 +114,7 @@ fn test_server_catching_api_error() {
     must_get_none(&cluster.get_engine(1), b"k3");
 
     let mut put_req = RawPutRequest::default();
-    put_req.set_context(ctx.clone());
+    put_req.set_context(ctx);
     put_req.key = b"k3".to_vec();
     put_req.value = b"v3".to_vec();
     let put_resp = client.raw_put(&put_req).unwrap();

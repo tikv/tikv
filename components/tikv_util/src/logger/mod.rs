@@ -47,7 +47,7 @@ where
         if !disabled_targets.is_empty() {
             // The format of the returned value from module() would like this:
             // ```
-            //  tikv::raftstore::store::fsm::store
+            //  raftstore::store::fsm::store
             //  tikv_util
             //  tikv_util::config::check_data_dir
             //  raft::raft
@@ -328,7 +328,7 @@ impl<'a> Drop for Serializer<'a> {
     fn drop(&mut self) {}
 }
 
-impl<'a> slog::ser::Serializer for Serializer<'a> {
+impl<'a> slog::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         self.emit_arguments(key, &format_args!("None"))
     }

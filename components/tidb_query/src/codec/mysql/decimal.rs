@@ -1829,9 +1829,9 @@ impl ConvertTo<Decimal> for Json {
     /// Port from TiDB's types.ConvertJSONToDecimal
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        match self {
-            Json::String(s) => {
-                Decimal::from_str(s.as_str()).or_else(|e| {
+        match self.as_ref().get_type() {
+            JsonType::String => {
+                Decimal::from_str(self.as_ref().get_str()?).or_else(|e| {
                     ctx.handle_truncate_err(e)?;
                     // FIXME: if TiDB's MyDecimal::FromString return err,
                     //  it may has res. However, if TiKV's Decimal::from_str
@@ -2078,6 +2078,7 @@ pub trait DecimalEncoder: NumberEncoder {
         Ok(res)
     }
 
+    #[inline]
     fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
         let data = unsafe {
             let p = v as *const Decimal as *const u8;
@@ -2089,6 +2090,16 @@ pub trait DecimalEncoder: NumberEncoder {
 }
 
 impl<T: BufferWriter> DecimalEncoder for T {}
+
+pub trait DecimalDatumPayloadChunkEncoder: NumberEncoder + DecimalEncoder {
+    #[inline]
+    fn write_decimal_to_chunk_by_datum_payload(&mut self, mut src_payload: &[u8]) -> Result<()> {
+        let decimal = src_payload.read_decimal()?;
+        self.write_decimal_to_chunk(&decimal)
+    }
+}
+
+impl<T: BufferWriter> DecimalDatumPayloadChunkEncoder for T {}
 
 // Mark as `#[inline]` since in many cases `size` is a constant.
 #[inline]

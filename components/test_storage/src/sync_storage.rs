@@ -3,13 +3,13 @@
 use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
+use raftstore::coprocessor::RegionInfoProvider;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    txn::commands, Engine, RegionInfoProvider, Result, Storage, TestEngineBuilder,
-    TestStorageBuilder, TxnStatus,
+    txn::commands, Engine, Result, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
 use tikv_util::collections::HashMap;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};

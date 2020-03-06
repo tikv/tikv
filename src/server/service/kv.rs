@@ -5,8 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::coprocessor::Endpoint;
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::{Callback, CasualMessage};
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -34,6 +32,8 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use prometheus::HistogramTimer;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{Callback, CasualMessage};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -396,29 +396,31 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         &mut self,
         ctx: RpcContext<'_>,
         mut req: PhysicalScanLockRequest,
-        sink: ServerStreamingSink<PhysicalScanLockResponse>,
+        sink: UnarySink<PhysicalScanLockResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .physical_scan_lock
             .start_coarse_timer();
 
-        let stream = self
-            .gc_worker
-            .physical_scan_lock(req.take_context(), req.get_max_ts().into())
-            .then(|result| {
-                let mut resp = PhysicalScanLockResponse::default();
-                match result {
-                    Ok(locks) => resp.set_locks(locks.into()),
-                    Err(e) => resp.set_error(format!("{:?}", e)),
-                }
-                Ok::<_, GrpcError>(resp)
-            })
-            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)));
+        let (cb, f) = paired_future_callback();
+        let res = self.gc_worker.physical_scan_lock(
+            req.take_context(),
+            req.get_max_ts().into(),
+            Key::from_raw(req.get_start_key()),
+            req.get_limit() as _,
+            cb,
+        );
 
-        let future = sink
-            .send_all(stream)
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = PhysicalScanLockResponse::default();
+                match v {
+                    Ok(locks) => resp.set_locks(locks.into()),
+                    Err(e) => resp.set_error(format!("{}", e)),
+                }
+                sink.success(resp).map_err(Error::from)
+            })
             .map(|_| timer.observe_duration())
-            .map_err(Error::from)
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "physical_scan_lock",
@@ -1458,7 +1460,10 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     resp.set_errors(extract_key_errors(v).into())
 });
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
-    resp.set_errors(extract_key_errors(v).into())
+    match v {
+        Ok(Ok(res)) => resp.set_values(res.into_vec().into()),
+        Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+    }
 });
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())

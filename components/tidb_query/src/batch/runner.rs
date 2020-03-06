@@ -1,12 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kvproto::coprocessor::KeyRange;
+use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::deadline::Deadline;
-use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
+use tokio::sync::Semaphore;
 use yatp::task::future::reschedule;
 
 use super::executors::*;
@@ -27,6 +30,8 @@ pub const BATCH_MAX_SIZE: usize = 1024;
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
+/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time a coroutine
+/// can run without being yielded.
 const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
@@ -34,6 +39,12 @@ pub struct BatchExecutorsRunner<SS> {
     /// whether or not the deadline is exceeded and break the process if so.
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
+
+    /// The time allowed to be used on this handler without getting a semaphore permit.
+    execution_time_limit: Option<Duration>,
+
+    /// The coprocessor semaphore which limits concurrent running jobs.
+    semaphore: Option<Arc<Semaphore>>,
 
     out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
 
@@ -110,6 +121,13 @@ impl BatchExecutorsRunner<()> {
 
         Ok(())
     }
+}
+
+#[inline]
+fn is_arrow_encodable(schema: &[FieldType]) -> bool {
+    schema
+        .iter()
+        .all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
 pub fn build_executors<S: Storage + 'static>(
@@ -291,14 +309,21 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
+        execution_time_limit: Option<Duration>,
+        semaphore: Option<Arc<Semaphore>>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
-        let encode_type = req.get_encode_type();
 
         let out_most_executor =
             build_executors(req.take_executors().into(), storage, ranges, config.clone())?;
+
+        let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
+            EncodeType::TypeDefault
+        } else {
+            req.get_encode_type()
+        };
 
         // Check output offsets
         let output_offsets = req.take_output_offsets();
@@ -317,6 +342,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         Ok(Self {
             deadline,
+            execution_time_limit,
+            semaphore,
             out_most_executor,
             output_offsets,
             config,
@@ -332,12 +359,31 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
 
+        let mut total_execution_time = Duration::default();
         let mut time_slice_start = Instant::now();
+        let mut semaphore_permit = None;
         loop {
-            if time_slice_start.elapsed() > MAX_TIME_SLICE {
+            let time_slice_len = time_slice_start.elapsed();
+            // If `execution_time_limit` and `semaphore` are not `None`, it means the task failed
+            // to acquire a semaphore permit so it can only execute for a short time.
+            if let (Some(limit), Some(semaphore), None) = (
+                self.execution_time_limit,
+                &self.semaphore,
+                &semaphore_permit,
+            ) {
+                if total_execution_time + time_slice_len > limit {
+                    // If time limit exceeds, the task needs a semaphore before continue.
+                    semaphore_permit = Some(semaphore.acquire().await);
+                    COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_heavy.inc();
+                }
+            }
+            // Check whether we should yield from the execution
+            if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;
+                total_execution_time += time_slice_len;
                 time_slice_start = Instant::now();
             }
+
             self.deadline.check()?;
 
             let mut result = self.out_most_executor.next_batch(batch_size);
@@ -372,7 +418,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                             data.reserve(result.physical_columns.maximum_encoded_size_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
-                            )?);
+                            ));
                             result.physical_columns.encode_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -384,10 +430,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         _ => {
                             // For the default or unsupported encode type, use datum format.
                             self.encode_type = EncodeType::TypeDefault;
-                            data.reserve(result.physical_columns.maximum_encoded_size(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                            )?);
+                            data.reserve(
+                                result.physical_columns.maximum_encoded_size(
+                                    &result.logical_rows,
+                                    &self.output_offsets,
+                                ),
+                            );
                             result.physical_columns.encode(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -453,7 +501,112 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
     }
 
+    pub fn set_execution_time_limit(&mut self, execution_time_limit: Option<Duration>) {
+        self.execution_time_limit = execution_time_limit;
+    }
+
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {
         self.out_most_executor.collect_storage_stats(dest);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::batch::interface::BatchExecuteResult;
+    use crate::codec::batch::LazyBatchColumnVec;
+    use crate::expr::EvalWarnings;
+    use crate::storage::IntervalRange;
+    use futures::executor::block_on;
+    use std::sync::mpsc;
+    use std::thread;
+
+    pub struct MockExecutor {
+        left_batch_count: usize,
+        batch_duration: Duration,
+    }
+
+    impl MockExecutor {
+        fn new(batch_count: usize, batch_duration: Duration) -> Self {
+            MockExecutor {
+                left_batch_count: batch_count,
+                batch_duration,
+            }
+        }
+    }
+
+    impl BatchExecutor for MockExecutor {
+        type StorageStats = ();
+
+        fn schema(&self) -> &[FieldType] {
+            &[]
+        }
+
+        fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+            std::thread::sleep(self.batch_duration);
+            self.left_batch_count -= 1;
+            BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::empty(),
+                logical_rows: vec![],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(self.left_batch_count == 0),
+            }
+        }
+
+        fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {}
+
+        fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {}
+
+        fn take_scanned_range(&mut self) -> IntervalRange {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_execution_time_limit() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        // Exceed the limit
+        let runner_gen = |execution_time_limit, semaphore| BatchExecutorsRunner {
+            deadline: Deadline::from_now(Duration::from_secs(60)),
+            execution_time_limit,
+            semaphore,
+            out_most_executor: Box::new(MockExecutor::new(10, Duration::from_millis(1))),
+            output_offsets: vec![],
+            config: Arc::new(EvalConfig::default_for_test()),
+            collect_exec_summary: false,
+            exec_stats: ExecuteStats::new(1),
+            encode_type: EncodeType::TypeDefault,
+        };
+
+        let mut runner = runner_gen(Some(Duration::from_millis(5)), Some(semaphore.clone()));
+        let permit = semaphore.try_acquire().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let res = block_on(runner.handle_request());
+            tx.send(res).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        drop(permit);
+        assert!(rx.recv_timeout(Duration::from_millis(500)).unwrap().is_ok());
+
+        // Not exceed the limit
+        let mut runner = runner_gen(Some(Duration::from_secs(1)), Some(semaphore.clone()));
+        runner.out_most_executor = Box::new(MockExecutor::new(10, Duration::from_millis(5)));
+        let _permit = semaphore.try_acquire().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let res = block_on(runner.handle_request());
+            tx.send(res).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(500)).unwrap().is_ok());
+
+        // Unlimited
+        let mut runner = runner_gen(None, None);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let res = block_on(runner.handle_request());
+            tx.send(res).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(500)).unwrap().is_ok());
     }
 }

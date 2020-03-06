@@ -27,6 +27,8 @@ pub const INDEX_PREFIX_SEP: &[u8] = b"_i";
 pub const SEP_LEN: usize = 2;
 pub const TABLE_PREFIX_LEN: usize = 1;
 pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
+// the maximum len of the old encoding of index value.
+pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
@@ -524,7 +526,7 @@ mod tests {
             Datum::U64(1),
             Datum::Bytes(b"123".to_vec()),
             Datum::I64(-1),
-            Datum::Dur(Duration::parse(b"12:34:56.666", 2).unwrap()),
+            Datum::Dur(Duration::parse(&mut EvalContext::default(), b"12:34:56.666", 2).unwrap()),
         ];
 
         let mut duration_col = ColumnInfo::default();
@@ -596,7 +598,7 @@ mod tests {
             2 => Datum::Bytes(b"abc".to_vec()),
             3 => Datum::Dec(10.into()),
             5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap()),
-            6 => Datum::Dur(Duration::parse(b"23:23:23.666",2 ).unwrap())
+            6 => Datum::Dur(Duration::parse(&mut EvalContext::default(),b"23:23:23.666",2 ).unwrap())
         ];
 
         let mut ctx = EvalContext::default();
@@ -671,7 +673,7 @@ mod tests {
             Datum::I64(100),
             Datum::Bytes(b"abc".to_vec()),
             Datum::Dec(10.into()),
-            Datum::Dur(Duration::parse(b"23:23:23.666", 2).unwrap()),
+            Datum::Dur(Duration::parse(&mut EvalContext::default(), b"23:23:23.666", 2).unwrap()),
         ];
 
         let mut ctx = EvalContext::default();

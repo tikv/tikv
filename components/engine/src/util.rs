@@ -1,12 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::rocks;
-use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use crate::CF_LOCK;
+use crate::rocks::{Writable, DB};
 
 use super::Result;
 use super::{IterOption, Iterable};
+use engine_traits::CF_LOCK;
 use tikv_util::keybuilder::KeyBuilder;
+
+use crate::Mutable;
+use rocksdb::WriteBatch;
+impl Mutable for WriteBatch {}
 
 // In our tests, we found that if the batch size is too large, running delete_all_in_range will
 // reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
@@ -83,18 +87,6 @@ pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> R
     Ok(())
 }
 
-pub fn get_range_properties_cf(
-    db: &DB,
-    cfname: &str,
-    start_key: &[u8],
-    end_key: &[u8],
-) -> Result<TablePropertiesCollection> {
-    let cf = rocks::util::get_cf_handle(db, cfname)?;
-    let range = Range::new(start_key, end_key);
-    db.get_properties_of_tables_in_range(cf, &[range])
-        .map_err(|e| e.into())
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::Builder;
@@ -102,10 +94,10 @@ mod tests {
     use crate::rocks;
     use crate::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
     use crate::rocks::{ColumnFamilyOptions, DBOptions, SeekKey, Writable};
-    use crate::ALL_CFS;
     use crate::DB;
 
     use super::*;
+    use engine_traits::ALL_CFS;
 
     fn check_data(db: &DB, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {

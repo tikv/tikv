@@ -241,7 +241,7 @@ impl Expression {
                 .read_u64()
                 .map_err(Error::from)
                 .and_then(|i| {
-                    let fsp = field_type.decimal() as i8;
+                    let fsp = field_type.as_accessor().decimal() as i8;
                     Time::from_packed_u64(ctx, i, field_type.as_accessor().tp().try_into()?, fsp)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), field_type)),
@@ -454,7 +454,7 @@ mod tests {
             Datum::Json(j) => {
                 expr.set_tp(ExprType::MysqlJson);
                 let mut buf = Vec::new();
-                buf.write_json(&j).unwrap();
+                buf.write_json(j.as_ref()).unwrap();
                 expr.set_val(buf);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
@@ -521,7 +521,7 @@ mod tests {
             (
                 ScalarFuncSig::CastStringAsDuration,
                 vec![Datum::Bytes(b"12:02:03".to_vec())],
-                Datum::Dur(Duration::parse(b"12:02:03", 0).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"12:02:03", 0).unwrap()),
             ),
             (
                 ScalarFuncSig::CastStringAsTime,
@@ -538,7 +538,7 @@ mod tests {
             (
                 ScalarFuncSig::CastIntAsJson,
                 vec![Datum::I64(12)],
-                Datum::Json(Json::I64(12)),
+                Datum::Json(Json::from_i64(12).unwrap()),
             ),
         ];
         for (sig, cols, exp) in cases {

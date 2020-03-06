@@ -8,7 +8,15 @@ publish = false
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
-prost-codec = ["prost"]
+protobuf-codec = [
+  "kvproto/protobuf-codec",
+  "raft/protobuf-codec",
+]
+prost-codec = [
+  "prost",
+  "kvproto/prost-codec",
+  "raft/prost-codec",
+]
 
 [dependencies]
 configuration = { path = "../configuration" }
@@ -30,7 +38,7 @@ tikv_util = { path = "../tikv_util" }
 time = "0.1"
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus.git"
+git = "https://github.com/tikv/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 features = ["nightly", "push", "process"]
 
