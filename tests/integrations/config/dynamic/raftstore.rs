@@ -145,8 +145,8 @@ where
 #[test]
 fn test_update_raftstore_config() {
     let mut config = TiKvConfig::default();
-    config.validate().unwrap();
     config.enable_dynamic_config = false;
+    config.validate().unwrap();
     let (mut cfg_controller, router, _, mut system) = start_raftstore(config.clone());
 
     let incoming = config.clone();
@@ -179,8 +179,8 @@ fn test_update_raftstore_config() {
 #[test]
 fn test_update_apply_store_config() {
     let mut config = TiKvConfig::default();
-    config.raft_store.sync_log = true;
     config.enable_dynamic_config = false;
+    config.raft_store.sync_log = true;
     config.validate().unwrap();
     let (mut cfg_controller, raft_router, apply_router, mut system) =
         start_raftstore(config.clone());
