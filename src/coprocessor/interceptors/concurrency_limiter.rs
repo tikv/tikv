@@ -119,7 +119,6 @@ mod tests {
     use futures03::future::FutureExt;
     use std::sync::Arc;
     use std::thread;
-    use tokio::sync::Barrier;
     use tokio::task::yield_now;
     use tokio::time::{delay_for, timeout};
 
@@ -147,18 +146,16 @@ mod tests {
         );
 
         // Both t1 and t2 need a semaphore permit to finish. Although t2 is much shorter than t1,
-        // it starts after t1 and needs to wait for t1 releasing the permit.
+        // it starts with t1
         smp.add_permits(1);
         let smp2 = smp.clone();
-        let barrier = Arc::new(Barrier::new(2));
-        let barrier2 = barrier.clone();
-        let mut t1 = tokio::spawn(async move {
-            barrier.wait().await;
-            limit_concurrency(work(8), &*smp2, Duration::default()).await
-        })
-        .fuse();
+        let mut t1 =
+            tokio::spawn(
+                async move { limit_concurrency(work(8), &*smp2, Duration::default()).await },
+            )
+            .fuse();
 
-        barrier2.wait().await;
+        delay_for(Duration::from_millis(100)).await;
         let smp2 = smp.clone();
         let mut t2 =
             tokio::spawn(
