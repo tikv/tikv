@@ -260,13 +260,13 @@ impl ApplyCallback {
 
 #[derive(Clone)]
 pub enum Notifier {
-    Router(RaftRouter),
+    Router(RaftRouter<RocksEngine>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg>),
+    Sender(Sender<PeerMsg<RocksEngine>>),
 }
 
 impl Notifier {
-    fn notify(&self, region_id: u64, msg: PeerMsg) {
+    fn notify(&self, region_id: u64, msg: PeerMsg<RocksEngine>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -3248,7 +3248,7 @@ mod tests {
         notify2.send(()).unwrap();
     }
 
-    fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg>) -> ApplyRes {
+    fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>) -> ApplyRes {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,

@@ -370,8 +370,8 @@ checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
 
 [[package]]
 name = "bzip2-sys"
-version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#a8ee5cb4d0587409d03b4367bbfa8d7d6266378e"
+version = "0.1.8+1.0.8"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#461d66916a5e6848e455c6d4fb9a5f70f4617efd"
 dependencies = [
  "cc",
  "libc",
@@ -1024,6 +1024,7 @@ version = "0.0.1"
 dependencies = [
  "engine_traits",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -1834,7 +1835,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#35b65c96516ef285b412ea3cd0c43a62add63383"
+source = "git+https://github.com/pingcap/kvproto.git#2cf9a243b8d589f345de1dbaa9eeffec6afbdc06"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -1903,7 +1904,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#20f5bef7261e6a41d8491ee9d5306564a926ee12"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b67becf9add951538ff2b54a83bbc0e906a8f566"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1921,7 +1922,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#20f5bef7261e6a41d8491ee9d5306564a926ee12"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b67becf9add951538ff2b54a83bbc0e906a8f566"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3388,7 +3389,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#20f5bef7261e6a41d8491ee9d5306564a926ee12"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b67becf9add951538ff2b54a83bbc0e906a8f566"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -5135,7 +5136,7 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.15+zstd.1.4.4"
-source = "git+https://github.com/gyscos/zstd-rs.git#3df21bbc06a5257967ca7f30ba33a6512e0cde4b"
+source = "git+https://github.com/gyscos/zstd-rs.git#bc874a57298bdb500cdb5aeac5f23878b6480d0b"
 dependencies = [
  "cc",
  "glob",

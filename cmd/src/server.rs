@@ -10,7 +10,7 @@
 
 use crate::{setup::*, signal_handler};
 use engine::{rocks, rocks::util::security::encrypted_env_from_cipher_file};
-use engine_rocks::{metrics_flusher::*, RocksEngine};
+use engine_rocks::{metrics_flusher::*, Compat, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -107,7 +107,7 @@ struct TiKVServer {
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter,
+    router: RaftRouter<RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
     store_path: PathBuf,
@@ -189,7 +189,7 @@ impl TiKVServer {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
-        let version = if config.dynamic_config {
+        let version = if config.enable_dynamic_config {
             // Advertise address and cluster id can not be changed
             if config.server.advertise_addr.is_empty() {
                 config.server.advertise_addr = config.server.addr.clone();
@@ -207,7 +207,7 @@ impl TiKVServer {
             cfg.server.advertise_addr = advertise_addr;
             cfg.server.cluster_id = cluster_id;
             cfg.log_file = log_file;
-            cfg.dynamic_config = true;
+            cfg.enable_dynamic_config = true;
             config = cfg;
             v
         } else {
@@ -344,8 +344,11 @@ impl TiKVServer {
             block_cache.is_some(),
         );
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
+        let local_reader = LocalReader::new(
+            engines.kv.c().clone(),
+            store_meta.clone(),
+            self.router.clone(),
+        );
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -617,7 +620,7 @@ impl TiKVServer {
             pool.clone(),
             engines.raft_router.clone(),
             gc_worker.get_config_manager(),
-            self.config.dynamic_config,
+            self.config.enable_dynamic_config,
         );
         if servers
             .server
