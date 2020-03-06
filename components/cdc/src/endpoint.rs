@@ -312,6 +312,9 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             }
             if has_failed {
                 self.capture_regions.remove(&region_id);
+                self.connections
+                    .iter_mut()
+                    .for_each(|(_, conn)| conn.unsubscribe(region_id));
             }
         }
     }
@@ -335,6 +338,9 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             // Delegate may fail during handling pending batch.
             if delegate.has_failed() {
                 self.capture_regions.remove(&region_id);
+                self.connections
+                    .iter_mut()
+                    .for_each(|(_, conn)| conn.unsubscribe(region_id));
             }
         } else {
             warn!("region not found on region ready (finish building resolver)"; "region_id" => region_id);

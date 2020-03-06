@@ -29,7 +29,7 @@ fn test_failed_pending_batch() {
     req.region_id = region.get_id();
     req.set_region_epoch(region.get_region_epoch().clone());
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = req_tx
+    let req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
@@ -61,11 +61,9 @@ fn test_failed_pending_batch() {
 
     // Try to subscribe region again.
     let region = suite.cluster.get_region(b"k0");
-    // Ensure it is old region.
+    // Ensure it is the previous region.
     assert_eq!(req.get_region_id(), region.get_id());
     req.set_region_epoch(region.get_region_epoch().clone());
-    let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1, "{:?}", events);

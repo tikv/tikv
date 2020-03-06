@@ -270,7 +270,7 @@ impl Delegate {
                 "region_id" => self.region_id, "min_ts" => min_ts);
             return;
         }
-        info!("try to advance ts"; "region_id" => self.region_id);
+        info!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
