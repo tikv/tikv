@@ -14,10 +14,10 @@ use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedSta
 use raft::eraftpb::ConfChangeType;
 use tempfile::{Builder, TempDir};
 
-use engine::rocks::{self, Writable};
-use engine::{Engines, Peekable, WriteBatch, DB};
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{Iterable, CF_DEFAULT, CF_RAFT};
+use engine::rocks;
+use engine::{Engines, Peekable, DB};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_traits::{Iterable, KvEngine, Mutable, CF_DEFAULT, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -47,7 +47,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines,
-        router: RaftRouter,
+        router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
@@ -60,7 +60,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -899,7 +899,7 @@ impl<T: Simulator> Cluster<T> {
             keys::region_meta_prefix(region_id),
             keys::region_meta_prefix(region_id + 1),
         );
-        let kv_wb = WriteBatch::new();
+        let kv_wb = self.engines[&store_id].kv.c().write_batch();
         RocksEngine::from_ref(&self.engines[&store_id].kv)
             .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, _| {
                 kv_wb.delete(k).unwrap();
@@ -927,15 +927,15 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id].kv.write(&kv_wb).unwrap();
+        self.engines[&store_id].kv.write(kv_wb.as_inner()).unwrap();
     }
 
     pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
-        let raft_wb = WriteBatch::new();
         let (raft_start, raft_end) = (
             keys::region_raft_prefix(region_id),
             keys::region_raft_prefix(region_id + 1),
         );
+        let raft_wb = self.engines[&store_id].raft.c().write_batch();
         RocksEngine::from_ref(&self.engines[&store_id].raft)
             .scan(&raft_start, &raft_end, false, |k, _| {
                 raft_wb.delete(k).unwrap();
@@ -947,7 +947,10 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id].raft.write(&raft_wb).unwrap();
+        self.engines[&store_id]
+            .raft
+            .write(raft_wb.as_inner())
+            .unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
@@ -1199,7 +1202,7 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
+            CasualMessage::Test(Box::new(move |peer: &mut PeerFsm<RocksEngine>| {
                 let idx = peer.peer.raft_group.get_store().committed_index();
                 peer.peer.raft_group.request_snapshot(idx).unwrap();
                 debug!("{} request snapshot at {}", idx, peer.peer.tag);
