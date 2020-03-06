@@ -1,7 +1,15 @@
 #!/usr/bin/env python
+# 
+# This script makes sure tests binary are linked to jemalloc and release binaries
+# utilize sse4.2 extensions.
+#
+# It is suitable to run as part of CI.
 
 import sys, json, os, time, re
 
+# These don't need to link to jemalloc
+# NB: The fuzzer bins here are just placeholders due to the workspace
+# structure; they are not actual fuzzers.
 WHITE_LIST = {
     "configuration", "configuration_derive", "match_template", "tidb_query_codegen",
     "panic_hook", "fuzz", "fuzzer_afl", "fuzzer_honggfuzz", "fuzzer_libfuzzer",
@@ -34,7 +42,11 @@ def check_sse(executable):
     segments = [(pos, pos + 1) for (pos, l) in enumerate(lines) if "Fast_CRC32" in l]
     if len(segments) == 0:
         pr("error: %s does not contain sse4.2\n" % executable)
+        print("fix this by building tikv with ROCKSDB_SYS_SSE=1")
         sys.exit(1)
+
+    # Make sure the `Fast_CRC32` uses the sse4.2 instruction `crc32`
+    # f2.*0f 38 is the opcode of `crc32`, see SSE4 Programming Reference.
     opcode_pattern = re.compile(".*f2.*0f 38.*crc32")
     for start, end in segments:
         s_addr = lines[start].split()[0]
@@ -46,6 +58,8 @@ def check_sse(executable):
                 break
         else:
             pr("error %s does not contain sse4.2\n" % executable)
+            print("fix this by building tikv with ROCKSDB_SYS_SSE=1")
+            sys.exit(1)
 
 def check_tests():
     print("Checking bins for jemalloc")
