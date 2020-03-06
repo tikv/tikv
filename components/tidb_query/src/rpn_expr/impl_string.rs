@@ -412,10 +412,13 @@ pub fn find_in_set(s: &Option<Bytes>, str_list: &Option<Bytes>) -> Result<Option
 #[rpn_fn]
 #[inline]
 pub fn trim_1_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|bytes| {
-        let s = String::from_utf8_lossy(bytes);
-        s.trim_matches(' ').to_string().into_bytes()
-    }))
+    match arg.as_ref() {
+        Some(bytes) => match str::from_utf8(bytes) {
+            Ok(s) => Ok(Some(s.trim_matches(' ').to_string().into_bytes())),
+            Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+        },
+        _ => Ok(None),
+    }
 }
 
 #[rpn_fn]
@@ -1663,8 +1666,8 @@ mod tests {
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
     }
-          
-    #[test]  
+
+    #[test]
     fn test_char_length() {
         let cases = vec![
             (Some(b"HELLO".to_vec()), Some(5)),
