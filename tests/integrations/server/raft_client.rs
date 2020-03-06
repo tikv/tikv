@@ -128,14 +128,14 @@ fn test_raft_client_reconnect() {
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
-    let (mock_server, port) = create_mock_server(service, 50000, 50300).unwrap();
+    let (mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
 
     // `send` should success.
     let addr = format!("localhost:{}", port);
     (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::default()).unwrap());
     raft_client.flush();
 
-    check_msg_count(300, &msg_count, 50);
+    check_msg_count(500, &msg_count, 50);
 
     // `send` should fail after the mock server stopped.
     drop(mock_server);
@@ -152,7 +152,7 @@ fn test_raft_client_reconnect() {
     (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::default()).unwrap());
     raft_client.flush();
 
-    check_msg_count(300, &msg_count, 100);
+    check_msg_count(500, &msg_count, 100);
 
     drop(mock_server);
     pool.shutdown().wait().unwrap();
@@ -166,7 +166,7 @@ fn test_batch_size_limit() {
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
-    let (mock_server, port) = create_mock_server(service, 50000, 50300).unwrap();
+    let (mock_server, port) = create_mock_server(service, 60200, 60300).unwrap();
 
     let addr = format!("localhost:{}", port);
 
@@ -183,8 +183,11 @@ fn test_batch_size_limit() {
     }
     raft_client.flush();
 
-    check_msg_count(300, &msg_count, 10);
+    check_msg_count(500, &msg_count, 10);
+    // The final received message count should be 10 exactly.
+    drop(raft_client);
     drop(mock_server);
+    assert_eq!(msg_count.load(Ordering::SeqCst), 10);
 }
 
 // Try to create a mock server with `service`. The server will be binded wiht a random
@@ -193,7 +196,7 @@ fn create_mock_server<T>(service: T, min_port: u16, max_port: u16) -> Option<(Se
 where
     T: MockKvService + Clone + Send + 'static,
 {
-    for port in min_port..=max_port {
+    for port in min_port..max_port {
         let kv = MockKv(service.clone());
         let mut mock_server = match mock_kv_service(kv, "localhost", port) {
             Ok(s) => s,
