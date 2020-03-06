@@ -248,10 +248,9 @@ pub trait BatchCollector<Collection, Elem> {
     fn collect(&mut self, collection: &mut Collection, elem: Elem) -> Option<Elem>;
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct VecCollector<E>(std::marker::PhantomData<E>);
+pub struct VecCollector;
 
-impl<E> BatchCollector<Vec<E>, E> for VecCollector<E> {
+impl<E> BatchCollector<Vec<E>, E> for VecCollector {
     fn collect(&mut self, v: &mut Vec<E>, e: E) -> Option<E> {
         v.push(e);
         None
@@ -380,12 +379,7 @@ mod tests {
     fn test_batch_receiver() {
         let (tx, rx) = unbounded::<u64>(4);
 
-        let rx = BatchReceiver::new(
-            rx,
-            8,
-            || Vec::with_capacity(4),
-            VecCollector::<u64>::default(),
-        );
+        let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), VecCollector);
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter_spawned = Arc::clone(&msg_counter);
         let (nty, polled) = mpsc::sync_channel(1);

@@ -129,7 +129,7 @@ fn bench_receiver_stream_batch(b: &mut Bencher) {
         rx,
         32,
         Vec::new,
-        mpsc::batch::VecCollector::<i32>::default(),
+        mpsc::batch::VecCollector,
     ));
 
     b.iter(|| {
