@@ -706,6 +706,7 @@ impl Command {
                         Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
                             bytes += key.as_encoded().len();
                         }
+                        Mutation::CheckNotExists(_) => (),
                     }
                 }
             }
@@ -720,6 +721,7 @@ impl Command {
                         Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
                             bytes += key.as_encoded().len();
                         }
+                        Mutation::CheckNotExists(_) => (),
                     }
                 }
             }
