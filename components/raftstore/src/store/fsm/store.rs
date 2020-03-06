@@ -63,7 +63,7 @@ use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now, SlowTimer};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
@@ -643,6 +643,9 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             fsm: store,
             ctx: &mut self.poll_ctx,
         };
+        if self.poll_ctx.current_time.is_none() {
+            self.poll_ctx.current_time.replace(monotonic_raw_now());
+        }
         delegate.handle_msgs(&mut self.store_msg_buf);
         expected_msg_count
     }
@@ -656,6 +659,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             |_| unreachable!()
         );
 
+        self.poll_ctx.current_time.replace(monotonic_raw_now());
         while self.peer_msg_buf.len() < self.messages_per_tick {
             match peer.receiver.try_recv() {
                 // TODO: we may need a way to optimize the message copy.

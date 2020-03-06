@@ -641,7 +641,6 @@ pub struct PerfStatisticsWrite {
     perf_level: i32,
 }
 
-
 impl PerfStatisticsWrite {
     /// Create an instance which stores instant statistics values, retrieved at creation.
     pub fn new(metric: LocalHistogramVec) -> Self {
