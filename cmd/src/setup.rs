@@ -142,7 +142,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
     }
 
     if let Some(metrics_addr) = matches.value_of("metrics-addr") {
-        config.metric.address = metrics_addr.to_owned()
+        config.server.status_addr = metrics_addr.to_owned()
     }
 }
 
