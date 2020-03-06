@@ -161,11 +161,11 @@ mod profiling {
 
             let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(&path);
+            super::dump_prof(&path).unwrap();
 
             let os_path = dir.path().to_path_buf().join("test2.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(&path);
+            super::dump_prof(&path).unwrap();
 
             let files = fs::read_dir(dir.path()).unwrap().count();
             assert_eq!(files, 2);

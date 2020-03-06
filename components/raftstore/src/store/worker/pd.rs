@@ -329,7 +329,7 @@ pub struct Runner<T: PdClient + ConfigClient> {
     store_id: u64,
     pd_client: Arc<T>,
     config_handler: Box<dyn DynamicConfig>,
-    router: RaftRouter,
+    router: RaftRouter<RocksEngine>,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -351,7 +351,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         store_id: u64,
         pd_client: Arc<T>,
         config_handler: Box<dyn DynamicConfig>,
-        router: RaftRouter,
+        router: RaftRouter<RocksEngine>,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
@@ -1021,7 +1021,7 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
 }
 
 fn send_admin_request(
-    router: &RaftRouter,
+    router: &RaftRouter<RocksEngine>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -1046,7 +1046,7 @@ fn send_admin_request(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::Peer) {
+fn send_merge_fail(router: &RaftRouter<RocksEngine>, source_region_id: u64, target: metapb::Peer) {
     let target_id = target.get_id();
     if let Err(e) = router.force_send(
         source_region_id,
@@ -1064,7 +1064,7 @@ fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::P
 
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
-    router: &RaftRouter,
+    router: &RaftRouter<RocksEngine>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
