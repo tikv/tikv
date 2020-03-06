@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use futures::future::{loop_fn, Loop};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures::{future, Future, Sink, Stream};
@@ -19,6 +20,7 @@ use super::{Config, PdFuture, UnixSecs};
 use super::{ConfigClient, Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use tikv_util::security::SecurityManager;
 use tikv_util::time::duration_to_sec;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use txn_types::TimeStamp;
 
@@ -26,9 +28,11 @@ const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
 const CONFIG_COMPONENT: &str = "tikv";
 
+pub const UPDATE_INTERVAL_SEC: u64 = 10 * 60; // 10min
+
 pub struct RpcClient {
     cluster_id: u64,
-    leader_client: LeaderClient,
+    leader_client: Arc<LeaderClient>,
 }
 
 impl RpcClient {
@@ -48,10 +52,36 @@ impl RpcClient {
         for i in 0..retries {
             match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
                 Ok((client, members)) => {
-                    return Ok(RpcClient {
+                    let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
-                        leader_client: LeaderClient::new(env, security_mgr, client, members),
+                        leader_client: Arc::new(LeaderClient::new(
+                            env,
+                            security_mgr,
+                            client,
+                            members,
+                        )),
+                    };
+
+                    // spawn a background future to update PD information periodically
+                    let update_loop = loop_fn(rpc_client.leader_client.clone(), |client| {
+                        GLOBAL_TIMER_HANDLE
+                            .delay(Instant::now() + Duration::from_secs(UPDATE_INTERVAL_SEC))
+                            .then(|_| {
+                                if client.reconnect().is_err() {
+                                    warn!("update PD information failed");
+                                    // will update later anyway
+                                }
+                                Ok(Loop::Continue(client))
+                            })
                     });
+                    rpc_client
+                        .leader_client
+                        .inner
+                        .rl()
+                        .client_stub
+                        .spawn(update_loop);
+
+                    return Ok(rpc_client);
                 }
                 Err(e) => {
                     if i as usize % cfg.retry_log_every == 0 {
