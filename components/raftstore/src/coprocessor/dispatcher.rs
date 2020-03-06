@@ -80,44 +80,49 @@ macro_rules! impl_box_observer {
     };
 }
 
-pub struct BoxSplitCheckObserver<E>(Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver<E>> + Send>);
-impl<E: 'static + Send> BoxSplitCheckObserver<E> {
-    pub fn new<T: 'static + SplitCheckObserver<E> + Clone>(observer: T) -> BoxSplitCheckObserver<E> {
-        BoxSplitCheckObserver(Box::new(WrappedSplitCheckObserver { inner: observer, _phantom: PhantomData }))
-    }
-}
-impl<E: 'static> Clone for BoxSplitCheckObserver<E> {
-    fn clone(&self) -> BoxSplitCheckObserver<E> {
-        BoxSplitCheckObserver((**self).box_clone())
-    }
-}
-impl<E> Deref for BoxSplitCheckObserver<E> {
-    type Target = Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver<E>> + Send>;
+// This is the same as impl_box_observer_g except $ob has a typaram
+macro_rules! impl_box_observer_g {
+    ($name:ident, $ob: ident, $wrapper: ident) => {
+        pub struct $name<E>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
+        impl<E: 'static + Send> $name<E> {
+            pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
+                $name(Box::new($wrapper { inner: observer, _phantom: PhantomData }))
+            }
+        }
+        impl<E: 'static> Clone for $name<E> {
+            fn clone(&self) -> $name<E> {
+                $name((**self).box_clone())
+            }
+        }
+        impl<E> Deref for $name<E> {
+            type Target = Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>;
 
-    fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn SplitCheckObserver<E>> + Send> {
-        &self.0
-    }
-}
+            fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send> {
+                &self.0
+            }
+        }
 
-struct WrappedSplitCheckObserver<E, T: SplitCheckObserver<E> + Clone> {
-    inner: T,
-    _phantom: PhantomData<E>,
-}
-impl<E: 'static + Send, T: 'static + SplitCheckObserver<E> + Clone> ClonableObserver for WrappedSplitCheckObserver<E, T> {
-    type Ob = dyn SplitCheckObserver<E>;
-    fn inner(&self) -> &Self::Ob {
-        &self.inner as _
-    }
+        struct $wrapper<E, T: $ob<E> + Clone> {
+            inner: T,
+            _phantom: PhantomData<E>,
+        }
+        impl<E: 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver for $wrapper<E, T> {
+            type Ob = dyn $ob<E>;
+            fn inner(&self) -> &Self::Ob {
+                &self.inner as _
+            }
 
-    fn inner_mut(&mut self) -> &mut Self::Ob {
-        &mut self.inner as _
-    }
+            fn inner_mut(&mut self) -> &mut Self::Ob {
+                &mut self.inner as _
+            }
 
-    fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
-        Box::new(WrappedSplitCheckObserver {
-            inner: self.inner.clone(),
-            _phantom: PhantomData,
-        })
+            fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
+                Box::new(WrappedSplitCheckObserver {
+                    inner: self.inner.clone(),
+                    _phantom: PhantomData,
+                })
+            }
+        }
     }
 }
 
@@ -128,11 +133,11 @@ impl_box_observer!(
     ApplySnapshotObserver,
     WrappedApplySnapshotObserver
 );
-/*impl_box_observer!(
+impl_box_observer_g!(
     BoxSplitCheckObserver,
     SplitCheckObserver,
     WrappedSplitCheckObserver
-);*/
+);
 impl_box_observer!(BoxRoleObserver, RoleObserver, WrappedRoleObserver);
 impl_box_observer!(
     BoxRegionChangeObserver,
