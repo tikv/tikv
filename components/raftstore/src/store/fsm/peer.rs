@@ -888,6 +888,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             ExtraMessageType::MsgRegionWakeUp => {
                 self.reset_raft_tick(GroupState::Ordered);
             }
+            ExtraMessageType::MsgWantRollbackMerge => {
+                unimplemented!("remove this after #6584 merged")
+            }
         }
     }
 
