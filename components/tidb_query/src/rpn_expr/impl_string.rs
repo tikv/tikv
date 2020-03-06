@@ -414,10 +414,7 @@ pub fn find_in_set(s: &Option<Bytes>, str_list: &Option<Bytes>) -> Result<Option
 pub fn trim_1_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|bytes| {
         let s = String::from_utf8_lossy(bytes);
-        s.trim_start_matches(' ')
-            .trim_end_matches(' ')
-            .to_string()
-            .into_bytes()
+        s.trim_matches(' ').to_string().into_bytes()
     }))
 }
 
