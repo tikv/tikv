@@ -5,9 +5,7 @@
 use crate::*;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
-use std::thread::sleep;
 use tikv_util::mpsc;
-use tikv_util::time::Duration;
 
 /// Message `Runner` can accepts.
 pub enum Message {
