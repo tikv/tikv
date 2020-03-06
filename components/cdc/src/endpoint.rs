@@ -35,7 +35,7 @@ pub enum Task {
         conn_id: ConnID,
     },
     Deregister {
-        region_id: u64,
+        region_id: Option<u64>,
         downstream_id: Option<DownstreamID>,
         conn_id: Option<ConnID>,
         err: Option<Error>,
@@ -161,19 +161,21 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
 
     fn on_deregister(
         &mut self,
-        region_id: u64,
+        region_id: Option<u64>,
         id: Option<DownstreamID>,
         conn_id: Option<ConnID>,
         err: Option<Error>,
     ) {
         info!("cdc deregister region";
             "region_id" => region_id,
-            "id" => ?id,
+            "downstream_id" => ?id,
+            "conn_id" => ?conn_id,
             "error" => ?err);
         let mut is_last = false;
         match (id, err, conn_id) {
             (Some(id), err, Some(conn_id)) => {
                 // The peer wants to deregister
+                let region_id = region_id.unwrap();
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                     is_last = delegate.unsubscribe(id, err);
                 }
@@ -182,10 +184,13 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 }
                 if is_last {
                     self.capture_regions.remove(&region_id);
+                    // Do not continue to observe the events of the region
+                    self.observer.unsubscribe_region(region_id);
                 }
             }
             (None, Some(err), None) => {
-                // Something went wrong, deregister all downstreams.
+                // Something went wrong, deregister all downstreams of the region.
+                let region_id = region_id.unwrap();
                 if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                     delegate.fail(err);
                     is_last = true;
@@ -193,6 +198,10 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 self.connections
                     .iter_mut()
                     .for_each(|(_, conn)| conn.unsubscribe(region_id));
+                if is_last {
+                    // Do not continue to observe the events of the region
+                    self.observer.unsubscribe_region(region_id);
+                }
             }
             (None, None, Some(conn_id)) => {
                 if let Some(conn) = self.connections.remove(&conn_id) {
@@ -202,6 +211,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                                 if delegate.unsubscribe(downstream_id, None) {
                                     self.capture_regions.remove(&region_id);
+                                    // Do not continue to observe the events of the region
                                     self.observer.unsubscribe_region(region_id);
                                 }
                             }
@@ -209,10 +219,6 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 }
             }
             _ => unreachable!(),
-        }
-        if is_last {
-            // Unsubscribe region role change events.
-            self.observer.unsubscribe_region(region_id);
         }
     }
 
@@ -287,7 +293,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
         ) {
             error!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
             let deregister = Task::Deregister {
-                region_id,
+                region_id: Some(region_id),
                 downstream_id: Some(downstream_id),
                 conn_id: Some(conn_id),
                 err: Some(Error::Request(e.into())),
@@ -400,7 +406,7 @@ impl Initializer {
             );
             let err = resp.response.take_header().take_error();
             let deregister = Task::Deregister {
-                region_id: self.region_id,
+                region_id: Some(self.region_id),
                 downstream_id: Some(self.downstream_id),
                 conn_id: Some(self.conn_id),
                 err: Some(Error::Request(err)),
@@ -449,7 +455,7 @@ impl Initializer {
                                 error!("cdc scan entries failed"; "error" => ?e);
                                 // TODO: record in metrics.
                                 if let Err(e) = sched.schedule(Task::Deregister {
-                                    region_id,
+                                    region_id: Some(region_id),
                                     downstream_id: Some(downstream_id),
                                     conn_id: Some(conn_id),
                                     err: Some(e),

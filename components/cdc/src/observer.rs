@@ -99,7 +99,7 @@ impl RoleObserver for CdcObserver {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::NotLeader(region_id, None);
                 if let Err(e) = self.sched.schedule(Task::Deregister {
-                    region_id,
+                    region_id: Some(region_id),
                     downstream_id: None,
                     conn_id: None,
                     err: Some(CdcError::Request(store_err.into())),
@@ -155,7 +155,7 @@ mod tests {
                 conn_id,
                 err,
             } => {
-                assert_eq!(region_id, 1);
+                assert_eq!(region_id.unwrap(), 1);
                 assert!(downstream_id.is_none(), "{:?}", downstream_id);
                 assert!(conn_id.is_none(), "{:?}", conn_id);
                 assert!(err.is_some(), "{:?}", err);

@@ -158,7 +158,7 @@ impl ChangeData for Service {
         ctx.spawn(recv_req.then(move |res| {
             // Unregister this downstream only.
             if let Err(e) = scheduler.schedule(Task::Deregister {
-                region_id: 0,
+                region_id: None,
                 downstream_id: None,
                 conn_id: Some(conn_id),
                 err: None,
@@ -180,7 +180,7 @@ impl ChangeData for Service {
         ctx.spawn(send_resp.then(move |res| {
             // Unregister this downstream only.
             if let Err(e) = scheduler.schedule(Task::Deregister {
-                region_id: 0,
+                region_id: None,
                 downstream_id: None,
                 conn_id: Some(conn_id),
                 err: None,
