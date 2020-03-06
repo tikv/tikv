@@ -4,6 +4,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [3.0.5-hotfix]
 + Raftstore support yield to schedule apply more fairly, and introduce pre-transfer leader to make transfer leader more stable #[6560](https://github.com/tikv/tikv/pull/6560)
++ Fix the panic that might occur when the peer is removed under high loads [#6706](https://github.com/tikv/tikv/pull/6706)
 
 ## [3.0.5]
 + Fix the problem that split check is always scanning caused by updating approximate in pd-worker [#5716](https://github.com/tikv/tikv/pull/5716)
