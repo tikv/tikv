@@ -40,7 +40,7 @@ pub fn delete_all_in_range_cf(
     end_key: &[u8],
     use_delete_range: bool,
 ) -> Result<()> {
-    let handle = rocks::util::get_cf_handle(db, cf)?;
+    let handle = get_cf_handle(db, cf)?;
     let wb = WriteBatch::default();
     if use_delete_range && cf != CF_LOCK {
         wb.delete_range_cf(handle, start_key, end_key)?;
