@@ -555,7 +555,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
-    use std::os::macos::fs::MetadataExt;
     use tempfile::Builder;
 
     #[test]
@@ -732,7 +731,7 @@ mod tests {
         reserve_space_for_recover(data_path, reserve_size).unwrap();
         assert!(file.exists());
         let meta = file.metadata().unwrap();
-        assert_eq!(meta.st_size(), reserve_size);
+        assert_eq!(meta.len(), reserve_size);
         reserve_space_for_recover(data_path, 0).unwrap();
         assert!(!file.exists());
     }
