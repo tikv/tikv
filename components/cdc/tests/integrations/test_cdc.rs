@@ -707,6 +707,7 @@ fn test_region_split() {
     suite.stop();
 }
 
+#[cfg(feature = "failpoints")]
 #[test]
 fn test_failed_pending_batch() {
     let _guard = super::setup_fail();
