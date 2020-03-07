@@ -10,11 +10,13 @@ pub fn init() {
     INIT.call_once(test_util::setup_for_ci);
 }
 
+#[cfg(feature = "failpoints")]
 fn setup_fail<'a>() -> fail::FailScenario<'a> {
     INIT.call_once(test_util::setup_for_ci);
     fail::FailScenario::setup()
 }
 
+#[cfg(feature = "failpoints")]
 #[test]
 fn test_setup_fail() {
     let _ = std::thread::spawn(move || {
