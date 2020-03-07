@@ -17,7 +17,7 @@ use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::config::{ReadableDuration, ReadableSize};
 
-pub use slog::Level;
+pub use slog::{FilterFn, Level};
 
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
@@ -33,6 +33,7 @@ pub fn init_log<D>(
     use_async: bool,
     init_stdlog: bool,
     mut disabled_targets: Vec<String>,
+    slow_threshold: u64,
 ) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
@@ -43,7 +44,7 @@ where
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
 
-    let filtered = drain.filter(move |record| {
+    let filter = move |record: &Record| {
         if !disabled_targets.is_empty() {
             // The format of the returned value from module() would like this:
             // ```
@@ -60,22 +61,40 @@ where
         } else {
             true
         }
-    });
+    };
 
     let logger = if use_async {
-        let drain = Async::new(LogAndFuse(filtered))
+        let drain = Async::new(LogAndFuse(drain))
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
             .build()
             .filter_level(level)
             .fuse();
-        slog::Logger::root(drain, slog_o!())
+        let drain = SlowLogFilter {
+            threshold: slow_threshold,
+            inner: drain,
+        };
+        let filtered = drain.filter(filter).fuse();
+        slog::Logger::root(filtered, slog_o!())
     } else {
-        let drain = LogAndFuse(Mutex::new(filtered).filter_level(level));
-        slog::Logger::root(drain, slog_o!())
+        let drain = LogAndFuse(Mutex::new(drain).filter_level(level));
+        let drain = SlowLogFilter {
+            threshold: slow_threshold,
+            inner: drain,
+        };
+        let filtered = drain.filter(filter).fuse();
+        slog::Logger::root(filtered, slog_o!())
     };
 
+    set_global_logger(level, init_stdlog, logger)
+}
+
+pub fn set_global_logger(
+    level: Level,
+    init_stdlog: bool,
+    logger: slog::Logger,
+) -> Result<(), SetLoggerError> {
     slog_global::set_global(logger);
     if init_stdlog {
         slog_global::redirect_std_log(Some(level))?;
@@ -239,21 +258,47 @@ where
     }
 }
 
+// Filters logs with operation cost lower than threshold. Otherwise output logs to inner drainer
+struct SlowLogFilter<D> {
+    threshold: u64,
+    inner: D,
+}
+
+impl<D> Drain for SlowLogFilter<D>
+where
+    D: Drain<Ok = (), Err = slog::Never>,
+{
+    type Ok = ();
+    type Err = slog::Never;
+
+    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        if record.tag() == "slow_log" {
+            let mut s = SlowCostSerializer { cost: None };
+            let kv = record.kv();
+            let _ = kv.serialize(record, &mut s);
+            if let Some(cost) = s.cost {
+                if cost > self.threshold {
+                    return self.inner.log(record, values);
+                }
+            } else {
+                return self.inner.log(record, values);
+            }
+            Ok(())
+        } else {
+            self.inner.log(record, values)
+        }
+    }
+}
+
 /// Dispatches logs to a normal `Drain` or a slow-log specialized `Drain` by tag
 pub struct LogDispatcher<N: Drain, S: Drain> {
     normal: N,
     slow: S,
-    // The minimum operation cost to output slow logs to `slow`
-    slow_threshold: u64,
 }
 
 impl<N: Drain, S: Drain> LogDispatcher<N, S> {
-    pub fn new(normal: N, slow: S, slow_threshold: u64) -> Self {
-        Self {
-            normal,
-            slow,
-            slow_threshold,
-        }
+    pub fn new(normal: N, slow: S) -> Self {
+        Self { normal, slow }
     }
 }
 
@@ -266,23 +311,10 @@ where
     type Err = io::Error;
 
     fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        match record.tag() {
-            "slow_log" => {
-                let mut s = SlowCostSerializer { cost: None };
-                let kv = record.kv();
-                let _ = kv.serialize(record, &mut s);
-                if let Some(cost) = s.cost {
-                    if cost > self.slow_threshold {
-                        return self.slow.log(record, values);
-                    }
-                } else {
-                    return self.slow.log(record, values);
-                }
-                Ok(())
-            }
-            // Slow log detected by SlowTimer. Log it anyway.
-            "slow_log_by_timer" => self.slow.log(record, values),
-            _ => self.normal.log(record, values),
+        if record.tag().starts_with("slow_log") {
+            self.slow.log(record, values)
+        } else {
+            self.normal.log(record, values)
         }
     }
 }
@@ -667,12 +699,18 @@ mod tests {
     fn test_slow_log_dispatcher() {
         let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
-        let drain = LogDispatcher::new(normal, slow, 100).fuse();
+        let drain = LogDispatcher::new(normal, slow).fuse();
+        let drain = SlowLogFilter {
+            threshold: 200,
+            inner: drain,
+        }
+        .fuse();
         let logger = slog::Logger::root_typed(drain, slog_o!());
         slog_info!(logger, "Hello World");
         slog_info!(logger, #"slow_log", "nothing");
         slog_info!(logger, #"slow_log", "🆗"; "takes" => 30);
         slog_info!(logger, #"slow_log", "🐢"; "takes" => 200);
+        slog_info!(logger, #"slow_log", "🐢🐢"; "takes" => 201);
         slog_info!(logger, #"slow_log", "without cost"; "a" => "b");
         slog_info!(logger, #"slow_log_by_timer", "⏰");
         slog_info!(logger, #"slow_log_by_timer", "⏰"; "takes" => 1000);
@@ -684,7 +722,7 @@ mod tests {
             assert_eq!(output_segments["msg"].to_owned(), r#"["Hello World"]"#);
         });
         let slow_expect = r#"[nothing]
-[🐢] [takes=200]
+[🐢🐢] [takes=201]
 ["without cost"] [a=b]
 [⏰]
 [⏰] [takes=1000]

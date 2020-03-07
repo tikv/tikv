@@ -41,7 +41,15 @@ pub fn initial_logger(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
-        logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
+        logger::init_log(
+            drainer,
+            config.log_level,
+            true,
+            true,
+            vec![],
+            config.slow_log_threshold.as_millis(),
+        )
+        .unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     } else {
@@ -59,7 +67,15 @@ pub fn initial_logger(config: &TiKvConfig) {
             );
         });
         if config.slow_log_file.is_empty() {
-            logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
+            logger::init_log(
+                drainer,
+                config.log_level,
+                true,
+                true,
+                vec![],
+                config.slow_log_threshold.as_millis(),
+            )
+            .unwrap_or_else(|e| {
                 fatal!("failed to initialize log: {}", e);
             });
         } else {
@@ -76,12 +92,16 @@ pub fn initial_logger(config: &TiKvConfig) {
                     e
                 );
             });
-            let drainer = logger::LogDispatcher::new(
+            let drainer = logger::LogDispatcher::new(drainer, slow_log_drainer);
+            logger::init_log(
                 drainer,
-                slow_log_drainer,
+                config.log_level,
+                true,
+                true,
+                vec![],
                 config.slow_log_threshold.as_millis(),
-            );
-            logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
+            )
+            .unwrap_or_else(|e| {
                 fatal!("failed to initialize log: {}", e);
             });
         };

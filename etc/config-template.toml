@@ -19,7 +19,7 @@
 ## will be appended to stderr.
 # slow-log-file = ""
 
-## The minimum operation costto output relative logs into "slow-log-file".
+## The minimum operation cost to output relative logs.
 # slow-log-threshold = "1s"
 
 ## Timespan between rotating the log files.
