@@ -6,7 +6,7 @@ use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::DB;
 use engine_rocks::{Compat, RocksEngine, RocksWriteBatch};
-use engine_traits::{KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions, Peekable};
+use engine_traits::{KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions, Peekable, Iterable};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -58,7 +58,6 @@ use crate::store::{
 };
 use crate::Result;
 use engine::Engines;
-use engine::{Iterable};
 use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{ConfigClient, PdClient};
@@ -753,7 +752,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
-        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
+        kv_engine.c().scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
             let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);

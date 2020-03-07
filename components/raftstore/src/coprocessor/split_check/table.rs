@@ -3,9 +3,9 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use engine::rocks::{SeekKey, DB};
-use engine::{IterOption, Iterable};
-use engine_traits::CF_WRITE;
+use engine::rocks::{DB};
+use engine_traits::{CF_WRITE, Iterable, IterOptions, Iterator, SeekKey};
+use engine_rocks::Compat;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
@@ -174,12 +174,12 @@ fn last_key_of_region(db: &Arc<DB>, region: &Region) -> Result<Option<Vec<u8>>> 
     let end_key = keys::enc_end_key(region);
     let mut last_key = None;
 
-    let iter_opt = IterOption::new(
+    let iter_opt = IterOptions::new(
         Some(KeyBuilder::from_vec(start_key, 0, 0)),
         Some(KeyBuilder::from_vec(end_key, 0, 0)),
         false,
     );
-    let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
+    let mut iter = box_try!(db.c().iterator_cf_opt(CF_WRITE, iter_opt));
 
     // the last key
     let found: Result<bool> = iter.seek(SeekKey::End).map_err(|e| box_err!(e));

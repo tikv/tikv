@@ -8,8 +8,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIden
 use protobuf::Message;
 
 use engine::rocks::{Writable};
-use engine::{Iterable};
-use engine_traits::Peekable;
+use engine_traits::{Peekable, Iterable};
 use engine_rocks::Compat;
 use engine_traits::{CF_RAFT, Mutable};
 use test_raftstore::*;
@@ -51,7 +50,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"k3");
     let mut existing_kvs = vec![];
     for cf in engine_2.cf_names() {
-        engine_2
+        engine_2.c()
             .scan_cf(cf, b"", &[0xFF], false, |k, v| {
                 existing_kvs.push((k.to_vec(), v.to_vec()));
                 Ok(true)

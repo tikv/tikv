@@ -10,10 +10,9 @@ use std::{cmp, error, u64};
 
 use engine::rocks::DB;
 use engine::Engines;
-use engine::{Iterable};
 use engine_rocks::{RocksSnapshot, RocksWriteBatch, Compat};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Mutable, Peekable};
+use engine_traits::{KvEngine, Mutable, Peekable, Iterable};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1261,7 +1260,7 @@ pub fn fetch_entries_to(
 
     let start_key = keys::raft_log_key(region_id, low);
     let end_key = keys::raft_log_key(region_id, high);
-    engine.scan(
+    engine.c().scan(
         &start_key,
         &end_key,
         true, // fill_cache
@@ -1282,7 +1281,8 @@ pub fn fetch_entries_to(
             }
             Ok(!exceeded_max_size)
         },
-    )?;
+    ).map_err(|e| raft::Error::Store(
+        raft::StorageError::Other(e.into())))?;
 
     // If we get the correct number of entries, returns,
     // or the total size almost exceeds max_size, returns.
@@ -1311,7 +1311,7 @@ pub fn clear_meta(
     let begin_log_key = keys::raft_log_key(region_id, 0);
     let end_log_key = keys::raft_log_key(region_id, first_index);
     engines
-        .raft
+        .raft.c()
         .scan(&begin_log_key, &end_log_key, false, |key, _| {
             first_index = keys::raft_log_index(key).unwrap();
             Ok(false)
@@ -1647,7 +1647,7 @@ mod tests {
         );
         store
             .engines
-            .kv
+            .kv.c()
             .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
                 count += 1;
                 Ok(true)
@@ -1660,7 +1660,7 @@ mod tests {
         );
         store
             .engines
-            .kv
+            .kv.c()
             .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
@@ -1669,7 +1669,7 @@ mod tests {
 
         store
             .engines
-            .raft
+            .raft.c()
             .scan(&raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)

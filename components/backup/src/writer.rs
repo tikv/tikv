@@ -270,7 +270,8 @@ impl BackupRawKVWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::Iterable;
+    use engine_rocks::Compat;
+    use engine_traits::Iterable;
     use std::collections::BTreeMap;
     use std::f64::INFINITY;
     use std::path::Path;
@@ -296,7 +297,7 @@ mod tests {
         }
         for (cf, kv) in kvs {
             let mut map = BTreeMap::new();
-            db.scan_cf(
+            db.c().scan_cf(
                 cf,
                 keys::DATA_MIN_KEY,
                 keys::DATA_MAX_KEY,

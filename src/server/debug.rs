@@ -14,11 +14,11 @@ use engine::rocks::{
     DB,
 };
 use engine::IterOptionsExt;
-use engine::{self, Engines, IterOption, Iterable};
+use engine::{self, Engines, IterOption};
 use engine_rocks::{Compat, RocksWriteBatch};
 use engine_traits::{
     Mutable, TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteBatch,
-    WriteOptions, Peekable
+    WriteOptions, Peekable, Iterable
 };
 use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
@@ -161,7 +161,7 @@ impl Debugger {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
-        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
+        box_try!(db.c().scan_cf(cf, start_key, end_key, false, |key, _| {
             let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
@@ -247,7 +247,7 @@ impl Debugger {
                 let mut sizes = vec![];
                 for cf in cfs {
                     let mut size = 0;
-                    box_try!(self.engines.kv.scan_cf(
+                    box_try!(self.engines.kv.c().scan_cf(
                         cf.as_ref(),
                         start_key,
                         end_key,
@@ -610,7 +610,7 @@ impl Debugger {
                     }
                 }
             } else {
-                box_try!(self.engines.kv.scan_cf(
+                box_try!(self.engines.kv.c().scan_cf(
                     CF_RAFT,
                     keys::REGION_META_MIN_KEY,
                     keys::REGION_META_MAX_KEY,
@@ -638,7 +638,7 @@ impl Debugger {
             return Err(box_err!("Bad region: {:?}", region));
         }
 
-        box_try!(self.engines.kv.scan_cf(
+        box_try!(self.engines.kv.c().scan_cf(
             CF_RAFT,
             keys::REGION_META_MIN_KEY,
             keys::REGION_META_MAX_KEY,

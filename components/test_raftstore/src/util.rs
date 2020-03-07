@@ -21,7 +21,7 @@ use engine::rocks::{CompactionJobInfo, DB};
 use engine::*;
 use engine_rocks::CompactionListener;
 use engine_rocks::{RocksEngine, Compat};
-use engine_traits::Peekable;
+use engine_traits::{Peekable, Iterable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -87,7 +87,7 @@ pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
     let end_key = keys::data_key(region.get_end_key());
     for cf in ALL_CFS {
         engine
-            .kv
+            .kv.c()
             .scan_cf(cf, &start_key, &end_key, false, |k, v| {
                 panic!(
                     "[region {}] unexpected ({:?}, {:?}) in cf {:?}",
@@ -99,7 +99,7 @@ pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
     let log_min_key = keys::raft_log_key(id, 0);
     let log_max_key = keys::raft_log_key(id, u64::MAX);
     engine
-        .raft
+        .raft.c()
         .scan(&log_min_key, &log_max_key, false, |k, v| {
             panic!("[region {}] unexpected log ({:?}, {:?})", id, k, v);
         })

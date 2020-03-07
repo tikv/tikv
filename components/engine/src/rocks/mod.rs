@@ -1,7 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod db;
-
 pub mod util;
 
 pub use rocksdb::rocksdb_options::UnsafeSnap;
