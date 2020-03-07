@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::marker::PhantomData;
 use crate::store::{CasualMessage, CasualRouter};
-use engine_rocks::{RocksEngine};
 use engine_traits::CF_WRITE;
 use engine_traits::{TableProperties, TablePropertiesCollection, KvEngine, Range};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
@@ -41,7 +41,7 @@ impl Checker {
     }
 }
 
-impl SplitChecker<RocksEngine> for Checker {
+impl<E> SplitChecker<E> for Checker where E: KvEngine {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
         if !key.is_commit_version() {
             return false;
@@ -81,26 +81,28 @@ impl SplitChecker<RocksEngine> for Checker {
 }
 
 #[derive(Clone)]
-pub struct KeysCheckObserver<C> {
+pub struct KeysCheckObserver<C, E> {
     router: Arc<Mutex<C>>,
+    _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<RocksEngine>> KeysCheckObserver<C> {
-    pub fn new(router: C) -> KeysCheckObserver<C> {
+impl<C: CasualRouter<E>, E> KeysCheckObserver<C, E> where E: KvEngine {
+    pub fn new(router: C) -> KeysCheckObserver<C, E> {
         KeysCheckObserver {
             router: Arc::new(Mutex::new(router)),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
+impl<C: Send, E: Send> Coprocessor for KeysCheckObserver<C, E> {}
 
-impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver<RocksEngine> for KeysCheckObserver<C> {
+impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for KeysCheckObserver<C, E> where E: KvEngine {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host<'_, RocksEngine>,
-        engine: &RocksEngine,
+        host: &mut Host<'_, E>,
+        engine: &E,
         policy: CheckPolicy,
     ) {
         let region = ctx.region();

@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::RocksEngine;
 use engine_traits::{TableProperties, TablePropertiesCollection, KvEngine};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
@@ -35,7 +34,7 @@ impl Checker {
     }
 }
 
-impl SplitChecker<RocksEngine> for Checker {
+impl<E> SplitChecker<E> for Checker where E: KvEngine {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
             self.buckets.push(entry.key().to_vec());
@@ -59,7 +58,7 @@ impl SplitChecker<RocksEngine> for Checker {
     fn approximate_split_keys(
         &mut self,
         region: &Region,
-        engine: &RocksEngine,
+        engine: &E,
     ) -> Result<Vec<Vec<u8>>> {
         let ks = box_try!(get_region_approximate_middle(engine, region)
             .map(|keys| keys.map_or(vec![], |key| vec![key])));
@@ -77,12 +76,12 @@ pub struct HalfCheckObserver;
 
 impl Coprocessor for HalfCheckObserver {}
 
-impl SplitCheckObserver<RocksEngine> for HalfCheckObserver {
+impl<E> SplitCheckObserver<E> for HalfCheckObserver where E: KvEngine {
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
-        host: &mut Host<'_, RocksEngine>,
-        _: &RocksEngine,
+        host: &mut Host<'_, E>,
+        _: &E,
         policy: CheckPolicy,
     ) {
         if host.auto_split() {

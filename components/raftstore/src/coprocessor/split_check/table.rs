@@ -3,7 +3,6 @@
 use std::cmp::Ordering;
 
 use engine_traits::{CF_WRITE, KvEngine, IterOptions, SeekKey, Iterator};
-use engine_rocks::{RocksEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
@@ -22,7 +21,7 @@ pub struct Checker {
     policy: CheckPolicy,
 }
 
-impl SplitChecker<RocksEngine> for Checker {
+impl<E> SplitChecker<E> for Checker where E: KvEngine {
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
@@ -70,12 +69,12 @@ pub struct TableCheckObserver;
 
 impl Coprocessor for TableCheckObserver {}
 
-impl SplitCheckObserver<RocksEngine> for TableCheckObserver {
+impl<E> SplitCheckObserver<E> for TableCheckObserver where E: KvEngine {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host<'_, RocksEngine>,
-        engine: &RocksEngine,
+        host: &mut Host<'_, E>,
+        engine: &E,
         policy: CheckPolicy,
     ) {
         if !host.cfg.split_region_on_table {

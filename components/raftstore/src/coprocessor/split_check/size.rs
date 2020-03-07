@@ -2,8 +2,8 @@
 
 use std::mem;
 use std::sync::{Arc, Mutex};
+use std::marker::PhantomData;
 
-use engine_rocks::{RocksEngine};
 use engine_traits::LARGE_CFS;
 use engine_traits::{KvEngine, TableProperties, TablePropertiesCollection, Range};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
@@ -45,7 +45,7 @@ impl Checker {
     }
 }
 
-impl SplitChecker<RocksEngine> for Checker {
+impl<E> SplitChecker<E> for Checker where E: KvEngine {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         let size = entry.entry_size() as u64;
         self.current_size += size;
@@ -88,7 +88,7 @@ impl SplitChecker<RocksEngine> for Checker {
     fn approximate_split_keys(
         &mut self,
         region: &Region,
-        engine: &RocksEngine,
+        engine: &E,
     ) -> Result<Vec<Vec<u8>>> {
         Ok(box_try!(get_approximate_split_keys(
             engine,
@@ -101,26 +101,28 @@ impl SplitChecker<RocksEngine> for Checker {
 }
 
 #[derive(Clone)]
-pub struct SizeCheckObserver<C> {
+pub struct SizeCheckObserver<C, E> {
     router: Arc<Mutex<C>>,
+    _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<RocksEngine>> SizeCheckObserver<C> {
-    pub fn new(router: C) -> SizeCheckObserver<C> {
+impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E> where E: KvEngine {
+    pub fn new(router: C) -> SizeCheckObserver<C, E> {
         SizeCheckObserver {
             router: Arc::new(Mutex::new(router)),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<C: Send> Coprocessor for SizeCheckObserver<C> {}
+impl<C: Send, E: Send> Coprocessor for SizeCheckObserver<C, E> {}
 
-impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver<RocksEngine> for SizeCheckObserver<C> {
+impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E> where E: KvEngine {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host<'_, RocksEngine>,
-        engine: &RocksEngine,
+        host: &mut Host<'_, E>,
+        engine: &E,
         mut policy: CheckPolicy,
     ) {
         let region = ctx.region();
@@ -503,12 +505,12 @@ pub mod tests {
         let mut ctx = ObserverContext::new(&region);
         loop {
             let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 4, CF_WRITE);
-            if checker.on_kv(&mut ctx, &data) {
+            if SplitChecker::<RocksEngine>::on_kv(&mut checker, &mut ctx, &data) {
                 break;
             }
         }
 
-        assert!(!checker.split_keys().is_empty());
+        assert!(!SplitChecker::<RocksEngine>::split_keys(&mut checker).is_empty());
     }
 
     #[test]
@@ -518,12 +520,12 @@ pub mod tests {
         let mut ctx = ObserverContext::new(&region);
         for _ in 0..2 {
             let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 5, CF_WRITE);
-            if checker.on_kv(&mut ctx, &data) {
+            if SplitChecker::<RocksEngine>::on_kv(&mut checker, &mut ctx, &data) {
                 break;
             }
         }
 
-        assert!(!checker.split_keys().is_empty());
+        assert!(!SplitChecker::<RocksEngine>::split_keys(&mut checker).is_empty());
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
