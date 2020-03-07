@@ -4,8 +4,9 @@
 use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 use std::i64;
 
-use crate::rocks::{
-    self, DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
+use crate::rocks;
+use rocksdb::{
+    DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
     HistogramData, DB,
 };
 use engine_traits::CF_DEFAULT;
