@@ -17,9 +17,9 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use engine::rocks::util::config::BlobRunMode;
-use engine::rocks::{CompactionJobInfo, DB};
+use engine::rocks::DB;
 use engine::*;
-use engine_rocks::CompactionListener;
+use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
@@ -549,7 +549,7 @@ pub fn must_error_read_on_peer<T: Simulator>(
     }
 }
 
-fn dummpy_filter(_: &CompactionJobInfo) -> bool {
+fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
     true
 }
 

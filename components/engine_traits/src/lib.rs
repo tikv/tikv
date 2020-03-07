@@ -260,5 +260,7 @@ pub use crate::range::*;
 pub mod metrics_flusher;
 pub mod util;
 pub use crate::metrics_flusher::*;
+pub mod compact;
+pub use compact::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
