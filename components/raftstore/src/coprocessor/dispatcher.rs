@@ -84,7 +84,10 @@ macro_rules! impl_box_observer_g {
         pub struct $name<E>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
         impl<E: 'static + Send> $name<E> {
             pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
-                $name(Box::new($wrapper { inner: observer, _phantom: PhantomData }))
+                $name(Box::new($wrapper {
+                    inner: observer,
+                    _phantom: PhantomData,
+                }))
             }
         }
         impl<E: 'static> Clone for $name<E> {
@@ -121,7 +124,7 @@ macro_rules! impl_box_observer_g {
                 })
             }
         }
-    }
+    };
 }
 
 impl_box_observer!(BoxAdminObserver, AdminObserver, WrappedAdminObserver);
@@ -187,7 +190,11 @@ impl Registry {
         push!(priority, aso, self.apply_snapshot_observers);
     }
 
-    pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver<RocksEngine>) {
+    pub fn register_split_check_observer(
+        &mut self,
+        priority: u32,
+        sco: BoxSplitCheckObserver<RocksEngine>,
+    ) {
         push!(priority, sco, self.split_check_observers);
     }
 

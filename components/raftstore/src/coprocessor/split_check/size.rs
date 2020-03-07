@@ -1,11 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::marker::PhantomData;
 use std::mem;
 use std::sync::{Arc, Mutex};
-use std::marker::PhantomData;
 
 use engine_traits::LARGE_CFS;
-use engine_traits::{KvEngine, TableProperties, TablePropertiesCollection, Range};
+use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
@@ -45,7 +45,10 @@ impl Checker {
     }
 }
 
-impl<E> SplitChecker<E> for Checker where E: KvEngine {
+impl<E> SplitChecker<E> for Checker
+where
+    E: KvEngine,
+{
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         let size = entry.entry_size() as u64;
         self.current_size += size;
@@ -85,11 +88,7 @@ impl<E> SplitChecker<E> for Checker where E: KvEngine {
         self.policy
     }
 
-    fn approximate_split_keys(
-        &mut self,
-        region: &Region,
-        engine: &E,
-    ) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
         Ok(box_try!(get_approximate_split_keys(
             engine,
             region,
@@ -106,7 +105,10 @@ pub struct SizeCheckObserver<C, E> {
     _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E> where E: KvEngine {
+impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E>
+where
+    E: KvEngine,
+{
     pub fn new(router: C) -> SizeCheckObserver<C, E> {
         SizeCheckObserver {
             router: Arc::new(Mutex::new(router)),
@@ -117,7 +119,10 @@ impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E> where E: KvEngine {
 
 impl<C: Send, E: Send> Coprocessor for SizeCheckObserver<C, E> {}
 
-impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E> where E: KvEngine {
+impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
+where
+    E: KvEngine,
+{
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -196,7 +201,11 @@ pub fn get_region_approximate_size(db: &impl KvEngine, region: &Region) -> Resul
     Ok(size)
 }
 
-pub fn get_region_approximate_size_cf(db: &impl KvEngine, cfname: &str, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_size_cf(
+    db: &impl KvEngine,
+    cfname: &str,
+    region: &Region,
+) -> Result<u64> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
@@ -341,7 +350,7 @@ pub mod tests {
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine_rocks::{RocksEngine, Compat};
+    use engine_rocks::{Compat, RocksEngine};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;

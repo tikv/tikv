@@ -11,8 +11,8 @@ use crate::errors::Result;
 use crate::iterable::{Iterable, Iterator};
 use crate::mutable::Mutable;
 use crate::options::IterOptions;
-use crate::write_batch::{WriteBatch, WriteBatchExt};
 use crate::range::Range;
+use crate::write_batch::{WriteBatch, WriteBatchExt};
 
 use tikv_util::keybuilder::KeyBuilder;
 

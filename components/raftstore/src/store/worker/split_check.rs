@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use engine::rocks::DBIterator;
 use engine::{IterOption, Iterable, DB};
-use engine_rocks::{RocksEngine, Compat};
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{CfName, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
@@ -214,7 +214,8 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                     }
                 }
             }
-            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine.c()) {
+            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine.c())
+            {
                 Ok(keys) => keys
                     .into_iter()
                     .map(|k| keys::origin_key(&k).to_vec())

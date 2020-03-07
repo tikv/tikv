@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use engine_traits::{CF_WRITE, KvEngine, IterOptions, SeekKey, Iterator};
+use engine_traits::{IterOptions, Iterator, KvEngine, SeekKey, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
@@ -21,7 +21,10 @@ pub struct Checker {
     policy: CheckPolicy,
 }
 
-impl<E> SplitChecker<E> for Checker where E: KvEngine {
+impl<E> SplitChecker<E> for Checker
+where
+    E: KvEngine,
+{
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
@@ -69,7 +72,10 @@ pub struct TableCheckObserver;
 
 impl Coprocessor for TableCheckObserver {}
 
-impl<E> SplitCheckObserver<E> for TableCheckObserver where E: KvEngine {
+impl<E> SplitCheckObserver<E> for TableCheckObserver
+where
+    E: KvEngine,
+{
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -229,8 +235,8 @@ mod tests {
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine_traits::ALL_CFS;
     use engine_rocks::Compat;
+    use engine_traits::ALL_CFS;
     use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;

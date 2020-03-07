@@ -1,10 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
 use crate::store::{CasualMessage, CasualRouter};
 use engine_traits::CF_WRITE;
-use engine_traits::{TableProperties, TablePropertiesCollection, KvEngine, Range};
+use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
+use std::marker::PhantomData;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
@@ -41,7 +41,10 @@ impl Checker {
     }
 }
 
-impl<E> SplitChecker<E> for Checker where E: KvEngine {
+impl<E> SplitChecker<E> for Checker
+where
+    E: KvEngine,
+{
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
         if !key.is_commit_version() {
             return false;
@@ -86,7 +89,10 @@ pub struct KeysCheckObserver<C, E> {
     _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<E>, E> KeysCheckObserver<C, E> where E: KvEngine {
+impl<C: CasualRouter<E>, E> KeysCheckObserver<C, E>
+where
+    E: KvEngine,
+{
     pub fn new(router: C) -> KeysCheckObserver<C, E> {
         KeysCheckObserver {
             router: Arc::new(Mutex::new(router)),
@@ -97,7 +103,10 @@ impl<C: CasualRouter<E>, E> KeysCheckObserver<C, E> where E: KvEngine {
 
 impl<C: Send, E: Send> Coprocessor for KeysCheckObserver<C, E> {}
 
-impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for KeysCheckObserver<C, E> where E: KvEngine {
+impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for KeysCheckObserver<C, E>
+where
+    E: KvEngine,
+{
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -182,7 +191,11 @@ pub fn get_region_approximate_keys(db: &impl KvEngine, region: &Region) -> Resul
     Ok(keys)
 }
 
-pub fn get_region_approximate_keys_cf(db: &impl KvEngine, cfname: &str, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys_cf(
+    db: &impl KvEngine,
+    cfname: &str,
+    region: &Region,
+) -> Result<u64> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
@@ -208,8 +221,8 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use engine_rocks::Compat;
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;

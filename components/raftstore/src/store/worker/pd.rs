@@ -14,7 +14,7 @@ use tokio_timer::Delay;
 
 use engine::rocks::util::*;
 use engine::rocks::DB;
-use engine_rocks::{RocksEngine, Compat};
+use engine_rocks::{Compat, RocksEngine};
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
