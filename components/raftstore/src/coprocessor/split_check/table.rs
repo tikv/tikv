@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use engine_traits::{IterOptions, Iterator, KvEngine, SeekKey, CF_WRITE};
+use engine_traits::{IterOptions, Iterator, SeekKey, CF_WRITE, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;

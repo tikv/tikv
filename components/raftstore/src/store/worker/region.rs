@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine::rocks;
-use engine::{Engines, Peekable};
+use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{MiscExt, Mutable, WriteBatchExt};
+use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -283,7 +283,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -309,7 +309,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -690,9 +690,8 @@ mod tests {
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine::Peekable;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, WriteBatchExt};
+    use engine_traits::{Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
@@ -873,6 +872,7 @@ mod tests {
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
                 .kv
+                .c()
                 .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                 .unwrap()
                 .unwrap();
@@ -895,6 +895,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(100));
                 if engine
                     .kv
+                    .c()
                     .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                     .unwrap()
                     .unwrap()

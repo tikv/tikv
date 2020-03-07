@@ -1443,9 +1443,9 @@ pub mod tests {
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
-    use engine::{Engines, Mutable, Peekable};
+    use engine::Engines;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::Iterable;
+    use engine_traits::{Iterable, Mutable, Peekable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1506,16 +1506,16 @@ pub mod tests {
     ) -> Result<Arc<DB>> {
         let p = path.to_str().unwrap();
         let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
+        let db = Arc::new(db);
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
-            let handle = rocks::util::get_cf_handle(&db, cf)?;
             let mut p = Peer::default();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
-            db.put_msg_cf(handle, &key[..], &p)?;
+            db.c().put_msg_cf(cf, &key[..], &p)?;
         }
-        Ok(Arc::new(db))
+        Ok(db)
     }
 
     pub fn get_test_db_for_regions(
@@ -1538,15 +1538,15 @@ pub mod tests {
             let mut apply_state = RaftApplyState::default();
             apply_state.set_applied_index(10);
             apply_state.mut_truncated_state().set_index(10);
-            let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
-            kv.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
+            kv.c()
+                .put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
             let mut region_state = RegionLocalState::default();
             region_state.set_region(region);
-            let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
-            kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+            kv.c()
+                .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
         let shared_block_cache = false;
         Ok(Engines {
@@ -1588,12 +1588,12 @@ pub mod tests {
         region
     }
 
-    pub fn assert_eq_db(expected_db: &DB, db: &DB) {
+    pub fn assert_eq_db(expected_db: &Arc<DB>, db: &Arc<DB>) {
         let key = keys::data_key(TEST_KEY);
         for cf in SNAPSHOT_CFS {
-            let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
+            let p1: Option<Peer> = expected_db.c().get_msg_cf(cf, &key[..]).unwrap();
             if let Some(p1) = p1 {
-                let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
+                let p2: Option<Peer> = db.c().get_msg_cf(cf, &key[..]).unwrap();
                 if let Some(p2) = p2 {
                     if p2 != p1 {
                         panic!(
@@ -1807,7 +1807,7 @@ pub mod tests {
         assert_eq!(size_track.load(Ordering::SeqCst), 0);
 
         // Verify the data is correct after applying snapshot.
-        assert_eq_db(&db, dst_db.as_ref());
+        assert_eq_db(&db, &dst_db);
     }
 
     #[test]

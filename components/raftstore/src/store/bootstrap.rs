@@ -6,10 +6,11 @@ use super::peer_storage::{
 use super::util::new_peer;
 use crate::Result;
 use engine::rocks::Writable;
-use engine::{Engines, Iterable, DB};
+use engine::{Engines, DB};
 use engine_rocks::Compat;
-use engine_traits::{Mutable, WriteBatchExt};
+use engine_traits::{Iterable, Mutable, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
+use std::sync::Arc;
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
@@ -26,9 +27,9 @@ pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Re
 }
 
 // check no any data in range [start_key, end_key)
-fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
+fn is_range_empty(engine: &Arc<DB>, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
     let mut count: u32 = 0;
-    engine.scan_cf(cf, start_key, end_key, false, |_, _| {
+    engine.c().scan_cf(cf, start_key, end_key, false, |_, _| {
         count += 1;
         Ok(false)
     })?;
@@ -109,8 +110,7 @@ mod tests {
     use super::*;
     use engine::rocks;
     use engine::Engines;
-    use engine::Peekable;
-    use engine_traits::CF_DEFAULT;
+    use engine_traits::{Peekable, CF_DEFAULT};
 
     #[test]
     fn test_bootstrap() {
@@ -142,18 +142,22 @@ mod tests {
 
         assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
         assert!(kv_engine
+            .c()
             .get_value(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_some());
         assert!(kv_engine
+            .c()
             .get_value_cf(CF_RAFT, &keys::region_state_key(1))
             .unwrap()
             .is_some());
         assert!(kv_engine
+            .c()
             .get_value_cf(CF_RAFT, &keys::apply_state_key(1))
             .unwrap()
             .is_some());
         assert!(raft_engine
+            .c()
             .get_value(&keys::raft_state_key(1))
             .unwrap()
             .is_some());

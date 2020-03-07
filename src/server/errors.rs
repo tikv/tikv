@@ -13,6 +13,7 @@ use tokio_sync::oneshot::error::RecvError;
 use super::snap::Task as SnapTask;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::Error as StorageError;
+use engine_traits::Error as EngineTraitError;
 use pd_client::Error as PdError;
 use raftstore::Error as RaftServerError;
 use tikv_util::codec::Error as CodecError;
@@ -64,6 +65,12 @@ quick_error! {
             description(err.description())
         }
         Engine(err: EngineError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
+        EngineTrait(err: EngineTraitError) {
             from()
             cause(err)
             display("{:?}", err)

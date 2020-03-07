@@ -16,9 +16,8 @@ use tempfile::{Builder, TempDir};
 use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
-use engine::Peekable;
-use engine_rocks::RocksEngine;
-use engine_traits::CF_DEFAULT;
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::{Peekable, CF_DEFAULT};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -501,7 +500,7 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.remove(&region_id);
     }
 
-    pub fn assert_quorum<F: FnMut(&DB) -> bool>(&self, mut condition: F) {
+    pub fn assert_quorum<F: FnMut(&Arc<DB>) -> bool>(&self, mut condition: F) {
         if self.engines.is_empty() {
             return;
         }
@@ -796,6 +795,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
         self.get_engine(store_id)
+            .c()
             .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &keys::apply_state_key(region_id))
             .unwrap()
             .unwrap()

@@ -10,10 +10,9 @@ use std::{cmp, error, u64};
 
 use engine::rocks::DB;
 use engine::Engines;
-use engine::{Iterable, Mutable, Peekable};
-use engine_rocks::{RocksSnapshot, RocksWriteBatch};
+use engine_rocks::{Compat, RocksSnapshot, RocksWriteBatch};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Mutable as MutableTrait, Peekable as PeekableTrait};
+use engine_traits::{Iterable, KvEngine, Mutable, Peekable};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -328,7 +327,7 @@ pub fn recover_from_applying_state(
 ) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
     let snapshot_raft_state: RaftLocalState =
-        match box_try!(engines.kv.get_msg_cf(CF_RAFT, &snapshot_raft_state_key)) {
+        match box_try!(engines.kv.c().get_msg_cf(CF_RAFT, &snapshot_raft_state_key)) {
             Some(state) => state,
             None => {
                 return Err(box_err!(
@@ -340,7 +339,7 @@ pub fn recover_from_applying_state(
         };
 
     let raft_state_key = keys::raft_state_key(region_id);
-    let raft_state: RaftLocalState = match box_try!(engines.raft.get_msg(&raft_state_key)) {
+    let raft_state: RaftLocalState = match box_try!(engines.raft.c().get_msg(&raft_state_key)) {
         Some(state) => state,
         None => RaftLocalState::default(),
     };
@@ -359,7 +358,7 @@ pub fn recover_from_applying_state(
 
 pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
-    Ok(match engines.raft.get_msg(&state_key)? {
+    Ok(match engines.raft.c().get_msg(&state_key)? {
         Some(s) => s,
         None => {
             let mut raft_state = RaftLocalState::default();
@@ -368,7 +367,7 @@ pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalSt
                 raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
                 raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
                 raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-                engines.raft.put_msg(&state_key, &raft_state)?;
+                engines.raft.c().put_msg(&state_key, &raft_state)?;
             }
             raft_state
         }
@@ -379,6 +378,7 @@ pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyS
     Ok(
         match engines
             .kv
+            .c()
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))?
         {
             Some(s) => s,
@@ -413,7 +413,7 @@ fn init_last_term(
         assert!(last_idx > RAFT_INIT_LOG_INDEX);
     }
     let last_log_key = keys::raft_log_key(region.get_id(), last_idx);
-    let entry = engines.raft.get_msg::<Entry>(&last_log_key)?;
+    let entry = engines.raft.c().get_msg::<Entry>(&last_log_key)?;
     match entry {
         None => Err(box_err!(
             "[region {}] entry at {} doesn't exist, may lose data.",
@@ -1224,7 +1224,7 @@ fn get_sync_log_from_entry(entry: &Entry) -> bool {
 }
 
 pub fn fetch_entries_to(
-    engine: &DB,
+    engine: &Arc<DB>,
     region_id: u64,
     low: u64,
     high: u64,
@@ -1261,28 +1261,31 @@ pub fn fetch_entries_to(
 
     let start_key = keys::raft_log_key(region_id, low);
     let end_key = keys::raft_log_key(region_id, high);
-    engine.scan(
-        &start_key,
-        &end_key,
-        true, // fill_cache
-        |_, value| {
-            let mut entry = Entry::default();
-            entry.merge_from_bytes(value)?;
+    engine
+        .c()
+        .scan(
+            &start_key,
+            &end_key,
+            true, // fill_cache
+            |_, value| {
+                let mut entry = Entry::default();
+                entry.merge_from_bytes(value)?;
 
-            // May meet gap or has been compacted.
-            if entry.get_index() != next_index {
-                return Ok(false);
-            }
-            next_index += 1;
+                // May meet gap or has been compacted.
+                if entry.get_index() != next_index {
+                    return Ok(false);
+                }
+                next_index += 1;
 
-            total_size += value.len() as u64;
-            exceeded_max_size = total_size > max_size;
-            if !exceeded_max_size || buf.is_empty() {
-                buf.push(entry);
-            }
-            Ok(!exceeded_max_size)
-        },
-    )?;
+                total_size += value.len() as u64;
+                exceeded_max_size = total_size > max_size;
+                if !exceeded_max_size || buf.is_empty() {
+                    buf.push(entry);
+                }
+                Ok(!exceeded_max_size)
+            },
+        )
+        .map_err(|e| raft::Error::Store(raft::StorageError::Other(e.into())))?;
 
     // If we get the correct number of entries, returns,
     // or the total size almost exceeds max_size, returns.
@@ -1312,6 +1315,7 @@ pub fn clear_meta(
     let end_log_key = keys::raft_log_key(region_id, first_index);
     engines
         .raft
+        .c()
         .scan(&begin_log_key, &end_log_key, false, |key, _| {
             first_index = keys::raft_log_index(key).unwrap();
             Ok(false)
@@ -1431,7 +1435,7 @@ where
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.
-pub fn write_initial_raft_state<T: MutableTrait>(raft_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::default();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -1443,7 +1447,7 @@ pub fn write_initial_raft_state<T: MutableTrait>(raft_wb: &T, region_id: u64) ->
 
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region apply state first.
-pub fn write_initial_apply_state<T: MutableTrait>(kv_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_apply_state<T: Mutable>(kv_wb: &T, region_id: u64) -> Result<()> {
     let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
     apply_state
@@ -1457,7 +1461,7 @@ pub fn write_initial_apply_state<T: MutableTrait>(kv_wb: &T, region_id: u64) -> 
     Ok(())
 }
 
-pub fn write_peer_state<T: MutableTrait>(
+pub fn write_peer_state<T: Mutable>(
     kv_wb: &T,
     region: &metapb::Region,
     state: PeerState,
@@ -1648,6 +1652,7 @@ mod tests {
         store
             .engines
             .kv
+            .c()
             .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
                 count += 1;
                 Ok(true)
@@ -1661,6 +1666,7 @@ mod tests {
         store
             .engines
             .kv
+            .c()
             .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
@@ -1670,6 +1676,7 @@ mod tests {
         store
             .engines
             .raft
+            .c()
             .scan(&raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)

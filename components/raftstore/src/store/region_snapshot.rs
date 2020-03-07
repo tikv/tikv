@@ -415,8 +415,8 @@ mod tests {
     use engine::rocks::Writable;
     use engine::Engines;
     use engine::*;
-    use engine_rocks::RocksEngine;
-    use engine_traits::Peekable;
+    use engine_rocks::{Compat, RocksEngine};
+    use engine_traits::{Mutable, Peekable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -508,7 +508,7 @@ mod tests {
         let store = new_peer_storage(engines.clone(), &r);
 
         let key3 = b"key3";
-        engines.kv.put_msg(&data_key(key3), &r).expect("");
+        engines.kv.c().put_msg(&data_key(key3), &r).expect("");
 
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
         let v3 = snap.get_msg(key3).expect("");
