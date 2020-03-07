@@ -3,10 +3,11 @@
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
-use engine::rocks::CompactionJobInfo;
 use engine::DB;
-use engine_rocks::{Compat, RocksEngine, RocksWriteBatch};
-use engine_traits::{KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
+use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch};
+use engine_traits::{
+    CompactionJobInfo, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions,
+};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -2010,7 +2011,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 }
 
-fn size_change_filter(info: &CompactionJobInfo) -> bool {
+fn size_change_filter(info: &RocksCompactionJobInfo) -> bool {
     // When calculating region size, we only consider write and default
     // column families.
     let cf = info.cf_name();
