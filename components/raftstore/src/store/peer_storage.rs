@@ -10,9 +10,9 @@ use std::{cmp, error, u64};
 
 use engine::rocks::DB;
 use engine::Engines;
-use engine_rocks::{RocksSnapshot, RocksWriteBatch, Compat};
+use engine_rocks::{Compat, RocksSnapshot, RocksWriteBatch};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Mutable, Peekable, Iterable};
+use engine_traits::{Iterable, KvEngine, Mutable, Peekable};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -377,7 +377,8 @@ pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalSt
 pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyState> {
     Ok(
         match engines
-            .kv.c()
+            .kv
+            .c()
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))?
         {
             Some(s) => s,
@@ -1260,29 +1261,31 @@ pub fn fetch_entries_to(
 
     let start_key = keys::raft_log_key(region_id, low);
     let end_key = keys::raft_log_key(region_id, high);
-    engine.c().scan(
-        &start_key,
-        &end_key,
-        true, // fill_cache
-        |_, value| {
-            let mut entry = Entry::default();
-            entry.merge_from_bytes(value)?;
+    engine
+        .c()
+        .scan(
+            &start_key,
+            &end_key,
+            true, // fill_cache
+            |_, value| {
+                let mut entry = Entry::default();
+                entry.merge_from_bytes(value)?;
 
-            // May meet gap or has been compacted.
-            if entry.get_index() != next_index {
-                return Ok(false);
-            }
-            next_index += 1;
+                // May meet gap or has been compacted.
+                if entry.get_index() != next_index {
+                    return Ok(false);
+                }
+                next_index += 1;
 
-            total_size += value.len() as u64;
-            exceeded_max_size = total_size > max_size;
-            if !exceeded_max_size || buf.is_empty() {
-                buf.push(entry);
-            }
-            Ok(!exceeded_max_size)
-        },
-    ).map_err(|e| raft::Error::Store(
-        raft::StorageError::Other(e.into())))?;
+                total_size += value.len() as u64;
+                exceeded_max_size = total_size > max_size;
+                if !exceeded_max_size || buf.is_empty() {
+                    buf.push(entry);
+                }
+                Ok(!exceeded_max_size)
+            },
+        )
+        .map_err(|e| raft::Error::Store(raft::StorageError::Other(e.into())))?;
 
     // If we get the correct number of entries, returns,
     // or the total size almost exceeds max_size, returns.
@@ -1311,7 +1314,8 @@ pub fn clear_meta(
     let begin_log_key = keys::raft_log_key(region_id, 0);
     let end_log_key = keys::raft_log_key(region_id, first_index);
     engines
-        .raft.c()
+        .raft
+        .c()
         .scan(&begin_log_key, &end_log_key, false, |key, _| {
             first_index = keys::raft_log_index(key).unwrap();
             Ok(false)
@@ -1647,7 +1651,8 @@ mod tests {
         );
         store
             .engines
-            .kv.c()
+            .kv
+            .c()
             .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
                 count += 1;
                 Ok(true)
@@ -1660,7 +1665,8 @@ mod tests {
         );
         store
             .engines
-            .kv.c()
+            .kv
+            .c()
             .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
@@ -1669,7 +1675,8 @@ mod tests {
 
         store
             .engines
-            .raft.c()
+            .raft
+            .c()
             .scan(&raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)

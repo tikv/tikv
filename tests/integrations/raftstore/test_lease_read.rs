@@ -10,8 +10,8 @@ use std::{mem, thread};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
-use engine_traits::Peekable;
 use engine_rocks::Compat;
+use engine_traits::Peekable;
 use raftstore::store::Callback;
 use test_raftstore::*;
 use tikv_util::config::*;

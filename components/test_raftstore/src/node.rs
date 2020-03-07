@@ -257,7 +257,8 @@ impl Simulator for NodeCluster {
             Box::new(config_client) as _,
         )?;
         assert!(engines
-            .kv.c()
+            .kv
+            .c()
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none());

@@ -7,10 +7,10 @@ use std::time::Duration;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 
-use engine::rocks::{Writable};
-use engine_traits::{Peekable, Iterable};
+use engine::rocks::Writable;
 use engine_rocks::Compat;
-use engine_traits::{CF_RAFT, Mutable};
+use engine_traits::{Iterable, Peekable};
+use engine_traits::{Mutable, CF_RAFT};
 use test_raftstore::*;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -50,7 +50,8 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"k3");
     let mut existing_kvs = vec![];
     for cf in engine_2.cf_names() {
-        engine_2.c()
+        engine_2
+            .c()
             .scan_cf(cf, b"", &[0xFF], false, |k, v| {
                 existing_kvs.push((k.to_vec(), v.to_vec()));
                 Ok(true)
@@ -252,13 +253,15 @@ fn test_server_stale_meta() {
     cluster.shutdown();
 
     let engine_3 = cluster.get_engine(3);
-    let mut state: RegionLocalState = engine_3.c()
+    let mut state: RegionLocalState = engine_3
+        .c()
         .get_msg_cf(CF_RAFT, &keys::region_state_key(1))
         .unwrap()
         .unwrap();
     state.set_state(PeerState::Tombstone);
 
-    engine_3.c()
+    engine_3
+        .c()
         .put_msg_cf(CF_RAFT, &keys::region_state_key(1), &state)
         .unwrap();
     cluster.clear_send_filters();

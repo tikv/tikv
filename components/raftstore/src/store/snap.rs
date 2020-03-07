@@ -1443,7 +1443,7 @@ pub mod tests {
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
-    use engine::{Engines};
+    use engine::Engines;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{Iterable, Mutable, Peekable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1538,13 +1538,15 @@ pub mod tests {
             let mut apply_state = RaftApplyState::default();
             apply_state.set_applied_index(10);
             apply_state.mut_truncated_state().set_index(10);
-            kv.c().put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
+            kv.c()
+                .put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
             let mut region_state = RegionLocalState::default();
             region_state.set_region(region);
-            kv.c().put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
+            kv.c()
+                .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
         let shared_block_cache = false;
         Ok(Engines {

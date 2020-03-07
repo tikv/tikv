@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine::rocks;
-use engine::{Engines};
+use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{MiscExt, Mutable, WriteBatchExt, Peekable};
+use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -691,7 +691,7 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, WriteBatchExt, Peekable};
+    use engine_traits::{Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
@@ -871,7 +871,8 @@ mod tests {
             let wb = engine.kv.c().write_batch();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
-                .kv.c()
+                .kv
+                .c()
                 .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                 .unwrap()
                 .unwrap();
@@ -893,7 +894,8 @@ mod tests {
             loop {
                 thread::sleep(Duration::from_millis(100));
                 if engine
-                    .kv.c()
+                    .kv
+                    .c()
                     .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                     .unwrap()
                     .unwrap()

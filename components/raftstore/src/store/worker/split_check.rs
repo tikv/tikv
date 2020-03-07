@@ -6,9 +6,9 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 
-use engine::{DB};
-use engine_rocks::{RocksEngine, Compat, RocksEngineIterator};
-use engine_traits::{CfName, CF_WRITE, LARGE_CFS, Iterable, IterOptions, Iterator};
+use engine::DB;
+use engine_rocks::{Compat, RocksEngine, RocksEngineIterator};
+use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;

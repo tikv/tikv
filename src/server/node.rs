@@ -187,7 +187,10 @@ where
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
     fn check_store(&self, engines: &Engines) -> Result<u64> {
-        let res = engines.kv.c().get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+        let res = engines
+            .kv
+            .c()
+            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }

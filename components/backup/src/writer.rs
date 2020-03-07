@@ -297,17 +297,18 @@ mod tests {
         }
         for (cf, kv) in kvs {
             let mut map = BTreeMap::new();
-            db.c().scan_cf(
-                cf,
-                keys::DATA_MIN_KEY,
-                keys::DATA_MAX_KEY,
-                false,
-                |key, value| {
-                    map.insert(key.to_owned(), value.to_owned());
-                    Ok(true)
-                },
-            )
-            .unwrap();
+            db.c()
+                .scan_cf(
+                    cf,
+                    keys::DATA_MIN_KEY,
+                    keys::DATA_MAX_KEY,
+                    false,
+                    |key, value| {
+                        map.insert(key.to_owned(), value.to_owned());
+                        Ok(true)
+                    },
+                )
+                .unwrap();
             assert_eq!(map.len(), kv.len(), "{} {:?} {:?}", cf, map, kv);
             for (k, v) in *kv {
                 assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());

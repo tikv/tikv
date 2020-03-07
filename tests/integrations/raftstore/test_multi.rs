@@ -11,8 +11,8 @@ use rand::Rng;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
 
-use engine_traits::Peekable;
 use engine_rocks::Compat;
+use engine_traits::Peekable;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -49,7 +49,13 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
-    cluster.assert_quorum(|engine| engine.c().get_value(&keys::data_key(key)).unwrap().is_none());
+    cluster.assert_quorum(|engine| {
+        engine
+            .c()
+            .get_value(&keys::data_key(key))
+            .unwrap()
+            .is_none()
+    });
 
     // TODO add epoch not match test cases.
 }

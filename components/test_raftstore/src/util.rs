@@ -20,8 +20,8 @@ use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::{CompactionJobInfo, DB};
 use engine::*;
 use engine_rocks::CompactionListener;
-use engine_rocks::{RocksEngine, Compat};
-use engine_traits::{Peekable, Iterable};
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::{Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -81,13 +81,19 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
 pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
-    let state: RegionLocalState = engine.kv.c().get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine
+        .kv
+        .c()
+        .get_msg_cf(CF_RAFT, &state_key)
+        .unwrap()
+        .unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
     let start_key = keys::data_key(region.get_start_key());
     let end_key = keys::data_key(region.get_end_key());
     for cf in ALL_CFS {
         engine
-            .kv.c()
+            .kv
+            .c()
             .scan_cf(cf, &start_key, &end_key, false, |k, v| {
                 panic!(
                     "[region {}] unexpected ({:?}, {:?}) in cf {:?}",
@@ -99,7 +105,8 @@ pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
     let log_min_key = keys::raft_log_key(id, 0);
     let log_max_key = keys::raft_log_key(id, u64::MAX);
     engine
-        .raft.c()
+        .raft
+        .c()
         .scan(&log_min_key, &log_max_key, false, |k, v| {
             panic!("[region {}] unexpected log ({:?}, {:?})", id, k, v);
         })

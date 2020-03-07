@@ -3,9 +3,9 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use engine::rocks::{DB};
-use engine_traits::{CF_WRITE, Iterable, IterOptions, Iterator, SeekKey};
+use engine::rocks::DB;
 use engine_rocks::Compat;
+use engine_traits::{IterOptions, Iterable, Iterator, SeekKey, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;

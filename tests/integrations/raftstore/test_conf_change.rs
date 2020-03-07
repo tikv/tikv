@@ -13,7 +13,7 @@ use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine_rocks::Compat;
-use engine_traits::{CF_RAFT, Peekable};
+use engine_traits::{Peekable, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::Result;
 use test_raftstore::*;
@@ -171,7 +171,8 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let peer2 = new_conf_change_peer(&stores[1], &pd_client);
     let engine_2 = cluster.get_engine(peer2.get_store_id());
-    assert!(engine_2.c()
+    assert!(engine_2
+        .c()
         .get_value(&keys::data_key(b"k1"))
         .unwrap()
         .is_none());
@@ -402,7 +403,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(3).unwrap();
 
     for _ in 0..250 {
-        let region: RegionLocalState = engine1.c()
+        let region: RegionLocalState = engine1
+            .c()
             .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
             .unwrap()
             .unwrap();
@@ -411,7 +413,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         }
         sleep_ms(20);
     }
-    let region: RegionLocalState = engine1.c()
+    let region: RegionLocalState = engine1
+        .c()
         .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
         .unwrap()
         .unwrap();

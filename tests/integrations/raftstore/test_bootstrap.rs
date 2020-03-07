@@ -10,7 +10,7 @@ use kvproto::raft_serverpb::RegionLocalState;
 
 use engine::*;
 use engine_rocks::Compat;
-use engine_traits::{ALL_CFS, CF_RAFT, Peekable};
+use engine_traits::{Peekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{bootstrap_store, fsm, SnapManager};
@@ -76,12 +76,14 @@ fn test_node_bootstrap_with_prepared_data() {
     // now rocksDB must have some prepare data
     bootstrap_store(&engines, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
-    assert!(engine.c()
+    assert!(engine
+        .c()
         .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
         .unwrap()
         .is_some());
     let region_state_key = keys::region_state_key(region.get_id());
-    assert!(engine.c()
+    assert!(engine
+        .c()
         .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
         .unwrap()
         .is_some());
@@ -114,11 +116,13 @@ fn test_node_bootstrap_with_prepared_data() {
         Box::new(config_client),
     )
     .unwrap();
-    assert!(Arc::clone(&engine).c()
+    assert!(Arc::clone(&engine)
+        .c()
         .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
         .unwrap()
         .is_none());
-    assert!(engine.c()
+    assert!(engine
+        .c()
         .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
         .unwrap()
         .is_none());

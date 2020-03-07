@@ -6,7 +6,9 @@ use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::DB;
 use engine_rocks::{Compat, RocksEngine, RocksWriteBatch};
-use engine_traits::{KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions, Peekable, Iterable};
+use engine_traits::{
+    Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt, WriteOptions,
+};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -752,61 +754,63 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
-        kv_engine.c().scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
-            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
-            if suffix != keys::REGION_STATE_SUFFIX {
-                return Ok(true);
-            }
+        kv_engine
+            .c()
+            .scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
+                let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+                if suffix != keys::REGION_STATE_SUFFIX {
+                    return Ok(true);
+                }
 
-            total_count += 1;
+                total_count += 1;
 
-            let mut local_state = RegionLocalState::default();
-            local_state.merge_from_bytes(value)?;
+                let mut local_state = RegionLocalState::default();
+                local_state.merge_from_bytes(value)?;
 
-            let region = local_state.get_region();
-            if local_state.get_state() == PeerState::Tombstone {
-                tombstone_count += 1;
-                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
-                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
-                return Ok(true);
-            }
-            if local_state.get_state() == PeerState::Applying {
-                // in case of restart happen when we just write region state to Applying,
-                // but not write raft_local_state to raft rocksdb in time.
-                box_try!(peer_storage::recover_from_applying_state(
-                    &self.engines,
-                    &raft_wb,
-                    region_id
+                let region = local_state.get_region();
+                if local_state.get_state() == PeerState::Tombstone {
+                    tombstone_count += 1;
+                    debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
+                    self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
+                    return Ok(true);
+                }
+                if local_state.get_state() == PeerState::Applying {
+                    // in case of restart happen when we just write region state to Applying,
+                    // but not write raft_local_state to raft rocksdb in time.
+                    box_try!(peer_storage::recover_from_applying_state(
+                        &self.engines,
+                        &raft_wb,
+                        region_id
+                    ));
+                    applying_count += 1;
+                    applying_regions.push(region.clone());
+                    return Ok(true);
+                }
+
+                let (tx, mut peer) = box_try!(PeerFsm::create(
+                    store_id,
+                    &self.cfg.value(),
+                    self.region_scheduler.clone(),
+                    self.engines.clone(),
+                    region,
                 ));
-                applying_count += 1;
-                applying_regions.push(region.clone());
-                return Ok(true);
-            }
-
-            let (tx, mut peer) = box_try!(PeerFsm::create(
-                store_id,
-                &self.cfg.value(),
-                self.region_scheduler.clone(),
-                self.engines.clone(),
-                region,
-            ));
-            if local_state.get_state() == PeerState::Merging {
-                info!("region is merging"; "region" => ?region, "store_id" => store_id);
-                merging_count += 1;
-                peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
-            }
-            meta.region_ranges.insert(enc_end_key(region), region_id);
-            meta.regions.insert(region_id, region.clone());
-            // No need to check duplicated here, because we use region id as the key
-            // in DB.
-            region_peers.push((tx, peer));
-            self.coprocessor_host.on_region_changed(
-                region,
-                RegionChangeEvent::Create,
-                StateRole::Follower,
-            );
-            Ok(true)
-        })?;
+                if local_state.get_state() == PeerState::Merging {
+                    info!("region is merging"; "region" => ?region, "store_id" => store_id);
+                    merging_count += 1;
+                    peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
+                }
+                meta.region_ranges.insert(enc_end_key(region), region_id);
+                meta.regions.insert(region_id, region.clone());
+                // No need to check duplicated here, because we use region id as the key
+                // in DB.
+                region_peers.push((tx, peer));
+                self.coprocessor_host.on_region_changed(
+                    region,
+                    RegionChangeEvent::Create,
+                    StateRole::Follower,
+                );
+                Ok(true)
+            })?;
 
         if !kv_wb.is_empty() {
             self.engines.kv.c().write(&kv_wb).unwrap();

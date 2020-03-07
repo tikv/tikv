@@ -8,7 +8,7 @@ use crate::Result;
 use engine::rocks::Writable;
 use engine::{Engines, DB};
 use engine_rocks::Compat;
-use engine_traits::{Mutable, WriteBatchExt, Iterable};
+use engine_traits::{Iterable, Mutable, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 use std::sync::Arc;
 
@@ -110,7 +110,7 @@ mod tests {
     use super::*;
     use engine::rocks;
     use engine::Engines;
-    use engine_traits::{CF_DEFAULT, Peekable};
+    use engine_traits::{Peekable, CF_DEFAULT};
 
     #[test]
     fn test_bootstrap() {
@@ -141,19 +141,23 @@ mod tests {
         assert!(bootstrap_store(&engines, 1, 1).is_err());
 
         assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
-        assert!(kv_engine.c()
+        assert!(kv_engine
+            .c()
             .get_value(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_some());
-        assert!(kv_engine.c()
+        assert!(kv_engine
+            .c()
             .get_value_cf(CF_RAFT, &keys::region_state_key(1))
             .unwrap()
             .is_some());
-        assert!(kv_engine.c()
+        assert!(kv_engine
+            .c()
             .get_value_cf(CF_RAFT, &keys::apply_state_key(1))
             .unwrap()
             .is_some());
-        assert!(raft_engine.c()
+        assert!(raft_engine
+            .c()
             .get_value(&keys::raft_state_key(1))
             .unwrap()
             .is_some());
