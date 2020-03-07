@@ -177,6 +177,7 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         enable_multi_batch_write: true,
+        perf_level: 2,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -454,7 +455,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
-        enable_unordered_write: false,
+        enable_unordered_write: true,
         allow_concurrent_memtable_write: true,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),

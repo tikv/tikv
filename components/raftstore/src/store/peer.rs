@@ -1206,12 +1206,6 @@ impl Peer {
 
         self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
 
-        if !ready.committed_entries.as_ref().map_or(true, Vec::is_empty)
-            && ctx.current_time.is_none()
-        {
-            ctx.current_time.replace(monotonic_raw_now());
-        }
-
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
@@ -1321,9 +1315,9 @@ impl Peer {
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
-                        ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                            (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
-                        ));
+                        if let Ok(x) = (ctx.current_time.unwrap() - propose_time).to_std() {
+                            ctx.raft_metrics.commit_log.observe(duration_to_sec(x));
+                        }
                         self.maybe_renew_leader_lease(propose_time, ctx, None);
                         lease_to_be_updated = false;
                     }
@@ -1831,9 +1825,6 @@ impl Peer {
         cb: Callback<RocksEngine>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
-        if poll_ctx.current_time.is_none() {
-            poll_ctx.current_time = Some(monotonic_raw_now());
-        }
         meta.renew_lease_time = poll_ctx.current_time;
 
         if !cb.is_none() {

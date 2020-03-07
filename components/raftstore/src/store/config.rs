@@ -171,6 +171,11 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[config(skip)]
     pub enable_multi_batch_write: bool,
+
+    #[serde(skip_serializing)]
+    #[config(skip)]
+    #[doc(hidden)]
+    pub perf_level: i32,
 }
 
 impl Default for Config {
@@ -236,10 +241,10 @@ impl Default for Config {
             future_poll_size: 1,
             hibernate_regions: true,
             enable_multi_batch_write: true,
-
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
+            perf_level: 2,
         }
     }
 }

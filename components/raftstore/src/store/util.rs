@@ -14,7 +14,9 @@ use time::{Duration, Timespec};
 
 use super::peer_storage;
 use crate::{Error, Result};
-use tikv_util::time::monotonic_raw_now;
+use engine::rocks::{set_perf_level, PerfContext, PerfLevel};
+use prometheus::local::LocalHistogramVec;
+use tikv_util::time::{monotonic_raw_now, Instant};
 use tikv_util::Either;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -624,6 +626,101 @@ impl<
                 hex::encode_upper(it.next().unwrap()),
                 hex::encode_upper(it.next_back().unwrap())
             ),
+        }
+    }
+}
+
+pub struct PerfStatisticsWrite {
+    metric: LocalHistogramVec,
+    start_time: Instant,
+    wal_time: u64,
+    write_pre_and_post_process_time: u64,
+    memtable_time: u64,
+    wait_mutex_time: u64,
+    write_thread_wait_time: u64,
+    perf_level: i32,
+}
+
+impl PerfStatisticsWrite {
+    /// Create an instance which stores instant statistics values, retrieved at creation.
+    pub fn new(metric: LocalHistogramVec) -> Self {
+        PerfStatisticsWrite {
+            metric,
+            start_time: Instant::now(),
+            wal_time: 0,
+            memtable_time: 0,
+            write_pre_and_post_process_time: 0,
+            wait_mutex_time: 0,
+            write_thread_wait_time: 0,
+            perf_level: 2,
+        }
+    }
+
+    pub fn start(&mut self, level: i32) {
+        if level <= 2 {
+            return;
+        }
+        PerfContext::get().reset();
+        let perf_level = match level {
+            0 => PerfLevel::Uninitialized,
+            1 => PerfLevel::Disable,
+            2 => PerfLevel::EnableCount,
+            3 => PerfLevel::EnableTimeExceptForMutex,
+            4 => PerfLevel::EnableTimeAndCPUTimeExceptForMutex,
+            5 => PerfLevel::EnableTime,
+            _ => PerfLevel::OutOfBounds,
+        };
+        set_perf_level(perf_level);
+        self.perf_level = level;
+        self.start_time = Instant::now();
+        self.wal_time = 0;
+        self.memtable_time = 0;
+        self.write_pre_and_post_process_time = 0;
+        self.wait_mutex_time = 0;
+        self.write_thread_wait_time = 0;
+    }
+
+    pub fn observe(&mut self) {
+        if self.perf_level <= 2 {
+            return;
+        }
+        let perf_context = PerfContext::get();
+        let wal_time = perf_context.write_wal_time();
+        let pre_time = perf_context.write_pre_and_post_process_time();
+        let memtable_time = perf_context.write_memtable_time();
+        let write_wait = perf_context.write_thread_wait_nanos();
+        let wait_mutex = perf_context.db_mutex_lock_nanos();
+
+        self.metric
+            .with_label_values(&["write_wal"])
+            .observe((wal_time - self.wal_time) as f64 / 1_000_000_000.0);
+        self.metric
+            .with_label_values(&["write_memtable"])
+            .observe((memtable_time - self.memtable_time) as f64 / 1_000_000_000.0);
+        self.metric
+            .with_label_values(&["write_pre_and_post_process"])
+            .observe((pre_time - self.write_pre_and_post_process_time) as f64 / 1000000.0);
+        self.metric
+            .with_label_values(&["write_thread_wait"])
+            .observe((write_wait - self.write_thread_wait_time) as f64 / 1_000_000_000.0);
+        self.metric
+            .with_label_values(&["wait_mutex"])
+            .observe((wait_mutex - self.wait_mutex_time) as f64 / 1_000_000_000.0);
+        self.metric
+            .with_label_values(&["observe_time"])
+            .observe(self.start_time.elapsed_secs());
+
+        self.wal_time = wal_time;
+        self.memtable_time = memtable_time;
+        self.write_pre_and_post_process_time = pre_time;
+        self.write_thread_wait_time = write_wait;
+        self.wait_mutex_time = wait_mutex;
+        self.start_time = Instant::now();
+    }
+
+    pub fn flush(&mut self) {
+        if self.perf_level > 2 {
+            self.metric.flush();
         }
     }
 }

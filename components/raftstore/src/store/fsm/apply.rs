@@ -39,8 +39,8 @@ use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
-use crate::store::util::KeysInfoFormatter;
 use crate::store::util::{check_region_epoch, compare_region_epoch};
+use crate::store::util::{KeysInfoFormatter, PerfStatisticsWrite};
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
@@ -307,6 +307,9 @@ struct ApplyContext {
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
     enable_multi_batch_write: bool,
+
+    perf_level: i32,
+    perf_statistic: PerfStatisticsWrite,
 }
 
 impl ApplyContext {
@@ -342,6 +345,8 @@ impl ApplyContext {
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             enable_multi_batch_write: cfg.enable_multi_batch_write,
+            perf_level: cfg.perf_level,
+            perf_statistic: PerfStatisticsWrite::new(APPLY_PERF_CONTEXT_TIME_HISTOGRAM.local()),
         }
     }
 
@@ -417,6 +422,7 @@ impl ApplyContext {
                         panic!("failed to write to engine: {:?}", e);
                     });
             }
+            self.perf_statistic.observe();
             self.sync_log_hint = false;
             for w in 0..=self.cur_wb {
                 let data_size = self.kv_wbs[w].data_size();
@@ -2922,7 +2928,11 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                 _ => {}
             }
             self.apply_ctx.enable_sync_log = incoming.sync_log;
+            self.apply_ctx.perf_level = incoming.perf_level;
         }
+        self.apply_ctx
+            .perf_statistic
+            .start(self.apply_ctx.perf_level);
     }
 
     /// There is no control fsm in apply poller.
@@ -2971,6 +2981,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     }
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
+        self.apply_ctx.perf_statistic.flush();
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {
