@@ -76,7 +76,7 @@ struct MergedIterator<'a> {
 
 impl<'a> MergedIterator<'a> {
     fn new(
-        db: &'a DB,
+        db: &'a Arc<DB>,
         cfs: &[CfName],
         start_key: &[u8],
         end_key: &[u8],
@@ -267,7 +267,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::new(self.engine.as_ref(), LARGE_CFS, start_key, end_key, false).map(
+        MergedIterator::new(&self.engine, LARGE_CFS, start_key, end_key, false).map(
             |mut iter| {
                 let mut size = 0;
                 let mut keys = 0;

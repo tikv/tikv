@@ -1224,7 +1224,7 @@ fn get_sync_log_from_entry(entry: &Entry) -> bool {
 }
 
 pub fn fetch_entries_to(
-    engine: &DB,
+    engine: &Arc<DB>,
     region_id: u64,
     low: u64,
     high: u64,

@@ -10,6 +10,7 @@ use engine::{Engines, Iterable, DB};
 use engine_rocks::Compat;
 use engine_traits::{Mutable, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
+use std::sync::Arc;
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
@@ -26,7 +27,7 @@ pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Re
 }
 
 // check no any data in range [start_key, end_key)
-fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
+fn is_range_empty(engine: &Arc<DB>, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
     let mut count: u32 = 0;
     engine.scan_cf(cf, start_key, end_key, false, |_, _| {
         count += 1;

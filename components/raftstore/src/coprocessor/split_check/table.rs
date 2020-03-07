@@ -169,7 +169,7 @@ impl SplitCheckObserver for TableCheckObserver {
     }
 }
 
-fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
+fn last_key_of_region(db: &Arc<DB>, region: &Region) -> Result<Option<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let mut last_key = None;
