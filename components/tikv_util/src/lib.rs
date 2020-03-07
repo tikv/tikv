@@ -555,8 +555,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
-    use tempfile::Builder;
     use std::os::macos::fs::MetadataExt;
+    use tempfile::Builder;
 
     #[test]
     fn test_panic_mark_file_path() {
