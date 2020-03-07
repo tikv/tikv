@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use engine::rocks::DBIterator;
 use engine::{IterOption, Iterable, DB};
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, Compat};
 use engine_traits::{CfName, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
@@ -195,7 +195,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         let mut host = self.coprocessor.new_split_checker_host(
             &self.cfg,
             region,
-            &self.engine,
+            &self.engine.c(),
             auto_split,
             policy,
         );
@@ -214,7 +214,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                     }
                 }
             }
-            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine) {
+            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine.c()) {
                 Ok(keys) => keys
                     .into_iter()
                     .map(|k| keys::origin_key(&k).to_vec())
@@ -261,7 +261,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
     /// Gets the split keys by scanning the range.
     fn scan_split_keys(
         &self,
-        host: &mut SplitCheckerHost<'_, Arc<DB>>,
+        host: &mut SplitCheckerHost<'_, RocksEngine>,
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],

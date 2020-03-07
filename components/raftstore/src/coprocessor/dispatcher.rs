@@ -1,7 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use engine::rocks::DB;
 use engine_rocks::RocksEngine;
 use engine_traits::CfName;
 use kvproto::metapb::Region;
@@ -152,7 +150,7 @@ pub struct Registry {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
-    split_check_observers: Vec<Entry<BoxSplitCheckObserver<Arc<DB>>>>,
+    split_check_observers: Vec<Entry<BoxSplitCheckObserver<RocksEngine>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver>>,
@@ -189,7 +187,7 @@ impl Registry {
         push!(priority, aso, self.apply_snapshot_observers);
     }
 
-    pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver<Arc<DB>>) {
+    pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver<RocksEngine>) {
         push!(priority, sco, self.split_check_observers);
     }
 
@@ -372,10 +370,10 @@ impl CoprocessorHost {
         &self,
         cfg: &'a Config,
         region: &Region,
-        engine: &Arc<DB>,
+        engine: &RocksEngine,
         auto_split: bool,
         policy: CheckPolicy,
-    ) -> SplitCheckerHost<'a, Arc<DB>> {
+    ) -> SplitCheckerHost<'a, RocksEngine> {
         let mut host = SplitCheckerHost::new(auto_split, cfg);
         loop_ob!(
             region,

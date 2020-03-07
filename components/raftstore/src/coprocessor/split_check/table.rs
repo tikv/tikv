@@ -1,11 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::sync::Arc;
 
-use engine::rocks::{DB};
 use engine_traits::{CF_WRITE, KvEngine, IterOptions, SeekKey, Iterator};
-use engine_rocks::Compat;
+use engine_rocks::{RocksEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
@@ -24,7 +22,7 @@ pub struct Checker {
     policy: CheckPolicy,
 }
 
-impl SplitChecker<Arc<DB>> for Checker {
+impl SplitChecker<RocksEngine> for Checker {
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
@@ -72,12 +70,12 @@ pub struct TableCheckObserver;
 
 impl Coprocessor for TableCheckObserver {}
 
-impl SplitCheckObserver<Arc<DB>> for TableCheckObserver {
+impl SplitCheckObserver<RocksEngine> for TableCheckObserver {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host<'_, Arc<DB>>,
-        engine: &Arc<DB>,
+        host: &mut Host<'_, RocksEngine>,
+        engine: &RocksEngine,
         policy: CheckPolicy,
     ) {
         if !host.cfg.split_region_on_table {
@@ -89,7 +87,7 @@ impl SplitCheckObserver<Arc<DB>> for TableCheckObserver {
             return;
         }
 
-        let end_key = match last_key_of_region(engine.c(), region) {
+        let end_key = match last_key_of_region(engine, region) {
             Ok(Some(end_key)) => end_key,
             Ok(None) => return,
             Err(err) => {
@@ -233,6 +231,7 @@ mod tests {
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
     use engine_traits::ALL_CFS;
+    use engine_rocks::Compat;
     use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;

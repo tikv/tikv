@@ -1,8 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine::rocks::DB;
-use engine_rocks::{RocksEngine, Compat};
+use engine_rocks::{RocksEngine};
 use engine_traits::CF_WRITE;
 use engine_traits::{TableProperties, TablePropertiesCollection, KvEngine, Range};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
@@ -42,7 +41,7 @@ impl Checker {
     }
 }
 
-impl SplitChecker<Arc<DB>> for Checker {
+impl SplitChecker<RocksEngine> for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
         if !key.is_commit_version() {
             return false;
@@ -96,17 +95,17 @@ impl<C: CasualRouter<RocksEngine>> KeysCheckObserver<C> {
 
 impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
 
-impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver<Arc<DB>> for KeysCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver<RocksEngine> for KeysCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host<'_, Arc<DB>>,
-        engine: &Arc<DB>,
+        host: &mut Host<'_, RocksEngine>,
+        engine: &RocksEngine,
         policy: CheckPolicy,
     ) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let region_keys = match get_region_approximate_keys(engine.c(), region) {
+        let region_keys = match get_region_approximate_keys(engine, region) {
             Ok(keys) => keys,
             Err(e) => {
                 warn!(
@@ -208,6 +207,7 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_rocks::Compat;
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;

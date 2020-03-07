@@ -3,8 +3,7 @@
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::DB;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{RocksEngine};
 use engine_traits::LARGE_CFS;
 use engine_traits::{KvEngine, TableProperties, TablePropertiesCollection, Range};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
@@ -46,7 +45,7 @@ impl Checker {
     }
 }
 
-impl SplitChecker<Arc<DB>> for Checker {
+impl SplitChecker<RocksEngine> for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         let size = entry.entry_size() as u64;
         self.current_size += size;
@@ -89,10 +88,10 @@ impl SplitChecker<Arc<DB>> for Checker {
     fn approximate_split_keys(
         &mut self,
         region: &Region,
-        engine: &Arc<DB>,
+        engine: &RocksEngine,
     ) -> Result<Vec<Vec<u8>>> {
         Ok(box_try!(get_approximate_split_keys(
-            engine.c(),
+            engine,
             region,
             self.split_size,
             self.max_size,
@@ -116,17 +115,17 @@ impl<C: CasualRouter<RocksEngine>> SizeCheckObserver<C> {
 
 impl<C: Send> Coprocessor for SizeCheckObserver<C> {}
 
-impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver<Arc<DB>> for SizeCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver<RocksEngine> for SizeCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host<'_, Arc<DB>>,
-        engine: &Arc<DB>,
+        host: &mut Host<'_, RocksEngine>,
+        engine: &RocksEngine,
         mut policy: CheckPolicy,
     ) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let region_size = match get_region_approximate_size(engine.c(), &region) {
+        let region_size = match get_region_approximate_size(engine, &region) {
             Ok(size) => size,
             Err(e) => {
                 warn!(

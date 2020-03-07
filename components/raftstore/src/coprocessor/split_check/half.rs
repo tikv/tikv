@@ -1,12 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::DB;
-use engine_rocks::Compat;
+use engine_rocks::RocksEngine;
 use engine_traits::{TableProperties, TablePropertiesCollection, KvEngine};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use std::sync::Arc;
 
 use tikv_util::config::ReadableSize;
 
@@ -37,7 +35,7 @@ impl Checker {
     }
 }
 
-impl SplitChecker<Arc<DB>> for Checker {
+impl SplitChecker<RocksEngine> for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
             self.buckets.push(entry.key().to_vec());
@@ -61,9 +59,9 @@ impl SplitChecker<Arc<DB>> for Checker {
     fn approximate_split_keys(
         &mut self,
         region: &Region,
-        engine: &Arc<DB>,
+        engine: &RocksEngine,
     ) -> Result<Vec<Vec<u8>>> {
-        let ks = box_try!(get_region_approximate_middle(engine.c(), region)
+        let ks = box_try!(get_region_approximate_middle(engine, region)
             .map(|keys| keys.map_or(vec![], |key| vec![key])));
 
         Ok(ks)
@@ -79,12 +77,12 @@ pub struct HalfCheckObserver;
 
 impl Coprocessor for HalfCheckObserver {}
 
-impl SplitCheckObserver<Arc<DB>> for HalfCheckObserver {
+impl SplitCheckObserver<RocksEngine> for HalfCheckObserver {
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
-        host: &mut Host<'_, Arc<DB>>,
-        _: &Arc<DB>,
+        host: &mut Host<'_, RocksEngine>,
+        _: &RocksEngine,
         policy: CheckPolicy,
     ) {
         if host.auto_split() {
@@ -170,6 +168,7 @@ mod tests {
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
+    use engine_rocks::Compat;
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
