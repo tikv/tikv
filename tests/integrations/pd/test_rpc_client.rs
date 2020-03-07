@@ -36,6 +36,18 @@ fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> Rpc
     RpcClient::new(&cfg, mgr).unwrap()
 }
 
+fn new_client_with_update_interval(
+    eps: Vec<(String, u16)>,
+    mgr: Option<Arc<SecurityManager>>,
+    interval: u64,
+) -> RpcClient {
+    let mut cfg = new_config(eps);
+    cfg.update_interval = interval;
+    let mgr =
+        mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
+    RpcClient::new(&cfg, mgr).unwrap()
+}
+
 #[test]
 fn test_retry_rpc_client() {
     let eps_count = 1;
@@ -459,4 +471,21 @@ fn test_region_heartbeat_on_leader_change() {
 
     // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
     heartbeat_on_leader_change(2);
+}
+
+#[test]
+fn test_periodical_update() {
+    let eps_count = 3;
+    let server = MockServer::new(eps_count);
+    let eps = server.bind_addrs();
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let client = new_client_with_update_interval(eps, None, 3);
+    let counter1 = Arc::clone(&counter);
+    client.handle_reconnect(move || {
+        counter1.fetch_add(1, Ordering::SeqCst);
+    });
+
+    thread::sleep(Duration::from_secs(7));
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
 }

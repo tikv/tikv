@@ -28,8 +28,6 @@ const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
 const CONFIG_COMPONENT: &str = "tikv";
 
-pub const UPDATE_INTERVAL_SEC: u64 = 10 * 60; // 10min
-
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: Arc<LeaderClient>,
@@ -63,9 +61,10 @@ impl RpcClient {
                     };
 
                     // spawn a background future to update PD information periodically
-                    let update_loop = loop_fn(rpc_client.leader_client.clone(), |client| {
+                    let duration = Duration::from_secs(cfg.update_interval);
+                    let update_loop = loop_fn(rpc_client.leader_client.clone(), move |client| {
                         GLOBAL_TIMER_HANDLE
-                            .delay(Instant::now() + Duration::from_secs(UPDATE_INTERVAL_SEC))
+                            .delay(Instant::now() + duration)
                             .then(|_| {
                                 if client.reconnect().is_err() {
                                     warn!("update PD information failed");

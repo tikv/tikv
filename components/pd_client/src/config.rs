@@ -28,6 +28,10 @@ pub struct Config {
     ///
     /// Default is 10. Set to 1 to disable this feature.
     pub retry_log_every: usize,
+    /// The interval at which to update PD information.
+    ///
+    /// Default is 10min (600s).
+    pub update_interval: u64,
 }
 
 impl Default for Config {
@@ -37,6 +41,7 @@ impl Default for Config {
             retry_interval: ReadableDuration::millis(300),
             retry_max_count: std::isize::MAX,
             retry_log_every: 10,
+            update_interval: 600,
         }
     }
 }
@@ -60,6 +65,10 @@ impl Config {
 
         if self.retry_max_count < -1 {
             return Err("pd.retry_max_count cannot be < -1".into());
+        }
+
+        if self.update_interval == 0 {
+            return Err("pd.update_interval cannot be <=0".into());
         }
 
         Ok(())
