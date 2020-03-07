@@ -70,7 +70,6 @@ pub struct Handler {
 
 impl Handler {
     fn handle(&mut self, r: &mut Runner) -> Option<usize> {
-        let mut batch_size = 0;
         for _ in 0..16 {
             match r.recv.try_recv() {
                 Ok(Message::Loop(count)) => {
@@ -79,7 +78,6 @@ impl Handler {
                         r.res *= count;
                         r.res %= count + 1;
                     }
-                    batch_size += count;
                 }
                 Ok(Message::Callback(cb)) => cb(r),
                 Err(_) => break,
