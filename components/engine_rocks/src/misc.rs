@@ -2,7 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Range, Result, ALL_CFS};
+use engine_traits::{MiscExt, Range, Result, ALL_CFS, CFNamesExt};
 use rocksdb::Range as RocksRange;
 
 impl MiscExt for RocksEngine {
@@ -79,6 +79,16 @@ impl MiscExt for RocksEngine {
         }
 
         Ok(())
+    }
+
+    fn auto_compactions_is_disabled(&self) -> Result<bool> {
+        for cf_name in self.cf_names() {
+            let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
+            if self.as_inner().get_options_cf(cf).get_disable_auto_compactions() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 

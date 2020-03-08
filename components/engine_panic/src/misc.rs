@@ -33,4 +33,8 @@ impl MiscExt for PanicEngine {
     fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
         panic!()
     }
+
+    fn auto_compactions_is_disabled(&self) -> Result<bool> {
+        panic!()
+    }
 }
