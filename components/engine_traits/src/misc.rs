@@ -113,4 +113,15 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     /// *  total size (bytes) of all blob files.
     ///
     fn get_engine_used_size(&self) -> Result<u64>;
+
+    /// Roughly deletes files in multiple ranges.
+    ///
+    /// Note:
+    ///    - After this operation, some keys in the range might still exist in the database.
+    ///    - After this operation, some keys in the range might be removed from existing snapshot,
+    ///      so you shouldn't expect to be able to read data from the range using existing snapshots
+    ///      any more.
+    ///
+    /// Ref: https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys
+    fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
 }

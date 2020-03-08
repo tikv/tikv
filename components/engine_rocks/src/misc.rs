@@ -3,6 +3,7 @@
 use crate::engine::RocksEngine;
 use crate::util;
 use engine_traits::{MiscExt, Range, Result, ALL_CFS};
+use rocksdb::Range as RocksRange;
 
 impl MiscExt for RocksEngine {
     fn is_titan(&self) -> bool {
@@ -56,6 +57,28 @@ impl MiscExt for RocksEngine {
             used_size += util::get_engine_cf_used_size(self.as_inner(), handle);
         }
         Ok(used_size)
+    }
+
+    fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        let db = self.as_inner();
+        let mut delete_ranges = Vec::new();
+        for &(ref start, ref end) in ranges {
+            if start == end {
+                continue;
+            }
+            assert!(start < end);
+            delete_ranges.push(RocksRange::new(start, end));
+        }
+        if delete_ranges.is_empty() {
+            return Ok(());
+        }
+
+        for cf in db.cf_names() {
+            let handle = util::get_cf_handle(db, cf)?;
+            db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)?;
+        }
+
+        Ok(())
     }
 }
 
