@@ -194,6 +194,7 @@ trait DebugExecutor {
                 cmd.merge_from_bytes(&ctx).unwrap();
                 v1!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
+            EntryType::EntryConfChangeV2 => unimplemented!(),
         }
     }
 
