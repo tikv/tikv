@@ -126,4 +126,6 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
 
     fn path(&self) -> &str;
+
+    fn sync_wal(&self) -> Result<()>;
 }

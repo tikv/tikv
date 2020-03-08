@@ -84,6 +84,10 @@ impl MiscExt for RocksEngine {
     fn path(&self) -> &str {
         self.as_inner().path()
     }
+
+    fn sync_wal(&self) -> Result<()> {
+        Ok(self.as_inner().sync_wal()?)
+    }
 }
 
 #[cfg(test)]
