@@ -277,16 +277,45 @@ where
             let kv = record.kv();
             let _ = kv.serialize(record, &mut s);
             if let Some(cost) = s.cost {
-                if cost > self.threshold {
-                    return self.inner.log(record, values);
+                if cost <= self.threshold {
+                    // Filter slow logs which are actually not that slow
+                    return Ok(());
                 }
-            } else {
-                return self.inner.log(record, values);
             }
-            Ok(())
-        } else {
-            self.inner.log(record, values)
         }
+        self.inner.log(record, values)
+    }
+}
+
+struct SlowCostSerializer {
+    // None means input record without key `takes`
+    cost: Option<u64>,
+}
+
+impl slog::ser::Serializer for SlowCostSerializer {
+    fn emit_arguments(&mut self, _key: Key, _val: &fmt::Arguments<'_>) -> slog::Result {
+        Ok(())
+    }
+
+    fn emit_u64(&mut self, key: Key, val: u64) -> slog::Result {
+        if key == "takes" {
+            self.cost = Some(val);
+        }
+        Ok(())
+    }
+}
+
+/// Special struct for slow log cost serializing
+pub struct LogCost(pub u64);
+
+impl slog::Value for LogCost {
+    fn serialize(
+        &self,
+        _record: &Record,
+        key: Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_u64(key, self.0)
     }
 }
 
@@ -382,23 +411,6 @@ fn write_log_fields(
     serializer.finish()?;
 
     Ok(())
-}
-
-struct SlowCostSerializer {
-    // None means input record without key `takes`
-    cost: Option<u64>,
-}
-
-impl slog::ser::Serializer for SlowCostSerializer {
-    fn emit_arguments(&mut self, key: Key, val: &fmt::Arguments<'_>) -> slog::Result {
-        if key == "takes" {
-            match format!("{}", val).parse() {
-                Ok(v) => self.cost = Some(v),
-                _ => return Err(fmt::Error {}.into()),
-            };
-        }
-        Ok(())
-    }
 }
 
 struct Serializer<'a> {
@@ -708,12 +720,12 @@ mod tests {
         let logger = slog::Logger::root_typed(drain, slog_o!());
         slog_info!(logger, "Hello World");
         slog_info!(logger, #"slow_log", "nothing");
-        slog_info!(logger, #"slow_log", "🆗"; "takes" => 30);
-        slog_info!(logger, #"slow_log", "🐢"; "takes" => 200);
-        slog_info!(logger, #"slow_log", "🐢🐢"; "takes" => 201);
+        slog_info!(logger, #"slow_log", "🆗"; "takes" => LogCost(30));
+        slog_info!(logger, #"slow_log", "🐢"; "takes" => LogCost(200));
+        slog_info!(logger, #"slow_log", "🐢🐢"; "takes" => LogCost(201));
         slog_info!(logger, #"slow_log", "without cost"; "a" => "b");
         slog_info!(logger, #"slow_log_by_timer", "⏰");
-        slog_info!(logger, #"slow_log_by_timer", "⏰"; "takes" => 1000);
+        slog_info!(logger, #"slow_log_by_timer", "⏰"; "takes" => LogCost(1000));
         let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
         NORMAL_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
