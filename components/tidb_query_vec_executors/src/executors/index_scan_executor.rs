@@ -300,7 +300,7 @@ mod tests {
     use tidb_query_datatype::codec::data_type::*;
     use tidb_query_datatype::codec::{datum, table, Datum};
     use tidb_query_datatype::expr::EvalConfig;
-    use tidb_query_datatype::storage::fixture::FixtureStorage;
+    use tidb_query_datatype::storage::test_fixture::FixtureStorage;
     use tidb_query_datatype::util::convert_to_prefix_next;
 
     #[test]
@@ -393,7 +393,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 3);
             assert!(result.physical_columns[0].is_raw());
             result.physical_columns[0]
-                .ensure_all_decoded(&mut ctx, &schema[0])
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[0].decoded().as_int_slice(),
@@ -401,7 +401,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&mut ctx, &schema[1])
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_real_slice(),
@@ -447,7 +447,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_raw());
             result.physical_columns[0]
-                .ensure_all_decoded(&mut ctx, &schema[0])
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[0].decoded().as_int_slice(),
@@ -455,7 +455,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&mut ctx, &schema[1])
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_real_slice(),
@@ -522,7 +522,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_raw());
             result.physical_columns[0]
-                .ensure_all_decoded(&mut ctx, &schema[0])
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[0].decoded().as_int_slice(),
@@ -530,7 +530,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&mut ctx, &schema[1])
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_real_slice(),
@@ -577,7 +577,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_raw());
             result.physical_columns[0]
-                .ensure_all_decoded(&mut ctx, &schema[0])
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[0].decoded().as_int_slice(),
@@ -585,7 +585,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&mut ctx, &schema[1])
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_real_slice(),

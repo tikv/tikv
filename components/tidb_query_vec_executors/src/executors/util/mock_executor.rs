@@ -14,7 +14,6 @@ pub struct MockExecutor {
     results: std::vec::IntoIter<BatchExecuteResult>,
 }
 
-//#[cfg(test)] // FIXME: this will not visible to tidb_query_vec_expr, need help
 impl MockExecutor {
     pub fn new(schema: Vec<FieldType>, results: Vec<BatchExecuteResult>) -> Self {
         assert!(!results.is_empty());

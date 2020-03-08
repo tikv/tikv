@@ -1157,7 +1157,6 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     }
 }
 
-//#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::Result;
@@ -1165,7 +1164,7 @@ mod tests {
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
     use crate::rpn_expr::RpnFnCallExtra;
     use std::collections::BTreeMap;
-    use std::fmt::{Debug, Display, Formatter};
+    use std::fmt::{Debug, Display};
     use std::sync::Arc;
     use std::{f32, f64, i64, u64};
     use tidb_query_datatype::builder::FieldTypeBuilder;
@@ -5761,8 +5760,6 @@ mod tests {
 
     #[test]
     fn test_json_as_json() {
-        println!(">>> REMOVE ME!!!");
-        assert_eq!(1, 2);
         test_none_with_nothing(cast_json_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();

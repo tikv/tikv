@@ -356,7 +356,7 @@ pub mod tests {
     use kvproto::coprocessor::KeyRange;
     use tidb_query_datatype::codec::{datum, table, Datum};
     use tidb_query_datatype::expr::EvalContext;
-    use tidb_query_datatype::storage::fixture::FixtureStorage;
+    use tidb_query_datatype::storage::test_fixture::FixtureStorage;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tikv_util::collections::HashMap;
     use tikv_util::map;

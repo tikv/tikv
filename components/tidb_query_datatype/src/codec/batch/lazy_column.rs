@@ -186,8 +186,7 @@ impl LazyBatchColumn {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub fn ensure_all_decoded(
+    pub fn ensure_all_decoded_for_test(
         &mut self,
         ctx: &mut EvalContext,
         field_type: &FieldType,
@@ -276,7 +275,7 @@ mod tests {
         {
             // Empty raw to empty decoded.
             let mut col = col.clone();
-            col.ensure_all_decoded(&mut ctx, &FieldTypeTp::Long.into())
+            col.ensure_all_decoded_for_test(&mut ctx, &FieldTypeTp::Long.into())
                 .unwrap();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);

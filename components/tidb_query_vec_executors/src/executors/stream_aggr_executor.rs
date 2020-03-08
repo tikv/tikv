@@ -458,12 +458,14 @@ mod tests {
         // - col_1 + 2.0
 
         let group_by_exps = vec![
-            RpnExpressionBuilder::new().push_column_ref(0).build(),
-            RpnExpressionBuilder::new()
-                .push_column_ref(1)
-                .push_constant(2.0)
-                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
-                .build(),
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .build_for_test(),
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(1)
+                .push_constant_for_test(2.0)
+                .push_fn_call_for_test(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
+                .build_for_test(),
         ];
 
         let aggr_definitions = vec![
@@ -555,8 +557,12 @@ mod tests {
     #[test]
     fn test_no_fn() {
         let group_by_exps = vec![
-            RpnExpressionBuilder::new().push_column_ref(0).build(),
-            RpnExpressionBuilder::new().push_column_ref(1).build(),
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .build_for_test(),
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(1)
+                .build_for_test(),
         ];
 
         let src_exec = make_src_executor();

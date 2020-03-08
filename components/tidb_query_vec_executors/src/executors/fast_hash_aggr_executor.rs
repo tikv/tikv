@@ -420,14 +420,12 @@ mod tests {
         // And group by:
         // - col_0 + col_1
 
-        println!(">>> REMOVE ME !!!");
-        assert_eq!(1, 2);
         let group_by_exp = || {
-            RpnExpressionBuilder::new()
-                .push_column_ref(0)
-                .push_column_ref(1)
-                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
-                .build()
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .push_column_ref_for_test(1)
+                .push_fn_call_for_test(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
+                .build_for_test()
         };
 
         let aggr_definitions = vec![
@@ -490,7 +488,7 @@ mod tests {
             // Let's check group by column first. Group by column is decoded in fast hash agg,
             // but not decoded in slow hash agg. So decode it anyway.
             r.physical_columns[4]
-                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[4])
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[4])
                 .unwrap();
 
             // The row order is not defined. Let's sort it by the group by column before asserting.
@@ -554,7 +552,11 @@ mod tests {
         // And group by:
         // - col_4
 
-        let group_by_exp = || RpnExpressionBuilder::new().push_column_ref(4).build();
+        let group_by_exp = || {
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(4)
+                .build_for_test()
+        };
 
         let aggr_definitions = vec![
             ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -609,7 +611,7 @@ mod tests {
             // Let's check group by column first. Group by column is decoded in fast hash agg,
             // but not decoded in slow hash agg. So decode it anyway.
             r.physical_columns[3]
-                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[3])
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[3])
                 .unwrap();
 
             // The row order is not defined. Let's sort it by the group by column before asserting.
@@ -673,7 +675,11 @@ mod tests {
                 out_exp: &mut Vec<RpnExpression>,
             ) -> Result<Box<dyn AggrFunction>> {
                 out_schema.push(FieldTypeTp::LongLong.into());
-                out_exp.push(RpnExpressionBuilder::new().push_constant(1).build());
+                out_exp.push(
+                    RpnExpressionBuilder::new_for_test()
+                        .push_constant_for_test(1)
+                        .build_for_test(),
+                );
                 Ok(Box::new(AggrFnUnreachable))
             }
         }
@@ -681,7 +687,9 @@ mod tests {
         let exec_fast = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                RpnExpressionBuilder::new().push_column_ref(0).build(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
                 vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -690,7 +698,9 @@ mod tests {
         let exec_slow = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
+                vec![RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test()],
                 vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -736,7 +746,11 @@ mod tests {
     /// E.g. SELECT 1 FROM t GROUP BY x
     #[test]
     fn test_no_aggr_fn() {
-        let group_by_exp = || RpnExpressionBuilder::new().push_column_ref(0).build();
+        let group_by_exp = || {
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .build_for_test()
+        };
 
         let exec_fast = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
@@ -778,7 +792,7 @@ mod tests {
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
             r.physical_columns[0]
-                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[0])
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[0])
                 .unwrap();
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[0]
                 .decoded()

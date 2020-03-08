@@ -302,7 +302,9 @@ mod tests {
     /// Single constant node
     #[test]
     fn test_eval_single_constant_node() {
-        let exp = RpnExpressionBuilder::new().push_constant(1.5f64).build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(1.5f64)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, &[], &mut columns, &[], 10);
@@ -346,7 +348,9 @@ mod tests {
         let (columns, logical_rows, schema) = new_single_column_node_fixture();
 
         let mut c = columns.clone();
-        let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(1)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 5);
         let val = result.unwrap();
@@ -362,7 +366,9 @@ mod tests {
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns.clone();
-        let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(1)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, &schema, &mut c, &[2, 0, 1], 3);
         let val = result.unwrap();
@@ -376,7 +382,9 @@ mod tests {
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns;
-        let exp = RpnExpressionBuilder::new().push_column_ref(0).build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 5);
         let val = result.unwrap();
@@ -398,7 +406,9 @@ mod tests {
         let (columns, logical_rows, schema) = new_single_column_node_fixture();
 
         let mut c = columns.clone();
-        let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(1)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let hooked_eval = panic_hook::recover_safe(|| {
             // smaller row number
@@ -407,7 +417,9 @@ mod tests {
         assert!(hooked_eval.is_err());
 
         let mut c = columns;
-        let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(1)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let hooked_eval = panic_hook::recover_safe(|| {
             // larger row number
@@ -424,9 +436,9 @@ mod tests {
             Ok(Some(42))
         }
 
-        let exp = RpnExpressionBuilder::new()
-            .push_fn_call(foo_fn_meta(), 0, FieldTypeTp::LongLong)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_fn_call_for_test(foo_fn_meta(), 0, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, &[], &mut columns, &[], 4);
@@ -449,10 +461,10 @@ mod tests {
             Ok(v.map(|v| v * 2.0))
         }
 
-        let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64)
-            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::Double)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(1.5f64)
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::Double)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
@@ -488,10 +500,10 @@ mod tests {
         }]);
         let schema = &[FieldTypeTp::LongLong.into()];
 
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
         let val = result.unwrap();
@@ -539,10 +551,10 @@ mod tests {
         }]);
         let schema = &[FieldTypeTp::LongLong.into()];
 
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0, 1], 3);
         let val = result.unwrap();
@@ -564,11 +576,11 @@ mod tests {
             Ok(Some(v1.unwrap() + v2.unwrap() as f64 - 1.0))
         }
 
-        let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64)
-            .push_constant(3i64)
-            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::Double)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(1.5f64)
+            .push_constant_for_test(3i64)
+            .push_fn_call_for_test(foo_fn_meta(), 2, FieldTypeTp::Double)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
@@ -604,11 +616,11 @@ mod tests {
         }]);
         let schema = &[FieldTypeTp::Double.into()];
 
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_constant(1.5f64)
-            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::Double)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_constant_for_test(1.5f64)
+            .push_fn_call_for_test(foo_fn_meta(), 2, FieldTypeTp::Double)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
         let val = result.unwrap();
@@ -642,11 +654,11 @@ mod tests {
         }]);
         let schema = &[FieldTypeTp::LongLong.into()];
 
-        let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64)
-            .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::Double)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(1.5f64)
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(foo_fn_meta(), 2, FieldTypeTp::Double)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 2], 2);
         let val = result.unwrap();
@@ -692,11 +704,11 @@ mod tests {
         let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
 
         // foo(col1, col0)
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(1)
-            .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::LongLong)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(1)
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(foo_fn_meta(), 2, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[0, 2, 1], 3);
         let val = result.unwrap();
@@ -749,11 +761,11 @@ mod tests {
         }]);
         let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
 
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::LongLong)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(foo_fn_meta(), 2, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[1], 1);
         let val = result.unwrap();
@@ -784,12 +796,12 @@ mod tests {
         }]);
         let schema = &[FieldTypeTp::LongLong.into()];
 
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_constant(3i64)
-            .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), 3, FieldTypeTp::LongLong)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_constant_for_test(3i64)
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(foo_fn_meta(), 3, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 0, 2], 3);
         let val = result.unwrap();
@@ -858,16 +870,16 @@ mod tests {
         let schema = &[FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
 
         // Col0, fn_b, Col1, Const0, fn_d, Const1, fn_c, fn_a
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_fn_call(fn_b_fn_meta(), 0, FieldTypeTp::Double)
-            .push_column_ref(1)
-            .push_constant(7i64)
-            .push_fn_call(fn_d_fn_meta(), 2, FieldTypeTp::LongLong)
-            .push_constant(11i64)
-            .push_fn_call(fn_c_fn_meta(), 2, FieldTypeTp::Double)
-            .push_fn_call(fn_a_fn_meta(), 3, FieldTypeTp::Double)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(fn_b_fn_meta(), 0, FieldTypeTp::Double)
+            .push_column_ref_for_test(1)
+            .push_constant_for_test(7i64)
+            .push_fn_call_for_test(fn_d_fn_meta(), 2, FieldTypeTp::LongLong)
+            .push_constant_for_test(11i64)
+            .push_fn_call_for_test(fn_c_fn_meta(), 2, FieldTypeTp::Double)
+            .push_fn_call_for_test(fn_a_fn_meta(), 3, FieldTypeTp::Double)
+            .build_for_test();
 
         //      fn_a(
         //          [0.5, -0.1, 3.5],
@@ -899,9 +911,9 @@ mod tests {
             unreachable!()
         }
 
-        let exp = RpnExpressionBuilder::new()
-            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = panic_hook::recover_safe(|| {
@@ -921,11 +933,11 @@ mod tests {
 
         // foo() only accepts 1 parameter but we will give 2.
 
-        let exp = RpnExpressionBuilder::new()
-            .push_constant(3.0f64)
-            .push_constant(1.5f64)
-            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::Double)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(3.0f64)
+            .push_constant_for_test(1.5f64)
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::Double)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = panic_hook::recover_safe(|| {
@@ -944,10 +956,10 @@ mod tests {
             Ok(v.map(|v| v * 2.5))
         }
 
-        let exp = RpnExpressionBuilder::new()
-            .push_constant(7i64)
-            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::Double)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(7i64)
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::Double)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = panic_hook::recover_safe(|| {
@@ -1161,11 +1173,11 @@ mod tests {
         }]);
         let schema = &[FieldTypeTp::LongLong.into()];
 
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_column_ref(0)
-            .push_fn_call(arithmetic_fn_meta::<IntIntPlus>(), 2, FieldTypeTp::LongLong)
-            .build();
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(arithmetic_fn_meta::<IntIntPlus>(), 2, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..1024).collect();
 
@@ -1194,15 +1206,15 @@ mod tests {
         }]);
         let schema = &[FieldTypeTp::LongLong.into()];
 
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_column_ref(0)
-            .push_fn_call(
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(
                 compare_fn_meta::<BasicComparer<Int, CmpOpLE>>(),
                 2,
                 FieldTypeTp::LongLong,
             )
-            .build();
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..1024).collect();
 
@@ -1231,15 +1243,15 @@ mod tests {
         }]);
         let schema = &[FieldTypeTp::LongLong.into()];
 
-        let exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_column_ref(0)
-            .push_fn_call(
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(
                 compare_fn_meta::<BasicComparer<Int, CmpOpLE>>(),
                 2,
                 FieldTypeTp::LongLong,
             )
-            .build();
+            .build_for_test();
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..5).collect();
 

@@ -483,7 +483,9 @@ mod tests {
 
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new().push_constant(1).build()],
+            vec![RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(1)
+                .build_for_test()],
             vec![false],
             0,
         );
@@ -517,7 +519,9 @@ mod tests {
 
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
+            vec![RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .build_for_test()],
             vec![false],
             10,
         );
@@ -631,7 +635,9 @@ mod tests {
 
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new().push_column_ref(2).build()],
+            vec![RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(2)
+                .build_for_test()],
             vec![false],
             100,
         );
@@ -695,8 +701,12 @@ mod tests {
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
             vec![
-                RpnExpressionBuilder::new().push_column_ref(0).build(),
-                RpnExpressionBuilder::new().push_column_ref(1).build(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
             ],
             vec![true, false],
             7,
@@ -762,16 +772,22 @@ mod tests {
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
             vec![
-                RpnExpressionBuilder::new()
-                    .push_column_ref(0)
-                    .push_fn_call(is_null_fn_meta::<Int>(), 1, FieldTypeTp::LongLong)
-                    .build(),
-                RpnExpressionBuilder::new().push_column_ref(0).build(),
-                RpnExpressionBuilder::new()
-                    .push_column_ref(1)
-                    .push_constant(1)
-                    .push_fn_call(arithmetic_fn_meta::<IntIntPlus>(), 2, FieldTypeTp::LongLong)
-                    .build(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .push_fn_call_for_test(is_null_fn_meta::<Int>(), 1, FieldTypeTp::LongLong)
+                    .build_for_test(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .push_constant_for_test(1)
+                    .push_fn_call_for_test(
+                        arithmetic_fn_meta::<IntIntPlus>(),
+                        2,
+                        FieldTypeTp::LongLong,
+                    )
+                    .build_for_test(),
             ],
             vec![false, false, true],
             5,
@@ -913,9 +929,15 @@ mod tests {
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
             vec![
-                RpnExpressionBuilder::new().push_column_ref(0).build(),
-                RpnExpressionBuilder::new().push_column_ref(2).build(),
-                RpnExpressionBuilder::new().push_column_ref(1).build(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(2)
+                    .build_for_test(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
             ],
             vec![true, true, false],
             5,
@@ -988,9 +1010,15 @@ mod tests {
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
             vec![
-                RpnExpressionBuilder::new().push_column_ref(0).build(),
-                RpnExpressionBuilder::new().push_column_ref(1).build(),
-                RpnExpressionBuilder::new().push_column_ref(2).build(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(1)
+                    .build_for_test(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(2)
+                    .build_for_test(),
             ],
             vec![false, false, false],
             5,

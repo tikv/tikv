@@ -218,10 +218,8 @@ pub struct Json {
     pub value: Vec<u8>,
 }
 
-//#[cfg(test)] // FIXME: this will not visible to tidb_query_vec_expr, need help
 use std::fmt::{Display, Formatter};
 
-//#[cfg(test)] // FIXME: this will not visible to tidb_query_vec_expr, need help
 impl Display for Json {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{}", self.to_string())

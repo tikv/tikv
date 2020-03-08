@@ -249,9 +249,9 @@ mod tests {
 
         let mut exec = BatchSelectionExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new()
-                .push_fn_call(foo_fn_meta(), 0, FieldTypeTp::LongLong)
-                .build()],
+            vec![RpnExpressionBuilder::new_for_test()
+                .push_fn_call_for_test(foo_fn_meta(), 0, FieldTypeTp::LongLong)
+                .build_for_test()],
         );
 
         // When source executor returns empty rows, selection executor should process correctly.
@@ -336,7 +336,9 @@ mod tests {
 
         // Build a selection executor with a predicate that always returns true.
         let exec_predicate_true = |src_exec: MockExecutor| {
-            let predicate = RpnExpressionBuilder::new().push_constant(1i64).build();
+            let predicate = RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(1i64)
+                .build_for_test();
             BatchSelectionExecutor::new_for_test(src_exec, vec![predicate])
         };
 
@@ -369,7 +371,9 @@ mod tests {
     fn test_predicate_always_false() {
         let src_exec = make_src_executor_using_fixture_1();
 
-        let predicate = RpnExpressionBuilder::new().push_constant(0i64).build();
+        let predicate = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(0i64)
+            .build_for_test();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
         // The selection executor should always return empty rows.
@@ -462,10 +466,10 @@ mod tests {
 
         // Use FnIsEven(column[0]) as the predicate.
 
-        let predicate = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
-            .build();
+        let predicate = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(0)
+            .push_fn_call_for_test(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
         let r = exec.next_batch(1);
@@ -487,10 +491,10 @@ mod tests {
 
         // Use is_even(column[1]) as the predicate.
 
-        let predicate = RpnExpressionBuilder::new()
-            .push_column_ref(1)
-            .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
-            .build();
+        let predicate = RpnExpressionBuilder::new_for_test()
+            .push_column_ref_for_test(1)
+            .push_fn_call_for_test(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
+            .build_for_test();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
         let r = exec.next_batch(1);
@@ -515,10 +519,10 @@ mod tests {
         let predicate: Vec<_> = (0..=1)
             .map(|offset| {
                 move || {
-                    RpnExpressionBuilder::new()
-                        .push_column_ref(offset)
-                        .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
-                        .build()
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(offset)
+                        .push_fn_call_for_test(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
+                        .build_for_test()
                 }
             })
             .collect();
@@ -550,10 +554,10 @@ mod tests {
         let predicate: Vec<_> = (0..=2)
             .map(|offset| {
                 move || {
-                    RpnExpressionBuilder::new()
-                        .push_column_ref(offset)
-                        .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
-                        .build()
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(offset)
+                        .push_fn_call_for_test(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
+                        .build_for_test()
                 }
             })
             .collect();
@@ -631,10 +635,10 @@ mod tests {
 
         let predicates = (0..=1)
             .map(|offset| {
-                RpnExpressionBuilder::new()
-                    .push_column_ref(offset)
-                    .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
-                    .build()
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(offset)
+                    .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::LongLong)
+                    .build_for_test()
             })
             .collect();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);

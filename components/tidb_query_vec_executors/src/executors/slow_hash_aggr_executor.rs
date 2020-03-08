@@ -473,12 +473,14 @@ mod tests {
         // - col_0 + 1
 
         let group_by_exps = vec![
-            RpnExpressionBuilder::new().push_column_ref(4).build(),
-            RpnExpressionBuilder::new()
-                .push_column_ref(0)
-                .push_constant(1.0)
-                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
-                .build(),
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(4)
+                .build_for_test(),
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .push_constant_for_test(1.0)
+                .push_fn_call_for_test(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
+                .build_for_test(),
         ];
 
         let aggr_definitions = vec![
@@ -526,7 +528,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         // Let's check the two group by column first.
         r.physical_columns[3]
-            .ensure_all_decoded(&mut ctx, &exec.schema()[3])
+            .ensure_all_decoded_for_test(&mut ctx, &exec.schema()[3])
             .unwrap();
         assert_eq!(
             r.physical_columns[3].decoded().as_bytes_slice(),
@@ -538,7 +540,7 @@ mod tests {
             ]
         );
         r.physical_columns[4]
-            .ensure_all_decoded(&mut ctx, &exec.schema()[4])
+            .ensure_all_decoded_for_test(&mut ctx, &exec.schema()[4])
             .unwrap();
         assert_eq!(
             r.physical_columns[4].decoded().as_real_slice(),

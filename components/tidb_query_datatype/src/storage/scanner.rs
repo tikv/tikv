@@ -228,7 +228,7 @@ impl<T: Storage> RangesScanner<T> {
 mod tests {
     use super::*;
 
-    use crate::storage::fixture::FixtureStorage;
+    use crate::storage::test_fixture::FixtureStorage;
     use crate::storage::{IntervalRange, PointRange, Range};
 
     fn create_storage() -> FixtureStorage {

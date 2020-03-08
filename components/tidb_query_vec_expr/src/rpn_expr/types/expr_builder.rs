@@ -110,14 +110,12 @@ impl RpnExpressionBuilder {
     /// Creates a new builder instance.
     ///
     /// Only used in tests. Normal logic should use `build_from_expr_tree`.
-    #[cfg(test)]
-    pub fn new() -> Self {
+    pub fn new_for_test() -> Self {
         Self(Vec::new())
     }
 
     /// Pushes a `FnCall` node.
-    #[cfg(test)]
-    pub fn push_fn_call(
+    pub fn push_fn_call_for_test(
         mut self,
         func_meta: RpnFnMeta,
         args_len: usize,
@@ -153,8 +151,7 @@ impl RpnExpressionBuilder {
 
     /// Pushes a `Constant` node. The field type will be auto inferred by choosing an arbitrary
     /// field type that matches the field type of the given value.
-    #[cfg(test)]
-    pub fn push_constant(mut self, value: impl Into<ScalarValue>) -> Self {
+    pub fn push_constant_for_test(mut self, value: impl Into<ScalarValue>) -> Self {
         let value = value.into();
         let field_type = value
             .eval_type()
@@ -181,16 +178,14 @@ impl RpnExpressionBuilder {
     }
 
     /// Pushes a `ColumnRef` node.
-    #[cfg(test)]
-    pub fn push_column_ref(mut self, offset: usize) -> Self {
+    pub fn push_column_ref_for_test(mut self, offset: usize) -> Self {
         let node = RpnExpressionNode::ColumnRef { offset };
         self.0.push(node);
         self
     }
 
     /// Builds the `RpnExpression`.
-    #[cfg(test)]
-    pub fn build(self) -> RpnExpression {
+    pub fn build_for_test(self) -> RpnExpression {
         RpnExpression::from(self.0)
     }
 }

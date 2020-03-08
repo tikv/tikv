@@ -368,9 +368,9 @@ mod tests {
                         // Foo("abc") -> Int
                         push_foo_output_schema(out_schema);
                         out_exp.push(
-                            RpnExpressionBuilder::new()
-                                .push_constant(b"abc".to_vec())
-                                .build(),
+                            RpnExpressionBuilder::new_for_test()
+                                .push_constant_for_test(b"abc".to_vec())
+                                .build_for_test(),
                         );
                         Ok(Box::new(AggrFnFoo))
                     }
@@ -378,38 +378,50 @@ mod tests {
                         // Foo(NULL) -> Int
                         push_foo_output_schema(out_schema);
                         out_exp.push(
-                            RpnExpressionBuilder::new()
-                                .push_constant(ScalarValue::Bytes(None))
-                                .build(),
+                            RpnExpressionBuilder::new_for_test()
+                                .push_constant_for_test(ScalarValue::Bytes(None))
+                                .build_for_test(),
                         );
                         Ok(Box::new(AggrFnFoo))
                     }
                     2 => {
                         // Bar(42.5) -> (Int, Int, Real)
                         push_bar_output_schema(out_schema);
-                        out_exp.push(RpnExpressionBuilder::new().push_constant(42.5f64).build());
+                        out_exp.push(
+                            RpnExpressionBuilder::new_for_test()
+                                .push_constant_for_test(42.5f64)
+                                .build_for_test(),
+                        );
                         Ok(Box::new(AggrFnBar))
                     }
                     3 => {
                         // Bar(NULL) -> (Int, Int, Real)
                         push_bar_output_schema(out_schema);
                         out_exp.push(
-                            RpnExpressionBuilder::new()
-                                .push_constant(ScalarValue::Real(None))
-                                .build(),
+                            RpnExpressionBuilder::new_for_test()
+                                .push_constant_for_test(ScalarValue::Real(None))
+                                .build_for_test(),
                         );
                         Ok(Box::new(AggrFnBar))
                     }
                     4 => {
                         // Foo(col_2) -> Int
                         push_foo_output_schema(out_schema);
-                        out_exp.push(RpnExpressionBuilder::new().push_column_ref(2).build());
+                        out_exp.push(
+                            RpnExpressionBuilder::new_for_test()
+                                .push_column_ref_for_test(2)
+                                .build_for_test(),
+                        );
                         Ok(Box::new(AggrFnFoo))
                     }
                     5 => {
                         // Bar(col_1) -> (Int, Int, Real)
                         push_bar_output_schema(out_schema);
-                        out_exp.push(RpnExpressionBuilder::new().push_column_ref(1).build());
+                        out_exp.push(
+                            RpnExpressionBuilder::new_for_test()
+                                .push_column_ref_for_test(1)
+                                .build_for_test(),
+                        );
                         Ok(Box::new(AggrFnBar))
                     }
                     _ => unreachable!(),
@@ -613,7 +625,11 @@ mod tests {
                 out_exp: &mut Vec<RpnExpression>,
             ) -> Result<Box<dyn AggrFunction>> {
                 out_schema.push(FieldTypeTp::LongLong.into());
-                out_exp.push(RpnExpressionBuilder::new().push_constant(5f64).build());
+                out_exp.push(
+                    RpnExpressionBuilder::new_for_test()
+                        .push_constant_for_test(5f64)
+                        .build_for_test(),
+                );
                 Ok(Box::new(AggrFnFoo))
             }
         }

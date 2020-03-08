@@ -25,7 +25,7 @@ impl RpnFnScalarEvaluator {
     /// Creates a new `RpnFnScalarEvaluator`.
     pub fn new() -> Self {
         Self {
-            rpn_expr_builder: RpnExpressionBuilder::new(),
+            rpn_expr_builder: RpnExpressionBuilder::new_for_test(),
             return_field_type: None,
             context: None,
             metadata: None,
@@ -36,13 +36,13 @@ impl RpnFnScalarEvaluator {
     /// inferred by choosing an arbitrary field type that matches the field type of the given
     /// value.
     pub fn push_param(mut self, value: impl Into<ScalarValue>) -> Self {
-        self.rpn_expr_builder = self.rpn_expr_builder.push_constant(value);
+        self.rpn_expr_builder = self.rpn_expr_builder.push_constant_for_test(value);
         self
     }
 
     pub fn push_params(mut self, values: impl IntoIterator<Item = impl Into<ScalarValue>>) -> Self {
         for value in values {
-            self.rpn_expr_builder = self.rpn_expr_builder.push_constant(value);
+            self.rpn_expr_builder = self.rpn_expr_builder.push_constant_for_test(value);
         }
         self
     }
@@ -137,7 +137,7 @@ impl RpnFnScalarEvaluator {
         let expr = self
             .rpn_expr_builder
             .push_fn_call_with_metadata(func, children_ed.len(), ret_field_type, metadata)
-            .build();
+            .build_for_test();
 
         let mut columns = LazyBatchColumnVec::empty();
         let ret = expr.eval(&mut context, &[], &mut columns, &[0], 1);

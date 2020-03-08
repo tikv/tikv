@@ -66,7 +66,6 @@ impl<Src: Executor> Executor for LimitExecutor<Src> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::codec::datum::Datum;

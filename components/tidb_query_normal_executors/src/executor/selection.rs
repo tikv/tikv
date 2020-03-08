@@ -200,8 +200,6 @@ mod tests {
 
     #[test]
     fn test_selection_executor_condition() {
-        println!(">>>>>>>>> REMOVE ME !!!!!");
-        assert_eq!(1, 2);
         let cis = vec![
             new_col_info(1, FieldTypeTp::LongLong),
             new_col_info(2, FieldTypeTp::VarChar),
