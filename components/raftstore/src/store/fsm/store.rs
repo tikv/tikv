@@ -2,7 +2,6 @@
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine::rocks;
 use engine::DB;
 use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, CloneCompat};
 use engine_traits::{
@@ -1529,7 +1528,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return;
         }
 
-        if rocks::util::auto_compactions_is_disabled(&self.ctx.engines.kv) {
+        if self.ctx.engines.kv.c().auto_compactions_is_disabled().expect("cf") {
             debug!(
                 "skip compact check when disabled auto compactions";
                 "store_id" => self.fsm.store.id,

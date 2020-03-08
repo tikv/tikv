@@ -291,17 +291,6 @@ pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64
     engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
 }
 
-/// Checks whether any column family sets `disable_auto_compactions` to `True` or not.
-pub fn auto_compactions_is_disabled(engine: &DB) -> bool {
-    for cf_name in engine.cf_names() {
-        let cf = engine.cf_handle(cf_name).unwrap();
-        if engine.get_options_cf(cf).get_disable_auto_compactions() {
-            return true;
-        }
-    }
-    false
-}
-
 pub struct FixedSuffixSliceTransform {
     pub suffix_len: usize,
 }
