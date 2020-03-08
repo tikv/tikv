@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine::rocks;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
@@ -515,7 +514,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             if plain_file_used(cf) {
                 continue;
             }
-            if rocks::util::ingest_maybe_slowdown_writes(&self.engines.kv, cf) {
+            if self.engines.kv.c().ingest_maybe_slowdown_writes(cf).expect("cf") {
                 return true;
             }
         }

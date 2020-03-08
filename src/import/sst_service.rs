@@ -3,9 +3,9 @@
 use std::f64::INFINITY;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
+use engine::rocks::util::{compact_files_in_range};
 use engine::rocks::DB;
-use engine_traits::{name_to_cf, CF_DEFAULT};
+use engine_traits::{name_to_cf, CF_DEFAULT, MiscExt};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -14,7 +14,7 @@ use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, Compat};
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
@@ -211,7 +211,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
 
         if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
-            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
+            && self.engine.c().ingest_maybe_slowdown_writes(CF_DEFAULT).expect("cf")
         {
             return send_rpc_error(
                 ctx,

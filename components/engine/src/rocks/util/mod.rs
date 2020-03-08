@@ -50,20 +50,6 @@ pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
     Ok(handle)
 }
 
-pub fn ingest_maybe_slowdown_writes(db: &DB, cf: &str) -> bool {
-    let handle = get_cf_handle(db, cf).unwrap();
-    if let Some(n) = get_cf_num_files_at_level(db, handle, 0) {
-        let options = db.get_options_cf(handle);
-        let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
-        // Leave enough buffer to tolerate heavy write workload,
-        // which may flush some memtables in a short time.
-        if n > u64::from(slowdown_trigger) / 2 {
-            return true;
-        }
-    }
-    false
-}
-
 pub fn open_opt(
     opts: DBOptions,
     path: &str,
