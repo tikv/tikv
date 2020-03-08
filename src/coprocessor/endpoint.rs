@@ -9,13 +9,12 @@ use futures::{future, Future, Stream};
 use futures03::channel::mpsc;
 use futures03::prelude::*;
 use rand::prelude::*;
-use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio::sync::Semaphore;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
-use tidb_query::metrics::*;
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
@@ -27,6 +26,7 @@ use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
+use crate::coprocessor::interceptors::limit_concurrency;
 use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
@@ -215,8 +215,6 @@ impl<E: Engine> Endpoint<E> {
                     )
                     .data_version(data_version)
                     .enable_batch_if_possible(enable_batch_if_possible)
-                    .execution_time_limit(req_ctx.execution_time_limit)
-                    .semaphore(req_ctx.semaphore.clone())
                     .build()
                 });
             }
@@ -303,33 +301,6 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
-    /// Try to acquire a permit from the semaphore.
-    ///
-    /// When `is_heavy` is false, it means the request can be a light task and is allowed to
-    /// run without a permit, but the execution time should be limited by the returned `Duration`.
-    ///
-    /// When `is_heavy` is true, the function won't return until a permit is acquired successfully.
-    async fn acquire_permit(
-        semaphore: Option<&Semaphore>,
-    ) -> (Option<SemaphorePermit<'_>>, Option<Duration>) {
-        if let Some(semaphore) = semaphore {
-            // If a task fail to acquire a permit from the semaphore, it has limited
-            // execution time.
-            match semaphore.try_acquire() {
-                Ok(permit) => {
-                    COPR_ACQUIRE_SEMAPHORE_TYPE.acquired_generic.inc();
-                    (Some(permit), None)
-                }
-                Err(_) => {
-                    COPR_ACQUIRE_SEMAPHORE_TYPE.unacquired.inc();
-                    (None, Some(LIGHT_TASK_THRESHOLD))
-                }
-            }
-        } else {
-            (None, None)
-        }
-    }
-
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
@@ -340,7 +311,6 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
-        let (_permit, execution_time_limit) = Self::acquire_permit(semaphore.as_deref()).await;
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.req_ctx.deadline.check()?;
@@ -360,18 +330,17 @@ impl<E: Engine> Endpoint<E> {
             // Build a cached request handler instead if cache version is matching.
             CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
         } else {
-            if execution_time_limit.is_some() {
-                tracker.req_ctx.execution_time_limit = execution_time_limit;
-                tracker.req_ctx.semaphore = semaphore.clone();
-            }
             handler_builder(snapshot, &tracker.req_ctx)?
         };
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = handler.handle_request();
-        let handle_request_future = track(handle_request_future, &mut tracker);
-        let result = handle_request_future.await;
+        let handle_request_future = track(handler.handle_request(), &mut tracker);
+        let result = if let Some(semaphore) = &semaphore {
+            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
+        } else {
+            handle_request_future.await
+        };
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
