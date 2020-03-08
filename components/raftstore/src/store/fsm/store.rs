@@ -2,7 +2,6 @@
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine::DB;
 use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, CloneCompat};
 use engine_traits::{
     CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
@@ -79,7 +78,7 @@ pub const PENDING_VOTES_CAP: usize = 20;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo {
-    pub engine: Arc<DB>,
+    pub engine: RocksEngine,
     pub capacity: u64,
 }
 
@@ -1650,7 +1649,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         );
 
         let store_info = StoreInfo {
-            engine: Arc::clone(&self.ctx.engines.kv),
+            engine: self.ctx.engines.kv.c().clone(),
             capacity: self.ctx.cfg.capacity.0,
         };
 

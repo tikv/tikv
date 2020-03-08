@@ -12,7 +12,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{RocksEngine};
 use engine_traits::MiscExt;
 use fs2;
 use kvproto::metapb;
@@ -557,7 +557,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
 
         // already include size of snapshot files
         let used_size =
-            stats.get_used_size() + store_info.engine.c().get_engine_used_size().expect("cf");
+            stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
         stats.set_used_size(used_size);
 
         let mut available = if capacity > used_size {
