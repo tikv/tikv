@@ -26,7 +26,7 @@ use rocksdb::{
 };
 
 pub use crate::rocks::CFHandle;
-use engine_traits::{ALL_CFS, CF_DEFAULT};
+use engine_traits::{CF_DEFAULT};
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
@@ -240,21 +240,7 @@ pub fn db_exist(path: &str) -> bool {
     fs::read_dir(&path).unwrap().next().is_some()
 }
 
-/// Gets total used size of rocksdb engine, including:
-/// *  total size (bytes) of all SST files.
-/// *  total size (bytes) of active and unflushed immutable memtables.
-/// *  total size (bytes) of all blob files.
-///
-pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
-    let mut used_size: u64 = 0;
-    for cf in ALL_CFS {
-        let handle = get_cf_handle(&engine, cf).unwrap();
-        used_size += get_engine_cf_used_size(&engine, handle);
-    }
-    used_size
-}
-
-pub fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
+pub(crate) fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
     let mut cf_used_size = engine
         .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
         .expect("rocksdb is too old, missing total-sst-files-size property");
