@@ -48,7 +48,7 @@ impl RpcClient {
             v => v.checked_add(1).unwrap_or(std::isize::MAX),
         };
         for i in 0..retries {
-            match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
+            match validate_endpoints(Arc::clone(&env), cfg, security_mgr.clone()) {
                 Ok((client, members)) => {
                     let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
