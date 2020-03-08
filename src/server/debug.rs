@@ -15,7 +15,7 @@ use engine::rocks::{
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption};
-use engine_rocks::{Compat, RocksWriteBatch};
+use engine_rocks::{Compat, RocksWriteBatch, CloneCompat};
 use engine_traits::{
     Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection, TablePropertiesExt,
     WriteBatch, WriteOptions,
@@ -511,8 +511,8 @@ impl Debugger {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())
                 })?;
 
-            let raft_state = box_try!(init_raft_state(&self.engines, region));
-            let apply_state = box_try!(init_apply_state(&self.engines, region));
+            let raft_state = box_try!(init_raft_state(&self.engines.c(), region));
+            let apply_state = box_try!(init_apply_state(&self.engines.c(), region));
             if raft_state.get_last_index() < apply_state.get_applied_index() {
                 return Err(Error::Other("last index < applied index".into()));
             }
@@ -525,7 +525,7 @@ impl Debugger {
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::new(
-                self.engines.clone(),
+                self.engines.c(),
                 region,
                 fake_snap_worker.scheduler(),
                 peer_id,

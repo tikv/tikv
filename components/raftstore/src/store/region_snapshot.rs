@@ -415,7 +415,7 @@ mod tests {
     use engine::rocks::Writable;
     use engine::Engines;
     use engine::*;
-    use engine_rocks::{Compat, RocksEngine};
+    use engine_rocks::{Compat, RocksEngine, CloneCompat};
     use engine_traits::{Mutable, Peekable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
@@ -428,7 +428,7 @@ mod tests {
 
     fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
         let (sched, _) = worker::dummy_scheduler();
-        PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
+        PeerStorage::new(engines.c(), r, sched, 0, "".to_owned()).unwrap()
     }
 
     fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {

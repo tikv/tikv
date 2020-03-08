@@ -776,7 +776,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                     // in case of restart happen when we just write region state to Applying,
                     // but not write raft_local_state to raft rocksdb in time.
                     box_try!(peer_storage::recover_from_applying_state(
-                        &self.engines,
+                        &self.engines.c(),
                         &raft_wb,
                         region_id
                     ));
@@ -789,7 +789,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                     store_id,
                     &self.cfg.value(),
                     self.region_scheduler.clone(),
-                    self.engines.clone(),
+                    self.engines.c(),
                     region,
                 ));
                 if local_state.get_state() == PeerState::Merging {
@@ -826,7 +826,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 store_id,
                 &self.cfg.value(),
                 self.region_scheduler.clone(),
-                self.engines.clone(),
+                self.engines.c(),
                 &region,
             )?;
             peer.schedule_applying_snapshot();
@@ -865,7 +865,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             Some(value) => value,
         };
 
-        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
+        peer_storage::clear_meta(&self.engines.c(), kv_wb, raft_wb, region.get_id(), &raft_state)
             .unwrap();
         let key = keys::region_state_key(region.get_id());
         kv_wb.put_msg_cf(CF_RAFT, &key, origin_state).unwrap();
@@ -1451,7 +1451,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             self.ctx.store_id(),
             &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
-            self.ctx.engines.clone(),
+            self.ctx.engines.c(),
             region_id,
             target.clone(),
         )?;

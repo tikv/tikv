@@ -17,8 +17,8 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::WriteOptions;
 use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
-use engine_traits::{MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch, CloneCompat};
+use engine_traits::{MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt, KvEngines};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -2308,7 +2308,7 @@ impl GenSnapTask {
 
     pub fn generate_and_schedule_snapshot(
         self,
-        engines: &Engines,
+        engines: &KvEngines<RocksEngine, RocksEngine>,
         region_sched: &Scheduler<RegionTask>,
     ) -> Result<()> {
         let snapshot = RegionTask::Gen {
@@ -2317,8 +2317,8 @@ impl GenSnapTask {
             // This snapshot may be held for a long time, which may cause too many
             // open files in rocksdb.
             // TODO: figure out another way to do raft snapshot with short life rocksdb snapshots.
-            raft_snap: RocksSnapshot::new(engines.raft.clone()),
-            kv_snap: RocksSnapshot::new(engines.kv.clone()),
+            raft_snap: RocksSnapshot::new(engines.raft.as_inner().clone()),
+            kv_snap: RocksSnapshot::new(engines.kv.as_inner().clone()),
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
@@ -2686,7 +2686,7 @@ impl ApplyFsm {
         }
 
         if let Err(e) = snap_task
-            .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
+            .generate_and_schedule_snapshot(&apply_ctx.engines.c(), &apply_ctx.region_scheduler)
         {
             error!(
                 "schedule snapshot failed";

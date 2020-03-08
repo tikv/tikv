@@ -7,10 +7,9 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot, CloneCompat};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Peekable};
+use engine_traits::{KvEngine, Peekable, KvEngines};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -130,7 +129,7 @@ impl<E: KvEngine> PeerFsm<E> {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<E>> {
         let meta_peer = match util::find_peer(region, store_id) {
@@ -172,7 +171,7 @@ impl<E: KvEngine> PeerFsm<E> {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<SenderFsmPair<E>> {
@@ -1614,7 +1613,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.ctx.store_id(),
                 &self.ctx.cfg,
                 self.ctx.region_scheduler.clone(),
-                self.ctx.engines.clone(),
+                self.ctx.engines.c(),
                 &new_region,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
