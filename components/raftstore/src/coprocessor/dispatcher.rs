@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::RocksEngine;
-use engine_traits::CfName;
+use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -148,16 +148,30 @@ impl_box_observer!(
 impl_box_observer!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 
 /// Registry contains all registered coprocessors.
-#[derive(Default, Clone)]
-pub struct Registry {
+#[derive(Clone)]
+pub struct Registry<E> where E: KvEngine {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
-    split_check_observers: Vec<Entry<BoxSplitCheckObserver<RocksEngine>>>,
+    split_check_observers: Vec<Entry<BoxSplitCheckObserver<E>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver>>,
     // TODO: add endpoint
+}
+
+impl<E> Default for Registry<E> where E: KvEngine {
+    fn default() -> Registry<E> {
+        Registry {
+            admin_observers: Default::default(),
+            query_observers: Default::default(),
+            apply_snapshot_observers: Default::default(),
+            split_check_observers: Default::default(),
+            role_observers: Default::default(),
+            region_change_observers: Default::default(),
+            cmd_observers: Default::default(),
+        }
+    }
 }
 
 macro_rules! push {
@@ -173,7 +187,7 @@ macro_rules! push {
     };
 }
 
-impl Registry {
+impl<E> Registry<E> where E: KvEngine {
     pub fn register_admin_observer(&mut self, priority: u32, ao: BoxAdminObserver) {
         push!(priority, ao, self.admin_observers);
     }
@@ -193,7 +207,7 @@ impl Registry {
     pub fn register_split_check_observer(
         &mut self,
         priority: u32,
-        sco: BoxSplitCheckObserver<RocksEngine>,
+        sco: BoxSplitCheckObserver<E>,
     ) {
         push!(priority, sco, self.split_check_observers);
     }
@@ -258,7 +272,7 @@ macro_rules! loop_ob {
 /// Admin and invoke all coprocessors.
 #[derive(Default, Clone)]
 pub struct CoprocessorHost {
-    pub registry: Registry,
+    pub registry: Registry<RocksEngine>,
 }
 
 impl CoprocessorHost {
