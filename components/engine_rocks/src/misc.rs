@@ -2,7 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Range, Result};
+use engine_traits::{MiscExt, Range, Result, ALL_CFS};
 
 impl MiscExt for RocksEngine {
     fn is_titan(&self) -> bool {
@@ -47,6 +47,15 @@ impl MiscExt for RocksEngine {
             }
         }
         Ok(false)
+    }
+
+    fn get_engine_used_size(&self) -> Result<u64> {
+        let mut used_size: u64 = 0;
+        for cf in ALL_CFS {
+            let handle = util::get_cf_handle(self.as_inner(), cf)?;
+            used_size += util::get_engine_cf_used_size(self.as_inner(), handle);
+        }
+        Ok(used_size)
     }
 }
 

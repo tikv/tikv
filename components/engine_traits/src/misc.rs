@@ -106,4 +106,11 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;
 
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;
+
+    /// Gets total used size of rocksdb engine, including:
+    /// *  total size (bytes) of all SST files.
+    /// *  total size (bytes) of active and unflushed immutable memtables.
+    /// *  total size (bytes) of all blob files.
+    ///
+    fn get_engine_used_size(&self) -> Result<u64>;
 }

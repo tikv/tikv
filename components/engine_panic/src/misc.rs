@@ -25,4 +25,8 @@ impl MiscExt for PanicEngine {
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
         panic!()
     }
+
+    fn get_engine_used_size(&self) -> Result<u64> {
+        panic!()
+    }
 }
