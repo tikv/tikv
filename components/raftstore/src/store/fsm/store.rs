@@ -7,7 +7,7 @@ use engine::DB;
 use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, CloneCompat};
 use engine_traits::{
     CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
-    WriteOptions,
+    WriteOptions, MiscExt,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -887,7 +887,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        rocks::util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
+        self.engines.kv.c().roughly_cleanup_ranges(&ranges)?;
 
         info!(
             "cleans up garbage data";

@@ -22,7 +22,7 @@ use rocksdb::load_latest_options;
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
-    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
+    DBCompressionType, DBOptions, Env, SliceTransform, DB,
 };
 
 pub use crate::rocks::CFHandle;
@@ -366,36 +366,6 @@ impl SliceTransform for NoopSliceTransform {
     fn in_range(&mut self, _: &[u8]) -> bool {
         true
     }
-}
-
-/// Roughly deletes files in multiple ranges.
-///
-/// Note:
-///    - After this operation, some keys in the range might still exist in the database.
-///    - After this operation, some keys in the range might be removed from existing snapshot,
-///      so you shouldn't expect to be able to read data from the range using existing snapshots
-///      any more.
-///
-/// Ref: https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys
-pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
-    let mut delete_ranges = Vec::new();
-    for &(ref start, ref end) in ranges {
-        if start == end {
-            continue;
-        }
-        assert!(start < end);
-        delete_ranges.push(Range::new(start, end));
-    }
-    if delete_ranges.is_empty() {
-        return Ok(());
-    }
-
-    for cf in db.cf_names() {
-        let handle = get_cf_handle(db, cf)?;
-        db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)?;
-    }
-
-    Ok(())
 }
 
 /// Compacts the column families in the specified range by manual or not.
