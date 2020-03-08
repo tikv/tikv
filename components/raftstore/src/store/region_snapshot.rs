@@ -1,9 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::DB;
-use engine::{self, IterOption};
-use engine_rocks::Compat;
-use engine_traits::{KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot};
+use engine_traits::{KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot, IterOptions};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,8 +36,8 @@ where
         RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
     }
 
-    pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot<RocksEngine> {
-        RegionSnapshot::from_snapshot(db.c().snapshot().into_sync(), region)
+    pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksEngine> {
+        RegionSnapshot::from_snapshot(db.snapshot().into_sync(), region)
     }
 
     pub fn from_snapshot(
@@ -85,11 +82,11 @@ where
         }
     }
 
-    pub fn iter(&self, iter_opt: IterOption) -> RegionIterator<E> {
+    pub fn iter(&self, iter_opt: IterOptions) -> RegionIterator<E> {
         RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
     }
 
-    pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator<E>> {
+    pub fn iter_cf(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<E>> {
         Ok(RegionIterator::new_cf(
             &self.snap,
             Arc::clone(&self.region),
@@ -106,7 +103,7 @@ where
     {
         let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
         let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
+        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
 
@@ -124,7 +121,7 @@ where
     {
         let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
         let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
+        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
@@ -253,7 +250,7 @@ pub struct RegionIterator<E: KvEngine> {
     region: Arc<Region>,
 }
 
-fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
     let region_start_key = keys::enc_start_key(region);
     if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_lower_bound_prefix(keys::DATA_PREFIX_KEY);
@@ -265,7 +262,7 @@ fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
     }
 }
 
-fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_upper_bound(iter_opt: &mut IterOptions, region: &Region) {
     let region_end_key = keys::enc_end_key(region);
     if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
@@ -285,7 +282,7 @@ where
     pub fn new(
         snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Arc<Region>,
-        mut iter_opt: IterOption,
+        mut iter_opt: IterOptions,
     ) -> RegionIterator<E> {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
@@ -298,7 +295,7 @@ where
     pub fn new_cf(
         snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Arc<Region>,
-        mut iter_opt: IterOption,
+        mut iter_opt: IterOptions,
         cf: &str,
     ) -> RegionIterator<E> {
         update_lower_bound(&mut iter_opt, &region);

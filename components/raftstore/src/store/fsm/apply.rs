@@ -2738,7 +2738,7 @@ impl ApplyFsm {
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::<RocksEngine>::from_raw(
-                        apply_ctx.engines.kv.as_inner().clone(),
+                        apply_ctx.engines.kv.clone(),
                         self.delegate.region.clone(),
                     )),
                 }

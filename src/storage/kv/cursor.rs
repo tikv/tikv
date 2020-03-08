@@ -502,7 +502,7 @@ mod tests {
     use engine::Engines;
     use engine::*;
 
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{RocksEngine, Compat};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -540,7 +540,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (region, test_data) = load_default_dataset(engines.clone());
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv.clone(), region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv.c().clone(), region);
         let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
@@ -591,7 +591,7 @@ mod tests {
         // test last region
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv, region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv.c().clone(), region);
         let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter
