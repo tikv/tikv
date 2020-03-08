@@ -103,8 +103,7 @@ mod profiling {
 
     /// Dump the profile to the `path`.
     pub fn dump_prof(path: &str) -> ProfResult<()> {
-        // TODO: return errors in this function
-        let mut bytes = CString::new(path).unwrap().into_bytes_with_nul();
+        let mut bytes = CString::new(path)?;
         let ptr = bytes.as_mut_ptr() as *mut c_char;
         let res = unsafe { jemallocator::mallctl_set(PROF_DUMP, ptr) };
         match res {
@@ -183,7 +182,7 @@ mod profiling {
                     prof_count += 1
                 }
             }
-            assert!(prof_count == 2);
+            assert_eq!(prof_count, 2);
         }
     }
 }
