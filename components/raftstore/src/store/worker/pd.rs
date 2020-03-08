@@ -63,12 +63,19 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     // saves the flow statistics of different region.
     // TODO: maybe we need to return a Result later?
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
+
+    fn report_qps_stats(&self, hub: SplitHub);
 }
 
 impl FlowStatsReporter for Scheduler<Task> {
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
+        }
+    }
+    fn report_qps_stats(&self, hub: SplitHub) {
+        if let Err(e) = self.schedule(Task::QpsStats { hub }) {
+            error!("Failed to send qps statistics"; "err" => ?e);
         }
     }
 }
@@ -131,6 +138,9 @@ pub enum Task {
     },
     ReadStats {
         read_stats: HashMap<u64, FlowStatistics>,
+    },
+    QpsStats {
+        hub: SplitHub,
     },
     DestroyPeer {
         region_id: u64,
@@ -250,6 +260,9 @@ impl Display for Task {
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
+            Task::QpsStats { ref hub } => {
+                write!(f, "get the qps statistics {:?}", hub.region_qps)
+            }
             Task::DestroyPeer { ref region_id } => {
                 write!(f, "destroy peer of region {}", region_id)
             }
@@ -286,7 +299,8 @@ const DEFAULT_COLLECT_INTERVAL: Duration = Duration::from_secs(1);
 struct StatsMonitor {
     scheduler: Scheduler<Task>,
     handle: Option<JoinHandle<()>>,
-    sender: Option<Sender<bool>>,
+    timer: Option<Sender<bool>>,
+    sender: Option<Sender<SplitHub>>,
     thread_info_interval: Duration,
     qps_info_interval: Duration,
     collect_interval: Duration,
@@ -297,6 +311,7 @@ impl StatsMonitor {
         StatsMonitor {
             scheduler,
             handle: None,
+            timer: None,
             sender: None,
             thread_info_interval: interval,
             qps_info_interval: DEFAULT_QPS_INFO_INTERVAL,
@@ -315,10 +330,11 @@ impl StatsMonitor {
             .div_duration_f64(self.collect_interval) as i32;
 
         let (tx, rx) = mpsc::channel();
-        self.sender = Some(tx);
+        self.timer = Some(tx);
+        let (sender, receiver) = mpsc::channel();
+        self.sender = Some(sender);
 
         let scheduler = self.scheduler.clone();
-        let receiver = hub_config.receiver;
         let mut unify_hub = SplitHub::new();
         unify_hub.qps_threshold = hub_config.qps_threshold;
         unify_hub.split_score = hub_config.split_score;
@@ -384,6 +400,7 @@ impl StatsMonitor {
         if h.is_none() {
             return;
         }
+        drop(self.timer.take().unwrap());
         drop(self.sender.take().unwrap());
         if let Err(e) = h.unwrap().join() {
             error!("join stats collector failed"; "err" => ?e);
@@ -865,6 +882,12 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         }
     }
 
+    fn handle_qps_stats(&mut self, hub: SplitHub) {
+        if let Some(sender) = &self.stats_monitor.sender {
+            sender.send(hub).unwrap();
+        }
+    }
+
     fn handle_destroy_peer(&mut self, region_id: u64) {
         match self.region_peers.remove(&region_id) {
             None => {}
@@ -1031,6 +1054,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 merge_source,
             } => self.handle_validate_peer(handle, region, peer, merge_source),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
+            Task::QpsStats { hub } => self.handle_qps_stats(hub),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
             Task::StoreInfos {
                 cpu_usages,
@@ -1284,6 +1308,7 @@ impl Recorder {
     }
 }
 
+#[derive(Debug)]
 pub struct RegionInfo {
     pub peer: metapb::Peer,
     pub qps: u32,
@@ -1306,16 +1331,13 @@ impl RegionInfo {
 }
 
 pub struct SplitHubConfig {
-    pub receiver: mpsc::Receiver<SplitHub>,
     pub qps_threshold: u32,
     pub split_score: f64,
 }
 
 impl SplitHubConfig {
     pub fn default() -> SplitHubConfig {
-        let (_tx, rx) = mpsc::channel();
         SplitHubConfig {
-            receiver: rx,
             qps_threshold: DEFAULT_QPS_THRESHOLD,
             split_score: DEFAULT_SPLIT_SCORE,
         }

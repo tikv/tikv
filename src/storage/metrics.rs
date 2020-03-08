@@ -6,7 +6,6 @@ use prometheus_static_metric::*;
 
 use std::cell::RefCell;
 use std::mem;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
@@ -40,7 +39,7 @@ thread_local! {
     );
 }
 
-pub fn tls_flush<R: FlowStatsReporter>(reporter: &R, sender: &mpsc::Sender<SplitHub>) {
+pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
@@ -69,7 +68,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R, sender: &mpsc::Sender<Split
 
         let mut hub = SplitHub::new();
         mem::swap(&mut hub, &mut m.local_hub);
-        sender.send(hub).unwrap();
+        reporter.report_qps_stats(hub);
     });
 }
 

@@ -4,10 +4,8 @@ use futures::sync::oneshot;
 use futures::{future, Future};
 use futures03::prelude::*;
 use kvproto::kvrpcpb::CommandPri;
-use raftstore::store::SplitHub;
 use std::cell::Cell;
 use std::future::Future as StdFuture;
-use std::sync::mpsc;
 use std::time::Duration;
 use tikv_util::future_pool::{self, FuturePool};
 use tikv_util::time::Instant;
@@ -157,7 +155,6 @@ pub struct ReadPoolRunner<E: Engine, R: FlowStatsReporter> {
     engine: Option<E>,
     reporter: R,
     inner: FutureRunner,
-    sender: mpsc::Sender<SplitHub>,
 }
 
 impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
@@ -192,17 +189,11 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
 }
 
 impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
-    pub fn new(
-        engine: E,
-        inner: FutureRunner,
-        reporter: R,
-        sender: mpsc::Sender<SplitHub>,
-    ) -> Self {
+    pub fn new(engine: E, inner: FutureRunner, reporter: R) -> Self {
         ReadPoolRunner {
             engine: Some(engine),
             reporter,
             inner,
-            sender,
         }
     }
 
@@ -226,8 +217,8 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
     }
 
     fn flush_metrics(&self) {
-        crate::storage::metrics::tls_flush(&self.reporter, &self.sender);
-        crate::coprocessor::metrics::tls_flush(&self.reporter, &self.sender);
+        crate::storage::metrics::tls_flush(&self.reporter);
+        crate::coprocessor::metrics::tls_flush(&self.reporter);
     }
 }
 
@@ -251,7 +242,6 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
     engine: E,
-    sender: mpsc::Sender<SplitHub>,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
 
@@ -263,7 +253,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     let multilevel_builder =
         multilevel::Builder::new(multilevel::Config::default().name(Some(&unified_read_pool_name)));
 
-    let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter, sender);
+    let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter);
     let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
     let pool = builder
         .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
@@ -330,6 +320,7 @@ mod tests {
     use crate::storage::TestEngineBuilder;
     use futures03::channel::oneshot;
     use raftstore::store::FlowStatistics;
+    use raftstore::store::SplitHub;
     use std::thread;
     use tikv_util::collections::HashMap;
 
@@ -338,6 +329,8 @@ mod tests {
 
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: HashMap<u64, FlowStatistics>) {}
+
+        fn report_qps_stats(&self, _hub: SplitHub) {}
     }
 
     #[test]
@@ -351,8 +344,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let (tx, _rx) = mpsc::channel();
-        let pool = build_yatp_read_pool(&config, DummyReporter, engine, tx);
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();

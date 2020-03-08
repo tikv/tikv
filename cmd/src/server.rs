@@ -35,7 +35,7 @@ use std::{
     fmt,
     fs::File,
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex},
     thread::JoinHandle,
     time::Duration,
 };
@@ -421,13 +421,11 @@ impl TiKVServer {
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
-        let (tx, rx) = mpsc::channel();
         let unified_read_pool = if self.config.readpool.unify_read_pool {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                tx.clone(),
             ))
         } else {
             None
@@ -440,7 +438,6 @@ impl TiKVServer {
                 &self.config.readpool.storage,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                tx.clone(),
             ));
             storage_read_pools.handle()
         };
@@ -477,7 +474,6 @@ impl TiKVServer {
                 &self.config.readpool.coprocessor,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                tx,
             ));
             cop_read_pools.handle()
         };
@@ -545,7 +541,6 @@ impl TiKVServer {
 
         let raft_router = node.get_router();
         let hub_config = SplitHubConfig {
-            receiver: rx,
             qps_threshold: self.config.server.split_qps_threshold,
             split_score: self.config.server.split_score,
         };
