@@ -97,3 +97,92 @@ impl CompactExt for RocksEngine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use engine_traits::CompactExt;
+    use rocksdb::{ColumnFamilyOptions, Writable};
+    use engine::rocks::util::{new_engine, CFOptions};
+    use tempfile::Builder;
+    use crate::Compat;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_compact_files_in_range() {
+        let temp_dir = Builder::new()
+            .prefix("test_compact_files_in_range")
+            .tempdir()
+            .unwrap();
+
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_disable_auto_compactions(true);
+        let cfs_opts = vec![
+            CFOptions::new("default", cf_opts.clone()),
+            CFOptions::new("test", cf_opts),
+        ];
+        let db = new_engine(
+            temp_dir.path().to_str().unwrap(),
+            None,
+            &["default", "test"],
+            Some(cfs_opts),
+        )
+            .unwrap();
+        let db = Arc::new(db);
+
+        for cf_name in db.cf_names() {
+            let cf = db.cf_handle(cf_name).unwrap();
+            for i in 0..5 {
+                db.put_cf(cf, &[i], &[i]).unwrap();
+                db.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
+                db.flush_cf(cf, true).unwrap();
+            }
+            let cf_meta = db.get_column_family_meta_data(cf);
+            let cf_levels = cf_meta.get_levels();
+            assert_eq!(cf_levels.first().unwrap().get_files().len(), 5);
+        }
+
+        // # Before
+        // Level-0: [4-5], [3-4], [2-3], [1-2], [0-1]
+        // # After
+        // Level-0: [4-5]
+        // Level-1: [0-4]
+        db.c().compact_files_in_range(None, Some(&[4]), Some(1)).unwrap();
+
+        for cf_name in db.cf_names() {
+            let cf = db.cf_handle(cf_name).unwrap();
+            let cf_meta = db.get_column_family_meta_data(cf);
+            let cf_levels = cf_meta.get_levels();
+            let level_0 = cf_levels[0].get_files();
+            assert_eq!(level_0.len(), 1);
+            assert_eq!(level_0[0].get_smallestkey(), &[4]);
+            assert_eq!(level_0[0].get_largestkey(), &[5]);
+            let level_1 = cf_levels[1].get_files();
+            assert_eq!(level_1.len(), 1);
+            assert_eq!(level_1[0].get_smallestkey(), &[0]);
+            assert_eq!(level_1[0].get_largestkey(), &[4]);
+        }
+
+        // # Before
+        // Level-0: [4-5]
+        // Level-1: [0-4]
+        // # After
+        // Level-0: [4-5]
+        // Level-N: [0-4]
+        db.c().compact_files_in_range(Some(&[2]), Some(&[4]), None).unwrap();
+
+        for cf_name in db.cf_names() {
+            let cf = db.cf_handle(cf_name).unwrap();
+            let cf_opts = db.get_options_cf(cf);
+            let cf_meta = db.get_column_family_meta_data(cf);
+            let cf_levels = cf_meta.get_levels();
+            let level_0 = cf_levels[0].get_files();
+            assert_eq!(level_0.len(), 1);
+            assert_eq!(level_0[0].get_smallestkey(), &[4]);
+            assert_eq!(level_0[0].get_largestkey(), &[5]);
+            let level_n = cf_levels[cf_opts.get_num_levels() - 1].get_files();
+            assert_eq!(level_n.len(), 1);
+            assert_eq!(level_n[0].get_smallestkey(), &[0]);
+            assert_eq!(level_n[0].get_largestkey(), &[4]);
+        }
+    }
+}
