@@ -1514,10 +1514,10 @@ mod tests {
             Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
         let shared_block_cache = false;
         let engines = Engines::new(kv_db, raft_db, shared_block_cache);
-        bootstrap_store(&engines, 1, 1).unwrap();
+        bootstrap_store(&engines.c(), 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
-        prepare_bootstrap_cluster(&engines, &region).unwrap();
+        prepare_bootstrap_cluster(&engines.c(), &region).unwrap();
         PeerStorage::new(engines.c(), &region, sched, 0, "".to_owned()).unwrap()
     }
 

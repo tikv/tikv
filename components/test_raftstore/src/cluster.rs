@@ -16,7 +16,7 @@ use tempfile::{Builder, TempDir};
 use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, CloneCompat};
 use engine_traits::{Peekable, CF_DEFAULT, CompactExt};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
@@ -449,11 +449,11 @@ impl<T: Simulator> Cluster<T> {
         for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(engines, self.id(), id).unwrap();
+            bootstrap_store(&engines.c(), self.id(), id).unwrap();
         }
 
         for engines in self.engines.values() {
-            prepare_bootstrap_cluster(engines, &region)?;
+            prepare_bootstrap_cluster(&engines.c(), &region)?;
         }
 
         self.bootstrap_cluster(region);
@@ -469,7 +469,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for (&id, engines) in &self.engines {
-            bootstrap_store(engines, self.id(), id).unwrap();
+            bootstrap_store(&engines.c(), self.id(), id).unwrap();
         }
 
         let node_id = 1;
@@ -477,7 +477,7 @@ impl<T: Simulator> Cluster<T> {
         let peer_id = 1;
 
         let region = initial_region(node_id, region_id, peer_id);
-        prepare_bootstrap_cluster(&self.engines[&node_id], &region).unwrap();
+        prepare_bootstrap_cluster(&self.engines[&node_id].c(), &region).unwrap();
         self.bootstrap_cluster(region);
         region_id
     }
