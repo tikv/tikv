@@ -96,12 +96,11 @@ macro_rules! box_try {
 macro_rules! slow_log {
     (T $t:expr, $($arg:tt)*) => {{
         if $t.is_slow() {
-            warn!(#"slow_log_by_timer", $($arg)*; "takes" => crate::logger::LogCost($t.elapsed()));
+            warn!(#"slow_log_by_timer", $($arg)*; "takes" => $crate::logger::LogCost($crate::time::duration_to_ms($t.elapsed())));
         }
     }};
     ($n:expr, $($arg:tt)*) => {{
-        let elapsed = crate::logger::LogCost(crate::time::duration_to_ms($n));
-        warn!(#"slow_log", $($arg)*; "takes" => elapsed);
+        warn!(#"slow_log", $($arg)*; "takes" => $crate::logger::LogCost($crate::time::duration_to_ms($n)));
     }}
 
 }
