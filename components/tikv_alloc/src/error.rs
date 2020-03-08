@@ -21,7 +21,9 @@ impl fmt::Display for ProfError {
             ProfError::PathEncodingError(path) => {
                 write!(f, "Dump target path {:?} is not unicode encoding", path)
             }
-            ProfError::PathWithNulError(path) => write!(f, "Dump target path {:?} contain an internal 0 byte", path),
+            ProfError::PathWithNulError(path) => {
+                write!(f, "Dump target path {:?} contain an internal 0 byte", path)
+            }
         }
     }
 }
