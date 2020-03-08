@@ -90,6 +90,10 @@ impl MiscExt for RocksEngine {
         }
         Ok(false)
     }
+
+    fn path(&self) -> &str {
+        self.as_inner().path()
+    }
 }
 
 #[cfg(test)]

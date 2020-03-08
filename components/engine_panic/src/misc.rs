@@ -37,4 +37,8 @@ impl MiscExt for PanicEngine {
     fn auto_compactions_is_disabled(&self) -> Result<bool> {
         panic!()
     }
+
+    fn path(&self) -> &str {
+        panic!()
+    }
 }

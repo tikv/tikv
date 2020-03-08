@@ -127,4 +127,6 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
 
     /// Checks whether any column family sets `disable_auto_compactions` to `True` or not.
     fn auto_compactions_is_disabled(&self) -> Result<bool>;
+
+    fn path(&self) -> &str;
 }
