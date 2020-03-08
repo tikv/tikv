@@ -8,8 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
-use engine::rocks::DB;
-use engine_rocks::{Compat, RocksSnapshot, RocksWriteBatch, RocksEngine};
+use engine_rocks::{RocksSnapshot, RocksWriteBatch, RocksEngine};
 use engine_traits::CF_RAFT;
 use engine_traits::{Iterable, KvEngine, Mutable, Peekable, KvEngines, MiscExt};
 use keys::{self, enc_end_key, enc_start_key};
@@ -571,7 +570,7 @@ impl PeerStorage {
             // not overlap
             self.stats.miss.update(|m| m + 1);
             fetch_entries_to(
-                self.engines.raft.as_inner(),
+                &self.engines.raft,
                 region_id,
                 low,
                 high,
@@ -584,7 +583,7 @@ impl PeerStorage {
         let begin_idx = if low < cache_low {
             self.stats.miss.update(|m| m + 1);
             fetched_size = fetch_entries_to(
-                self.engines.raft.as_inner(),
+                &self.engines.raft,
                 region_id,
                 low,
                 cache_low,
@@ -993,8 +992,8 @@ impl PeerStorage {
         Ok(())
     }
 
-    pub fn get_raft_engine(&self) -> Arc<DB> {
-        Arc::clone(self.engines.raft.as_inner())
+    pub fn get_raft_engine(&self) -> RocksEngine {
+        self.engines.raft.clone()
     }
 
     /// Check whether the storage has finished applying snapshot.
@@ -1222,7 +1221,7 @@ fn get_sync_log_from_entry(entry: &Entry) -> bool {
 }
 
 pub fn fetch_entries_to(
-    engine: &Arc<DB>,
+    engine: &RocksEngine,
     region_id: u64,
     low: u64,
     high: u64,
@@ -1237,7 +1236,7 @@ pub fn fetch_entries_to(
         // to fetch one empty log.
         for i in low..high {
             let key = keys::raft_log_key(region_id, i);
-            match engine.get(&key) {
+            match engine.get_value(&key) {
                 Ok(None) => return Err(RaftError::Store(StorageError::Unavailable)),
                 Ok(Some(v)) => {
                     let mut entry = Entry::default();
@@ -1260,7 +1259,6 @@ pub fn fetch_entries_to(
     let start_key = keys::raft_log_key(region_id, low);
     let end_key = keys::raft_log_key(region_id, high);
     engine
-        .c()
         .scan(
             &start_key,
             &end_key,
