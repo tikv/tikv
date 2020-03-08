@@ -244,8 +244,8 @@ pub use crate::mutable::*;
 mod peekable;
 pub use crate::peekable::*;
 
-// These modules contain support code that does not need to be implemented by
-// engines.
+// These modules contain concrete types and support code that do not need to
+// be implemented by engines.
 
 mod cf_defs;
 pub use crate::cf_defs::*;
@@ -257,10 +257,14 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+
+// These modules need further scrutiny
+
 pub mod metrics_flusher;
-pub mod util;
 pub use crate::metrics_flusher::*;
+pub mod util;
 pub mod compaction_job;
 pub use compaction_job::*;
 
+// FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
