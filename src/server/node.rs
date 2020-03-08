@@ -12,7 +12,7 @@ use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, CloneCompat};
 use engine_traits::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
@@ -356,7 +356,7 @@ where
         self.system.spawn(
             store,
             cfg,
-            engines,
+            engines.c(),
             trans,
             pd_client,
             snap_mgr,

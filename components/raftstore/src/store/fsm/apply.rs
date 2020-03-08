@@ -14,11 +14,8 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine::rocks;
-use engine::rocks::WriteOptions;
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch, CloneCompat};
-use engine_traits::{MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt, KvEngines};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch};
+use engine_traits::{MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt, KvEngines, WriteOptions, KvEngine};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -284,7 +281,7 @@ struct ApplyContext {
     region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
     notifier: Notifier,
-    engines: Engines,
+    engines: KvEngines<RocksEngine, RocksEngine>,
     cbs: MustConsumeVec<ApplyCallback>,
     apply_res: Vec<ApplyRes>,
     exec_ctx: Option<ExecContext>,
@@ -310,7 +307,7 @@ impl ApplyContext {
         host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         router: ApplyRouter,
         notifier: Notifier,
         cfg: &Config,
@@ -348,7 +345,6 @@ impl ApplyContext {
             let kb_wb = self
                 .engines
                 .kv
-                .c()
                 .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
             self.kv_wb = Some(kb_wb);
             self.kv_wb_last_bytes = 0;
@@ -401,7 +397,7 @@ impl ApplyContext {
             write_opts.set_sync(need_sync);
             self.engines
                 .kv
-                .write_opt(self.kv_wb().as_inner(), &write_opts)
+                .write_opt(self.kv_wb(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
@@ -412,7 +408,6 @@ impl ApplyContext {
                 let kv_wb = self
                     .engines
                     .kv
-                    .c()
                     .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
                 self.kv_wb = Some(kv_wb);
             } else {
@@ -1334,7 +1329,6 @@ impl ApplyDelegate {
         if ALL_CFS.iter().find(|x| **x == cf).is_none() {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
-        let handle = rocks::util::get_cf_handle(&ctx.engines.kv, cf).unwrap();
 
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
@@ -1343,7 +1337,7 @@ impl ApplyDelegate {
             ctx.engines
                 .kv
                 .delete_files_in_range_cf(
-                    handle, &start_key, &end_key, /* include_end */ false,
+                    cf, &start_key, &end_key, /* include_end */ false,
                 )
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1358,7 +1352,6 @@ impl ApplyDelegate {
             // Delete all remaining keys.
             ctx.engines
                 .kv
-                .c()
                 .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1401,7 +1394,7 @@ impl ApplyDelegate {
         }
 
         ctx.importer
-            .ingest(sst, RocksEngine::from_ref(&ctx.engines.kv))
+            .ingest(sst, &ctx.engines.kv)
             .unwrap_or_else(|e| {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.
@@ -1899,7 +1892,7 @@ impl ApplyDelegate {
 
         let region_state_key = keys::region_state_key(source_region_id);
         let state: RegionLocalState =
-            match ctx.engines.kv.c().get_msg_cf(CF_RAFT, &region_state_key) {
+            match ctx.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
                 Ok(Some(s)) => s,
                 e => panic!(
                     "{} failed to get regions state of {:?}: {:?}",
@@ -1976,7 +1969,7 @@ impl ApplyDelegate {
             .inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState =
-            match ctx.engines.kv.c().get_msg_cf(CF_RAFT, &region_state_key) {
+            match ctx.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
                 Ok(Some(s)) => s,
                 e => panic!("{} failed to get regions state: {:?}", self.tag, e),
             };
@@ -2092,7 +2085,7 @@ impl ApplyDelegate {
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: RocksSnapshot::new(Arc::clone(&ctx.engines.kv)),
+                snap: ctx.engines.kv.snapshot(),
             }),
         ))
     }
@@ -2668,7 +2661,6 @@ impl ApplyFsm {
                     apply_ctx
                         .engines
                         .kv
-                        .c()
                         .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE),
                 );
             }
@@ -2686,7 +2678,7 @@ impl ApplyFsm {
         }
 
         if let Err(e) = snap_task
-            .generate_and_schedule_snapshot(&apply_ctx.engines.c(), &apply_ctx.region_scheduler)
+            .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
         {
             error!(
                 "schedule snapshot failed";
@@ -2746,7 +2738,7 @@ impl ApplyFsm {
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::<RocksEngine>::from_raw(
-                        apply_ctx.engines.kv.clone(),
+                        apply_ctx.engines.kv.as_inner().clone(),
                         self.delegate.region.clone(),
                     )),
                 }
@@ -2927,7 +2919,7 @@ pub struct Builder {
     coprocessor_host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
-    engines: Engines,
+    engines: KvEngines<RocksEngine, RocksEngine>,
     sender: Notifier,
     router: ApplyRouter,
 }
@@ -3118,8 +3110,9 @@ mod tests {
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
     use engine::DB;
+    use engine::rocks;
     use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{Peekable, WriteBatch};
+    use engine_traits::{Peekable, WriteBatch, KvEngines};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -3133,7 +3126,7 @@ mod tests {
 
     use super::*;
 
-    pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
+    pub fn create_tmp_engine(path: &str) -> (TempDir, KvEngines<RocksEngine, RocksEngine>) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = Arc::new(
             rocks::util::new_engine(
@@ -3149,7 +3142,7 @@ mod tests {
                 .unwrap(),
         );
         let shared_block_cache = false;
-        (path, Engines::new(db, raft_db, shared_block_cache))
+        (path, KvEngines::new(db.c().clone(), raft_db.c().clone(), shared_block_cache))
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
@@ -3176,7 +3169,7 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        let wb = engines.kv.c().write_batch();
+        let wb = engines.kv.write_batch();
         assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // IngestSst command
@@ -3185,12 +3178,12 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        let wb = engines.kv.c().write_batch();
+        let wb = engines.kv.write_batch();
         assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let wb = engines.kv.c().write_batch();
+        let wb = engines.kv.write_batch();
         for i in 0..WRITE_BATCH_MAX_KEYS {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -3199,7 +3192,7 @@ mod tests {
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let wb = engines.kv.c().write_batch();
+        let wb = engines.kv.write_batch();
         for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -3368,7 +3361,6 @@ mod tests {
         let apply_state_key = keys::apply_state_key(2);
         assert!(engines
             .kv
-            .c()
             .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .is_none());
@@ -3676,9 +3668,9 @@ mod tests {
         let dk_k1 = keys::data_key(b"k1");
         let dk_k2 = keys::data_key(b"k2");
         let dk_k3 = keys::data_key(b"k3");
-        assert_eq!(engines.kv.get(&dk_k1).unwrap().unwrap(), b"v1");
-        assert_eq!(engines.kv.get(&dk_k2).unwrap().unwrap(), b"v1");
-        assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get_value(&dk_k1).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get_value(&dk_k2).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get_value(&dk_k3).unwrap().unwrap(), b"v1");
         validate(&router, 1, |delegate| {
             assert_eq!(delegate.applied_index_term, 1);
             assert_eq!(delegate.apply_state.get_applied_index(), 1);
@@ -3699,9 +3691,8 @@ mod tests {
         assert_eq!(apply_res.metrics.written_keys, 2);
         assert_eq!(apply_res.metrics.size_diff_hint, 5);
         assert_eq!(apply_res.metrics.lock_cf_written_bytes, 5);
-        let lock_handle = engines.kv.cf_handle(CF_LOCK).unwrap();
         assert_eq!(
-            engines.kv.get_cf(lock_handle, &dk_k1).unwrap().unwrap(),
+            engines.kv.get_value_cf(CF_LOCK, &dk_k1).unwrap().unwrap(),
             b"v1"
         );
 
@@ -3730,7 +3721,7 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         // a writebatch should be atomic.
-        assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get_value(&dk_k3).unwrap().unwrap(), b"v1");
 
         EntryBuilder::new(5, 2)
             .capture_resp(&router, 3, 1, capture_tx.clone())
@@ -3748,7 +3739,7 @@ mod tests {
         assert!(resp.get_header().get_error().has_stale_command());
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert!(engines.kv.get(&dk_k1).unwrap().is_none());
+        assert!(engines.kv.get_value(&dk_k1).unwrap().is_none());
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.metrics.lock_cf_written_bytes, 3);
         assert_eq!(apply_res.metrics.delete_keys_hint, 2);
@@ -3772,7 +3763,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry])));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
-        assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
+        assert_eq!(engines.kv.get_value(&dk_k3).unwrap().unwrap(), b"v1");
         fetch_apply_res(&rx);
 
         let delete_range_entry = EntryBuilder::new(8, 3)
@@ -3785,9 +3776,9 @@ mod tests {
         router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry])));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert!(engines.kv.get(&dk_k1).unwrap().is_none());
-        assert!(engines.kv.get(&dk_k2).unwrap().is_none());
-        assert!(engines.kv.get(&dk_k3).unwrap().is_none());
+        assert!(engines.kv.get_value(&dk_k1).unwrap().is_none());
+        assert!(engines.kv.get_value(&dk_k2).unwrap().is_none());
+        assert!(engines.kv.get_value(&dk_k3).unwrap().is_none());
         fetch_apply_res(&rx);
 
         // UploadSST
@@ -3833,7 +3824,7 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        check_db_range(&RocksEngine::from_db(engines.kv.clone()), sst_range);
+        check_db_range(&engines.kv, sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);
@@ -4241,7 +4232,7 @@ mod tests {
         // All requests should be checked.
         assert!(error_msg(&resp).contains("id count"), "{:?}", resp);
         let checker = SplitResultChecker {
-            db: &engines.kv,
+            db: engines.kv.as_inner(),
             origin_peers: &peers,
             epoch: epoch.clone(),
         };

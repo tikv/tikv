@@ -8,7 +8,7 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{RocksEngine};
 use engine_traits::{KvEngine, Peekable, Snapshot, WriteBatchExt, WriteOptions, KvEngines};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
@@ -453,8 +453,8 @@ impl Peer {
         );
 
         // Set Tombstone state explicitly
-        let kv_wb = ctx.engines.kv.c().write_batch();
-        let raft_wb = ctx.engines.raft.c().write_batch();
+        let kv_wb = ctx.engines.kv.write_batch();
+        let raft_wb = ctx.engines.raft.write_batch();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
         write_peer_state(
             &kv_wb,
@@ -465,8 +465,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
-        ctx.engines.kv.c().write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.c().write_opt(&raft_wb, &write_opts)?;
+        ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
+        ctx.engines.raft.write_opt(&raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -2430,7 +2430,7 @@ impl Peer {
         read_index: Option<u64>,
     ) -> ReadResponse<RocksEngine> {
         let mut resp = ReadExecutor::new(
-            ctx.engines.kv.c().clone(),
+            ctx.engines.kv.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
         )

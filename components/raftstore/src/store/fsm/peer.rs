@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot, CloneCompat};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, Peekable, KvEngines};
 use futures::Future;
@@ -1080,7 +1080,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .ctx
             .engines
             .kv
-            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
             debug!(
@@ -1613,7 +1612,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.ctx.store_id(),
                 &self.ctx.cfg,
                 self.ctx.region_scheduler.clone(),
-                self.ctx.engines.c(),
+                self.ctx.engines.clone(),
                 &new_region,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
@@ -1711,7 +1710,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let state_key = keys::region_state_key(region_id);
-        let state: RegionLocalState = match self.ctx.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)
+        let state: RegionLocalState = match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)
         {
             Err(e) => {
                 error!(
