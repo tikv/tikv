@@ -3,9 +3,8 @@
 use std::f64::INFINITY;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::{compact_files_in_range};
 use engine::rocks::DB;
-use engine_traits::{name_to_cf, CF_DEFAULT, MiscExt};
+use engine_traits::{name_to_cf, CF_DEFAULT, MiscExt, CompactExt};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -280,7 +279,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 Some(req.get_output_level())
             };
 
-            let res = compact_files_in_range(&engine, start, end, output_level);
+            let res = engine.c().compact_files_in_range(start, end, output_level);
             match res {
                 Ok(_) => info!(
                     "compact files in range";

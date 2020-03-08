@@ -411,12 +411,11 @@ mod tests {
     use crate::store::PeerStorage;
     use crate::Result;
 
-    use engine::rocks::util::compact_files_in_range;
     use engine::rocks::Writable;
     use engine::Engines;
     use engine::*;
     use engine_rocks::{Compat, RocksEngine, CloneCompat};
-    use engine_traits::{Mutable, Peekable};
+    use engine_traits::{Mutable, Peekable, CompactExt};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -488,7 +487,7 @@ mod tests {
                 db.put(&data_key(k), k).unwrap();
                 db.flush(true).unwrap();
                 data.push((k.to_vec(), k.to_vec()));
-                compact_files_in_range(&db, Some(&data_key(k)), Some(&data_key(k)), Some(level))
+                db.c().compact_files_in_range(Some(&data_key(k)), Some(&data_key(k)), Some(level))
                     .unwrap();
             }
         }

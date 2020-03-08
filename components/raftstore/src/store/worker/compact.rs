@@ -6,11 +6,9 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::rocks;
-use engine::rocks::util::compact_range;
 use engine::DB;
 use engine_rocks::Compat;
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, CompactExt};
 use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
 
@@ -103,19 +101,17 @@ impl Runner {
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
     ) -> Result<(), Error> {
-        let handle = box_try!(rocks::util::get_cf_handle(&self.engine, &cf_name));
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
             .start_coarse_timer();
-        compact_range(
-            &self.engine,
-            handle,
+        box_try!(self.engine.c().compact_range(
+            cf_name,
             start_key,
             end_key,
             false,
             1, /* threads */
-        );
+        ));
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";

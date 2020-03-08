@@ -17,7 +17,7 @@ use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{Peekable, CF_DEFAULT};
+use engine_traits::{Peekable, CF_DEFAULT, CompactExt};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -181,8 +181,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            let handle = rocks::util::get_cf_handle(&engine.kv, "default").unwrap();
-            rocks::util::compact_range(&engine.kv, handle, None, None, false, 1);
+            engine.kv.c().compact_range("default", None, None, false, 1).unwrap();
         }
     }
 

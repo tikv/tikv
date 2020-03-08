@@ -687,7 +687,7 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
     use engine_rocks::{Compat, CloneCompat, RocksSnapshot};
-    use engine_traits::{Mutable, Peekable, WriteBatchExt};
+    use engine_traits::{Mutable, Peekable, WriteBatchExt, CompactExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
@@ -912,7 +912,7 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
+        engine.kv.c().compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
@@ -954,7 +954,7 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
+        engine.kv.c().compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
@@ -971,7 +971,7 @@ mod tests {
         );
 
         // make sure have checked pending applies
-        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
+        engine.kv.c().compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0

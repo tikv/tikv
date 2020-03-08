@@ -7,13 +7,12 @@ use std::thread;
 use std::time::Duration;
 
 use engine::rocks;
-use engine::rocks::util::compact_files_in_range;
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Writable};
 use engine::Engines;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
-use engine_traits::{MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE};
+use engine_traits::{MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE, CompactExt};
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
 use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
@@ -216,7 +215,7 @@ fn test_delete_files_in_range_for_titan() {
 
     // Flush and compact the kvs into L6.
     db.flush(true).unwrap();
-    compact_files_in_range(&db, None, None, None).unwrap();
+    db.c().compact_files_in_range(None, None, None).unwrap();
     let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
     let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
@@ -259,7 +258,7 @@ fn test_delete_files_in_range_for_titan() {
     db.flush(true).unwrap();
     db.put(b"2", b"2").unwrap();
     db.flush(true).unwrap();
-    compact_files_in_range(db, Some(b"0"), Some(b"3"), Some(1)).unwrap();
+    db.c().compact_files_in_range(Some(b"0"), Some(b"3"), Some(1)).unwrap();
 
     // Now the LSM structure of default cf is:
     // memtable: [put(b_7, blob4)] (because of Titan GC)
