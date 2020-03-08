@@ -1,5 +1,7 @@
 log-level = "debug"
 log-file = "foo"
+slow-log-file = "slow_foo"
+slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 
