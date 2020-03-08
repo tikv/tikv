@@ -1040,6 +1040,7 @@ dependencies = [
  "rocksdb",
  "slog",
  "slog-global",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
