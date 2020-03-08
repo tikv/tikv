@@ -12,7 +12,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-use engine::rocks::util::*;
+use engine::rocks;
 use engine::rocks::DB;
 use engine_rocks::{Compat, RocksEngine};
 use fs2;
@@ -558,7 +558,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
 
         // already include size of snapshot files
         let used_size =
-            stats.get_used_size() + get_engine_used_size(Arc::clone(&store_info.engine));
+            stats.get_used_size() + rocks::util::get_engine_used_size(Arc::clone(&store_info.engine));
         stats.set_used_size(used_size);
 
         let mut available = if capacity > used_size {
