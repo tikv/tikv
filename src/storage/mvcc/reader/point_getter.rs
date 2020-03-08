@@ -162,6 +162,32 @@ impl<S: Snapshot> PointGetter<S> {
         self.load_data(user_key)
     }
 
+    // TODO: optimize: we read lock again, could be cached in get()
+    pub fn found_newer_data(&mut self, user_key: &Key) -> Result<bool> {
+        if let IsolationLevel::Si = self.isolation_level {
+            self.statistics.lock.get += 1;
+            let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
+            if let Some(ref lock_value) = lock_value {
+                self.statistics.lock.processed += 1;
+                let lock = Lock::parse(lock_value)?;
+                if lock.ts > self.ts {
+                    return Ok(true);
+                }
+            }
+        };
+
+        self.write_cursor.seek(
+            &user_key.clone().append_ts(TimeStamp::max()),
+            &mut self.statistics.write,
+        )?;
+        if !self.write_cursor.valid()? {
+            return Ok(false);
+        }
+
+        let current_key = self.write_cursor.key(&mut self.statistics.write);
+        Ok(Key::decode_ts_from(current_key)? > self.ts)
+    }
+
     /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
     /// see whether it conflicts with the given `ts`.
     ///

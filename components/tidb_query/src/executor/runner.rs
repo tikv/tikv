@@ -24,6 +24,7 @@ pub struct ExecutorsRunner<SS> {
     collect_exec_summary: bool,
     context: EvalContext,
     exec_stats: ExecuteStats,
+    // storage: Storage,
 }
 
 /// Builds a normal executor pipeline.
@@ -198,6 +199,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
             collect_exec_summary,
             context,
             exec_stats,
+            // storage,
         })
     }
 
@@ -317,5 +319,10 @@ impl<SS: 'static> ExecutorsRunner<SS> {
         // TODO: A better way is to fill storage stats in `handle_request`, or
         // return SelectResponse in `handle_request`.
         self.executor.collect_storage_stats(dest);
+    }
+
+    pub fn found_newer_data(&mut self) -> bool {
+        // TODO: issue-6690: self.storage.found_newer_data()
+        false
     }
 }

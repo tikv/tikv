@@ -21,6 +21,8 @@ pub trait Store: Send {
     /// Re-use last cursor to incrementally (if possible) fetch the provided key.
     fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>>;
 
+    fn incremental_get_found_newer_data(&mut self, key: &Key) -> bool;
+
     /// Take the statistics. Currently only available for `incremental_get`.
     fn incremental_get_take_statistics(&mut self) -> Statistics;
 
@@ -71,6 +73,9 @@ pub trait Scanner: Send {
         }
         Ok(results)
     }
+
+    fn check_newer_data(&mut self, enabled: bool);
+    fn found_newer_data(&mut self) -> bool;
 
     /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
@@ -219,6 +224,18 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             );
         }
         Ok(self.point_getter_cache.as_mut().unwrap().get(key)?)
+    }
+
+    fn incremental_get_found_newer_data(&mut self, key: &Key) -> bool {
+        if self.point_getter_cache.is_none() {
+            false
+        } else {
+            self.point_getter_cache
+                .as_mut()
+                .unwrap()
+                .found_newer_data(key)
+                .unwrap_or(false)
+        }
     }
 
     fn incremental_get_take_statistics(&mut self) -> Statistics {
@@ -431,6 +448,11 @@ impl Store for FixtureStore {
     }
 
     #[inline]
+    fn incremental_get_found_newer_data(&mut self, _: &Key) -> bool {
+        false
+    }
+
+    #[inline]
     fn incremental_get_take_statistics(&mut self) -> Statistics {
         Statistics::default()
     }
@@ -514,6 +536,12 @@ impl Scanner for FixtureStoreScanner {
             Some((k, Ok(v))) => Ok(Some((k, v))),
             Some((_k, Err(e))) => Err(e),
         }
+    }
+
+    fn check_newer_data(&mut self, _: bool) {}
+
+    fn found_newer_data(&mut self) -> bool {
+        false
     }
 
     #[inline]

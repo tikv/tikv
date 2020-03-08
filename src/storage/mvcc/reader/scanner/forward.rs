@@ -115,6 +115,8 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     is_started: bool,
     statistics: Statistics,
     scan_policy: P,
+    check_newer_data: bool,
+    found_newer_data: bool,
 }
 
 impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
@@ -136,12 +138,22 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             statistics: Statistics::default(),
             is_started: false,
             scan_policy,
+            check_newer_data: false,
+            found_newer_data: false,
         }
     }
 
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::replace(&mut self.statistics, Statistics::default())
+    }
+
+    pub fn check_newer_data(&mut self, enabled: bool) {
+        self.check_newer_data = enabled;
+    }
+
+    pub fn found_newer_data(&mut self) -> Result<bool> {
+        Ok(self.found_newer_data)
     }
 
     /// Get the next key-value pair, in forward order.
@@ -296,6 +308,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
+                } else if self.check_newer_data {
+                    self.found_newer_data = true;
                 }
             }
         }
@@ -303,8 +317,14 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
+            let seek_ts = if self.check_newer_data && !self.found_newer_data {
+                // TODO: use "write.seek(ts) + write.prev()" to check newer data maybe faster?
+                TimeStamp::max()
+            } else {
+                self.cfg.ts
+            };
             self.cursors.write.seek(
-                &user_key.clone().append_ts(self.cfg.ts),
+                &user_key.clone().append_ts(seek_ts),
                 &mut self.statistics.write,
             )?;
             if !self.cursors.write.valid()? {
@@ -315,6 +335,22 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                 // Meet another key.
                 return Ok(false);
+            }
+            // Do the real seek if the previous seek was for checking newer data
+            if seek_ts == TimeStamp::max() && Key::decode_ts_from(current_key)? > self.cfg.ts {
+                self.cursors.write.near_seek(
+                    &user_key.clone().append_ts(self.cfg.ts),
+                    &mut self.statistics.write,
+                )?;
+                if !self.cursors.write.valid()? {
+                    return Ok(false);
+                }
+                let current_key = self.cursors.write.key(&mut self.statistics.write);
+                if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
+                    // Meet another key.
+                    return Ok(false);
+                }
+                self.found_newer_data = true;
             }
         }
         Ok(true)

@@ -25,6 +25,7 @@ pub struct DagHandlerBuilder<S: Store + 'static> {
     deadline: Deadline,
     batch_row_limit: usize,
     is_streaming: bool,
+    is_cache_enabled: bool,
     enable_batch_if_possible: bool,
     execution_time_limit: Option<Duration>,
     semaphore: Option<Arc<Semaphore>>,
@@ -38,6 +39,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
+        is_cache_enabled: bool,
     ) -> Self {
         DagHandlerBuilder {
             req,
@@ -47,6 +49,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
             deadline,
             batch_row_limit,
             is_streaming,
+            is_cache_enabled,
             enable_batch_if_possible: true,
             execution_time_limit: None,
             semaphore: None,
@@ -89,6 +92,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
                 self.deadline,
                 self.execution_time_limit,
                 self.semaphore,
+                self.is_cache_enabled,
             )?
             .into_boxed())
         } else {
@@ -101,6 +105,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
                 self.deadline,
                 self.batch_row_limit,
                 self.is_streaming,
+                self.is_cache_enabled,
             )?
             .into_boxed())
         }
@@ -121,12 +126,13 @@ impl DAGHandler {
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
+        is_cache_enabled: bool,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query::executor::ExecutorsRunner::from_request(
                 req,
                 ranges,
-                TiKVStorage::from(store),
+                TiKVStorage::new(store, is_cache_enabled),
                 deadline,
                 batch_row_limit,
                 is_streaming,
@@ -139,7 +145,8 @@ impl DAGHandler {
 #[async_trait]
 impl RequestHandler for DAGHandler {
     async fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.runner.handle_request(), self.data_version)
+        let result = self.runner.handle_request();
+        handle_qe_response(result, !self.runner.found_newer_data(), self.data_version)
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
@@ -165,12 +172,13 @@ impl BatchDAGHandler {
         deadline: Deadline,
         execution_time_limit: Option<Duration>,
         semaphore: Option<Arc<Semaphore>>,
+        is_cache_enabled: bool,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query::batch::runner::BatchExecutorsRunner::from_request(
                 req,
                 ranges,
-                TiKVStorage::from(store),
+                TiKVStorage::new(store, is_cache_enabled),
                 deadline,
                 execution_time_limit,
                 semaphore,
@@ -183,7 +191,8 @@ impl BatchDAGHandler {
 #[async_trait]
 impl RequestHandler for BatchDAGHandler {
     async fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.runner.handle_request().await, self.data_version)
+        let result = self.runner.handle_request().await;
+        handle_qe_response(result, !self.runner.found_newer_data(), self.data_version)
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
@@ -193,6 +202,7 @@ impl RequestHandler for BatchDAGHandler {
 
 fn handle_qe_response(
     result: tidb_query::Result<SelectResponse>,
+    can_be_cached: bool,
     data_version: Option<u64>,
 ) -> Result<Response> {
     use tidb_query::error::ErrorInner;
@@ -201,6 +211,8 @@ fn handle_qe_response(
         Ok(sel_resp) => {
             let mut resp = Response::default();
             resp.set_data(box_try!(sel_resp.write_to_bytes()));
+            // TODO: issue-6690
+            // resp.set_can_be_cached(can_be_cached);
             resp.set_is_cache_hit(false);
             if let Some(v) = data_version {
                 resp.set_cache_last_version(v);
@@ -215,6 +227,8 @@ fn handle_qe_response(
                 sel_resp.mut_error().set_code(err.code());
                 sel_resp.mut_error().set_msg(err.to_string());
                 resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                // TODO: issue-6690
+                // resp.set_can_be_cached(can_be_cached);
                 resp.set_is_cache_hit(false);
                 Ok(resp)
             }

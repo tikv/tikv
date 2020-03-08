@@ -174,6 +174,19 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
             Scanner::Backward(scanner) => scanner.take_statistics(),
         }
     }
+    fn check_newer_data(&mut self, enabled: bool) {
+        match self {
+            Scanner::Forward(scanner) => scanner.check_newer_data(enabled),
+            Scanner::Backward(scanner) => scanner.check_newer_data(enabled),
+        };
+    }
+    fn found_newer_data(&mut self) -> bool {
+        match self {
+            Scanner::Forward(scanner) => scanner.found_newer_data(),
+            Scanner::Backward(scanner) => scanner.found_newer_data(),
+        }
+        .unwrap_or(false)
+    }
 }
 
 pub struct ScannerConfig<S: Snapshot> {

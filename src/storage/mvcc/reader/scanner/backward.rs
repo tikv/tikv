@@ -34,6 +34,8 @@ pub struct BackwardKvScanner<S: Snapshot> {
     /// Is iteration started
     is_started: bool,
     statistics: Statistics,
+    check_newer_data: bool,
+    found_newer_data: bool,
 }
 
 impl<S: Snapshot> BackwardKvScanner<S> {
@@ -49,12 +51,22 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
+            check_newer_data: false,
+            found_newer_data: false,
         }
     }
 
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::replace(&mut self.statistics, Statistics::default())
+    }
+
+    pub fn check_newer_data(&mut self, enabled: bool) {
+        self.check_newer_data = enabled;
+    }
+
+    pub fn found_newer_data(&mut self) -> Result<bool> {
+        Ok(self.found_newer_data)
     }
 
     /// Get the next key-value pair, in backward order.
@@ -204,6 +216,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 } else if last_checked_commit_ts > ts {
                     // Meet an unwanted version, use `last_version` as the return as well.
                     is_done = true;
+                    self.found_newer_data = true;
                 }
             }
             if is_done {
@@ -226,6 +239,24 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             return Ok(self.handle_last_version(last_version, user_key)?);
         }
         assert!(ts > last_checked_commit_ts);
+
+        // Check newer data if needed
+        // TODO: use near_seek later
+        if self.check_newer_data && !self.found_newer_data {
+            let seek_key = user_key.clone().append_ts(TimeStamp::max());
+            self.write_cursor
+                .internal_seek(&seek_key, &mut self.statistics.write)?;
+            assert!(self.write_cursor.valid()?);
+            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            assert!(Key::is_user_key_eq(
+                current_key,
+                user_key.as_encoded().as_slice()
+            ));
+            let current_ts = Key::decode_ts_from(current_key)?;
+            if current_ts > ts {
+                self.found_newer_data = true
+            }
+        }
 
         // After several `prev()`, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.

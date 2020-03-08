@@ -211,6 +211,7 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
+                        req.get_is_cache_enabled(),
                     )
                     .data_version(data_version)
                     .enable_batch_if_possible(enable_batch_if_possible)
