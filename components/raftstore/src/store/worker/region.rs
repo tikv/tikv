@@ -9,10 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt};
+use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt, KvEngines};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -207,7 +206,7 @@ impl PendingDeleteRanges {
 
 #[derive(Clone)]
 struct SnapContext<R> {
-    engines: Engines,
+    engines: KvEngines<RocksEngine, RocksEngine>,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -282,7 +281,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -298,7 +297,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(self.engines.kv.c().delete_all_in_range(
+        box_try!(self.engines.kv.delete_all_in_range(
             &start_key,
             &end_key,
             self.use_delete_range
@@ -308,7 +307,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -331,7 +330,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.engines.kv.c().clone(),
+            db: self.engines.kv.clone(),
             region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -339,11 +338,11 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let wb = self.engines.kv.c().write_batch();
+        let wb = self.engines.kv.write_batch();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.c().write(&wb).unwrap_or_else(|e| {
+        self.engines.kv.write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -400,7 +399,6 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             if let Err(e) = self
                 .engines
                 .kv
-                .c()
                 .delete_all_files_in_range(start_key, end_key)
             {
                 error!(
@@ -416,7 +414,6 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         if let Err(e) =
             self.engines
                 .kv
-                .c()
                 .delete_all_in_range(start_key, end_key, self.use_delete_range)
         {
             error!(
@@ -514,7 +511,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             if plain_file_used(cf) {
                 continue;
             }
-            if self.engines.kv.c().ingest_maybe_slowdown_writes(cf).expect("cf") {
+            if self.engines.kv.ingest_maybe_slowdown_writes(cf).expect("cf") {
                 return true;
             }
         }
@@ -532,7 +529,7 @@ pub struct Runner<R> {
 
 impl<R: CasualRouter<RocksEngine>> Runner<R> {
     pub fn new(
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -689,7 +686,7 @@ mod tests {
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine_rocks::{Compat, RocksSnapshot};
+    use engine_rocks::{Compat, CloneCompat, RocksSnapshot};
     use engine_traits::{Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
@@ -828,7 +825,7 @@ mod tests {
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
-            engines.clone(),
+            engines.c(),
             mgr,
             0,
             true,

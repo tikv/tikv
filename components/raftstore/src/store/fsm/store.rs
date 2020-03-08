@@ -4,7 +4,7 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::DB;
-use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch};
+use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, CloneCompat};
 use engine_traits::{
     CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
     WriteOptions,
@@ -1115,7 +1115,7 @@ impl RaftBatchSystem {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let region_runner = RegionRunner::new(
-            engines.clone(),
+            engines.c(),
             snap_mgr,
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
