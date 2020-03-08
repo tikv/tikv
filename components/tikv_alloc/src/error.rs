@@ -19,7 +19,7 @@ impl fmt::Display for ProfError {
             ProfError::IOError(e) => write!(f, "io error occurred {:?}", e),
             ProfError::JemallocError(e) => write!(f, "jemalloc error {}", e),
             ProfError::PathEncodingError(path) => {
-                write!(f, "Dump target path {:?} is non-unicode", path)
+                write!(f, "Dump target path {:?} is not unicode encoding", path)
             }
             ProfError::PathWithNulError(path) => write!(f, "Dump target path {:?} contain an internal 0 byte", path),
         }
