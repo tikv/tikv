@@ -7,7 +7,7 @@ pub enum ProfError {
     IOError(std::io::Error),
     JemallocError(i32),
     PathEncodingError(std::ffi::OsString), // When temp files are in a non-unicode directory, OsString.into_string() will cause this error,
-    PtahError(std::ffi::NulError),
+    PathWithNulError(std::ffi::NulError),
 }
 
 pub type ProfResult<T> = std::result::Result<T, ProfError>;
@@ -21,7 +21,7 @@ impl fmt::Display for ProfError {
             ProfError::PathEncodingError(path) => {
                 write!(f, "Dump target path {:?} is non-unicode", path)
             }
-            ProfError::PtahError(path) => write!(f, "Dump target path {:?} is invalid", path),
+            ProfError::PathWithNulError(path) => write!(f, "Dump target path {:?}  has \\0", path),
         }
     }
 }
@@ -34,7 +34,7 @@ impl From<std::io::Error> for ProfError {
 
 impl From<std::ffi::NulError> for ProfError {
     fn from(e: std::ffi::NulError) -> Self {
-        ProfError::PtahError(e)
+        ProfError::PathWithNulError(e)
     }
 }
 
