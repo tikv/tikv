@@ -370,8 +370,8 @@ checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
 
 [[package]]
 name = "bzip2-sys"
-version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#a8ee5cb4d0587409d03b4367bbfa8d7d6266378e"
+version = "0.1.8+1.0.8"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#461d66916a5e6848e455c6d4fb9a5f70f4617efd"
 dependencies = [
  "cc",
  "libc",
@@ -911,7 +911,7 @@ checksum = "362b44f82af5d682357335094c5eecba8875215c30b011161c5143e33e998fde"
 dependencies = [
  "ahash",
  "futures 0.3.4",
- "hashbrown 0.6.3",
+ "hashbrown",
  "num_cpus",
  "owning_ref",
  "parking_lot 0.9.0",
@@ -1024,6 +1024,7 @@ version = "0.0.1"
 dependencies = [
  "engine_traits",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -1433,13 +1434,13 @@ dependencies = [
 
 [[package]]
 name = "getset"
-version = "0.0.7"
+version = "0.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19fbde0fad0c1c1f9474694b1f5c9ba22b09f2f74f74e6d2bd19c43f6656e2cb"
+checksum = "5bb3f5b7d8d70c9bd23cf29b2b38094661418fb0ea79f1b0cc2019a11d6f5429"
 dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.13",
- "syn 0.15.44",
+ "proc-macro2 1.0.9",
+ "quote 1.0.2",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -1520,12 +1521,6 @@ dependencies = [
  "string",
  "tokio-io",
 ]
-
-[[package]]
-name = "hashbrown"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1de41fb8dba9714efd92241565cdff73f78508c95697dd56787d3cba27e2353"
 
 [[package]]
 name = "hashbrown"
@@ -1834,7 +1829,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#35b65c96516ef285b412ea3cd0c43a62add63383"
+source = "git+https://github.com/pingcap/kvproto.git#2cf9a243b8d589f345de1dbaa9eeffec6afbdc06"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -1903,7 +1898,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#20f5bef7261e6a41d8491ee9d5306564a926ee12"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b67becf9add951538ff2b54a83bbc0e906a8f566"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1921,7 +1916,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#20f5bef7261e6a41d8491ee9d5306564a926ee12"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b67becf9add951538ff2b54a83bbc0e906a8f566"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2987,19 +2982,15 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#243278168c5488d94f2fd45cda9efd121c7ecb2a"
+source = "git+https://github.com/pingcap/raft-rs#afabefa23196a4a23832add0087f5a522d8ccc3b"
 dependencies = [
+ "fxhash",
  "getset",
- "hashbrown 0.5.0",
- "log",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)",
- "rand 0.6.5",
+ "rand 0.7.2",
  "slog",
- "slog-envlogger",
- "slog-stdlog",
- "term",
 ]
 
 [[package]]
@@ -3012,12 +3003,11 @@ replace = "raft 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#243278168c5488d94f2fd45cda9efd121c7ecb2a"
+source = "git+https://github.com/pingcap/raft-rs#afabefa23196a4a23832add0087f5a522d8ccc3b"
 dependencies = [
  "bytes 0.4.12",
  "lazy_static",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "prost-derive 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf-build 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -3408,7 +3398,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#20f5bef7261e6a41d8491ee9d5306564a926ee12"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b67becf9add951538ff2b54a83bbc0e906a8f566"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3765,21 +3755,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "slog-envlogger"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "906a1a0bc43fed692df4b82a5e2fbfc3733db8dad8bb514ab27a4f23ad04f5c0"
-dependencies = [
- "log",
- "regex",
- "slog",
- "slog-async",
- "slog-scope",
- "slog-stdlog",
- "slog-term",
-]
-
-[[package]]
 name = "slog-global"
 version = "0.1.0"
 source = "git+https://github.com/breeswish/slog-global.git?rev=0e23a5baff302a9d7bccd85f8f31e43339c2f2c1#0e23a5baff302a9d7bccd85f8f31e43339c2f2c1"
@@ -3788,29 +3763,6 @@ dependencies = [
  "lazy_static",
  "log",
  "slog",
-]
-
-[[package]]
-name = "slog-scope"
-version = "4.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1d3ec6214d46e57a7ec87c1972bbca66c59172a0cfffa5233c54726afb946bf"
-dependencies = [
- "arc-swap 0.3.11",
- "lazy_static",
- "slog",
-]
-
-[[package]]
-name = "slog-stdlog"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be4d87903baf655da2d82bc3ac3f7ef43868c58bf712b3a661fda72009304c23"
-dependencies = [
- "crossbeam",
- "log",
- "slog",
- "slog-scope",
 ]
 
 [[package]]
@@ -5169,7 +5121,7 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.15+zstd.1.4.4"
-source = "git+https://github.com/gyscos/zstd-rs.git#3df21bbc06a5257967ca7f30ba33a6512e0cde4b"
+source = "git+https://github.com/gyscos/zstd-rs.git#bc874a57298bdb500cdb5aeac5f23878b6480d0b"
 dependencies = [
  "cc",
  "glob",

@@ -12,7 +12,7 @@ use time;
 
 struct Serializer<'a>(&'a mut dyn std::io::Write);
 
-impl<'a> slog::ser::Serializer for Serializer<'a> {
+impl<'a> slog::Serializer for Serializer<'a> {
     fn emit_arguments(&mut self, key: slog::Key, val: &std::fmt::Arguments<'_>) -> slog::Result {
         write!(self.0, ", {}: {}", key, val)?;
         Ok(())
