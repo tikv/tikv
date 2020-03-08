@@ -3,11 +3,9 @@
 use std::collections::VecDeque;
 use std::error;
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
 use std::time::Instant;
 
-use engine::DB;
-use engine_rocks::Compat;
+use engine_rocks::{RocksEngine};
 use engine_traits::{KvEngine, CompactExt};
 use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
@@ -86,11 +84,11 @@ quick_error! {
 }
 
 pub struct Runner {
-    engine: Arc<DB>,
+    engine: RocksEngine,
 }
 
 impl Runner {
-    pub fn new(engine: Arc<DB>) -> Runner {
+    pub fn new(engine: RocksEngine) -> Runner {
         Runner { engine }
     }
 
@@ -105,7 +103,7 @@ impl Runner {
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
             .start_coarse_timer();
-        box_try!(self.engine.c().compact_range(
+        box_try!(self.engine.compact_range(
             cf_name,
             start_key,
             end_key,
@@ -147,7 +145,7 @@ impl Runnable<Task> for Runner {
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
             } => match collect_ranges_need_compact(
-                self.engine.c(),
+                &self.engine,
                 ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
@@ -263,6 +261,7 @@ mod tests {
     use crate::coprocessor::properties::MvccPropertiesCollectorFactory;
     use keys::data_key;
     use txn_types::{Key, TimeStamp, Write, WriteType};
+    use std::sync::Arc;
 
     use super::*;
 
@@ -277,7 +276,7 @@ mod tests {
         let db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let db = Arc::new(db);
 
-        let mut runner = Runner::new(Arc::clone(&db));
+        let mut runner = Runner::new(db.c().clone());
 
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
 

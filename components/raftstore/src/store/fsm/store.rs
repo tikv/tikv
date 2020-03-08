@@ -1127,7 +1127,7 @@ impl RaftBatchSystem {
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let compact_runner = CompactRunner::new(Arc::clone(&engines.kv));
+        let compact_runner = CompactRunner::new(engines.kv.c().clone());
         let cleanup_sst_runner = CleanupSSTRunner::new(
             store.get_id(),
             self.router.clone(),
