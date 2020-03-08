@@ -34,6 +34,20 @@ impl MiscExt for RocksEngine {
             .as_inner()
             .get_approximate_memtable_stats_cf(handle, &range))
     }
+
+    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        if let Some(n) = util::get_cf_num_files_at_level(self.as_inner(), handle, 0) {
+            let options = self.as_inner().get_options_cf(handle);
+            let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+            // Leave enough buffer to tolerate heavy write workload,
+            // which may flush some memtables in a short time.
+            if n > u64::from(slowdown_trigger) / 2 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 #[cfg(test)]
