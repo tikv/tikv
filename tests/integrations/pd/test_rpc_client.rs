@@ -476,7 +476,7 @@ fn test_region_heartbeat_on_leader_change() {
 #[test]
 fn test_periodical_update() {
     let eps_count = 3;
-    let server = MockServer::new(eps_count);
+    let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
 
     let counter = Arc::new(AtomicUsize::new(0));
@@ -485,7 +485,16 @@ fn test_periodical_update() {
     client.handle_reconnect(move || {
         counter1.fetch_add(1, Ordering::SeqCst);
     });
+    let leader = client.get_leader();
 
-    thread::sleep(Duration::from_secs(7));
-    assert_eq!(counter.load(Ordering::SeqCst), 2);
+    for _ in 0..5 {
+        let new = client.get_leader();
+        if new != leader {
+            assert!(counter.load(Ordering::SeqCst) >= 1);
+            return;
+        }
+        thread::sleep(LeaderChange::get_leader_interval());
+    }
+
+    panic!("failed, leader should changed");
 }
