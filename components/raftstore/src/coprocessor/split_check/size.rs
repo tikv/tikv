@@ -424,7 +424,7 @@ pub mod tests {
         cfg.batch_split_limit = 5;
 
         let mut runnable = SplitCheckRunner::new(
-            Arc::clone(&engine),
+            engine.c().clone(),
             tx.clone(),
             CoprocessorHost::new(tx),
             cfg,

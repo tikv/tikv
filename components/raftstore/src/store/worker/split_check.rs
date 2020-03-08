@@ -4,10 +4,8 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-use std::sync::Arc;
 
-use engine::DB;
-use engine_rocks::{Compat, RocksEngine, RocksEngineIterator};
+use engine_rocks::{RocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
@@ -75,7 +73,7 @@ struct MergedIterator {
 
 impl MergedIterator {
     fn new(
-        db: &Arc<DB>,
+        db: &RocksEngine,
         cfs: &[CfName],
         start_key: &[u8],
         end_key: &[u8],
@@ -89,7 +87,7 @@ impl MergedIterator {
                 Some(KeyBuilder::from_slice(end_key, 0, 0)),
                 fill_cache,
             );
-            let mut iter = db.c().iterator_cf_opt(cf, iter_opt)?;
+            let mut iter = db.iterator_cf_opt(cf, iter_opt)?;
             let found: Result<bool> = iter.seek(start_key.into()).map_err(|e| box_err!(e));
             if found? {
                 heap.push(KeyEntry::new(
@@ -162,14 +160,14 @@ impl Display for Task {
 }
 
 pub struct Runner<S> {
-    engine: Arc<DB>,
+    engine: RocksEngine,
     router: S,
     coprocessor: CoprocessorHost,
     cfg: Config,
 }
 
 impl<S: CasualRouter<RocksEngine>> Runner<S> {
-    pub fn new(engine: Arc<DB>, router: S, coprocessor: CoprocessorHost, cfg: Config) -> Runner<S> {
+    pub fn new(engine: RocksEngine, router: S, coprocessor: CoprocessorHost, cfg: Config) -> Runner<S> {
         Runner {
             engine,
             router,
@@ -194,7 +192,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         let mut host = self.coprocessor.new_split_checker_host(
             &self.cfg,
             region,
-            &self.engine.c(),
+            &self.engine,
             auto_split,
             policy,
         );
@@ -213,7 +211,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                     }
                 }
             }
-            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine.c())
+            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine)
             {
                 Ok(keys) => keys
                     .into_iter()

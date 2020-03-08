@@ -215,7 +215,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
         let mut runnable = SplitCheckRunner::new(
-            Arc::clone(&engine),
+            engine.c().clone(),
             tx.clone(),
             CoprocessorHost::new(tx),
             cfg,
