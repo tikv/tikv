@@ -5,7 +5,7 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, CloneCompat};
 use engine_traits::{
     CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
-    WriteOptions, MiscExt,
+    WriteOptions, MiscExt, CompactExt
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;

@@ -125,8 +125,5 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     /// Ref: https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys
     fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
 
-    /// Checks whether any column family sets `disable_auto_compactions` to `True` or not.
-    fn auto_compactions_is_disabled(&self) -> Result<bool>;
-
     fn path(&self) -> &str;
 }
