@@ -73,9 +73,8 @@ impl Conn {
         // Use a mutex to make compiler happy.
         let rx1 = Arc::new(Mutex::new(rx));
         let rx2 = Arc::clone(&rx1);
+        let (addr1, addr2) = (addr.to_owned(), addr.to_owned());
 
-        let batch_addr = addr.to_owned();
-        let addr = addr.to_owned();
         let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
         let batch_send_or_fallback = batch_sink
             .send_all(Reusable(rx1).map(move |v| {
@@ -83,26 +82,15 @@ impl Conn {
                 batch_msgs.set_msgs(v.into());
                 (batch_msgs, WriteFlags::default().buffer_hint(false))
             }))
-            .then(move |r| {
-                let (mut fallback, mut sink_e) = (false, None);
-                if let Err(e) = r {
-                    if let GrpcError::RpcFinished(Some(RpcStatus { ref status, .. })) = e {
-                        fallback = *status == RpcStatusCode::UNIMPLEMENTED;
-                    }
-                    sink_e = Some(e);
-                }
-                batch_receiver.map_err(move |e| {
-                    warn!(
-                        "batch_raft RPC fail"; "to_addr" => &batch_addr,
-                        "sink_err" => ?sink_e, "err" => ?e
-                    );
-                    fallback
+            .then(move |sink_r| {
+                batch_receiver.then(move |recv_r| {
+                    check_rpc_result("batch_raft", &addr1, sink_r.err(), recv_r.err())
                 })
             })
             .or_else(move |fallback| {
                 if !fallback {
-                    return Box::new(future::err(()))
-                        as Box<dyn Future<Item = _, Error = ()> + Send>;
+                    return Box::new(future::err(false))
+                        as Box<dyn Future<Item = _, Error = bool> + Send>;
                 }
                 // Fallback to raft RPC.
                 warn!("batch_raft is unimplemented, fallback to raft");
@@ -120,15 +108,9 @@ impl Conn {
                         stream::iter_ok::<_, GrpcError>(grpc_msgs)
                     })
                     .flatten();
-                Box::new(sink.send_all(msgs).then(move |r| {
-                    let mut sink_e = None;
-                    if let Err(e) = r {
-                        sink_e = Some(e);
-                    }
-                    receiver.map_err(move |e| {
-                        warn!("raft RPC fail"; "to_addr" => &addr,
-                            "sink_err" => ?sink_e, "err" => ?e
-                        );
+                Box::new(sink.send_all(msgs).then(move |sink_r| {
+                    receiver.then(move |recv_r| {
+                        check_rpc_result("raft", &addr2, sink_r.err(), recv_r.err())
                     })
                 }))
             });
@@ -280,4 +262,25 @@ impl<T: Stream> Stream for Reusable<T> {
         let mut t = self.0.lock().unwrap();
         t.poll().map_err(|_| GrpcError::RpcFinished(None))
     }
+}
+
+fn grpc_error_is_unimplemented(e: &GrpcError) -> bool {
+    if let GrpcError::RpcFailure(RpcStatus { ref status, .. }) = e {
+        let x = *status == RpcStatusCode::UNIMPLEMENTED;
+        return x;
+    }
+    false
+}
+
+fn check_rpc_result(
+    rpc: &str,
+    addr: &str,
+    sink_e: Option<GrpcError>,
+    recv_e: Option<GrpcError>,
+) -> std::result::Result<(), bool> {
+    if sink_e.is_none() && recv_e.is_none() {
+        return Ok(());
+    }
+    warn!( "RPC {} fail", rpc; "to_addr" => addr, "sink_err" => ?sink_e, "err" => ?recv_e);
+    recv_e.map_or(Ok(()), |e| Err(grpc_error_is_unimplemented(&e)))
 }
