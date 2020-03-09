@@ -370,6 +370,7 @@ impl StatsMonitor {
                         }
 
                         let (top, split_infos) = unify_hub.flush();
+                        unify_hub.clear();
                         let task = Task::AutoSplit { split_infos };
                         if let Err(e) = scheduler.schedule(task) {
                             error!(
@@ -1275,10 +1276,11 @@ impl Recorder {
         }
     }
 
+    fn is_ready(&self)->bool{
+        self.times >= DETECT_TIMES
+    }
+
     fn split_key(&self, split_score: f64, min_sample_num: i32) -> Vec<u8> {
-        if self.times < DETECT_TIMES {
-            return vec![];
-        }
         let mut best_index: i32 = -1;
         let mut best_score = split_score;
         for index in 0..self.samples.len() {
@@ -1424,23 +1426,24 @@ impl SplitHub {
                     .entry(*region_id)
                     .or_insert_with(Recorder::new);
                 recorder.record(region_info.get_key_ranges());
-                let key = recorder.split_key(self.split_score, self.min_sample_num);
-                if !key.is_empty() {
-                    let split_info = SplitInfo {
-                        region_id: *region_id,
-                        split_key: Key::from_raw(&key).into_encoded(),
-                        peer: region_info.get_peer().clone(),
-                    };
-                    split_infos.push(split_info);
+                if recorder.is_ready() {
+                    let key = recorder.split_key(self.split_score, self.min_sample_num);
+                    if !key.is_empty() {
+                        let split_info = SplitInfo {
+                            region_id: *region_id,
+                            split_key: Key::from_raw(&key).into_encoded(),
+                            peer: region_info.get_peer().clone(),
+                        };
+                        split_infos.push(split_info);
+                        info!("load base split region";"region_id"=>*region_id);
+                    }
                     self.region_recorder.remove(region_id);
-                    info!("load base split region";"region_id"=>*region_id);
                 }
             } else {
                 self.region_recorder.remove_entry(region_id);
             }
             top.push(qps);
         }
-        self.clear();
         (top.into_vec(), split_infos)
     }
 }
@@ -1617,5 +1620,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn default_hub()->SplitHub{
+        let mut hub = SplitHub::new();
+        for i in 0..1000{
+            for _j in 0..1000{
+                hub.add(i, &metapb::Peer::default(), b"a", b"b")
+            }
+        }
+        hub
+    }
+
+    #[bench]
+    fn hub_flush(b: &mut test::Bencher){
+        let mut hub = default_hub();
+        b.iter(|| {
+            hub.flush();
+        });
+    }
+
+    #[bench]
+    fn hub_update(b: &mut test::Bencher){
+        let mut other_hub = default_hub();
+
+        b.iter(|| {
+            let mut hub = SplitHub::new();
+            hub.update(&mut other_hub);
+        });
     }
 }
