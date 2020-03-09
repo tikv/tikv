@@ -213,6 +213,10 @@ impl Dicts {
         let generate_limit = 10;
         for _ in 0..generate_limit {
             let (key_id, key) = generate_data_key(method);
+            if key_id == 0 {
+                // 0 is invalid
+                continue;
+            }
             let mut data_key = DataKey::default();
             data_key.key = key;
             data_key.method = method.into();
