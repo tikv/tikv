@@ -572,7 +572,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 callback(res);
                 self.update_statistics_metrics();
                 slow_log!(
-                    timer,
+                    T timer,
                     "GC on region {}, epoch {:?}, safe_point {}",
                     ctx.get_region_id(),
                     ctx.get_region_epoch(),
@@ -589,7 +589,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
-                    timer,
+                    T timer,
                     "UnsafeDestroyRange start_key {:?}, end_key {:?}",
                     start_key,
                     end_key
@@ -606,7 +606,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
-                    timer,
+                    T timer,
                     "PhysicalScanLock start_key {:?}, max_ts {}, limit {}",
                     start_key,
                     max_ts,

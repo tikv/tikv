@@ -79,7 +79,7 @@ futures03 = { package = "futures", version = "0.3.1", features = ["compat"] }
 futures-cpupool = "0.1"
 futures-locks = "0.1"
 futures-executor = "0.3.1"
-futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
+futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 grpcio = { version = "0.5.0-alpha.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.3"
 itertools = "0.8"
@@ -95,6 +95,7 @@ more-asserts = "0.1"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 pd_client = { path = "components/pd_client" }
+pin-project = "0.4.8"
 prost = "0.5.0"
 pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
@@ -148,12 +149,13 @@ git = "https://github.com/tikv/yatp.git"
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
 test_sst_importer = { path = "components/test_sst_importer" }
+tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "5.0.1"
 
 [replace]
 # TODO: remove this when new raft-rs is published.
-"raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
-"raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
+"raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", default-features = false }
+"raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", default-features = false }
 "protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "prost:0.5.0" = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }

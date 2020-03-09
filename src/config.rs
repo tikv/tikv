@@ -1769,7 +1769,7 @@ mod readpool_tests {
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[config(skip)]
-    pub dynamic_config: bool,
+    pub enable_dynamic_config: bool,
 
     #[config(skip)]
     #[serde(with = "log_level_serde")]
@@ -1777,6 +1777,12 @@ pub struct TiKvConfig {
 
     #[config(skip)]
     pub log_file: String,
+
+    #[config(skip)]
+    pub slow_log_file: String,
+
+    #[config(skip)]
+    pub slow_log_threshold: ReadableDuration,
 
     #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
@@ -1833,9 +1839,11 @@ pub struct TiKvConfig {
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
-            dynamic_config: false,
+            enable_dynamic_config: true,
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            slow_log_file: "".to_owned(),
+            slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
@@ -2399,7 +2407,7 @@ impl ConfigHandler {
         mut controller: ConfigController,
         scheduler: FutureScheduler<PdTask>,
     ) -> CfgResult<Self> {
-        if controller.get_current().dynamic_config {
+        if controller.get_current().enable_dynamic_config {
             if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
                 return Err(format!("failed to schedule refresh config task: {:?}", e).into());
             }

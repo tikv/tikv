@@ -78,14 +78,18 @@ fn start_raftstore(
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-    let mut cfg_controller = ConfigController::new(cfg, Default::default());
+    let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default());
     cfg_controller.register(
         Module::Raftstore,
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
     );
     let pd_worker = FutureWorker::new("store-config");
-    let config_client =
-        ConfigHandler::start(String::new(), Default::default(), pd_worker.scheduler()).unwrap();
+    let config_client = ConfigHandler::start(
+        String::new(),
+        ConfigController::new(cfg, Default::default()),
+        pd_worker.scheduler(),
+    )
+    .unwrap();
 
     system
         .spawn(
@@ -141,6 +145,7 @@ where
 #[test]
 fn test_update_raftstore_config() {
     let mut config = TiKvConfig::default();
+    config.enable_dynamic_config = false;
     config.validate().unwrap();
     let (mut cfg_controller, router, _, mut system) = start_raftstore(config.clone());
 
@@ -174,6 +179,7 @@ fn test_update_raftstore_config() {
 #[test]
 fn test_update_apply_store_config() {
     let mut config = TiKvConfig::default();
+    config.enable_dynamic_config = false;
     config.raft_store.sync_log = true;
     config.validate().unwrap();
     let (mut cfg_controller, raft_router, apply_router, mut system) =
