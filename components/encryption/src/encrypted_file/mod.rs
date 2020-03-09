@@ -1,4 +1,4 @@
-use std::fs::{rename, OpenOptions};
+use std::fs::{rename, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 
@@ -78,6 +78,8 @@ impl<'a> EncryptedFile<'a> {
 
         // Replace old file with the tmp file aomticlly.
         rename(tmp_path, origin_path)?;
+        let base_dir = File::open(&self.base)?;
+        base_dir.sync_all()?;
 
         // TODO GC broken temp files if necessary.
         Ok(())
