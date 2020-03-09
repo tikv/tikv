@@ -7,6 +7,7 @@ use crate::{Error, Result};
 
 pub const METADATA_KEY_IV: &str = "IV";
 pub const METADATA_KEY_ENCRYPTION_METHOD: &str = "encryption_method";
+pub const METADATA_PLAINTEXT_SHA256: &str = "plaintext_sha256";
 
 pub fn encode_ecryption_method(method: EncryptionMethod) -> Result<Vec<u8>> {
     let mut value = Vec::with_capacity(4); // Length of i32.
@@ -30,6 +31,12 @@ pub fn decode_ecryption_method(mut value: &[u8]) -> Result<EncryptionMethod> {
         .read_i32::<BigEndian>()
         .map(|v| EncryptionMethod::from_i32(v).unwrap())
         .map_err(|e| Error::Other(e.into()))
+}
+
+pub fn sha256(content: &[u8]) -> Result<Vec<u8>> {
+    use openssl::hash::{self, MessageDigest};
+    let h = hash::hash(MessageDigest::sha256(), content).map(|digest| digest.to_vec())?;
+    Ok(h)
 }
 
 #[cfg(test)]
