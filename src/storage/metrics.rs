@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
 use kvproto::metapb;
+use kvproto::kvrpcpb::KeyRange;
 use raftstore::store::SplitHub;
 use tikv_util::collections::HashMap;
 
@@ -142,6 +143,13 @@ pub fn tls_collect_qps(region_id: u64, peer: &metapb::Peer, start_key: &[u8], en
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         m.local_hub.add(region_id, peer, start_key, end_key);
+    });
+}
+
+pub fn tls_collect_qps_batch(region_id: u64, peer: &metapb::Peer,mut key_ranges:Vec<KeyRange>) {
+    TLS_STORAGE_METRICS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.local_hub.batch_add(region_id, peer,&mut key_ranges);
     });
 }
 

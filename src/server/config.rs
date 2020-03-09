@@ -74,7 +74,7 @@ pub struct Config {
     pub concurrent_send_snap_limit: usize,
     /// How many snapshots can be recv concurrently.
     pub concurrent_recv_snap_limit: usize,
-    pub split_qps_threshold: u32,
+    pub split_qps_threshold: usize,
     pub split_score: f64,
     pub end_point_recursion_limit: u32,
     pub end_point_stream_channel_size: usize,

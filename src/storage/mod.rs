@@ -150,6 +150,13 @@ macro_rules! check_key_size {
     };
 }
 
+pub fn build_key_range(start_key: &[u8], end_key: &[u8])->KeyRange{
+    let mut range = KeyRange::default();
+    range.set_start_key(start_key.to_vec());
+    range.set_end_key(end_key.to_vec());
+    range
+}
+
 impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get concurrency of normal readpool.
     pub fn readpool_normal_concurrency(&self) -> usize {
@@ -358,11 +365,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
 
+                let mut key_ranges = vec!();
                 for key in &keys {
                     if let Ok(key) = key.to_owned().into_raw() {
-                        tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, b"");
+                        key_ranges.push(build_key_range(&key, b""));
                     }
                 }
+                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
@@ -676,9 +685,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
 
+                let mut key_ranges = vec!();
                 for key in &keys {
-                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, b"");
+                    key_ranges.push(build_key_range(key,b""));
                 }
+                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
@@ -1064,26 +1075,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 {
-                    let ranges = ranges.clone();
-                    for range in ranges.iter() {
+                    let mut key_ranges =  vec!();
+                    for range in &ranges {
                         let start_key = &range.start_key;
                         let end_key = &range.end_key;
                         if reverse_scan {
-                            tls_collect_qps(
-                                ctx.get_region_id(),
-                                ctx.get_peer(),
-                                &end_key,
-                                &start_key,
-                            );
+                            key_ranges.push(build_key_range(&end_key, &start_key));
                         } else {
-                            tls_collect_qps(
-                                ctx.get_region_id(),
-                                ctx.get_peer(),
-                                &start_key,
-                                &end_key,
-                            );
+                            key_ranges.push(build_key_range(&start_key, &end_key));
                         }
                     }
+                    tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
                 }
                 let command_duration = tikv_util::time::Instant::now_coarse();
 

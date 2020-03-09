@@ -16,6 +16,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::kvrpcpb::KeyRange;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use rand::Rng;
@@ -963,7 +964,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
             Task::AutoSplit { split_infos } => {
                 for split_info in split_infos {
                     if let Ok(Some(region)) =
-                        self.pd_client.get_region_by_id(split_info.region_id).wait()
+                    self.pd_client.get_region_by_id(split_info.region_id).wait()
                     {
                         self.handle_ask_split(
                             handle,
@@ -1193,7 +1194,7 @@ fn send_destroy_peer_message(
     }
 }
 
-const DEFAULT_QPS_THRESHOLD: u32 = 500;
+const DEFAULT_QPS_THRESHOLD: usize = 500;
 const DETECT_TIMES: u32 = 10;
 pub const TOP_N: usize = 10;
 const DETECT_INTERVAL: Duration = Duration::from_secs(1);
@@ -1218,20 +1219,11 @@ impl Sample {
     }
 }
 
-pub struct KeyRange {
-    pub start_key: Vec<u8>,
-    pub end_key: Vec<u8>,
-    pub qps: u64,
-}
-
-impl KeyRange {
-    fn new(start_key: &[u8], end_key: &[u8]) -> KeyRange {
-        KeyRange {
-            start_key: start_key.to_owned(),
-            end_key: end_key.to_owned(),
-            qps: 0,
-        }
-    }
+pub fn build_key_range(start_key: &[u8], end_key: &[u8])->KeyRange{
+    let mut range = KeyRange::default();
+    range.set_start_key(start_key.to_vec());
+    range.set_end_key(end_key.to_vec());
+    range
 }
 
 pub struct Recorder {
@@ -1311,27 +1303,50 @@ impl Recorder {
 #[derive(Debug)]
 pub struct RegionInfo {
     pub peer: metapb::Peer,
-    pub qps: u32,
+    pub key_ranges: Vec<KeyRange>,
 }
 
 impl RegionInfo {
     fn new() -> RegionInfo {
         RegionInfo {
-            qps: 0,
+            key_ranges: vec!(),
             peer: metapb::Peer::default(),
         }
     }
 
-    fn add(&mut self, peer: &metapb::Peer, num: u32) {
+    fn get_qps(&self) -> usize {
+        self.key_ranges.len()
+    }
+
+    fn get_key_ranges(&self) -> &Vec<KeyRange> {
+        &self.key_ranges
+    }
+
+    fn get_key_ranges_mut(&mut self) -> &mut Vec<KeyRange> {
+        &mut self.key_ranges
+    }
+
+    fn get_peer(&self) -> &metapb::Peer {
+        &self.peer
+    }
+
+    fn add_key_ranges(&mut self, key_ranges: &mut Vec<KeyRange>) {
+        self.key_ranges.append(key_ranges);
+    }
+
+    fn add_key_range(&mut self, key_range: KeyRange) {
+        self.key_ranges.push(key_range);
+    }
+
+    fn update_peer(&mut self, peer: &metapb::Peer) {
         if self.peer != *peer {
             self.peer = peer.clone();
         }
-        self.qps += num;
     }
 }
 
 pub struct SplitHubConfig {
-    pub qps_threshold: u32,
+    pub qps_threshold: usize,
     pub split_score: f64,
 }
 
@@ -1346,9 +1361,8 @@ impl SplitHubConfig {
 
 pub struct SplitHub {
     pub region_qps: HashMap<u64, RegionInfo>,
-    pub region_keys: HashMap<u64, Vec<KeyRange>>,
     pub region_recorder: HashMap<u64, Recorder>,
-    pub qps_threshold: u32,
+    pub qps_threshold: usize,
     pub split_score: f64,
     pub interval: Duration,
     pub min_sample_num: i32,
@@ -1358,7 +1372,6 @@ impl SplitHub {
     pub fn new() -> SplitHub {
         SplitHub {
             region_qps: HashMap::default(),
-            region_keys: HashMap::default(),
             region_recorder: HashMap::default(),
             qps_threshold: DEFAULT_QPS_THRESHOLD,
             split_score: DEFAULT_SPLIT_SCORE,
@@ -1367,59 +1380,56 @@ impl SplitHub {
         }
     }
 
-    fn add_qps(&mut self, region_id: u64, peer: &metapb::Peer, num: u32) {
-        let region_info = self
-            .region_qps
+    fn get_region_info(&mut self, region_id: u64) -> &mut RegionInfo {
+        self.region_qps
             .entry(region_id)
-            .or_insert_with(RegionInfo::new);
-        region_info.add(peer, num);
-    }
-
-    fn add_key_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
-        let key_ranges = self.region_keys.entry(region_id).or_insert_with(|| vec![]);
-        (*key_ranges).push(KeyRange::new(start_key, end_key));
+            .or_insert_with(RegionInfo::new)
     }
 
     pub fn add(&mut self, region_id: u64, peer: &metapb::Peer, start_key: &[u8], end_key: &[u8]) {
-        self.add_qps(region_id, peer, 1);
-        self.add_key_range(region_id, start_key, end_key);
+        let region_info = self.get_region_info(region_id);
+        region_info.update_peer(peer);
+        region_info.add_key_range(build_key_range(start_key, end_key));
+    }
+
+    pub fn batch_add(&mut self, region_id: u64, peer: &metapb::Peer, key_ranges: &mut Vec<KeyRange>) {
+        let region_info = self.get_region_info(region_id);
+        region_info.update_peer(peer);
+        region_info.add_key_ranges(key_ranges);
     }
 
     fn update(&mut self, other: &mut SplitHub) {
-        for (region_id, region_info) in other.region_qps.iter() {
-            self.add_qps(*region_id, &(*region_info).peer, (*region_info).qps);
-        }
-        for (region_id, other_key_ranges) in other.region_keys.iter_mut() {
-            let key_ranges = self.region_keys.entry(*region_id).or_insert_with(|| vec![]);
-            (*key_ranges).append(other_key_ranges);
+        for (region_id, other_region_info) in other.region_qps.iter_mut() {
+            let region_info = self.get_region_info(*region_id);
+            region_info.update_peer(other_region_info.get_peer());
+            region_info.add_key_ranges(other_region_info.get_key_ranges_mut());
         }
     }
 
     fn clear(&mut self) {
-        self.region_keys.clear();
         self.region_qps.clear();
         self.region_recorder.retain(|_, recorder| {
             recorder.create_time.elapsed().unwrap() < DETECT_INTERVAL * DETECT_TIMES * 10
         });
     }
 
-    pub fn flush(&mut self) -> (Vec<u32>, Vec<SplitInfo>) {
+    pub fn flush(&mut self) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut split_infos = Vec::default();
         let mut top = BinaryHeap::with_capacity(TOP_N as usize);
         for (region_id, region_info) in self.region_qps.iter() {
-            let qps = (*region_info).qps;
+            let qps = region_info.get_qps();
             if qps > self.qps_threshold {
                 let recorder = self
                     .region_recorder
                     .entry(*region_id)
                     .or_insert_with(Recorder::new);
-                recorder.record(self.region_keys.get(region_id).unwrap());
+                recorder.record(region_info.get_key_ranges());
                 let key = recorder.split_key(self.split_score, self.min_sample_num);
                 if !key.is_empty() {
                     let split_info = SplitInfo {
                         region_id: *region_id,
                         split_key: Key::from_raw(&key).into_encoded(),
-                        peer: (*region_info).peer.clone(),
+                        peer: region_info.get_peer().clone(),
                     };
                     split_infos.push(split_info);
                     self.region_recorder.remove(region_id);
@@ -1531,35 +1541,35 @@ mod tests {
         let mut recorder = Recorder::new();
         recorder.samples.push(Sample::new(b"c"));
 
-        let key_range = KeyRange::new(b"a", b"b");
+        let key_range = build_key_range(b"a", b"b");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].left, 1);
 
-        let key_range = KeyRange::new(b"a", b"c");
+        let key_range = build_key_range(b"a", b"c");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].left, 2);
 
-        let key_range = KeyRange::new(b"a", b"d");
+        let key_range = build_key_range(b"a", b"d");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].contained, 1);
 
-        let key_range = KeyRange::new(b"c", b"d");
+        let key_range = build_key_range(b"c", b"d");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].right, 1);
 
-        let key_range = KeyRange::new(b"d", b"e");
+        let key_range = build_key_range(b"d", b"e");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].right, 2);
 
-        let key_range = KeyRange::new(b"a", b"");
+        let key_range = build_key_range(b"a", b"");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].left, 3);
 
-        let key_range = KeyRange::new(b"c", b"");
+        let key_range = build_key_range(b"c", b"");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].right, 3);
 
-        let key_range = KeyRange::new(b"d", b"");
+        let key_range = build_key_range(b"d", b"");
         recorder.sample(&key_range);
         assert_eq!(recorder.samples[0].right, 4);
     }
@@ -1568,12 +1578,12 @@ mod tests {
     fn test_recorder() {
         let mut recorder = Recorder::new();
         let mut key_ranges: Vec<KeyRange> = Vec::new();
-        key_ranges.push(KeyRange::new(b"a", b"b"));
-        key_ranges.push(KeyRange::new(b"b", b"c"));
-        key_ranges.push(KeyRange::new(b"c", b"d"));
-        key_ranges.push(KeyRange::new(b"d", b""));
+        key_ranges.push(build_key_range(b"a", b"b"));
+        key_ranges.push(build_key_range(b"b", b"c"));
+        key_ranges.push(build_key_range(b"c", b"d"));
+        key_ranges.push(build_key_range(b"d", b""));
         for _ in 0..50 {
-            recorder.record(key_ranges.as_slice());
+            recorder.record(&key_ranges.to_vec());
         }
         assert_eq!(recorder.samples.len(), 20);
 
