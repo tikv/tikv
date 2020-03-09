@@ -84,15 +84,18 @@ impl Conn {
                 (batch_msgs, WriteFlags::default().buffer_hint(false))
             }))
             .then(move |r| {
-                let mut fallback = false;
+                let (mut fallback, mut sink_e) = (false, None);
                 if let Err(e) = r {
-                    warn!("batch_raft sink error"; "to_addr" => &batch_addr, "err" => ?e);
-                    if let GrpcError::RpcFinished(Some(RpcStatus { status, .. })) = e {
-                        fallback = status == RpcStatusCode::UNIMPLEMENTED;
+                    if let GrpcError::RpcFinished(Some(RpcStatus { ref status, .. })) = e {
+                        fallback = *status == RpcStatusCode::UNIMPLEMENTED;
                     }
+                    sink_e = Some(e);
                 }
                 batch_receiver.map_err(move |e| {
-                    warn!("batch_raft receiver error"; "to_addr" => &batch_addr, "err" => ?e);
+                    warn!(
+                        "batch_raft RPC fail"; "to_addr" => &batch_addr,
+                        "sink_err" => ?sink_e, "err" => ?e
+                    );
                     fallback
                 })
             })
@@ -118,12 +121,15 @@ impl Conn {
                     })
                     .flatten();
                 Box::new(sink.send_all(msgs).then(move |r| {
+                    let mut sink_e = None;
                     if let Err(e) = r {
-                        warn!("raft sink error"; "to_addr" => &addr, "err" => ?e);
+                        sink_e = Some(e);
                     }
-                    receiver.map_err(
-                        move |e| warn!("raft receiver error"; "to_addr" => &addr, "err" => ?e),
-                    )
+                    receiver.map_err(move |e| {
+                        warn!("raft RPC fail"; "to_addr" => &addr,
+                            "sink_err" => ?sink_e, "err" => ?e
+                        );
+                    })
                 }))
             });
 
