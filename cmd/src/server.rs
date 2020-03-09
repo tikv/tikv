@@ -10,7 +10,7 @@
 
 use crate::{setup::*, signal_handler};
 use engine::{rocks, rocks::util::security::encrypted_env_from_cipher_file};
-use engine_rocks::{metrics_flusher::*, Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -36,7 +36,6 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::JoinHandle,
-    time::Duration,
 };
 use tikv::{
     config::{ConfigController, ConfigHandler, DBConfigManger, DBType, TiKvConfig},
@@ -697,14 +696,11 @@ impl TiKVServer {
     }
 
     fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(RocksMetricsFlusher::new(
-            KvEngines::new(
-                RocksEngine::from_db(self.engines.as_ref().unwrap().engines.kv.clone()),
-                RocksEngine::from_db(self.engines.as_ref().unwrap().engines.raft.clone()),
-                self.engines.as_ref().unwrap().engines.shared_block_cache,
-            ),
-            Duration::from_millis(DEFAULT_FLUSHER_INTERVAL),
-        ));
+        let mut metrics_flusher = Box::new(MetricsFlusher::new(KvEngines::new(
+            RocksEngine::from_db(self.engines.as_ref().unwrap().engines.kv.clone()),
+            RocksEngine::from_db(self.engines.as_ref().unwrap().engines.raft.clone()),
+            self.engines.as_ref().unwrap().engines.shared_block_cache,
+        )));
 
         // Start metrics flusher
         if let Err(e) = metrics_flusher.start() {
@@ -839,7 +835,7 @@ impl Stop for StatusServer {
     }
 }
 
-impl Stop for RocksMetricsFlusher {
+impl Stop for MetricsFlusher<RocksEngine, RocksEngine> {
     fn stop(mut self: Box<Self>) {
         (*self).stop()
     }

@@ -1053,6 +1053,8 @@ dependencies = [
  "hex 0.3.2",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
+ "slog",
+ "slog-global",
  "tikv_alloc",
  "tikv_util",
 ]
