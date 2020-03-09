@@ -204,6 +204,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 }
             }
             (None, None, Some(conn_id)) => {
+                // The connection is closed, deregister all downstreams of the connection.
                 if let Some(conn) = self.connections.remove(&conn_id) {
                     conn.take_downstreams()
                         .into_iter()
@@ -228,9 +229,13 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
         mut downstream: Downstream,
         conn_id: ConnID,
     ) {
+        let region_id = request.region_id;
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
-            None => return,
+            None => {
+                error!("register for a nonexistent connection"; "region_id" => region_id, "conn_id" => ?conn_id);
+                return;
+            }
         };
         downstream.set_sink(conn.get_sink());
         if !conn.subscribe(request.get_region_id(), downstream.get_id()) {
@@ -238,7 +243,6 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             return;
         }
 
-        let region_id = request.region_id;
         info!("cdc register region"; "region_id" => region_id);
         let mut enabled = None;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
