@@ -4,44 +4,44 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::io;
-use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Sender};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
-use futures::sync::oneshot;
-use futures::Future;
-use tokio_core::reactor::Handle;
-use tokio_timer::Delay;
-
-use engine::rocks::util::*;
-use engine::rocks::DB;
-use engine_rocks::RocksEngine;
 use fs2;
+use futures::Future;
+use futures::sync::oneshot;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
-
-use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
-use crate::store::cmd_resp::new_error;
-use crate::store::metrics::*;
-use crate::store::util::is_epoch_stale;
-use crate::store::util::KeysInfoFormatter;
-use crate::store::Callback;
-use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
-use pd_client::metrics::*;
-use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use rand::Rng;
+use tokio_core::reactor::Handle;
+use tokio_timer::Delay;
+
+use engine::rocks::DB;
+use engine::rocks::util::*;
+use engine_rocks::RocksEngine;
+use pd_client::{ConfigClient, Error, PdClient, RegionStat};
+use pd_client::metrics::*;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
-
 use txn_types::Key;
+
+use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+use crate::store::Callback;
+use crate::store::cmd_resp::new_error;
+use crate::store::metrics::*;
+use crate::store::StoreInfo;
+use crate::store::util::is_epoch_stale;
+use crate::store::util::KeysInfoFormatter;
+
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
 #[derive(Default, Debug, Clone)]
@@ -110,7 +110,7 @@ pub enum Task {
         right_derive: bool,
         callback: Callback<RocksEngine>,
     },
-    ToAskSplit {
+    AutoSplit {
         split_infos: Vec<SplitInfo>,
     },
     Heartbeat {
@@ -218,7 +218,7 @@ impl Display for Task {
                 region.get_id(),
                 hex::encode_upper(&split_key),
             ),
-            Task::ToAskSplit {
+            Task::AutoSplit {
                 ..
             } => write!(
                 f,
@@ -369,7 +369,7 @@ impl StatsMonitor {
                         }
 
                         let (top, split_infos) = unify_hub.flush();
-                        let task = Task::ToAskSplit { split_infos };
+                        let task = Task::AutoSplit { split_infos };
                         if let Err(e) = scheduler.schedule(task) {
                             error!(
                                 "failed to send split infos to pd worker";
@@ -960,7 +960,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 right_derive,
                 callback,
             ),
-            Task::ToAskSplit { split_infos } => {
+            Task::AutoSplit { split_infos } => {
                 for split_info in split_infos {
                     if let Ok(Some(region)) =
                         self.pd_client.get_region_by_id(split_info.region_id).wait()
@@ -1440,6 +1440,7 @@ impl SplitHub {
 mod tests {
     use std::sync::Mutex;
     use std::time::Instant;
+
     use tikv_util::worker::FutureWorker;
 
     use super::*;

@@ -9,6 +9,41 @@
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
+use std::sync::{Arc, atomic};
+
+use futures03::prelude::*;
+use futures::Future;
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
+use rand::prelude::*;
+
+use engine::{DATA_KEY_PREFIX_LEN, IterOption};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CfName, DATA_CFS};
+use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
+
+use crate::read_pool::{ReadPool, ReadPoolHandle};
+use crate::storage::{
+    config::Config,
+    kv::{Error as EngineError, ErrorInner as EngineErrorInner, Modify, with_tls_engine},
+    lock_manager::{DummyLockManager, LockManager},
+    metrics::*,
+    txn::{
+        commands::{Command, TypedCommand},
+        scheduler::Scheduler as TxnScheduler,
+    },
+    types::StorageCallbackType,
+};
+
+pub use self::{
+    errors::{Error, ErrorHeaderKind, ErrorInner, get_error_kind_from_header, get_tag_from_header},
+    kv::{
+        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator, RocksEngine,
+        ScanMode, Snapshot, Statistics, TestEngineBuilder,
+    },
+    read_pool::{build_read_pool, build_read_pool_for_test},
+    txn::{ProcessResult, Scanner, SnapshotStore, Store},
+    types::{PessimisticLockRes, StorageCallback, TxnStatus},
+};
+
 pub mod config;
 pub mod errors;
 pub mod kv;
@@ -19,38 +54,6 @@ pub mod txn;
 
 mod read_pool;
 mod types;
-
-pub use self::{
-    errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
-    kv::{
-        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator, RocksEngine,
-        ScanMode, Snapshot, Statistics, TestEngineBuilder,
-    },
-    read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{ProcessResult, Scanner, SnapshotStore, Store},
-    types::{PessimisticLockRes, StorageCallback, TxnStatus},
-};
-
-use crate::read_pool::{ReadPool, ReadPoolHandle};
-use crate::storage::{
-    config::Config,
-    kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
-    lock_manager::{DummyLockManager, LockManager},
-    metrics::*,
-    txn::{
-        commands::{Command, TypedCommand},
-        scheduler::Scheduler as TxnScheduler,
-    },
-    types::StorageCallbackType,
-};
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
-use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
-use futures::Future;
-use futures03::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
-use rand::prelude::*;
-use std::sync::{atomic, Arc};
-use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -441,8 +444,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     }
                     if reverse_scan {
                         tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &start_key);
+                    } else {
+                        tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key);
                     }
-                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key);
                 }
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
@@ -952,8 +956,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     }
                     if reverse_scan {
                         tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &start_key);
+                    } else {
+                        tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key);
                     }
-                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key);
                 }
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -1070,8 +1075,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 &end_key,
                                 &start_key,
                             );
+                        } else {
+                            tls_collect_qps(
+                                ctx.get_region_id(),
+                                ctx.get_peer(),
+                                &start_key,
+                                &end_key,
+                            );
                         }
-                        tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &end_key);
                     }
                 }
                 let command_duration = tikv_util::time::Instant::now_coarse();
@@ -1250,18 +1261,21 @@ impl<E: Engine> TestStorageBuilder<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
-    use futures03::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, LockInfo};
     use std::{
         fmt::Debug,
         sync::mpsc::{channel, Sender},
     };
+
+    use futures03::executor::block_on;
+    use kvproto::kvrpcpb::{CommandPri, LockInfo};
+
     use tikv_util::collections::HashMap;
     use tikv_util::config::ReadableSize;
     use txn_types::Mutation;
+
+    use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
+
+    use super::*;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);
