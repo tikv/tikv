@@ -1,18 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Useful functions for custom test framework.
+//!
+//! See https://doc.rust-lang.org/unstable-book/language-features/custom-test-frameworks.html.
+
 use crate::test::*;
 use std::cell::RefCell;
 use std::env;
 
+/// A runner function for running general tests.
 pub fn run_tests(cases: &[&TestDescAndFn]) {
     run_test_with_hook(cases, Nope)
 }
 
+/// Hooks for customize tests procedure.
 pub trait TestHook {
+    /// Called before running every case.
     fn setup(&mut self);
+    /// Called after every case.
     fn teardown(&mut self);
 }
 
+/// A special TestHook that does nothing.
 #[derive(Clone)]
 struct Nope;
 
@@ -41,6 +50,7 @@ impl<H: TestHook> Drop for CaseLifeWatcher<H> {
     }
 }
 
+/// Connects std tests and custom test framework.
 pub fn run_test_with_hook(cases: &[&TestDescAndFn], hook: impl TestHook + Send + Clone + 'static) {
     crate::setup_for_ci();
     let cases: Vec<_> = cases
@@ -96,6 +106,7 @@ pub fn clear_failpoints() {
     FS.with(|s| s.borrow_mut().take());
 }
 
+/// A runner function for running failpoint tests.
 pub fn run_failpoint_tests(cases: &[&TestDescAndFn]) {
     run_test_with_hook(cases, FailpointHook)
 }
