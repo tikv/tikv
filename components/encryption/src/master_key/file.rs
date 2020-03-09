@@ -82,6 +82,10 @@ impl Backend for FileBackend {
     fn decrypt(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         self.decrypt_content(content)
     }
+
+    fn is_secure(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

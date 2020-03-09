@@ -44,8 +44,13 @@ impl Dicts {
         })
     }
 
-    fn save_key_dict(&self, master_key: &dyn Backend) -> Result<()> {
+    fn save_key_dict(&mut self, master_key: &dyn Backend) -> Result<()> {
         let file = EncryptedFile::new(&self.base, KEY_DICT_NAME);
+        if !master_key.is_secure() {
+            for value in self.key_dict.keys.values_mut() {
+                value.was_exposed = true
+            }
+        }
         let key_bytes = self.key_dict.write_to_bytes()?;
         file.write(&key_bytes, master_key)?;
         Ok(())
@@ -187,21 +192,25 @@ impl Dicts {
         // 0 means it's a new key dict
         if self.key_dict.current_key_id != 0 {
             // It's not a new dict, then check current data key
-            // cration time.
+            // creation time.
             let (_, key) = self.current_data_key();
 
-            let creation_time = UNIX_EPOCH + Duration::from_secs(key.creation_time);
-            match now.duration_since(creation_time) {
-                Ok(duration) => {
-                    if self.rotation_period > duration {
-                        debug!("current data key creation time is within rotation period";
-                            "now" => ?now, "creation_time" => ?creation_time);
-                        return Ok(());
+            // Generate a new data key if the current data key was
+            // exposed and the master key backend is secure.
+            if !(key.was_exposed && master_key.is_secure()) {
+                let creation_time = UNIX_EPOCH + Duration::from_secs(key.creation_time);
+                match now.duration_since(creation_time) {
+                    Ok(duration) => {
+                        if self.rotation_period > duration {
+                            debug!("current data key creation time is within rotation period";
+                                "now" => ?now, "creation_time" => ?creation_time);
+                            return Ok(());
+                        }
                     }
-                }
-                Err(e) => {
-                    warn!("data key rotate duraion overflow, generate a new data key";
-                        "now" => ?now, "creation_time" => ?creation_time, "error" => ?e);
+                    Err(e) => {
+                        warn!("data key rotate duraion overflow, generate a new data key";
+                            "now" => ?now, "creation_time" => ?creation_time, "error" => ?e);
+                    }
                 }
             }
         }
@@ -345,15 +354,19 @@ impl EncryptionKeyManager for DataKeyManager {
 mod tests {
     use super::*;
 
+    use hex::FromHex;
     use rocksdb::DBEncryptionMethod;
     use std::thread::sleep;
 
-    fn new_tmp_key_manager(temp: Option<tempfile::TempDir>) -> (tempfile::TempDir, DataKeyManager) {
+    fn new_tmp_key_manager(
+        temp: Option<tempfile::TempDir>,
+        backend: Option<Arc<dyn Backend>>,
+    ) -> (tempfile::TempDir, DataKeyManager) {
         let tmp = temp.unwrap_or_else(|| tempfile::TempDir::new().unwrap());
-        let master_key = Arc::new(PlainTextBackend::default());
+        let master_key = backend.unwrap_or_else(|| Arc::new(PlainTextBackend::default()));
         let manager = DataKeyManager::new(
             master_key,
-            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes256Ctr,
             Duration::from_secs(60),
             tmp.path().as_os_str().to_str().unwrap(),
         )
@@ -363,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_create_get_delete() {
-        let (_tmp, manager) = new_tmp_key_manager(None);
+        let (_tmp, manager) = new_tmp_key_manager(None, None);
 
         let new_file = manager.new_file("foo").unwrap();
         let get_file = manager.get_file("foo").unwrap();
@@ -392,7 +405,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_link() {
-        let (_tmp, manager) = new_tmp_key_manager(None);
+        let (_tmp, manager) = new_tmp_key_manager(None, None);
 
         let file = manager.new_file("foo").unwrap();
         manager.link_file("foo", "foo1").unwrap();
@@ -410,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rename() {
-        let (_tmp, mut manager) = new_tmp_key_manager(None);
+        let (_tmp, mut manager) = new_tmp_key_manager(None, None);
 
         manager.method = EncryptionMethod::Aes192Ctr;
         let file = manager.new_file("foo").unwrap();
@@ -429,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate() {
-        let (_tmp, manager) = new_tmp_key_manager(None);
+        let (_tmp, manager) = new_tmp_key_manager(None, None);
 
         let (key_id, key) = {
             let dicts = manager.dicts.read().unwrap();
@@ -483,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_persistence() {
-        let (tmp, manager) = new_tmp_key_manager(None);
+        let (tmp, manager) = new_tmp_key_manager(None, None);
 
         // Create a file and a datakey.
         manager.new_file("foo").unwrap();
@@ -495,7 +508,7 @@ mod tests {
 
         // Close and re-open.
         drop(manager);
-        let (_tmp, manager1) = new_tmp_key_manager(Some(tmp));
+        let (_tmp, manager1) = new_tmp_key_manager(Some(tmp), None);
 
         let dicts = manager1.dicts.read().unwrap();
         assert_eq!(files, dicts.file_dict);
@@ -504,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_dcit_rotate_key_collides() {
-        let (_tmp, manager) = new_tmp_key_manager(None);
+        let (_tmp, manager) = new_tmp_key_manager(None, None);
         let mut dict = manager.dicts.write().unwrap();
 
         let ok = dict
@@ -516,5 +529,83 @@ mod tests {
             .rotate_key(1, DataKey::default(), manager.master_key.as_ref())
             .unwrap();
         assert!(!ok);
+    }
+
+    #[test]
+    fn test_key_manager_rotate_on_key_expose() {
+        let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
+            .unwrap();
+        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key).unwrap();
+
+        let (_tmp, manager) = new_tmp_key_manager(None, Some(Arc::new(backend)));
+        let mut dicts = manager.dicts.write().unwrap();
+
+        let (key_id, key) = {
+            let (id, k) = dicts.current_data_key();
+            (id, k.clone())
+        };
+
+        // Do not rotate.
+        dicts
+            .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
+            .unwrap();
+        let (current_key_id1, current_key1) = {
+            let (id, k) = dicts.current_data_key();
+            (id, k.clone())
+        };
+        assert_eq!(current_key_id1, key_id);
+        assert_eq!(current_key1, key);
+
+        // Expose the current data key and must rotate.
+        dicts
+            .key_dict
+            .keys
+            .get_mut(&current_key_id1)
+            .unwrap()
+            .was_exposed = true;
+        dicts
+            .maybe_rotate_data_key(manager.method, manager.master_key.as_ref())
+            .unwrap();
+        let (current_key_id2, current_key2) = {
+            let (id, k) = dicts.current_data_key();
+            (id, k.clone())
+        };
+        assert_ne!(current_key_id2, key_id);
+        assert_ne!(current_key2, key);
+    }
+
+    #[test]
+    fn test_expose_keys_on_insecure_backend() {
+        let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
+            .unwrap();
+        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key).unwrap();
+
+        let (_tmp, manager) = new_tmp_key_manager(None, Some(Arc::new(backend)));
+        let mut dicts = manager.dicts.write().unwrap();
+
+        for i in 0..100 {
+            let ok = dicts
+                .rotate_key(i, DataKey::default(), manager.master_key.as_ref())
+                .unwrap();
+            assert!(ok);
+        }
+        for value in dicts.key_dict.keys.values() {
+            assert!(!value.was_exposed);
+        }
+
+        // Change it insecure backend and save dicts,
+        // must set expose for all keys.
+        let insecure = Arc::new(PlainTextBackend::default());
+        let ok = dicts
+            .rotate_key(100, DataKey::default(), insecure.as_ref())
+            .unwrap();
+        assert!(ok);
+
+        let mut count = 0;
+        for value in dicts.key_dict.keys.values() {
+            count += 1;
+            assert!(value.was_exposed);
+        }
+        assert!(count >= 101);
     }
 }

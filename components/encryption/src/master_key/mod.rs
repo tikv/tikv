@@ -10,6 +10,9 @@ use crate::Result;
 pub trait Backend: Sync + Send + 'static {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent>;
     fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>>;
+
+    /// Tests whether this backend is secure.
+    fn is_secure(&self) -> bool;
 }
 
 mod file;
@@ -27,5 +30,9 @@ impl Backend for PlainTextBackend {
     }
     fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
         Ok(ciphertext.get_content().to_owned())
+    }
+    fn is_secure(&self) -> bool {
+        // plain text backend is insecure.
+        false
     }
 }
