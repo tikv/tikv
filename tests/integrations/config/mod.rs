@@ -50,6 +50,8 @@ fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
     value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
+    value.slow_log_file = "slow_foo".to_owned();
+    value.slow_log_threshold = ReadableDuration::secs(1);
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),

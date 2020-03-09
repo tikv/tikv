@@ -29,7 +29,7 @@ use std::{io, usize};
 
 use self::metrics::*;
 use crate::mpsc::{self, Receiver, Sender};
-use crate::time::{Instant, SlowTimer};
+use crate::time::Instant;
 use crate::timer::Timer;
 
 pub use self::future::dummy_scheduler as dummy_future_scheduler;
@@ -84,9 +84,9 @@ pub trait Runnable<T: Display> {
     fn run_batch(&mut self, ts: &mut Vec<T>) {
         for t in ts.drain(..) {
             let task_str = format!("{}", t);
-            let timer = SlowTimer::new();
+            let timer = Instant::now_coarse();
             self.run(t);
-            slow_log!(timer, "handle task {}", task_str);
+            slow_log!(timer.elapsed(), "handle task {}", task_str);
         }
     }
 
