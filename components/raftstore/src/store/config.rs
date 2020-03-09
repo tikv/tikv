@@ -20,6 +20,16 @@ lazy_static! {
     .unwrap();
 }
 
+/// Custom quorum function for a Raft node.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum QuorumAlgorithm {
+    /// Default quorum function described in Raft paper.
+    Majority,
+    /// Ensure no data lost when ceil(voters_len / 2) voters fail.
+    IntegrationOnHalfFail,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -170,6 +180,9 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[config(skip)]
     pub region_split_size: ReadableSize,
+
+    #[config(skip)]
+    pub quorum_algorithm: QuorumAlgorithm,
 }
 
 impl Default for Config {
@@ -239,6 +252,8 @@ impl Default for Config {
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
+
+            quorum_algorithm: QuorumAlgorithm::Majority,
         }
     }
 }

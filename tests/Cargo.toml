@@ -32,6 +32,7 @@ path = "benches/hierarchy/mod.rs"
 [[bench]]
 name = "misc"
 path = "benches/misc/mod.rs"
+test = true
 
 [[bench]]
 name = "deadlock_detector"
@@ -41,9 +42,10 @@ path = "benches/deadlock_detector/mod.rs"
 [[bench]]
 name = "channel"
 path = "benches/channel/mod.rs"
+test = true
 
 [features]
-default = ["failpoints", "testexport"]
+default = ["failpoints", "testexport", "protobuf-codec"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]

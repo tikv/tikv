@@ -12,7 +12,7 @@ use engine::rocks::{
 };
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::Config as RaftstoreConfig;
+use raftstore::store::{Config as RaftstoreConfig, QuorumAlgorithm};
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
@@ -50,6 +50,8 @@ fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
     value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
+    value.slow_log_file = "slow_foo".to_owned();
+    value.slow_log_threshold = ReadableDuration::secs(1);
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
@@ -177,6 +179,7 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
+        quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
