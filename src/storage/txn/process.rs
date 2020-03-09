@@ -35,7 +35,7 @@ use crate::storage::{
 };
 use engine_traits::CF_WRITE;
 use tikv_util::collections::HashMap;
-use tikv_util::time::{Instant, SlowTimer};
+use tikv_util::time::Instant;
 
 pub const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -176,7 +176,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
 
                 let region_id = task.region_id;
                 let ts = task.ts;
-                let timer = SlowTimer::new();
+                let timer = Instant::now_coarse();
 
                 let statistics = if readonly {
                     self.process_read(snapshot, task)
@@ -186,7 +186,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
-                    timer,
+                    timer.elapsed(),
                     "[region {}] scheduler handle command: {}, ts: {}",
                     region_id,
                     tag,

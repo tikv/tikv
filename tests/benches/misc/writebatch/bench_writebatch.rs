@@ -1,18 +1,22 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{Writable, WriteBatch, DB};
+use std::sync::Arc;
+
+use engine::rocks::DB;
+use engine_rocks::{Compat, RocksWriteBatch};
+use engine_traits::{KvEngine, Mutable, WriteBatch};
 use tempfile::Builder;
 use test::Bencher;
 
-fn writebatch(db: &DB, round: usize, batch_keys: usize) {
+fn writebatch(db: &Arc<DB>, round: usize, batch_keys: usize) {
     let v = b"operators are syntactic sugar for calls to methods of built-in traits";
     for r in 0..round {
-        let batch = WriteBatch::default();
+        let batch = db.c().write_batch();
         for i in 0..batch_keys {
             let k = format!("key_round{}_key{}", r, i);
             batch.put(k.as_bytes(), v).unwrap();
         }
-        db.write(&batch).unwrap()
+        db.c().write(&batch).unwrap()
     }
 }
 
@@ -21,7 +25,7 @@ fn bench_writebatch_impl(b: &mut Bencher, batch_keys: usize) {
         .prefix("/tmp/rocksdb_write_batch_bench")
         .tempdir()
         .unwrap();
-    let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
+    let db = Arc::new(DB::open_default(path.path().to_str().unwrap()).unwrap());
     let key_count = 1 << 13;
     let round = key_count / batch_keys;
     b.iter(|| {
@@ -84,7 +88,7 @@ fn bench_writebatch_1024(b: &mut Bencher) {
     bench_writebatch_impl(b, 1024);
 }
 
-fn fill_writebatch(wb: &WriteBatch, target_size: usize) {
+fn fill_writebatch(wb: &RocksWriteBatch, target_size: usize) {
     let (k, v) = (b"this is the key", b"this is the value");
     loop {
         wb.put(k, v).unwrap();
@@ -96,16 +100,26 @@ fn fill_writebatch(wb: &WriteBatch, target_size: usize) {
 
 #[bench]
 fn bench_writebatch_without_capacity(b: &mut Bencher) {
+    let path = Builder::new()
+        .prefix("/tmp/rocksdb_write_batch_bench")
+        .tempdir()
+        .unwrap();
+    let db = Arc::new(DB::open_default(path.path().to_str().unwrap()).unwrap());
     b.iter(|| {
-        let wb = WriteBatch::default();
+        let wb = db.c().write_batch();
         fill_writebatch(&wb, 4096);
     });
 }
 
 #[bench]
 fn bench_writebatch_with_capacity(b: &mut Bencher) {
+    let path = Builder::new()
+        .prefix("/tmp/rocksdb_write_batch_bench")
+        .tempdir()
+        .unwrap();
+    let db = Arc::new(DB::open_default(path.path().to_str().unwrap()).unwrap());
     b.iter(|| {
-        let wb = WriteBatch::with_capacity(4096);
+        let wb = db.c().write_batch_with_cap(4096);
         fill_writebatch(&wb, 4096);
     });
 }
