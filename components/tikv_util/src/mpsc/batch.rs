@@ -298,6 +298,69 @@ impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for BatchReceiver<T, E, I, C> 
     }
 }
 
+/// `SizedBatchReceiver` is a `futures::Stream`, which returns a batched type.
+/// It receives the size of the sent item, uses this size to compute the batch size.
+pub struct SizedBatchReceiver<T, E, I: Fn() -> E, C: Fn(&mut E, T)> {
+    rx: Receiver<(usize, T)>,
+    max_batch_size: usize,
+    elem: Option<E>,
+    initializer: I,
+    collector: C,
+}
+
+impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> SizedBatchReceiver<T, E, I, C> {
+    /// Creates a new `SizedBatchReceiver` with given `initializer` and `collector`. `initializer` is
+    /// used to generate a initial value, and `collector` will collect every (at most
+    /// `max_batch_size`) raw items into the batched value.
+    pub fn new(
+        rx: Receiver<(usize, T)>,
+        max_batch_size: usize,
+        initializer: I,
+        collector: C,
+    ) -> Self {
+        SizedBatchReceiver {
+            rx,
+            max_batch_size,
+            elem: None,
+            initializer,
+            collector,
+        }
+    }
+}
+
+impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for SizedBatchReceiver<T, E, I, C> {
+    type Error = ();
+    type Item = E;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, ()> {
+        let mut current_size = 0;
+        let finished = loop {
+            match self.rx.try_recv() {
+                Ok((size, m)) => {
+                    (self.collector)(self.elem.get_or_insert_with(&self.initializer), m);
+                    current_size += size;
+                    if current_size >= self.max_batch_size {
+                        break false;
+                    }
+                }
+                Err(TryRecvError::Disconnected) => break true,
+                Err(TryRecvError::Empty) => {
+                    if self.rx.state.yield_poll() {
+                        break false;
+                    }
+                }
+            }
+        };
+
+        if self.elem.is_none() && finished {
+            return Ok(Async::Ready(None));
+        } else if self.elem.is_none() {
+            return Ok(Async::NotReady);
+        }
+        Ok(Async::Ready(self.elem.take()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{mpsc, Mutex};

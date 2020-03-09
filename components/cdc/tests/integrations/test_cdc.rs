@@ -612,3 +612,109 @@ fn test_duplicate_subscribe() {
     event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
+
+#[test]
+fn test_cdc_batch_size_limit() {
+    let mut suite = TestSuite::new(1);
+
+    // Prewrite
+    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = vec![0; 6 * 1024 * 1024];
+    let mut m2 = Mutation::default();
+    let k2 = b"k2".to_vec();
+    m2.set_op(Op::Put);
+    m2.key = k2.clone();
+    m2.value = b"v2".to_vec();
+    suite.must_kv_prewrite(1, vec![m1, m2], k1.clone(), start_ts);
+    // Commit
+    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k1, k2], start_ts, commit_ts);
+
+    let mut req = ChangeDataRequest::default();
+    req.region_id = 1;
+    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events.len());
+    while events.len() < 3 {
+        events.extend(receive_event(false).into_iter());
+    }
+    assert_eq!(events.len(), 3, "{:?}", events.len());
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
+            assert_eq!(e.key, b"k1", "{:?}", e.key);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    }
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
+            assert_eq!(e.key, b"k2", "{:?}", e.key);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    }
+    match events.pop().unwrap().event.unwrap() {
+        // Then it outputs Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            let e = &es.entries[0];
+            assert_eq!(
+                e.get_type(),
+                EventLogType::Initialized,
+                "{:?}",
+                e.get_type()
+            );
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    }
+
+    // Prewrite
+    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let mut m3 = Mutation::default();
+    let k3 = b"k3".to_vec();
+    m3.set_op(Op::Put);
+    m3.key = k3.clone();
+    m3.value = vec![0; 7 * 1024 * 1024];
+    let mut m4 = Mutation::default();
+    let k4 = b"k4".to_vec();
+    m4.set_op(Op::Put);
+    m4.key = k4;
+    m4.value = b"v4".to_vec();
+    suite.must_kv_prewrite(1, vec![m3, m4], k3, start_ts);
+
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 2);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
+            assert_eq!(e.key, b"k4", "{:?}", e.key);
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
+            assert_eq!(e.key, b"k3", "{:?}", e.key);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    }
+
+    event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}

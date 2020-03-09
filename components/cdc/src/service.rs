@@ -7,7 +7,7 @@ use futures::{Future, Sink, Stream};
 use grpcio::*;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
 use tikv_util::collections::HashMap;
-use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender};
+use tikv_util::mpsc::batch::{self, Sender as BatchSender, SizedBatchReceiver};
 use tikv_util::worker::*;
 
 use crate::delegate::{Downstream, DownstreamID};
@@ -15,8 +15,8 @@ use crate::endpoint::Task;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
-const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
-const CDC_MSG_NOTIFY_SIZE: usize = 8;
+const CDC_MSG_NOTIFY_COUNT: usize = 8;
+const CDC_MAX_RESP_SIZE: usize = 6 * 1024 * 1024; // 6MB
 
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -30,12 +30,12 @@ impl ConnID {
 
 pub struct Conn {
     id: ConnID,
-    sink: BatchSender<Event>,
+    sink: BatchSender<(usize, Event)>,
     downstreams: HashMap<u64, DownstreamID>,
 }
 
 impl Conn {
-    pub fn new(sink: BatchSender<Event>) -> Conn {
+    pub fn new(sink: BatchSender<(usize, Event)>) -> Conn {
         Conn {
             id: ConnID::new(),
             sink,
@@ -51,7 +51,7 @@ impl Conn {
         self.downstreams
     }
 
-    pub fn get_sink(&self) -> BatchSender<Event> {
+    pub fn get_sink(&self) -> BatchSender<(usize, Event)> {
         self.sink.clone()
     }
 
@@ -103,7 +103,7 @@ impl ChangeData for Service {
         sink: DuplexSink<ChangeDataEvent>,
     ) {
         // TODO: make it a bounded channel.
-        let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_SIZE);
+        let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
         let conn = Conn::new(tx);
         let conn_id = conn.get_id();
 
@@ -138,7 +138,7 @@ impl ChangeData for Service {
                 })
         });
 
-        let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, |v, e| v.push(e));
+        let rx = SizedBatchReceiver::new(rx, CDC_MAX_RESP_SIZE, Vec::new, |v, e| v.push(e));
         let send_resp = sink.send_all(rx.then(|events| match events {
             Ok(events) => {
                 let mut resp = ChangeDataEvent::default();

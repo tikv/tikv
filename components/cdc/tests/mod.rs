@@ -229,7 +229,9 @@ impl TestSuite {
         let addr = self.cluster.sim.rl().get_addr(store_id).to_owned();
         let env = self.env.clone();
         self.cdc_cli.entry(store_id).or_insert_with(|| {
-            let channel = ChannelBuilder::new(env).connect(&addr);
+            let channel = ChannelBuilder::new(env)
+                .max_receive_message_len(std::i32::MAX)
+                .connect(&addr);
             ChangeDataClient::new(channel)
         })
     }
