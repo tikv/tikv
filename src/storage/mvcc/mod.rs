@@ -276,7 +276,7 @@ pub mod tests {
     ) -> Result<()> {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         txn.prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
             pk,
@@ -293,7 +293,7 @@ pub mod tests {
     ) -> Result<()> {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         txn.pessimistic_prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
             pk,
