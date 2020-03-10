@@ -4065,6 +4065,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_util",
  "tikv",
  "tikv_util",
  "tokio-threadpool",
@@ -4102,9 +4103,11 @@ dependencies = [
 name = "test_util"
 version = "0.0.1"
 dependencies = [
+ "fail",
  "rand 0.6.5",
  "rand_isaac",
  "slog",
+ "slog-global",
  "tikv_util",
  "time",
 ]

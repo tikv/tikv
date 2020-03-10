@@ -8,8 +8,6 @@ use tikv_util::config::ReadableDuration;
 
 #[test]
 fn test_one_node_leader_missing() {
-    let _guard = crate::setup();
-
     let mut cluster = new_server_cluster(0, 1);
 
     // 50ms election timeout.
@@ -38,8 +36,6 @@ fn test_one_node_leader_missing() {
 
 #[test]
 fn test_node_update_localreader_after_removed() {
-    let _guard = crate::setup();
-
     let mut cluster = new_node_cluster(0, 6);
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
