@@ -1668,6 +1668,15 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
+
+        let invalid_utf8_output = RpnFnScalarEvaluator::new()
+            .push_param(Some(b"  \xF0 Hello \x90 World \x80 ".to_vec()))
+            .evaluate(ScalarFuncSig::Trim1Arg)
+            .unwrap();
+        assert_eq!(
+            invalid_utf8_output,
+            Some(b"\xF0 Hello \x90 World \x80".to_vec())
+        );
     }
 
     #[test]
