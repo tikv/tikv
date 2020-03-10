@@ -14,7 +14,7 @@ impl WriteBatch for PanicWriteBatch {
     fn is_empty(&self) -> bool {
         panic!()
     }
-    fn clear(&self) {
+    fn clear(&mut self) {
         panic!()
     }
 
