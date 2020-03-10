@@ -50,6 +50,9 @@ extern crate tikv_util;
 #[macro_use]
 extern crate failure;
 
+extern crate crossbeam;
+extern crate rustracing;
+
 #[cfg(test)]
 extern crate test;
 

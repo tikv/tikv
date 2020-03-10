@@ -54,6 +54,7 @@ testexport = ["raftstore/testexport"]
 name = "tikv"
 
 [dependencies]
+rustracing = "0.4"
 async-stream = "0.2"
 async-trait = "0.1"
 batch-system = { path = "components/batch-system", default-features = false }
@@ -64,7 +65,7 @@ codec = { path = "components/codec" }
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
-crossbeam = "0.7.2"
+crossbeam = "0.7.3"
 derive_more = "0.15.0"
 engine = { path = "components/engine" }
 engine_panic = { path = "components/engine_panic", optional = true }
