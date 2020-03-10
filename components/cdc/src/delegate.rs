@@ -71,6 +71,8 @@ impl Downstream {
         }
     }
 
+    /// Sink events to the downstream.
+    /// The size of `Error` and `ResolvedTS` are considered zero.
     pub fn sink_event(&self, change_data_event: Event, size: usize) {
         if self
             .sink
