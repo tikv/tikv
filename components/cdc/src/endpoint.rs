@@ -617,16 +617,19 @@ impl<T: CasualRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
 mod tests {
     use super::*;
     use engine_traits::DATA_CFS;
+    use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::kvrpcpb::Context;
     use std::collections::BTreeMap;
     use std::fmt::Display;
-    use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+    use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
     use tempfile::TempDir;
+    use test_raftstore::TestPdClient;
     use tikv::storage::kv::Engine;
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::TestEngineBuilder;
     use tikv_util::collections::HashSet;
-    use tikv_util::worker::{Builder as WorkerBuilder, Worker};
+    use tikv_util::mpsc::batch;
+    use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
 
     struct ReceiverRunnable<T> {
         tx: Sender<T>,
@@ -733,5 +736,80 @@ mod tests {
         }
 
         worker.stop().unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn test_deregister() {
+        let (task_sched, _task_rx) = dummy_scheduler();
+        let (raft_tx, _raft_rx) = sync_channel::<(u64, CasualMessage<RocksEngine>)>(16);
+        let observer = CdcObserver::new(task_sched.clone());
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let mut ep = Endpoint::new(pd_client, task_sched, raft_tx, observer);
+        let (tx, rx) = batch::unbounded(1);
+
+        let conn = Conn::new(tx);
+        let conn_id = conn.get_id();
+        ep.run(Task::OpenConn { conn });
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new("".to_string(), region_epoch.clone());
+        let downstream_id = downstream.get_id();
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(ep.capture_regions.len(), 1);
+
+        let mut err_header = ErrorHeader::default();
+        err_header.set_not_leader(Default::default());
+        ep.run(Task::Deregister {
+            region_id: Some(1),
+            downstream_id: Some(downstream_id),
+            conn_id: Some(conn_id),
+            err: Some(Error::Request(err_header.clone())),
+        });
+        let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        let event = change_data_event.event.take().unwrap();
+        match event {
+            Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
+            _ => panic!("unknown event"),
+        }
+        assert_eq!(ep.capture_regions.len(), 0);
+
+        let downstream = Downstream::new("".to_string(), region_epoch);
+        let downstream_id1 = downstream.get_id();
+        ep.run(Task::Register {
+            request: req,
+            downstream,
+            conn_id,
+        });
+        assert_eq!(ep.capture_regions.len(), 1);
+
+        ep.run(Task::Deregister {
+            region_id: Some(1),
+            downstream_id: Some(downstream_id),
+            conn_id: Some(conn_id),
+            err: Some(Error::Request(err_header.clone())),
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        assert_eq!(ep.capture_regions.len(), 1);
+
+        ep.run(Task::Deregister {
+            region_id: Some(1),
+            downstream_id: Some(downstream_id1),
+            conn_id: Some(conn_id),
+            err: Some(Error::Request(err_header)),
+        });
+        let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        let event = change_data_event.event.take().unwrap();
+        match event {
+            Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
+            _ => panic!("unknown event"),
+        }
+        assert_eq!(ep.capture_regions.len(), 0);
     }
 }

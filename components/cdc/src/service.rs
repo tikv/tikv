@@ -70,7 +70,7 @@ impl Conn {
     }
 
     pub fn downstream_id(&self, region_id: u64) -> Option<DownstreamID> {
-        self.downstreams.get(&region_id).map(|id| *id)
+        self.downstreams.get(&region_id).copied()
     }
 
     pub fn flush(&self) {
