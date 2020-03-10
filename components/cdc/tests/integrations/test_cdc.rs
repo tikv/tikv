@@ -321,11 +321,33 @@ fn test_cdc_stale_epoch_after_region_ready() {
     req.set_region_epoch(Default::default()); // zero epoch is always stale.
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     let _resp_rx = event_feed_wrap.as_ref().replace(Some(resp_rx));
+    let req_tx = req_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+    // Must receive epoch not match error.
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_epoch_not_match(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    req.set_region_epoch(suite.get_context(1).take_region_epoch());
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Must receive epoch not match error.
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }

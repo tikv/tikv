@@ -69,6 +69,10 @@ impl Conn {
         self.downstreams.remove(&region_id);
     }
 
+    pub fn downstream_id(&self, region_id: u64) -> Option<DownstreamID> {
+        self.downstreams.get(&region_id).map(|id| *id)
+    }
+
     pub fn flush(&self) {
         if !self.sink.is_empty() {
             if let Some(notifier) = self.sink.get_notifier() {

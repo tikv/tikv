@@ -171,20 +171,24 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             "downstream_id" => ?id,
             "conn_id" => ?conn_id,
             "error" => ?err);
-        let mut is_last = false;
         match (id, err, conn_id) {
             (Some(id), err, Some(conn_id)) => {
                 // The peer wants to deregister
                 let region_id = region_id.unwrap();
+                let mut is_last = false;
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                     is_last = delegate.unsubscribe(id, err);
                 }
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    conn.unsubscribe(region_id);
+                    if let Some(downstream_id) = conn.downstream_id(region_id) {
+                        if downstream_id == id {
+                            conn.unsubscribe(region_id);
+                        }
+                    }
                 }
                 if is_last {
                     self.capture_regions.remove(&region_id);
-                    // Do not continue to observe the events of the region
+                    // Do not continue to observe the events of the region.
                     self.observer.unsubscribe_region(region_id);
                 }
             }
@@ -192,16 +196,13 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 // Something went wrong, deregister all downstreams of the region.
                 let region_id = region_id.unwrap();
                 if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
-                    delegate.fail(err);
-                    is_last = true;
+                    delegate.stop(err);
                 }
                 self.connections
                     .iter_mut()
                     .for_each(|(_, conn)| conn.unsubscribe(region_id));
-                if is_last {
-                    // Do not continue to observe the events of the region
-                    self.observer.unsubscribe_region(region_id);
-                }
+                // Do not continue to observe the events of the region.
+                self.observer.unsubscribe_region(region_id);
             }
             (None, None, Some(conn_id)) => {
                 // The connection is closed, deregister all downstreams of the connection.
@@ -212,7 +213,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                                 if delegate.unsubscribe(downstream_id, None) {
                                     self.capture_regions.remove(&region_id);
-                                    // Do not continue to observe the events of the region
+                                    // Do not continue to observe the events of the region.
                                     self.observer.unsubscribe_region(region_id);
                                 }
                             }
@@ -243,7 +244,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             return;
         }
 
-        info!("cdc register region"; "region_id" => region_id);
+        info!("cdc register region"; "region_id" => region_id, "conn_id" => ?conn.get_id(), "downstream_id" => ?downstream.get_id());
         let mut enabled = None;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
             let d = Delegate::new(region_id);
@@ -268,11 +269,12 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             build_resolver: enabled.is_some(),
         };
         if !delegate.subscribe(downstream) {
+            conn.unsubscribe(request.get_region_id());
             return;
         }
         let change_cmd = if let Some(enabled) = enabled {
             // The region has never been registered.
-            // Subscribe region role change events.
+            // Subscribe the change events of the region.
             self.observer.subscribe_region(region_id);
 
             ChangeCmd::RegisterObserver {
@@ -308,17 +310,24 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
         for batch in multi {
-            let mut has_failed = false;
             let region_id = batch.region_id;
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                delegate.on_batch(batch);
-                has_failed = delegate.has_failed();
-            }
-            if has_failed {
-                self.capture_regions.remove(&region_id);
-                self.connections
-                    .iter_mut()
-                    .for_each(|(_, conn)| conn.unsubscribe(region_id));
+                if delegate.has_failed() {
+                    // Skip the batch if the delegate has failed.
+                    continue;
+                }
+                if let Err(e) = delegate.on_batch(batch) {
+                    assert!(delegate.has_failed());
+                    // Delegate has error, deregister the corresponding region.
+                    if let Err(e) = self.scheduler.schedule(Task::Deregister {
+                        region_id: Some(region_id),
+                        downstream_id: None,
+                        conn_id: None,
+                        err: Some(e),
+                    }) {
+                        error!("schedule cdc task failed"; "error" => ?e);
+                    }
+                }
             }
         }
     }
@@ -338,13 +347,17 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
 
     fn on_region_ready(&mut self, region_id: u64, resolver: Resolver, region: Region) {
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            delegate.on_region_ready(resolver, region);
-            // Delegate may fail during handling pending batch.
-            if delegate.has_failed() {
-                self.capture_regions.remove(&region_id);
-                self.connections
-                    .iter_mut()
-                    .for_each(|(_, conn)| conn.unsubscribe(region_id));
+            if let Err(e) = delegate.on_region_ready(resolver, region) {
+                assert!(delegate.has_failed());
+                // Delegate has error, deregister the corresponding region.
+                if let Err(e) = self.scheduler.schedule(Task::Deregister {
+                    region_id: Some(region_id),
+                    downstream_id: None,
+                    conn_id: None,
+                    err: Some(e),
+                }) {
+                    error!("schedule cdc task failed"; "error" => ?e);
+                }
             }
         } else {
             warn!("region not found on region ready (finish building resolver)"; "region_id" => region_id);

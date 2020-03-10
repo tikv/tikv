@@ -104,7 +104,7 @@ impl RoleObserver for CdcObserver {
                     conn_id: None,
                     err: Some(CdcError::Request(store_err.into())),
                 }) {
-                    warn!("schedule cdc task failed"; "error" => ?e);
+                    error!("schedule cdc task failed"; "error" => ?e);
                 }
             }
         }

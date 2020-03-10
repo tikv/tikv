@@ -31,7 +31,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, TimeStamp};
 
-use crate::Error;
+use crate::{Error, Result};
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
@@ -183,7 +183,7 @@ impl Delegate {
             }
             d.id != id
         });
-        let is_last = self.downstreams.is_empty();
+        let is_last = downstreams.is_empty();
         if is_last {
             self.enabled.store(false, Ordering::SeqCst);
         }
@@ -214,11 +214,20 @@ impl Delegate {
         change_data_event
     }
 
-    /// Fail the delegate
+    pub fn mark_failed(&mut self) {
+        self.failed = true;
+    }
+
+    pub fn has_failed(&self) -> bool {
+        self.failed
+    }
+
+    /// Stop the delegate
     ///
     /// This means the region has met an unrecoverable error for CDC.
     /// It broadcasts errors to all downstream and stops.
-    pub fn fail(&mut self, err: Error) {
+    pub fn stop(&mut self, err: Error) {
+        self.mark_failed();
         // Stop observe further events.
         self.enabled.store(false, Ordering::SeqCst);
 
@@ -226,13 +235,6 @@ impl Delegate {
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
         self.broadcast(change_data_err, 0);
-
-        // Mark this delegate has failed.
-        self.failed = true;
-    }
-
-    pub fn has_failed(&self) -> bool {
-        self.failed
     }
 
     fn broadcast(&self, change_data_event: Event, size: usize) {
@@ -251,7 +253,7 @@ impl Delegate {
     }
 
     /// Install a resolver and notify downstreams this region if ready to serve.
-    pub fn on_region_ready(&mut self, resolver: Resolver, region: Region) {
+    pub fn on_region_ready(&mut self, resolver: Resolver, region: Region) -> Result<()> {
         assert!(
             self.resolver.is_none(),
             "region resolver should not be ready"
@@ -267,13 +269,11 @@ impl Delegate {
                 self.on_scan(downstream_id, entries);
             }
             for batch in pending.multi_batch {
-                self.on_batch(batch);
-                if self.has_failed() {
-                    break;
-                }
+                self.on_batch(batch)?;
             }
         }
         info!("region is ready"; "region_id" => self.region_id);
+        Ok(())
     }
 
     /// Try advance and broadcast resolved ts.
@@ -297,10 +297,10 @@ impl Delegate {
         self.broadcast(change_data_event, 0);
     }
 
-    pub fn on_batch(&mut self, batch: CmdBatch) {
+    pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
         if let Some(pending) = self.pending.as_mut() {
             pending.multi_batch.push(batch);
-            return;
+            return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
             let Cmd {
@@ -312,17 +312,15 @@ impl Delegate {
                 if !request.has_admin_request() {
                     self.sink_data(index, request.requests.into());
                 } else {
-                    self.sink_admin(request.take_admin_request(), response.take_admin_response());
+                    self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
                 }
             } else {
                 let err_header = response.mut_header().take_error();
-                let err = Error::Request(err_header);
-                self.fail(err);
-            }
-            if self.has_failed() {
-                break;
+                self.mark_failed();
+                return Err(Error::Request(err_header));
             }
         }
+        Ok(())
     }
 
     pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
@@ -500,7 +498,7 @@ impl Delegate {
         self.broadcast(change_data_event, total_size);
     }
 
-    fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) {
+    fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
         let store_err = match request.get_cmd_type() {
             AdminCmdType::Split => RaftStoreError::EpochNotMatch(
                 "split".to_owned(),
@@ -518,10 +516,10 @@ impl Delegate {
             | AdminCmdType::RollbackMerge => {
                 RaftStoreError::EpochNotMatch("merge".to_owned(), vec![])
             }
-            _ => return,
+            _ => return Ok(()),
         };
-        let err = Error::Request(store_err.into());
-        self.fail(err);
+        self.mark_failed();
+        Err(Error::Request(store_err.into()))
     }
 }
 
@@ -629,7 +627,7 @@ mod tests {
         assert!(enabled.load(Ordering::SeqCst));
         let mut resolver = Resolver::new();
         resolver.init();
-        delegate.on_region_ready(resolver, region);
+        delegate.on_region_ready(resolver, region).unwrap();
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
@@ -650,7 +648,7 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
-        delegate.fail(Error::Request(err_header));
+        delegate.stop(Error::Request(err_header));
         let err = receive_error();
         assert!(err.has_not_leader());
         // Enable is disabled by any error.
@@ -658,13 +656,13 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
-        delegate.fail(Error::Request(err_header));
+        delegate.stop(Error::Request(err_header));
         let err = receive_error();
         assert!(err.has_region_not_found());
 
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
-        delegate.fail(Error::Request(err_header));
+        delegate.stop(Error::Request(err_header));
         let err = receive_error();
         assert!(err.has_epoch_not_match());
 
@@ -675,7 +673,8 @@ mod tests {
         request.set_cmd_type(AdminCmdType::Split);
         let mut response = AdminResponse::default();
         response.mut_split().set_left(region.clone());
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -688,7 +687,8 @@ mod tests {
         request.set_cmd_type(AdminCmdType::BatchSplit);
         let mut response = AdminResponse::default();
         response.mut_splits().set_regions(vec![region].into());
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -701,7 +701,8 @@ mod tests {
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::PrepareMerge);
         let response = AdminResponse::default();
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -709,7 +710,8 @@ mod tests {
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::CommitMerge);
         let response = AdminResponse::default();
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -717,7 +719,8 @@ mod tests {
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::RollbackMerge);
         let response = AdminResponse::default();
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -806,7 +809,7 @@ mod tests {
 
         let mut resolver = Resolver::new();
         resolver.init();
-        delegate.on_region_ready(resolver, region);
+        delegate.on_region_ready(resolver, region).unwrap();
 
         // Flush all pending entries.
         let mut row1 = EventRow::default();
