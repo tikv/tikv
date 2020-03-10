@@ -13,7 +13,7 @@ use test_util::*;
 const DEFAULT_DATA_SIZE: usize = 100_000;
 
 fn enc_write_kvs(db: &Arc<DB>, kvs: &[(Vec<u8>, Vec<u8>)]) {
-    let wb = db.c().write_batch();
+    let mut wb = db.c().write_batch();
     for &(ref k, ref v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
