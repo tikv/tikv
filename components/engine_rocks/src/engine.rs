@@ -163,7 +163,7 @@ impl SyncMutable for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine::rocks::util;
-    use engine_traits::{Iterable, KvEngine, Mutable, Peekable};
+    use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempfile::Builder;
