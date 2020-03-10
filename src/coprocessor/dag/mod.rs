@@ -7,11 +7,8 @@ pub use self::storage_impl::TiKVStorage;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use std::sync::Arc;
-use std::time::Duration;
 use tidb_query::storage::IntervalRange;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
-use tokio::sync::Semaphore;
 
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::{Deadline, RequestHandler, Result};
@@ -26,8 +23,6 @@ pub struct DagHandlerBuilder<S: Store + 'static> {
     batch_row_limit: usize,
     is_streaming: bool,
     enable_batch_if_possible: bool,
-    execution_time_limit: Option<Duration>,
-    semaphore: Option<Arc<Semaphore>>,
 }
 
 impl<S: Store + 'static> DagHandlerBuilder<S> {
@@ -48,8 +43,6 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
             batch_row_limit,
             is_streaming,
             enable_batch_if_possible: true,
-            execution_time_limit: None,
-            semaphore: None,
         }
     }
 
@@ -60,16 +53,6 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
 
     pub fn enable_batch_if_possible(mut self, enable_batch_if_possible: bool) -> Self {
         self.enable_batch_if_possible = enable_batch_if_possible;
-        self
-    }
-
-    pub fn execution_time_limit(mut self, execution_time_limit: Option<Duration>) -> Self {
-        self.execution_time_limit = execution_time_limit;
-        self
-    }
-
-    pub fn semaphore(mut self, semaphore: Option<Arc<Semaphore>>) -> Self {
-        self.semaphore = semaphore;
         self
     }
 
@@ -87,8 +70,6 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
                 self.store,
                 self.data_version,
                 self.deadline,
-                self.execution_time_limit,
-                self.semaphore,
             )?
             .into_boxed())
         } else {
@@ -163,8 +144,6 @@ impl BatchDAGHandler {
         store: S,
         data_version: Option<u64>,
         deadline: Deadline,
-        execution_time_limit: Option<Duration>,
-        semaphore: Option<Arc<Semaphore>>,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query::batch::runner::BatchExecutorsRunner::from_request(
@@ -172,8 +151,6 @@ impl BatchDAGHandler {
                 ranges,
                 TiKVStorage::from(store),
                 deadline,
-                execution_time_limit,
-                semaphore,
             )?,
             data_version,
         })
