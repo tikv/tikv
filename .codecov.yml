@@ -1,0 +1,8 @@
+codecov:
+  notify:
+    require_ci_to_pass: no
+
+comment:
+  layout: "header, diff"
+  behavior: default
+  require_changes: no
