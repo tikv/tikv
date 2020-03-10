@@ -56,10 +56,11 @@ impl Dicts {
         Ok(())
     }
 
-    fn save_file_dict(&self, master_key: &dyn Backend) -> Result<()> {
+    fn save_file_dict(&self) -> Result<()> {
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = self.file_dict.write_to_bytes()?;
-        file.write(&file_bytes, master_key)?;
+        // File dict can be saved in plaintext.
+        file.write(&file_bytes, &PlainTextBackend::default())?;
         Ok(())
     }
 
@@ -92,12 +93,7 @@ impl Dicts {
         self.file_dict.files.get(fname).unwrap()
     }
 
-    fn new_file(
-        &mut self,
-        fname: &str,
-        method: EncryptionMethod,
-        master_key: &dyn Backend,
-    ) -> Result<&FileInfo> {
+    fn new_file(&mut self, fname: &str, method: EncryptionMethod) -> Result<&FileInfo> {
         let mut file = FileInfo::default();
         file.iv = Iv::new().as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
@@ -111,11 +107,11 @@ impl Dicts {
                 )))
             }
         };
-        self.save_file_dict(master_key)?;
+        self.save_file_dict()?;
         Ok(self.file_dict.files.get(fname).unwrap())
     }
 
-    fn delete_file(&mut self, fname: &str, master_key: &dyn Backend) -> Result<()> {
+    fn delete_file(&mut self, fname: &str) -> Result<()> {
         self.file_dict.files.remove(fname).ok_or_else(|| {
             Error::Io(IoError::new(
                 ErrorKind::NotFound,
@@ -124,15 +120,10 @@ impl Dicts {
         })?;
 
         // TOOD GC unused data keys.
-        self.save_file_dict(master_key)
+        self.save_file_dict()
     }
 
-    fn link_file(
-        &mut self,
-        src_fname: &str,
-        dst_fname: &str,
-        master_key: &dyn Backend,
-    ) -> Result<()> {
+    fn link_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
         let file = self
             .file_dict
             .files
@@ -151,15 +142,10 @@ impl Dicts {
             )));
         }
         self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict(master_key)
+        self.save_file_dict()
     }
 
-    fn rename_file(
-        &mut self,
-        src_fname: &str,
-        dst_fname: &str,
-        master_key: &dyn Backend,
-    ) -> Result<()> {
+    fn rename_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
         let file = self.file_dict.files.remove(src_fname).ok_or_else(|| {
             Error::Io(IoError::new(
                 ErrorKind::NotFound,
@@ -167,7 +153,7 @@ impl Dicts {
             ))
         })?;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict(master_key)
+        self.save_file_dict()
     }
 
     fn rotate_key(&mut self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
@@ -316,7 +302,7 @@ impl EncryptionKeyManager for DataKeyManager {
         dicts.maybe_rotate_data_key(self.method, self.master_key.as_ref())?;
         let (_, data_key) = dicts.current_data_key();
         let key = data_key.get_key().to_owned();
-        let file = dicts.new_file(fname, self.method, self.master_key.as_ref())?;
+        let file = dicts.new_file(fname, self.method)?;
         let encrypted_file = FileEncryptionInfo {
             key,
             method: encryption_method_to_db_encryption_method(file.method),
@@ -326,10 +312,7 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn delete_file(&self, fname: &str) -> IoResult<()> {
-        self.dicts
-            .write()
-            .unwrap()
-            .delete_file(fname, self.master_key.as_ref())?;
+        self.dicts.write().unwrap().delete_file(fname)?;
         Ok(())
     }
 
@@ -337,7 +320,7 @@ impl EncryptionKeyManager for DataKeyManager {
         self.dicts
             .write()
             .unwrap()
-            .link_file(src_fname, dst_fname, self.master_key.as_ref())?;
+            .link_file(src_fname, dst_fname)?;
         Ok(())
     }
 
@@ -345,7 +328,7 @@ impl EncryptionKeyManager for DataKeyManager {
         self.dicts
             .write()
             .unwrap()
-            .rename_file(src_fname, dst_fname, self.master_key.as_ref())?;
+            .rename_file(src_fname, dst_fname)?;
         Ok(())
     }
 }

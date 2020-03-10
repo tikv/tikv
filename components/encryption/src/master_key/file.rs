@@ -121,7 +121,6 @@ mod tests {
 
     #[test]
     fn test_file_backend_sha256() {
-        // See more https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf
         let pt = vec![1u8, 2, 3];
         let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
             .unwrap();
@@ -140,7 +139,7 @@ mod tests {
         backend.decrypt_content(&encrypted_content1).unwrap_err();
 
         // Must checksum not found
-        let mut encrypted_content2 = encrypted_content.clone();
+        let mut encrypted_content2 = encrypted_content;
         encrypted_content2
             .mut_metadata()
             .remove(METADATA_PLAINTEXT_SHA256);
