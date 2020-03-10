@@ -86,7 +86,7 @@ fn start_raftstore(
     let pd_worker = FutureWorker::new("store-config");
     let config_client = ConfigHandler::start(
         String::new(),
-        ConfigController::new(cfg, Default::default()),
+        ConfigController::new(cfg, Default::default(), false),
         pd_worker.scheduler(),
     )
     .unwrap();

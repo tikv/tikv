@@ -1889,15 +1889,15 @@ impl TiKvConfig {
         self.storage.validate()?;
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
+
+        let store_path = Path::new(&self.storage.data_dir).to_owned();
         self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
-            config::canonicalize_sub_path(&self.storage.data_dir, "raft")?
+            format!("{}", store_path.join("raft").display())
         } else {
             config::canonicalize_path(&self.raft_store.raftdb_path)?
         };
 
-        let kv_db_path =
-            config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
-
+        let kv_db_path = format!("{}", store_path.join(DEFAULT_ROCKSDB_SUB_DIR).display());
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
         }
