@@ -1158,8 +1158,8 @@ impl<E: Engine> TestStorageBuilder<E> {
         self
     }
 
-    pub fn enable_pipelined_pessimistic_lock(mut self) -> Self {
-        self.pipelined_pessimistic_lock = true;
+    pub fn set_pipelined_pessimistic_lock(mut self, enabled: bool) -> Self {
+        self.pipelined_pessimistic_lock = enabled;
         self
     }
 
@@ -3865,7 +3865,7 @@ mod tests {
         assert_eq!(cmd.ts, None);
     }
 
-    fn test_pessimistic_lock_impl() {
+    fn test_pessimistic_lock_impl(pipelined_pessimistic_lock: bool) {
         type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
         fn new_acquire_pessimistic_lock_command(
             keys: Vec<(Key, bool)>,
@@ -3920,6 +3920,7 @@ mod tests {
 
         let storage = TestStorageBuilder::new()
             .enable_pessimistic_txn()
+            .set_pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
         let (tx, rx) = channel();
