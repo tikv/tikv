@@ -9,21 +9,21 @@
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
-use std::sync::{Arc, atomic};
+use std::sync::{atomic, Arc};
 
-use futures03::prelude::*;
 use futures::Future;
+use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
 use rand::prelude::*;
 
-use engine::{DATA_KEY_PREFIX_LEN, IterOption};
-use engine_traits::{ALL_CFS, CF_DEFAULT, CfName, DATA_CFS};
+use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::{
     config::Config,
-    kv::{Error as EngineError, ErrorInner as EngineErrorInner, Modify, with_tls_engine},
+    kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     txn::{
@@ -34,7 +34,7 @@ use crate::storage::{
 };
 
 pub use self::{
-    errors::{Error, ErrorHeaderKind, ErrorInner, get_error_kind_from_header, get_tag_from_header},
+    errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator, RocksEngine,
         ScanMode, Snapshot, Statistics, TestEngineBuilder,
@@ -150,7 +150,7 @@ macro_rules! check_key_size {
     };
 }
 
-pub fn build_key_range(start_key: &[u8], end_key: &[u8])->KeyRange{
+pub fn build_key_range(start_key: &[u8], end_key: &[u8]) -> KeyRange {
     let mut range = KeyRange::default();
     range.set_start_key(start_key.to_vec());
     range.set_end_key(end_key.to_vec());
@@ -365,7 +365,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
 
-                let mut key_ranges = vec!();
+                let mut key_ranges = vec![];
                 for key in &keys {
                     if let Ok(key) = key.to_owned().into_raw() {
                         key_ranges.push(build_key_range(&key, b""));
@@ -685,9 +685,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
 
-                let mut key_ranges = vec!();
+                let mut key_ranges = vec![];
                 for key in &keys {
-                    key_ranges.push(build_key_range(key,b""));
+                    key_ranges.push(build_key_range(key, b""));
                 }
                 tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
 
@@ -1075,7 +1075,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 {
-                    let mut key_ranges =  vec!();
+                    let mut key_ranges = vec![];
                     for range in &ranges {
                         let start_key = &range.start_key;
                         let end_key = &range.end_key;

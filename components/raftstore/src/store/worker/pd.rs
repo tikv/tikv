@@ -4,30 +4,30 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::io;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use fs2;
-use futures::Future;
 use futures::sync::oneshot;
+use futures::Future;
+use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::kvrpcpb::KeyRange;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use rand::Rng;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-use engine::rocks::DB;
 use engine::rocks::util::*;
+use engine::rocks::DB;
 use engine_rocks::RocksEngine;
-use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use pd_client::metrics::*;
+use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
@@ -35,13 +35,13 @@ use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler
 use txn_types::Key;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
-use crate::store::Callback;
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
-use crate::store::StoreInfo;
 use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
+use crate::store::Callback;
+use crate::store::StoreInfo;
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -965,7 +965,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
             Task::AutoSplit { split_infos } => {
                 for split_info in split_infos {
                     if let Ok(Some(region)) =
-                    self.pd_client.get_region_by_id(split_info.region_id).wait()
+                        self.pd_client.get_region_by_id(split_info.region_id).wait()
                     {
                         self.handle_ask_split(
                             handle,
@@ -1220,7 +1220,7 @@ impl Sample {
     }
 }
 
-pub fn build_key_range(start_key: &[u8], end_key: &[u8])->KeyRange{
+pub fn build_key_range(start_key: &[u8], end_key: &[u8]) -> KeyRange {
     let mut range = KeyRange::default();
     range.set_start_key(start_key.to_vec());
     range.set_end_key(end_key.to_vec());
@@ -1252,10 +1252,11 @@ impl Recorder {
             if self.samples.len() < 20 {
                 self.samples.push(Sample::new(&key_range.start_key));
             } else {
-                self.sample(key_range);
                 let i = rng.gen_range(0, self.count) as usize;
                 if i < 20 {
                     self.samples[i] = Sample::new(&key_range.start_key);
+                } else {
+                    self.sample(key_range);
                 }
             }
         }
@@ -1276,7 +1277,7 @@ impl Recorder {
         }
     }
 
-    fn is_ready(&self)->bool{
+    fn is_ready(&self) -> bool {
         self.times >= DETECT_TIMES
     }
 
@@ -1311,7 +1312,7 @@ pub struct RegionInfo {
 impl RegionInfo {
     fn new() -> RegionInfo {
         RegionInfo {
-            key_ranges: vec!(),
+            key_ranges: vec![],
             peer: metapb::Peer::default(),
         }
     }
@@ -1394,7 +1395,12 @@ impl SplitHub {
         region_info.add_key_range(build_key_range(start_key, end_key));
     }
 
-    pub fn batch_add(&mut self, region_id: u64, peer: &metapb::Peer, key_ranges: &mut Vec<KeyRange>) {
+    pub fn batch_add(
+        &mut self,
+        region_id: u64,
+        peer: &metapb::Peer,
+        key_ranges: &mut Vec<KeyRange>,
+    ) {
         let region_info = self.get_region_info(region_id);
         region_info.update_peer(peer);
         region_info.add_key_ranges(key_ranges);
@@ -1622,10 +1628,13 @@ mod tests {
         }
     }
 
-    fn default_hub()->SplitHub{
+    const REGION_NUM: u64 = 1000;
+    const KEY_RANGE_NUM: u64 = 1000;
+
+    fn default_hub() -> SplitHub {
         let mut hub = SplitHub::new();
-        for i in 0..1000{
-            for _j in 0..1000{
+        for i in 0..REGION_NUM {
+            for _j in 0..KEY_RANGE_NUM {
                 hub.add(i, &metapb::Peer::default(), b"a", b"b")
             }
         }
@@ -1633,7 +1642,7 @@ mod tests {
     }
 
     #[bench]
-    fn hub_flush(b: &mut test::Bencher){
+    fn hub_flush(b: &mut test::Bencher) {
         let mut hub = default_hub();
         b.iter(|| {
             hub.flush();
@@ -1641,7 +1650,17 @@ mod tests {
     }
 
     #[bench]
-    fn hub_update(b: &mut test::Bencher){
+    fn recorder_sample(b: &mut test::Bencher) {
+        let mut recorder = Recorder::new();
+        recorder.samples.push(Sample::new(b"c"));
+        let key_range = build_key_range(b"a", b"b");
+        b.iter(|| {
+            recorder.sample(&key_range);
+        });
+    }
+
+    #[bench]
+    fn hub_update(b: &mut test::Bencher) {
         let mut other_hub = default_hub();
 
         b.iter(|| {
@@ -1651,8 +1670,8 @@ mod tests {
     }
 
     #[bench]
-    fn hub_scan(b: &mut test::Bencher){
-        let mut hub = SplitHub::new();
+    fn hub_scan(b: &mut test::Bencher) {
+        let mut hub = default_hub();
         let start_key = Key::from_raw(b"a");
         let end_key = Some(Key::from_raw(b"b"));
 
@@ -1664,16 +1683,16 @@ mod tests {
                         key = end_key;
                     }
                 }
-                hub.add(0,&metapb::Peer::default(),&start_key,&key);
+                hub.add(0, &metapb::Peer::default(), &start_key, &key);
             }
         });
     }
 
     #[bench]
-    fn hub_add(b: &mut test::Bencher){
-        let mut hub = SplitHub::new();
+    fn hub_add(b: &mut test::Bencher) {
+        let mut hub = default_hub();
         b.iter(|| {
-                hub.add(0,&metapb::Peer::default(),b"a",b"b");
+            hub.add(0, &metapb::Peer::default(), b"a", b"b");
         });
     }
 }
