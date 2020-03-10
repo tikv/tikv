@@ -227,6 +227,8 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+mod properties;
+pub use crate::properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -241,8 +243,8 @@ pub use crate::peekable::*;
 // These modules contain support code that does not need to be implemented by
 // engines.
 
-mod cfdefs;
-pub use crate::cfdefs::*;
+mod cf_defs;
+pub use crate::cf_defs::*;
 mod engines;
 pub use engines::*;
 mod errors;
@@ -251,6 +253,10 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+pub mod metrics_flusher;
 pub mod util;
+pub use crate::metrics_flusher::*;
+pub mod compact;
+pub use compact::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

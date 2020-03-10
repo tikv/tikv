@@ -10,11 +10,10 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine::rocks;
-use engine::rocks::Writable;
-use engine::WriteBatch;
-use engine::CF_RAFT;
-use engine::{util as engine_util, Engines, Mutable, Peekable};
+use engine::{util as engine_util, Engines, Peekable};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_traits::CF_RAFT;
+use engine_traits::{KvEngine, Mutable};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -28,7 +27,9 @@ use crate::store::transport::CasualRouter;
 use crate::store::{
     self, check_abort, ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
 };
-use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use yatp::pool::{Builder, ThreadPool};
+use yatp::task::future::TaskCell;
+
 use tikv_util::time;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
@@ -217,7 +218,7 @@ struct SnapContext<R> {
     router: R,
 }
 
-impl<R: CasualRouter> SnapContext<R> {
+impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     /// Generates the snapshot of the Region.
     fn generate_snap(
         &self,
@@ -340,12 +341,11 @@ impl<R: CasualRouter> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let wb = WriteBatch::default();
+        let wb = self.engines.kv.c().write_batch();
         region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT));
-        box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
-        box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(&wb).unwrap_or_else(|e| {
+        box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
+        box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
+        self.engines.kv.c().write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -522,15 +522,14 @@ impl<R: CasualRouter> SnapContext<R> {
 }
 
 pub struct Runner<R> {
-    pool: ThreadPool<DefaultContext>,
+    pool: ThreadPool<TaskCell>,
     ctx: SnapContext<R>,
-
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task>,
 }
 
-impl<R: CasualRouter> Runner<R> {
+impl<R: CasualRouter<RocksEngine>> Runner<R> {
     pub fn new(
         engines: Engines,
         mgr: SnapManager,
@@ -541,9 +540,10 @@ impl<R: CasualRouter> Runner<R> {
         router: R,
     ) -> Runner<R> {
         Runner {
-            pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
-                .thread_count(GENERATE_POOL_SIZE)
-                .build(),
+            pool: Builder::new(thd_name!("snap-generator"))
+                .max_thread_count(GENERATE_POOL_SIZE)
+                .build_future_pool(),
+
             ctx: SnapContext {
                 engines,
                 mgr,
@@ -589,7 +589,7 @@ impl<R: CasualRouter> Runner<R> {
 
 impl<R> Runnable<Task> for Runner<R>
 where
-    R: CasualRouter + Send + Clone + 'static,
+    R: CasualRouter<RocksEngine> + Send + Clone + 'static,
 {
     fn run(&mut self, task: Task) {
         match task {
@@ -602,8 +602,10 @@ where
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
-                self.pool
-                    .execute(move |_| ctx.handle_gen(region_id, raft_snap, kv_snap, notifier))
+
+                self.pool.spawn(async move {
+                    ctx.handle_gen(region_id, raft_snap, kv_snap, notifier);
+                });
             }
             task @ Task::Apply { .. } => {
                 // to makes sure appling snapshots in order.
@@ -636,9 +638,7 @@ where
     }
 
     fn shutdown(&mut self) {
-        if let Err(e) = self.pool.stop() {
-            warn!("Stop threadpool failed"; "err" => %e);
-        }
+        self.pool.shutdown();
     }
 }
 
@@ -650,7 +650,7 @@ pub enum Event {
 
 impl<R> RunnableWithTimer<Task, Event> for Runner<R>
 where
-    R: CasualRouter + Send + Clone + 'static,
+    R: CasualRouter<RocksEngine> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
@@ -686,11 +686,12 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
     use engine::rocks;
-    use engine::rocks::{ColumnFamilyOptions, Writable, WriteBatch};
+    use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine::{Mutable, Peekable};
-    use engine::{CF_DEFAULT, CF_RAFT};
-    use engine_rocks::RocksSnapshot;
+    use engine::Peekable;
+    use engine_rocks::{Compat, RocksSnapshot};
+    use engine_traits::{KvEngine, Mutable};
+    use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;
@@ -866,8 +867,7 @@ mod tests {
             s3.save().unwrap();
 
             // set applying state
-            let wb = WriteBatch::default();
-            let handle = engine.kv.cf_handle(CF_RAFT).unwrap();
+            let wb = engine.kv.c().write_batch();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
                 .kv
@@ -875,8 +875,8 @@ mod tests {
                 .unwrap()
                 .unwrap();
             region_state.set_state(PeerState::Applying);
-            wb.put_msg_cf(handle, &region_key, &region_state).unwrap();
-            engine.kv.write(&wb).unwrap();
+            wb.put_msg_cf(CF_RAFT, &region_key, &region_state).unwrap();
+            engine.kv.c().write(&wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));

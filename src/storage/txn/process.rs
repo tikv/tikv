@@ -30,12 +30,12 @@ use crate::storage::txn::{
 };
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    types::{MvccInfo, TxnStatus},
+    types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
-use engine::CF_WRITE;
+use engine_traits::CF_WRITE;
 use tikv_util::collections::HashMap;
-use tikv_util::time::{Instant, SlowTimer};
+use tikv_util::time::Instant;
 
 pub const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -176,7 +176,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
 
                 let region_id = task.region_id;
                 let ts = task.ts;
-                let timer = SlowTimer::new();
+                let timer = Instant::now_coarse();
 
                 let statistics = if readonly {
                     self.process_read(snapshot, task)
@@ -186,7 +186,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
-                    timer,
+                    timer.elapsed(),
                     "[region {}] scheduler handle command: {}, ts: {}",
                     region_id,
                     tag,
@@ -459,7 +459,7 @@ fn wake_up_waiters_if_needed<L: LockManager>(
     }
 }
 
-fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
+fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
     match res {
         Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
@@ -606,11 +606,16 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             is_first_lock,
             for_update_ts,
             wait_timeout,
+            return_values,
             ..
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
-            let mut locks = vec![];
             let rows = keys.len();
+            let mut res = if return_values {
+                Ok(PessimisticLockRes::Values(vec![]))
+            } else {
+                Ok(PessimisticLockRes::Empty)
+            };
             for (k, should_not_exist) in keys {
                 match txn.acquire_pessimistic_lock(
                     k,
@@ -618,10 +623,15 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     should_not_exist,
                     lock_ttl,
                     for_update_ts,
+                    return_values,
                 ) {
-                    Ok(_) => {}
-                    e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                    Ok(val) => {
+                        if return_values {
+                            res.as_mut().unwrap().push(val);
+                        }
+                    }
+                    Err(e @ MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
+                        res = Err(e).map_err(Error::from).map_err(StorageError::from);
                         break;
                     }
                     Err(e) => return Err(Error::from(e)),
@@ -630,13 +640,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 
             statistics.add(&txn.take_statistics());
             // no conflict
-            if locks.is_empty() {
-                let pr = ProcessResult::MultiRes { results: vec![] };
+            if res.is_ok() {
+                let pr = ProcessResult::PessimisticLockRes { res };
                 let modifies = txn.into_modifies();
                 (pr, modifies, rows, cmd.ctx, None)
             } else {
-                let lock = extract_lock_from_result(&locks[0]);
-                let pr = ProcessResult::MultiRes { results: locks };
+                let lock = extract_lock_from_result(&res);
+                let pr = ProcessResult::PessimisticLockRes { res };
                 let lock_info = Some((lock, is_first_lock, wait_timeout));
                 // Wait for lock released
                 (pr, vec![], 0, cmd.ctx, lock_info)
@@ -983,7 +993,7 @@ mod tests {
         let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
             MvccError::from(MvccErrorInner::KeyIsLocked(info)),
         ))));
-        let lock = extract_lock_from_result(&Err(case));
+        let lock = extract_lock_from_result::<()>(&Err(case));
         assert_eq!(lock.ts, ts.into());
         assert_eq!(lock.hash, key.gen_hash());
     }

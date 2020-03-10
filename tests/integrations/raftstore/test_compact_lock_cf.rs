@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DBStatisticsTickerType;
-use engine::CF_LOCK;
+use engine_traits::CF_LOCK;
 use test_raftstore::*;
 use tikv_util::config::*;
 

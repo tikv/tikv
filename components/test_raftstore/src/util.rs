@@ -17,10 +17,10 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use engine::rocks::util::config::BlobRunMode;
-use engine::rocks::{CompactionJobInfo, DB};
+use engine::rocks::DB;
 use engine::*;
-use engine_rocks::CompactionListener;
 use engine_rocks::RocksEngine;
+use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -32,6 +32,7 @@ use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_RAFT};
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
@@ -540,13 +541,13 @@ pub fn must_error_read_on_peer<T: Simulator>(
     }
 }
 
-fn dummpy_filter(_: &CompactionJobInfo) -> bool {
+fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
     true
 }
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    router: RaftRouter,
+    router: RaftRouter<RocksEngine>,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine
@@ -591,6 +592,13 @@ pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+}
+
+pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Uses long check interval to make leader keep sleeping during tests.
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
 }
 
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

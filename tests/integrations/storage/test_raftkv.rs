@@ -8,7 +8,7 @@ use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
 use engine::IterOption;
-use engine::{CfName, CF_DEFAULT};
+use engine_traits::{CfName, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
 use tikv::storage::CfStatistics;

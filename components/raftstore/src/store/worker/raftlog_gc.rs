@@ -3,16 +3,13 @@
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
-use engine::rocks::Writable;
 use engine::util::MAX_DELETE_BATCH_SIZE;
-use engine::Iterable;
-use engine::{WriteBatch, DB};
+use engine_traits::{KvEngine, Mutable, WriteBatch};
 use tikv_util::worker::Runnable;
 
-pub struct Task {
-    pub raft_engine: Arc<DB>,
+pub struct Task<E: KvEngine> {
+    pub raft_engine: E,
     pub region_id: u64,
     pub start_idx: u64,
     pub end_idx: u64,
@@ -22,7 +19,7 @@ pub struct TaskRes {
     pub collected: u64,
 }
 
-impl Display for Task {
+impl<E: KvEngine> Display for Task<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -54,9 +51,9 @@ impl Runner {
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(
+    fn gc_raft_log<E: KvEngine>(
         &mut self,
-        raft_engine: Arc<DB>,
+        raft_engine: E,
         region_id: u64,
         start_idx: u64,
         end_idx: u64,
@@ -73,7 +70,7 @@ impl Runner {
             info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
-        let raft_wb = WriteBatch::default();
+        let raft_wb = raft_engine.write_batch();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
@@ -102,8 +99,8 @@ impl Runner {
     }
 }
 
-impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
+impl<E: KvEngine> Runnable<Task<E>> for Runner {
+    fn run(&mut self, task: Task<E>) {
         debug!(
             "execute gc log";
             "region_id" => task.region_id,
@@ -131,8 +128,9 @@ impl Runnable<Task> for Runner {
 mod tests {
     use super::*;
     use engine::rocks::util::new_engine;
-    use engine::CF_DEFAULT;
-    use std::sync::mpsc;
+    use engine_rocks::RocksEngine;
+    use engine_traits::{KvEngine, CF_DEFAULT};
+    use std::sync::{mpsc, Arc};
     use std::time::Duration;
     use tempfile::Builder;
 
@@ -141,13 +139,14 @@ mod tests {
         let path = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
         let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let raft_db = Arc::new(raft_db);
+        let raft_db = RocksEngine::from_db(raft_db);
 
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner::new(Some(tx));
 
         // generate raft logs
         let region_id = 1;
-        let raft_wb = WriteBatch::default();
+        let raft_wb = raft_db.write_batch();
         for i in 0..100 {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();
@@ -157,7 +156,7 @@ mod tests {
         let tbls = vec![
             (
                 Task {
-                    raft_engine: Arc::clone(&raft_db),
+                    raft_engine: raft_db.clone(),
                     region_id,
                     start_idx: 0,
                     end_idx: 10,
@@ -168,7 +167,7 @@ mod tests {
             ),
             (
                 Task {
-                    raft_engine: Arc::clone(&raft_db),
+                    raft_engine: raft_db.clone(),
                     region_id,
                     start_idx: 0,
                     end_idx: 50,
@@ -179,7 +178,7 @@ mod tests {
             ),
             (
                 Task {
-                    raft_engine: Arc::clone(&raft_db),
+                    raft_engine: raft_db.clone(),
                     region_id,
                     start_idx: 50,
                     end_idx: 50,
@@ -190,7 +189,7 @@ mod tests {
             ),
             (
                 Task {
-                    raft_engine: Arc::clone(&raft_db),
+                    raft_engine: raft_db.clone(),
                     region_id,
                     start_idx: 50,
                     end_idx: 60,
@@ -210,17 +209,27 @@ mod tests {
         }
     }
 
-    fn raft_log_must_not_exist(raft_engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
+    fn raft_log_must_not_exist(
+        raft_engine: &impl KvEngine,
+        region_id: u64,
+        start_idx: u64,
+        end_idx: u64,
+    ) {
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
-            assert!(raft_engine.get(&k).unwrap().is_none());
+            assert!(raft_engine.get_value(&k).unwrap().is_none());
         }
     }
 
-    fn raft_log_must_exist(raft_engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
+    fn raft_log_must_exist(
+        raft_engine: &impl KvEngine,
+        region_id: u64,
+        start_idx: u64,
+        end_idx: u64,
+    ) {
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
-            assert!(raft_engine.get(&k).unwrap().is_some());
+            assert!(raft_engine.get_value(&k).unwrap().is_some());
         }
     }
 }

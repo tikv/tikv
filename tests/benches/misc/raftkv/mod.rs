@@ -13,9 +13,9 @@ use kvproto::raft_serverpb::RaftMessage;
 use engine;
 use engine::rocks;
 use engine::rocks::DB;
-use engine::{ALL_CFS, CF_DEFAULT};
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::Snapshot;
+use engine_traits::{ALL_CFS, CF_DEFAULT};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{
     cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
@@ -40,7 +40,7 @@ impl SyncBenchRouter {
 }
 
 impl SyncBenchRouter {
-    fn invoke(&self, cmd: RaftCommand) {
+    fn invoke(&self, cmd: RaftCommand<RocksEngine>) {
         let mut response = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
@@ -78,7 +78,7 @@ impl RaftStoreRouter for SyncBenchRouter {
         Ok(())
     }
 
-    fn casual_send(&self, _: u64, _: CasualMessage) -> Result<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> Result<()> {
         Ok(())
     }
 

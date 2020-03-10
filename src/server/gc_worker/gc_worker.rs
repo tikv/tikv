@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
-use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::TablePropertiesExt;
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use kvproto::metapb;
@@ -569,7 +569,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 callback(res);
                 self.update_statistics_metrics();
                 slow_log!(
-                    timer,
+                    T timer,
                     "GC on region {}, epoch {:?}, safe_point {}",
                     ctx.get_region_id(),
                     ctx.get_region_epoch(),
@@ -586,7 +586,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
-                    timer,
+                    T timer,
                     "UnsafeDestroyRange start_key {:?}, end_key {:?}",
                     start_key,
                     end_key
@@ -603,7 +603,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
-                    timer,
+                    T timer,
                     "PhysicalScanLock start_key {:?}, max_ts {}, limit {}",
                     start_key,
                     max_ts,

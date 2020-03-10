@@ -32,6 +32,7 @@ path = "benches/hierarchy/mod.rs"
 [[bench]]
 name = "misc"
 path = "benches/misc/mod.rs"
+test = true
 
 [[bench]]
 name = "deadlock_detector"
@@ -41,9 +42,10 @@ path = "benches/deadlock_detector/mod.rs"
 [[bench]]
 name = "channel"
 path = "benches/channel/mod.rs"
+test = true
 
 [features]
-default = ["failpoints", "testexport"]
+default = ["failpoints", "testexport", "protobuf-codec"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
@@ -58,6 +60,7 @@ protobuf-codec = [
   "tidb_query/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
+  "cdc/protobuf-codec",
 ]
 prost-codec = [
   "engine/prost-codec",
@@ -70,6 +73,7 @@ prost-codec = [
   "tidb_query/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
+  "cdc/prost-codec",
 ]
 jemalloc = ["tikv/jemalloc"]
 sse = ["tikv/sse"]
@@ -81,6 +85,7 @@ crc64fast = "0.1"
 crossbeam = "0.7.2"
 configuration = { path = "../components/configuration" }
 engine = { path = "../components/engine" }
+cdc = { path = "../components/cdc" }
 futures = "0.1"
 futures-cpupool = "0.1"
 futures03 = { package = "futures", version = "0.3", features = ["executor"] }

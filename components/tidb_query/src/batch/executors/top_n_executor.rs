@@ -6,7 +6,6 @@ use std::ptr::NonNull;
 
 use servo_arc::Arc;
 
-use tidb_query_datatype::FieldTypeAccessor;
 use tipb::{Expr, FieldType, TopN};
 
 use crate::batch::executors::util::*;
@@ -222,14 +221,14 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         if self.heap.len() < self.n {
             // HeapItemUnsafe must be checked valid to compare in advance, or else it may
             // panic inside BinaryHeap.
-            row.cmp_with_field_type(&row)?;
+            row.cmp_sort_key(&row)?;
 
             // Push into heap when heap is not full.
             self.heap.push(row);
         } else {
             // Swap the greatest row in the heap if this row is smaller than that row.
             let mut greatest_row = self.heap.peek_mut().unwrap();
-            if row.cmp_with_field_type(&greatest_row)? == Ordering::Less {
+            if row.cmp_sort_key(&greatest_row)? == Ordering::Less {
                 *greatest_row = row;
             }
         }
@@ -398,7 +397,7 @@ impl HeapItemUnsafe {
         &vec_buf[offset_begin..offset_end]
     }
 
-    fn cmp_with_field_type(&self, other: &Self) -> Result<Ordering> {
+    fn cmp_sort_key(&self, other: &Self) -> Result<Ordering> {
         // Only debug assert because this function is called pretty frequently.
         debug_assert_eq!(self.get_order_is_desc(), other.get_order_is_desc());
 
@@ -416,10 +415,7 @@ impl HeapItemUnsafe {
 
             // There is panic inside, but will never panic, since the data type of corresponding
             // column should be consistent for each `HeapItemUnsafe`.
-            let ord = lhs.cmp_with_collation(
-                &rhs,
-                order_exprs_field_type[column_idx].as_accessor().collation(),
-            )?;
+            let ord = lhs.cmp_sort_key(&rhs, &order_exprs_field_type[column_idx])?;
 
             if ord == Ordering::Equal {
                 continue;
@@ -439,7 +435,7 @@ impl HeapItemUnsafe {
 /// So make sure that it is valid before putting it into a heap.
 impl Ord for HeapItemUnsafe {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.cmp_with_field_type(other).unwrap()
+        self.cmp_sort_key(other).unwrap()
     }
 }
 
@@ -461,7 +457,8 @@ impl Eq for HeapItemUnsafe {}
 mod tests {
     use super::*;
 
-    use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::{Collation, FieldTypeTp};
 
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::expr::EvalWarnings;
@@ -818,27 +815,34 @@ mod tests {
     /// Builds an executor that will return these data:
     ///
     /// == Schema ==
-    /// Col0 (Bytes[utf8_general_ci])      Col1(Bytes[utf8_bin])   Col2(Bytes[binary])
+    /// Col0 (Bytes[Utf8Mb4GeneralCi])      Col1(Bytes[Utf8Mb4Bin])     Col2(Bytes[Binary])
     /// == Call #1 ==
-    /// "aa"                               "aaa"                      "áaA"
-    /// NULL                               NULL                       "Aa"
-    /// "aa"                               "aa"                       NULL
+    /// "aa"                                "aaa"                       "áaA"
+    /// NULL                                NULL                        "Aa"
+    /// "aa"                                "aa"                        NULL
     /// == Call #2 ==
     /// == Call #3 ==
-    /// "áaA"                              "áa"                       NULL
-    /// "áa"                               "áaA"                      "aa"
-    /// "Aa"                               NULL                       "aaa"
-    /// "aaa"                              "Aa"                       "áa"
+    /// "áaA"                               "áa"                        NULL
+    /// "áa"                                "áaA"                       "aa"
+    /// "Aa"                                NULL                        "aaa"
+    /// "aaa"                               "Aa"                        "áa"
     /// (drained)
     fn make_bytes_src_executor() -> MockExecutor {
-        let mut col1: FieldType = FieldTypeTp::VarChar.into();
-        let mut col2: FieldType = FieldTypeTp::VarChar.into();
-        let mut col3: FieldType = FieldTypeTp::VarChar.into();
-        col1.set_collation(Collation::Utf8GeneralCi);
-        col2.set_collation(Collation::Utf8Bin);
-        col3.set_collation(Collation::Binary);
         MockExecutor::new(
-            vec![col1, col2, col3],
+            vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4GeneralCi)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Binary)
+                    .into(),
+            ],
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![

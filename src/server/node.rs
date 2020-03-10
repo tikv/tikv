@@ -13,13 +13,14 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
 use engine::Peekable;
+use engine_rocks::RocksEngine;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SplitCheckTask;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{DynamicConfig, PdTask};
@@ -175,8 +176,12 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter {
+    pub fn get_router(&self) -> RaftRouter<RocksEngine> {
         self.system.router()
+    }
+    /// Gets a transmission end of a channel which is used send messages to apply worker.
+    pub fn get_apply_router(&self) -> ApplyRouter {
+        self.system.apply_router()
     }
 
     // check store, return store id for the engine.

@@ -5,10 +5,11 @@ use super::peer_storage::{
 };
 use super::util::new_peer;
 use crate::Result;
-use engine::rocks;
 use engine::rocks::Writable;
-use engine::{Engines, Iterable, Mutable, WriteBatch, DB};
-use engine::{CF_DEFAULT, CF_RAFT};
+use engine::{Engines, Iterable, DB};
+use engine_rocks::Compat;
+use engine_traits::{KvEngine, Mutable};
+use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
@@ -52,7 +53,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     ident.set_cluster_id(cluster_id);
     ident.set_store_id(store_id);
 
-    engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
+    engines.kv.c().put_msg(keys::STORE_IDENT_KEY, &ident)?;
     engines.sync_kv()?;
     Ok(())
 }
@@ -64,17 +65,16 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     let mut state = RegionLocalState::default();
     state.set_region(region.clone());
 
-    let wb = WriteBatch::default();
+    let wb = engines.kv.c().write_batch();
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
-    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
-    box_try!(wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state));
-    write_initial_apply_state(&engines.kv, &wb, region.get_id())?;
-    engines.write_kv(&wb)?;
+    box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region.get_id()), &state));
+    write_initial_apply_state(&wb, region.get_id())?;
+    engines.kv.c().write(&wb)?;
     engines.sync_kv()?;
 
-    let raft_wb = WriteBatch::default();
+    let raft_wb = engines.raft.c().write_batch();
     write_initial_raft_state(&raft_wb, region.get_id())?;
-    engines.write_raft(&raft_wb)?;
+    engines.raft.c().write(&raft_wb)?;
     engines.sync_raft()?;
     Ok(())
 }
@@ -84,13 +84,12 @@ pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Res
     box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
     engines.sync_raft()?;
 
-    let wb = WriteBatch::default();
+    let wb = engines.kv.c().write_batch();
     box_try!(wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
     // should clear raft initial state too.
-    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
-    box_try!(wb.delete_cf(handle, &keys::region_state_key(region_id)));
-    box_try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
-    engines.write_kv(&wb)?;
+    box_try!(wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
+    box_try!(wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
+    engines.kv.c().write(&wb)?;
     engines.sync_kv()?;
     Ok(())
 }
@@ -111,7 +110,7 @@ mod tests {
     use engine::rocks;
     use engine::Engines;
     use engine::Peekable;
-    use engine::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
 
     #[test]
     fn test_bootstrap() {

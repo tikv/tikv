@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
-use grpcio::{EnvBuilder, Error as GrpcError};
+use grpcio::{EnvBuilder, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
 use kvproto::import_sstpb::create_import_sst;
@@ -15,13 +15,13 @@ use tempfile::{Builder, TempDir};
 
 use super::*;
 use engine::Engines;
-use engine_rocks::RocksEngine;
+use engine_rocks::{Compat, RocksEngine};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SplitCheckRunner;
 use raftstore::store::{Callback, LocalReader, SnapManager};
 use raftstore::Result;
@@ -56,9 +56,13 @@ struct ServerMeta {
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter,
+    raw_router: RaftRouter<RocksEngine>,
+    raw_apply_router: ApplyRouter,
     worker: Worker<ResolveTask>,
 }
+
+type PendingServices = Vec<Box<dyn Fn() -> Service>>;
+type CopHooks = Vec<Box<dyn Fn(&mut CoprocessorHost)>>;
 
 pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
@@ -66,6 +70,8 @@ pub struct ServerCluster {
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     pub importers: HashMap<u64, Arc<SSTImporter>>,
+    pub pending_services: HashMap<u64, PendingServices>,
+    pub coprocessor_hooks: HashMap<u64, CopHooks>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<RaftStoreBlackHole>,
@@ -96,12 +102,18 @@ impl ServerCluster {
             region_info_accessors: HashMap::default(),
             importers: HashMap::default(),
             snap_paths: HashMap::default(),
+            pending_services: HashMap::default(),
+            coprocessor_hooks: HashMap::default(),
             raft_client,
         }
     }
 
     pub fn get_addr(&self, node_id: u64) -> &str {
         &self.addrs[&node_id]
+    }
+
+    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter {
+        self.metas.get(&node_id).unwrap().raw_apply_router.clone()
     }
 }
 
@@ -111,7 +123,7 @@ impl Simulator for ServerCluster {
         node_id: u64,
         mut cfg: TiKvConfig,
         engines: Engines,
-        router: RaftRouter,
+        router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -129,7 +141,8 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader =
+            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
@@ -140,6 +153,12 @@ impl Simulator for ServerCluster {
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
+
+        if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
+            for hook in hooks {
+                hook(&mut coprocessor_host);
+            }
+        }
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
@@ -223,6 +242,11 @@ impl Simulator for ServerCluster {
             svr.register_service(create_import_sst(import_service.clone()));
             svr.register_service(create_debug(debug_service.clone()));
             svr.register_service(create_deadlock(deadlock_service.clone()));
+            if let Some(svcs) = self.pending_services.get(&node_id) {
+                for fact in svcs {
+                    svr.register_service(fact());
+                }
+            }
             match svr.build_and_bind() {
                 Ok(_) => {
                     server = Some(svr);
@@ -243,6 +267,7 @@ impl Simulator for ServerCluster {
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
         let server_cfg = Arc::new(cfg.server.clone());
+        let apply_router = system.apply_router();
 
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
@@ -323,6 +348,7 @@ impl Simulator for ServerCluster {
             node_id,
             ServerMeta {
                 raw_router: router,
+                raw_apply_router: apply_router,
                 node,
                 server,
                 sim_router,
@@ -408,7 +434,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }
