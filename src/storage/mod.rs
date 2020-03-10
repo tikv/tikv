@@ -3865,8 +3865,7 @@ mod tests {
         assert_eq!(cmd.ts, None);
     }
 
-    #[test]
-    fn test_pessimistic_lock() {
+    fn test_pessimistic_lock_impl() {
         type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
         fn new_acquire_pessimistic_lock_command(
             keys: Vec<(Key, bool)>,
@@ -4079,118 +4078,8 @@ mod tests {
     }
 
     #[test]
-    fn test_pipelined_pessimistic_lock() {
-        type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
-        fn new_acquire_pessimistic_lock_command(
-            key: Key,
-            start_ts: impl Into<TimeStamp>,
-            for_update_ts: impl Into<TimeStamp>,
-            force: bool,
-        ) -> PessimisticLockCommand {
-            commands::AcquirePessimisticLock::new(
-                vec![(key.clone(), false)],
-                key.to_raw().unwrap(),
-                start_ts.into(),
-                3000,
-                false,
-                for_update_ts.into(),
-                None,
-                force,
-                Context::default(),
-            )
-        }
-
-        let storage = TestStorageBuilder::new()
-            .enable_pipelined_pessimistic_lock()
-            .build()
-            .unwrap();
-        let (tx, rx) = channel();
-        let (key, val) = (Key::from_raw(b"key"), b"val".to_vec());
-
-        storage
-            .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key.clone(), 10, 10, false),
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-
-        // Duplicated command
-        storage
-            .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key.clone(), 10, 10, false),
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-
-        // KeyIsLocked
-        storage
-            .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key.clone(), 20, 20, false),
-                expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::KeyIsLocked(_),
-                    ))))) => (),
-                    e => panic!("unexpected error chain: {:?}", e),
-                }),
-            )
-            .unwrap();
-        // The DummyLockManager consumes the Msg::WaitForLock.
-        rx.recv_timeout(std::time::Duration::from_millis(100))
-            .unwrap_err();
-
-        storage
-            .sched_txn_command(
-                commands::PrewritePessimistic::new(
-                    vec![(Mutation::Put((key.clone(), val.clone())), true)],
-                    key.to_raw().unwrap(),
-                    10.into(),
-                    3000,
-                    10.into(),
-                    1,
-                    TimeStamp::zero(),
-                    Context::default(),
-                ),
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::Commit::new(vec![key.clone()], 10.into(), 20.into(), Context::default()),
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-
-        // WriteConflict
-        storage
-            .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key.clone(), 15, 15, false),
-                expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::WriteConflict { .. },
-                    ))))) => (),
-                    e => panic!("unexpected error chain: {:?}", e),
-                }),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-
-        // Force pessimistic lock
-        storage
-            .sched_txn_command(
-                new_acquire_pessimistic_lock_command(key, 30, 30, true),
-                Box::new(move |res: Result<_>| {
-                    assert_eq!(
-                        res.unwrap().unwrap(),
-                        PessimisticLockRes::Values(vec![Some(val.clone())])
-                    );
-                    tx.send(0).unwrap();
-                }),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+    fn test_pessimistic_lock() {
+        test_pessimistic_lock_impl(false);
+        test_pessimistic_lock_impl(true);
     }
 }

@@ -400,6 +400,7 @@ pub mod tests {
             TimeStamp::default(),
             0,
             TimeStamp::default(),
+            false,
         )?;
         Ok(())
     }
