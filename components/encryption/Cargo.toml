@@ -21,7 +21,20 @@ byteorder = "1.2"
 protobuf = "2.8"
 crc32fast = "1.2"
 engine_traits = { path = "../engine_traits" }
+rusoto_core = "0.42.0"
+rusoto_kms = { version = "0.42.0", features = ["serialize_structs"] }
+rusoto_credential = "0.42.0"
+configuration = { path = "../configuration" }
+serde_derive = "1.0"
+serde = "1.0"
+bytes = "0.4"
+
+# TODO need to be abstracted
+[dependencies.rocksdb]
+git = "https://github.com/tikv/rust-rocksdb.git"
+package = "rocksdb"
 
 [dev-dependencies]
 tempfile = "3.1"
 hex =  "0.3"
+rusoto_mock = "0.42.0"

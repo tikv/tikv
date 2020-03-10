@@ -19,8 +19,9 @@ pub trait Backend: Sync + Send + 'static {
 
 mod file;
 pub use self::file::FileBackend;
+mod kms;
 mod metadata;
-// TODO support KMS
+pub use self::kms::KmsBackend;
 
 #[derive(Default)]
 pub(crate) struct PlainTextBackend {}
