@@ -2013,14 +2013,14 @@ mod tests {
         let raft_engine = &debugger.engines.raft;
         let store_id = 1; // It's a fake id.
 
-        let wb1 = raft_engine.c().write_batch();
+        let mut wb1 = raft_engine.c().write_batch();
         let cf1 = CF_DEFAULT;
 
-        let wb2 = kv_engine.c().write_batch();
+        let mut wb2 = kv_engine.c().write_batch();
         let cf2 = CF_RAFT;
 
         {
-            let mock_region_state = |region_id: u64, peers: &[u64]| {
+            let mock_region_state = |wb: &mut RocksWriteBatch, region_id: u64, peers: &[u64]| {
                 let region_state_key = keys::region_state_key(region_id);
                 let mut region_state = RegionLocalState::default();
                 region_state.set_state(PeerState::Normal);
@@ -2039,38 +2039,38 @@ mod tests {
                         .collect::<Vec<_>>();
                     region.set_peers(peers.into());
                 }
-                wb2.put_msg_cf(cf2, &region_state_key, &region_state)
+                wb.put_msg_cf(cf2, &region_state_key, &region_state)
                     .unwrap();
             };
-            let mock_raft_state = |region_id: u64, last_index: u64, commit_index: u64| {
+            let mock_raft_state = |wb: &mut RocksWriteBatch, region_id: u64, last_index: u64, commit_index: u64| {
                 let raft_state_key = keys::raft_state_key(region_id);
                 let mut raft_state = RaftLocalState::default();
                 raft_state.set_last_index(last_index);
                 raft_state.mut_hard_state().set_commit(commit_index);
-                wb1.put_msg_cf(cf1, &raft_state_key, &raft_state).unwrap();
+                wb.put_msg_cf(cf1, &raft_state_key, &raft_state).unwrap();
             };
-            let mock_apply_state = |region_id: u64, apply_index: u64| {
+            let mock_apply_state = |wb: &mut RocksWriteBatch, region_id: u64, apply_index: u64| {
                 let raft_apply_key = keys::apply_state_key(region_id);
                 let mut apply_state = RaftApplyState::default();
                 apply_state.set_applied_index(apply_index);
-                wb2.put_msg_cf(cf2, &raft_apply_key, &apply_state).unwrap();
+                wb.put_msg_cf(cf2, &raft_apply_key, &apply_state).unwrap();
             };
 
             for &region_id in &[10, 11, 12] {
-                mock_region_state(region_id, &[store_id]);
+                mock_region_state(&mut wb2, region_id, &[store_id]);
             }
 
             // last index < commit index
-            mock_raft_state(10, 100, 110);
+            mock_raft_state(&mut wb1, 10, 100, 110);
 
             // commit index < last index < apply index, or commit index < apply index < last index.
-            mock_raft_state(11, 100, 90);
-            mock_apply_state(11, 110);
-            mock_raft_state(12, 100, 90);
-            mock_apply_state(12, 95);
+            mock_raft_state(&mut wb1, 11, 100, 90);
+            mock_apply_state(&mut wb2, 11, 110);
+            mock_raft_state(&mut wb1, 12, 100, 90);
+            mock_apply_state(&mut wb2, 12, 95);
 
             // region state doesn't contains the peer itself.
-            mock_region_state(13, &[]);
+            mock_region_state(&mut wb2, 13, &[]);
         }
 
         raft_engine
@@ -2291,15 +2291,15 @@ mod tests {
             .collect();
         let db = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
         // Write initial KVs.
-        let wb = db.c().write_batch();
+        let mut wb = db.c().write_batch();
         for &(cf, ref k, ref v, _) in &kv {
             wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
         db.c().write(&wb).unwrap();
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
-        let wb = db.c().write_batch();
-        checker.check_mvcc(&wb, None).unwrap();
+        let mut wb = db.c().write_batch();
+        checker.check_mvcc(&mut wb, None).unwrap();
         db.c().write(&wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
@@ -2338,7 +2338,7 @@ mod tests {
 
         let debugger = new_debugger();
 
-        let wb = debugger.engines.kv.c().write_batch();
+        let mut wb = debugger.engines.kv.c().write_batch();
         for key in keys {
             let data_key = keys::data_key(key);
             let value = key.to_vec();

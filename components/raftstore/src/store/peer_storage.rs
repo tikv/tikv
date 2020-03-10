@@ -1685,9 +1685,9 @@ mod tests {
 
         assert_eq!(6, get_meta_key_count(&store));
 
-        let kv_wb = store.engines.kv.c().write_batch();
-        let raft_wb = store.engines.raft.c().write_batch();
-        store.clear_meta(&kv_wb, &raft_wb).unwrap();
+        let mut kv_wb = store.engines.kv.c().write_batch();
+        let mut raft_wb = store.engines.raft.c().write_batch();
+        store.clear_meta(&mut kv_wb, &mut raft_wb).unwrap();
         store.engines.kv.c().write(&kv_wb).unwrap();
         store.engines.raft.c().write(&raft_wb).unwrap();
 
@@ -2167,9 +2167,9 @@ mod tests {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let kv_wb = s2.engines.kv.c().write_batch();
-        let raft_wb = s2.engines.raft.c().write_batch();
-        s2.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+        let mut kv_wb = s2.engines.kv.c().write_batch();
+        let mut raft_wb = s2.engines.raft.c().write_batch();
+        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
@@ -2185,9 +2185,9 @@ mod tests {
         validate_cache(&s3, &ents[1..]);
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let kv_wb = s3.engines.kv.c().write_batch();
-        let raft_wb = s3.engines.raft.c().write_batch();
-        s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+        let mut kv_wb = s3.engines.kv.c().write_batch();
+        let mut raft_wb = s3.engines.raft.c().write_batch();
+        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);

@@ -146,7 +146,7 @@ mod tests {
 
         // generate raft logs
         let region_id = 1;
-        let raft_wb = raft_db.write_batch();
+        let mut raft_wb = raft_db.write_batch();
         for i in 0..100 {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();

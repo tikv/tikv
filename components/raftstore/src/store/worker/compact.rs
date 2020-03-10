@@ -286,7 +286,7 @@ mod tests {
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
 
         // Generate the first SST file.
-        let wb = db.c().write_batch();
+        let mut wb = db.c().write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
@@ -296,7 +296,7 @@ mod tests {
         db.flush_cf(handle, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
-        let wb = db.c().write_batch();
+        let mut wb = db.c().write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
