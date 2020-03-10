@@ -1,10 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::future::Future;
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use crate::pd_client::PdClient;
+use crate::tikv_util::HandyRwLock;
+use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::ConfChangeType;
+use raft::eraftpb::MessageType;
 use raftstore::store::QuorumAlgorithm;
 use test_raftstore::*;
 
@@ -12,20 +17,50 @@ use test_raftstore::*;
 #[test]
 fn test_integration_on_half_fail_quorum_fn() {
     let mut cluster = new_node_cluster(0, 5);
+    // Disable hibernate region feature so that it will check quorum after some ticks.
+    cluster.cfg.raft_store.hibernate_regions = false;
     cluster.cfg.raft_store.quorum_algorithm = QuorumAlgorithm::IntegrationOnHalfFail;
     cluster.run();
     cluster.must_put(b"k1", b"v0");
 
-    // After peer 4 and 5 fail, no new leader could be elected.
+    let (tx, rx) = mpsc::sync_channel(1024);
+    let msg_cb = Arc::new(Box::new(move |_: &RaftMessage| drop(tx.send(0)))
+        as Box<dyn Fn(&RaftMessage) + Send + Sync>);
+    let filter = Box::new(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .msg_type(MessageType::MsgRequestPreVote)
+            .set_msg_callback(msg_cb)
+            .when(Arc::new(AtomicBool::new(false))),
+    );
+    cluster.sim.wl().add_send_filter(1, filter);
+
+    // After peer 4 and 5 fail, peer 1 should start a new election because check quorum fail.
     cluster.stop_node(4);
     cluster.stop_node(5);
-    for _ in 0..500 {
-        sleep_ms(10);
-        if cluster.leader_of_region(1).is_none() {
-            return;
-        }
+    if rx.recv_timeout(Duration::from_secs(3)).is_err() {
+        panic!("region 1 must start a new election");
     }
-    panic!("region 1 must lost leader because quorum fail");
+
+    cluster.sim.wl().clear_send_filters(1);
+
+    let (tx, rx) = mpsc::sync_channel(1024);
+    let msg_cb = Arc::new(Box::new(move |_: &RaftMessage| drop(tx.send(0)))
+        as Box<dyn Fn(&RaftMessage) + Send + Sync>);
+    let filter = Box::new(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .msg_type(MessageType::MsgAppend)
+            .msg_type(MessageType::MsgAppendResponse)
+            .set_msg_callback(msg_cb)
+            .when(Arc::new(AtomicBool::new(false))),
+    );
+    cluster.sim.wl().add_send_filter(1, filter);
+
+    // No new leader can be elected.
+    if rx.recv_timeout(Duration::from_secs(3)) != Err(mpsc::RecvTimeoutError::Timeout) {
+        panic!("No new leader should be elected");
+    }
 }
 
 #[test]
