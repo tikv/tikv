@@ -15,10 +15,10 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
+use rustracing::{sampler::AllSampler, Tracer};
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
-use rustracing::{Tracer, sampler::AllSampler};
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
@@ -31,7 +31,7 @@ use crate::coprocessor::interceptors::limit_concurrency;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
-use rustracing::span::{SpanContext, FinishedSpan};
+use rustracing::span::FinishedSpan;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -162,7 +162,7 @@ impl<E: Engine> Endpoint<E> {
 
         // Prost and rust-proto require different mutability.
         #[allow(unused_mut)]
-            let mut parser = Parser::new(&data, self.recursion_limit);
+        let mut parser = Parser::new(&data, self.recursion_limit);
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
@@ -214,9 +214,9 @@ impl<E: Engine> Endpoint<E> {
                         batch_row_limit,
                         is_streaming,
                     )
-                        .data_version(data_version)
-                        .enable_batch_if_possible(enable_batch_if_possible)
-                        .build()
+                    .data_version(data_version)
+                    .enable_batch_if_possible(enable_batch_if_possible)
+                    .build()
                 });
             }
             REQ_TYPE_ANALYZE => {
@@ -242,7 +242,7 @@ impl<E: Engine> Endpoint<E> {
                     statistics::analyze::AnalyzeContext::new(
                         analyze, ranges, start_ts, snap, req_ctx,
                     )
-                        .map(|h| h.into_boxed())
+                    .map(|h| h.into_boxed())
                 });
             }
             REQ_TYPE_CHECKSUM => {
@@ -288,7 +288,7 @@ impl<E: Engine> Endpoint<E> {
     fn async_snapshot(
         engine: &E,
         ctx: &kvrpcpb::Context,
-    ) -> impl std::future::Future<Output=Result<E::Snap>> {
+    ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let (callback, future) = tikv_util::future::paired_std_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         // make engine not cross yield point
@@ -323,7 +323,7 @@ impl<E: Engine> Endpoint<E> {
         let snapshot = unsafe {
             with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
         }
-            .await?;
+        .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.req_ctx.deadline.check()?;
 
@@ -339,7 +339,9 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
         tracker.on_begin_item();
 
-        let child_span = span.child("coprocessor executor", |options| options.start_with_state(()));
+        let child_span = span.child("coprocessor executor", |options| {
+            options.start_with_state(())
+        });
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handler.handle_request(), semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
@@ -347,7 +349,7 @@ impl<E: Engine> Endpoint<E> {
         };
         std::mem::drop(child_span);
 
-        for finished_span in receiver.iter() {
+        for _finished_span in receiver.iter() {
             //TODO 糊 generate span details
         }
 
@@ -381,8 +383,8 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
         span: rustracing::span::Span<()>,
-        receiver: crossbeam::channel::Receiver<FinishedSpan<()>>
-    ) -> impl Future<Item=coppb::Response, Error=Error> {
+        receiver: crossbeam::channel::Receiver<FinishedSpan<()>>,
+    ) -> impl Future<Item = coppb::Response, Error = Error> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx
             .txn_start_ts
@@ -392,7 +394,13 @@ impl<E: Engine> Endpoint<E> {
 
         self.read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, span, receiver, handler_builder),
+                Self::handle_unary_request_impl(
+                    self.semaphore.clone(),
+                    tracker,
+                    span,
+                    receiver,
+                    handler_builder,
+                ),
                 priority,
                 task_id,
             )
@@ -409,15 +417,17 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Item=coppb::Response, Error=()> {
+    ) -> impl Future<Item = coppb::Response, Error = ()> {
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
         // let inactive = rustracing::span::Span::<()>::inactive();
 
-        let result_of_future = self
-            .parse_request(req, peer, false)
-            .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder, entry_span, span_rx));
+        let result_of_future =
+            self.parse_request(req, peer, false)
+                .map(|(handler_builder, req_ctx)| {
+                    self.handle_unary_request(req_ctx, handler_builder, entry_span, span_rx)
+                });
 
         future::result(result_of_future)
             .flatten()
@@ -433,7 +443,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl futures03::stream::Stream<Item=Result<coppb::Response>> {
+    ) -> impl futures03::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
                 Some(semaphore.acquire().await)
@@ -498,7 +508,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl futures03::stream::Stream<Item=Result<coppb::Response>>> {
+    ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx
@@ -529,7 +539,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Stream<Item=coppb::Response, Error=()> {
+    ) -> impl Stream<Item = coppb::Response, Error = ()> {
         let result_of_stream =
             self.parse_request(req, peer, true)
                 .and_then(|(handler_builder, req_ctx)| {
@@ -710,8 +720,8 @@ mod tests {
 
     impl StreamFromClosure {
         pub fn new<F>(result_generator: F) -> StreamFromClosure
-            where
-                F: Fn(usize) -> HandlerStreamStepResult + Send + 'static,
+        where
+            F: Fn(usize) -> HandlerStreamStepResult + Send + 'static,
         {
             StreamFromClosure {
                 result_generator: Box::new(result_generator),
@@ -740,8 +750,17 @@ mod tests {
         // a normal request
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
+        let (span_tx, span_rx) = crossbeam::channel::unbounded();
+        let tracer = Tracer::with_sender(AllSampler, span_tx);
+        let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+
         let resp = cop
-            .handle_unary_request(ReqContext::default_for_test(), handler_builder)
+            .handle_unary_request(
+                ReqContext::default_for_test(),
+                handler_builder,
+                entry_span,
+                span_rx,
+            )
             .wait()
             .unwrap();
         assert!(resp.get_other_error().is_empty());
@@ -759,8 +778,12 @@ mod tests {
             None,
             None,
         );
+        let (span_tx, span_rx) = crossbeam::channel::unbounded();
+        let tracer = Tracer::with_sender(AllSampler, span_tx);
+        let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+
         assert!(cop
-            .handle_unary_request(outdated_req_ctx, handler_builder)
+            .handle_unary_request(outdated_req_ctx, handler_builder, entry_span, span_rx)
             .wait()
             .is_err());
     }
@@ -854,18 +877,18 @@ mod tests {
                 max_tasks_per_worker_normal: 2,
                 ..CoprReadPoolConfig::default_for_test()
             }
-                .to_future_pool_configs()
-                .into_iter()
-                .map(|config| {
-                    let engine = Arc::new(Mutex::new(engine.clone()));
-                    Builder::from_config(config)
-                        .name_prefix("coprocessor_endpoint_test_full")
-                        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                        // Safety: we call `set_` and `destroy_` with the same engine type.
-                        .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
-                        .build()
-                })
-                .collect::<Vec<_>>(),
+            .to_future_pool_configs()
+            .into_iter()
+            .map(|config| {
+                let engine = Arc::new(Mutex::new(engine.clone()));
+                Builder::from_config(config)
+                    .name_prefix("coprocessor_endpoint_test_full")
+                    .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                    // Safety: we call `set_` and `destroy_` with the same engine type.
+                    .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
+                    .build()
+            })
+            .collect::<Vec<_>>(),
         );
 
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
@@ -883,7 +906,16 @@ mod tests {
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed())
             });
-            let future = cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
+            let (span_tx, span_rx) = crossbeam::channel::unbounded();
+            let tracer = Tracer::with_sender(AllSampler, span_tx);
+            let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+
+            let future = cop.handle_unary_request(
+                ReqContext::default_for_test(),
+                handler_builder,
+                entry_span,
+                span_rx,
+            );
             let tx = tx.clone();
             thread::spawn(move || {
                 tx.send(future.wait()).unwrap();
@@ -910,11 +942,19 @@ mod tests {
             engine,
         ));
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
+        let (span_tx, span_rx) = crossbeam::channel::unbounded();
+        let tracer = Tracer::with_sender(AllSampler, span_tx);
+        let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
         let resp = cop
-            .handle_unary_request(ReqContext::default_for_test(), handler_builder)
+            .handle_unary_request(
+                ReqContext::default_for_test(),
+                handler_builder,
+                entry_span,
+                span_rx,
+            )
             .wait()
             .unwrap();
         assert_eq!(resp.get_data().len(), 0);
@@ -937,8 +977,8 @@ mod tests {
             cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data().len(), 0);
         assert!(!resp_vec[0].get_other_error().is_empty());
@@ -957,8 +997,8 @@ mod tests {
             cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 6);
         for i in 0..5 {
             assert_eq!(resp_vec[i].get_data(), [1, 2, i as u8]);
@@ -981,8 +1021,8 @@ mod tests {
             cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 0);
     }
 
@@ -1017,8 +1057,8 @@ mod tests {
             cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 7]);
         assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
@@ -1043,8 +1083,8 @@ mod tests {
             cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 13]);
         assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
@@ -1069,8 +1109,8 @@ mod tests {
             cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 2);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 23]);
         assert!(!resp_vec[1].get_other_error().is_empty());
@@ -1106,9 +1146,9 @@ mod tests {
             cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
-            .take(7)
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        .take(7)
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 7);
         assert!(counter.load(atomic::Ordering::SeqCst) < 14);
     }
@@ -1165,10 +1205,18 @@ mod tests {
                     Ok(coppb::Response::default()),
                     PAYLOAD_SMALL as u64,
                 )
-                    .into_boxed())
+                .into_boxed())
             });
-            let resp_future_1 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let (span_tx, span_rx) = crossbeam::channel::unbounded();
+            let tracer = Tracer::with_sender(AllSampler, span_tx);
+            let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+
+            let resp_future_1 = cop.handle_unary_request(
+                req_with_exec_detail.clone(),
+                handler_builder,
+                entry_span,
+                span_rx,
+            );
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1181,8 +1229,15 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let (span_tx, span_rx) = crossbeam::channel::unbounded();
+            let tracer = Tracer::with_sender(AllSampler, span_tx);
+            let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+            let resp_future_2 = cop.handle_unary_request(
+                req_with_exec_detail.clone(),
+                handler_builder,
+                entry_span,
+                span_rx,
+            );
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
@@ -1238,10 +1293,18 @@ mod tests {
                     Ok(coppb::Response::default()),
                     PAYLOAD_LARGE as u64,
                 )
-                    .into_boxed())
+                .into_boxed())
             });
-            let resp_future_1 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let (span_tx, span_rx) = crossbeam::channel::unbounded();
+            let tracer = Tracer::with_sender(AllSampler, span_tx);
+            let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+
+            let resp_future_1 = cop.handle_unary_request(
+                req_with_exec_detail.clone(),
+                handler_builder,
+                entry_span,
+                span_rx,
+            );
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1261,7 +1324,7 @@ mod tests {
                         PAYLOAD_SMALL as u64,
                     ],
                 )
-                    .into_boxed())
+                .into_boxed())
             });
             let resp_future_3 = cop
                 .handle_stream_request(req_with_exec_detail, handler_builder)
@@ -1272,7 +1335,7 @@ mod tests {
                         .collect::<Result<Vec<_>>>()
                         .unwrap(),
                 )
-                    .unwrap()
+                .unwrap()
             });
 
             // Response 1
