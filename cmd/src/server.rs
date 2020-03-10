@@ -58,6 +58,7 @@ use tikv::{
 use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
+    config::ensure_dir_exist,
     security::SecurityManager,
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
@@ -213,6 +214,9 @@ impl TiKVServer {
         } else {
             Default::default()
         };
+
+        ensure_dir_exist(&config.storage.data_dir).unwrap();
+        ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
 
         validate_and_persist_config(&mut config, true);
         check_system_config(&config);
