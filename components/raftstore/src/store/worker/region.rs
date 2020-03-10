@@ -341,7 +341,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let wb = self.engines.kv.c().write_batch();
+        let mut wb = self.engines.kv.c().write_batch();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
@@ -867,7 +867,7 @@ mod tests {
             s3.save().unwrap();
 
             // set applying state
-            let wb = engine.kv.c().write_batch();
+            let mut wb = engine.kv.c().write_batch();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
                 .kv

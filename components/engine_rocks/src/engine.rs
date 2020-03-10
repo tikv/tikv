@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
+    Error, IterOptions, Iterable, KvEngine, SyncMutable, Peekable, ReadOptions, Result, WriteOptions,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
@@ -132,7 +132,7 @@ impl Peekable for RocksEngine {
     }
 }
 
-impl Mutable for RocksEngine {
+impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.0.put(key, value).map_err(Error::Engine)
     }

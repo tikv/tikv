@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{self, Error, Mutable, Result};
+use engine_traits::{self, Error, Result, Mutable};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::util::get_cf_handle;
@@ -55,7 +55,7 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
         self.wb.is_empty()
     }
 
-    fn clear(&self) {
+    fn clear(&mut self) {
         self.wb.clear();
     }
 
@@ -73,25 +73,25 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
 }
 
 impl Mutable for RocksWriteBatch {
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.wb.put(key, value).map_err(Error::Engine)
     }
 
-    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.put_cf(handle, key, value).map_err(Error::Engine)
     }
 
-    fn delete(&self, key: &[u8]) -> Result<()> {
+    fn delete(&mut self, key: &[u8]) -> Result<()> {
         self.wb.delete(key).map_err(Error::Engine)
     }
 
-    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.delete_cf(handle, key).map_err(Error::Engine)
     }
 
-    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb
             .delete_range_cf(handle, begin_key, end_key)

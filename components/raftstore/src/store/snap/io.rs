@@ -92,6 +92,15 @@ where
     Ok(stats)
 }
 
+//fn write_to_wb<E, F>(batch: &mut Vec<u8>, wb: &mut E::WriteBatch, callback: &mut F) -> Result<(), Error>
+//where
+//    E: KvEngine,
+//    F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
+//{
+//    callback(batch);
+//    batch.drain(..).try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))
+//}
+
 /// Apply the given snapshot file into a column family. `callback` will be invoked for each batch of
 /// key value pairs written to db.
 pub fn apply_plain_cf_file<E, F>(
@@ -108,12 +117,14 @@ where
 {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
 
-    let mut write_to_wb = |batch: &mut Vec<_>, wb: &E::WriteBatch| {
+
+    let mut write_to_wb = |batch: &mut Vec<_>, wb: &mut E::WriteBatch| {
+
         callback(batch);
         batch.drain(..).try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))
     };
 
-    let wb = db.write_batch();
+    let mut wb = db.write_batch();
     // Collect keys to a vec rather than wb so that we can invoke the callback less times.
     let mut batch = Vec::with_capacity(1024);
     let mut batch_data_size = 0;
@@ -125,7 +136,7 @@ where
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if !batch.is_empty() {
-                box_try!(write_to_wb(&mut batch, &wb));
+                box_try!(write_to_wb(&mut batch, &mut wb));
                 box_try!(db.write(&wb));
             }
             return Ok(());
@@ -134,7 +145,7 @@ where
         batch_data_size += key.len() + value.len();
         batch.push((key, value));
         if batch_data_size >= batch_size {
-            box_try!(write_to_wb(&mut batch, &wb));
+            box_try!(write_to_wb(&mut batch, &mut wb));
             box_try!(db.write(&wb));
             wb.clear();
             batch_data_size = 0;
