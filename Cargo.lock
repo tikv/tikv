@@ -370,8 +370,8 @@ checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
 
 [[package]]
 name = "bzip2-sys"
-version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#a8ee5cb4d0587409d03b4367bbfa8d7d6266378e"
+version = "0.1.8+1.0.8"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#461d66916a5e6848e455c6d4fb9a5f70f4617efd"
 dependencies = [
  "cc",
  "libc",
@@ -1902,7 +1902,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#f14383bc6e383a808b52c0c564402b4fe545297f"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1920,7 +1920,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#f14383bc6e383a808b52c0c564402b4fe545297f"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3387,7 +3387,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6191b41497ee35234b1a2c1bbd6691787fe65537"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#f14383bc6e383a808b52c0c564402b4fe545297f"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -5136,7 +5136,7 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.15+zstd.1.4.4"
-source = "git+https://github.com/gyscos/zstd-rs.git#3df21bbc06a5257967ca7f30ba33a6512e0cde4b"
+source = "git+https://github.com/gyscos/zstd-rs.git#d8c90d64aa55ee3e7e53b53eaf44bc6603c11d7f"
 dependencies = [
  "cc",
  "glob",
