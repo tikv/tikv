@@ -55,7 +55,12 @@ impl LocalStorage {
 }
 
 impl ExternalStorage for LocalStorage {
-    fn write(&self, name: &str, reader: &mut (dyn AsyncRead + Unpin)) -> io::Result<()> {
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin + 'static>,
+        _content_length: u64,
+    ) -> io::Result<()> {
         // Storage does not support dir,
         // "a/a.sst", "/" and "" will return an error.
         if Path::new(name)
@@ -119,19 +124,20 @@ mod tests {
             .starts_with(LOCAL_STORAGE_TMP_FILE_SUFFIX));
 
         // Test save_file
-        let magic_contents = b"5678".to_vec();
-        ls.write("a.log", &mut magic_contents.clone().as_slice())
+        let magic_contents: &[u8] = b"5678";
+        let content_length = magic_contents.len() as u64;
+        ls.write("a.log", Box::new(magic_contents), content_length)
             .unwrap();
         assert_eq!(fs::read(path.join("a.log")).unwrap(), magic_contents);
 
         // Names contain parent is not allowed.
-        ls.write("a/a.log", &mut magic_contents.clone().as_slice())
+        ls.write("a/a.log", Box::new(magic_contents), content_length)
             .unwrap_err();
         // Empty name is not allowed.
-        ls.write("", &mut magic_contents.clone().as_slice())
+        ls.write("", Box::new(magic_contents), content_length)
             .unwrap_err();
         // root is not allowed.
-        ls.write("/", &mut magic_contents.clone().as_slice())
+        ls.write("/", Box::new(magic_contents), content_length)
             .unwrap_err();
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "3.1.0-beta.1"
+version = "3.1.0-beta.2"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -137,6 +137,7 @@ engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
 farmhash = "1.1.5"
 external_storage = { path = "components/external_storage" }
+batch-system = { path = "components/batch-system" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -196,6 +197,7 @@ members = [
   "components/external_storage",
   "components/backup",
   "cmd",
+  "components/batch-system",
 ]
 
 [profile.dev]

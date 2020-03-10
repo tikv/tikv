@@ -24,7 +24,7 @@ use tikv::config::*;
 use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::server::Config as ServerConfig;
+use tikv::server::{lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig};
 use tikv::storage::kv::CompactionListener;
 use tikv::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::config::*;
@@ -170,6 +170,15 @@ pub fn new_readpool_cfg() -> ReadPoolConfig {
     }
 }
 
+pub fn new_pessimistic_txn_cfg() -> PessimisticTxnConfig {
+    PessimisticTxnConfig {
+        // Use a large value here since tests run slowly in CI.
+        wait_for_lock_timeout: 3000,
+        wake_up_delay_duration: 100,
+        ..PessimisticTxnConfig::default()
+    }
+}
+
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     TiKvConfig {
         storage: StorageConfig {
@@ -180,6 +189,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
         server: new_server_config(cluster_id),
         raft_store: new_store_cfg(),
         readpool: new_readpool_cfg(),
+        pessimistic_txn: new_pessimistic_txn_cfg(),
         ..TiKvConfig::default()
     }
 }
@@ -565,6 +575,13 @@ pub fn create_test_engine(
         }
     };
     (engines, path)
+}
+
+pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Uses long check interval to make leader keep sleeping during tests.
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(20);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::secs(40);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(10);
 }
 
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

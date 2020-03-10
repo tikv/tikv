@@ -21,6 +21,7 @@ use engine::CF_DEFAULT;
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
+use tikv::raftstore::store::transport::CasualRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
@@ -845,16 +846,16 @@ impl<T: Simulator> Cluster<T> {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let split_key = split_key.to_vec();
-        router
-            .send(
-                region.get_id(),
-                PeerMsg::CasualMessage(CasualMessage::SplitRegion {
-                    region_epoch: region.get_region_epoch().clone(),
-                    split_keys: vec![split_key.clone()],
-                    callback: cb,
-                }),
-            )
-            .unwrap();
+        CasualRouter::send(
+            &router,
+            region.get_id(),
+            CasualMessage::SplitRegion {
+                region_epoch: region.get_region_epoch().clone(),
+                split_keys: vec![split_key],
+                callback: cb,
+            },
+        )
+        .unwrap();
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {

@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
@@ -14,7 +15,8 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::ops::Deref;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
@@ -33,10 +35,9 @@ use crate::raftstore::store::fsm::peer::{
 #[cfg(not(feature = "no-fail"))]
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
-    batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
 };
-use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
+use crate::raftstore::store::fsm::{ApplyNotifier, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
@@ -95,11 +96,6 @@ pub struct StoreMeta {
     /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
     /// source_region_id -> target_region_id
     pub targets_map: HashMap<u64, u64>,
-    /// In raftstore, the execute order of `PrepareMerge` and `CommitMerge` is not certain because of the messages
-    /// belongs two regions. To make them in order, `PrepareMerge` will set this structure and `CommitMerge` will retry
-    /// later if there is no related lock.
-    /// source_region_id -> (version, BiLock).
-    pub merge_locks: HashMap<u64, (u64, Option<Arc<AtomicBool>>)>,
 }
 
 impl StoreMeta {
@@ -113,7 +109,6 @@ impl StoreMeta {
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
             targets_map: HashMap::default(),
-            merge_locks: HashMap::default(),
         }
     }
 
@@ -134,7 +129,18 @@ impl StoreMeta {
     }
 }
 
-pub type RaftRouter = BatchRouter<PeerFsm, StoreFsm>;
+#[derive(Clone)]
+pub struct RaftRouter {
+    pub router: BatchRouter<PeerFsm, StoreFsm>,
+}
+
+impl Deref for RaftRouter {
+    type Target = BatchRouter<PeerFsm, StoreFsm>;
+
+    fn deref(&self) -> &BatchRouter<PeerFsm, StoreFsm> {
+        &self.router
+    }
+}
 
 impl RaftRouter {
     pub fn send_raft_message(
@@ -598,14 +604,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
 
     fn handle_normal(&mut self, peer: &mut PeerFsm) -> Option<usize> {
         let mut expected_msg_count = None;
-        if peer.have_pending_merge_apply_result() {
-            expected_msg_count = Some(peer.receiver.len());
-            let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
-            if !delegate.resume_handling_pending_apply_result() {
-                return expected_msg_count;
-            }
-            expected_msg_count = None;
-        }
 
         fail_point!(
             "pause_on_peer_collect_message",
@@ -1083,8 +1081,9 @@ impl RaftBatchSystem {
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
             cfg.clean_stale_peer_delay.0,
+            self.router(),
         );
-        let timer = RegionRunner::new_timer();
+        let timer = region_runner.new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
@@ -1099,6 +1098,7 @@ impl RaftBatchSystem {
             self.router.clone(),
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
+            cfg.pd_store_heartbeat_tick_interval.as_secs(),
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
@@ -1151,20 +1151,21 @@ impl RaftBatchSystem {
 pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
-    let (router, system) = batch::create_system(
+    let (router, system) = batch_system::create_system(
         cfg.store_pool_size,
         cfg.store_max_batch_size,
         store_tx,
         store_fsm,
     );
+    let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
         system,
         workers: None,
         apply_router,
         apply_system,
-        router: router.clone(),
+        router: raft_router.clone(),
     };
-    (router, system)
+    (raft_router, system)
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
@@ -1349,6 +1350,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return Ok(false);
         }
 
+        let mut is_overlapped = false;
         let mut regions_to_destroy = vec![];
         for (_, id) in meta.region_ranges.range((
             Excluded(data_key(msg.get_start_key())),
@@ -1369,25 +1371,27 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 meta.pending_votes.push(msg.to_owned());
             }
 
-            // Make sure the range of region from msg is covered by existing regions.
-            // If so, means that the region may be generated by some kinds of split
-            // and merge by catching logs. So there is no need to accept a snapshot.
-            if !is_range_covered(
-                &meta.region_ranges,
-                |id: u64| &meta.regions[&id],
-                data_key(msg.get_start_key()),
-                data_end_key(msg.get_end_key()),
+            if maybe_destroy_source(
+                meta,
+                region_id,
+                exist_region.get_id(),
+                msg.get_region_epoch().to_owned(),
             ) {
-                if maybe_destroy_source(
-                    meta,
-                    region_id,
-                    exist_region.get_id(),
-                    msg.get_region_epoch().to_owned(),
-                ) {
-                    regions_to_destroy.push(exist_region.get_id());
-                    continue;
-                }
+                regions_to_destroy.push(exist_region.get_id());
+                continue;
             }
+            is_overlapped = true;
+            if msg.get_region_epoch().get_version() > exist_region.get_region_epoch().get_version()
+            {
+                // If new region's epoch version is greater than exist region's, the exist region
+                // may has been merged already.
+                let _ = self.ctx.router.force_send(
+                    exist_region.get_id(),
+                    PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
+                );
+            }
+        }
+        if is_overlapped {
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(false);
         }
@@ -1397,7 +1401,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 .router
                 .force_send(
                     id,
-                    PeerMsg::CasualMessage(CasualMessage::MergeResult {
+                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target: target.clone(),
                         stale: true,
                     }),
@@ -2027,35 +2031,12 @@ fn calc_region_declined_bytes(
     region_declined_bytes
 }
 
-// check whether the range is covered by existing regions.
-fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
-    region_ranges: &BTreeMap<Key, u64>,
-    get_region: F,
-    mut start: Vec<u8>,
-    end: Vec<u8>,
-) -> bool {
-    for (end_key, &id) in region_ranges.range((Excluded(start.clone()), Unbounded::<Key>)) {
-        let region = get_region(id);
-        // find a missing range
-        if start < enc_start_key(region) {
-            return false;
-        }
-        if *end_key >= end {
-            return true;
-        }
-        start = end_key.clone();
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::collections::HashMap;
 
     use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::storage::kv::CompactedEvent;
-    use protobuf::RepeatedField;
 
     use super::*;
 
@@ -2100,82 +2081,5 @@ mod tests {
         let declined_bytes = calc_region_declined_bytes(event, &region_ranges, 1024);
         let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);
-    }
-
-    #[test]
-    fn test_is_range_covered() {
-        let meta = vec![(b"b", b"d"), (b"d", b"e"), (b"e", b"f"), (b"f", b"h")];
-        let mut region_ranges = BTreeMap::new();
-        let mut region_peers = HashMap::new();
-
-        {
-            for (i, (start, end)) in meta.into_iter().enumerate() {
-                let mut region = metapb::Region::new();
-                let peer = metapb::Peer::new();
-                region.set_peers(RepeatedField::from_vec(vec![peer]));
-                region.set_start_key(start.to_vec());
-                region.set_end_key(end.to_vec());
-
-                region_ranges.insert(enc_end_key(&region), i as u64);
-                region_peers.insert(i as u64, region);
-            }
-
-            let check_range = |start: &[u8], end: &[u8]| {
-                is_range_covered(
-                    &region_ranges,
-                    |id: u64| &region_peers[&id],
-                    data_key(start),
-                    data_end_key(end),
-                )
-            };
-
-            assert!(!check_range(b"a", b"c"));
-            assert!(check_range(b"b", b"d"));
-            assert!(check_range(b"b", b"e"));
-            assert!(check_range(b"e", b"f"));
-            assert!(check_range(b"b", b"g"));
-            assert!(check_range(b"e", b"h"));
-            assert!(!check_range(b"e", b"n"));
-            assert!(!check_range(b"g", b"n"));
-            assert!(!check_range(b"o", b"z"));
-            assert!(!check_range(b"", b""));
-        }
-
-        let meta = vec![(b"b", b"d"), (b"e", b"f"), (b"f", b"h")];
-        region_ranges.clear();
-        region_peers.clear();
-        {
-            for (i, (start, end)) in meta.into_iter().enumerate() {
-                let mut region = metapb::Region::new();
-                let peer = metapb::Peer::new();
-                region.set_peers(RepeatedField::from_vec(vec![peer]));
-                region.set_start_key(start.to_vec());
-                region.set_end_key(end.to_vec());
-
-                region_ranges.insert(enc_end_key(&region), i as u64);
-                region_peers.insert(i as u64, region);
-            }
-
-            let check_range = |start: &[u8], end: &[u8]| {
-                is_range_covered(
-                    &region_ranges,
-                    |id: u64| &region_peers[&id],
-                    data_key(start),
-                    data_end_key(end),
-                )
-            };
-
-            assert!(!check_range(b"a", b"c"));
-            assert!(check_range(b"b", b"d"));
-            assert!(!check_range(b"b", b"e"));
-            assert!(check_range(b"e", b"f"));
-            assert!(!check_range(b"b", b"g"));
-            assert!(check_range(b"e", b"g"));
-            assert!(check_range(b"e", b"h"));
-            assert!(!check_range(b"e", b"n"));
-            assert!(!check_range(b"g", b"n"));
-            assert!(!check_range(b"o", b"z"));
-            assert!(!check_range(b"", b""));
-        }
     }
 }

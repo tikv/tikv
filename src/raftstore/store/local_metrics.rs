@@ -75,6 +75,8 @@ pub struct RaftMessageMetrics {
     pub heartbeat_resp: u64,
     pub transfer_leader: u64,
     pub timeout_now: u64,
+    pub read_index: u64,
+    pub read_index_resp: u64,
 }
 
 impl RaftMessageMetrics {
@@ -146,6 +148,18 @@ impl RaftMessageMetrics {
                 .with_label_values(&["timeout_now"])
                 .inc_by(self.timeout_now as i64);
             self.timeout_now = 0;
+        }
+        if self.read_index > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["read_index"])
+                .inc_by(self.read_index as i64);
+            self.read_index = 0;
+        }
+        if self.read_index_resp > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["read_index_resp"])
+                .inc_by(self.read_index_resp as i64);
+            self.read_index_resp = 0;
         }
     }
 }

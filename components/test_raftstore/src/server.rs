@@ -22,7 +22,7 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
-use tikv::server::lock_manager::{Config as PessimisticTxnConfig, LockManager};
+use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::service::DebugService;
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -224,7 +224,7 @@ impl Simulator for ServerCluster {
         );
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
@@ -256,7 +256,7 @@ impl Simulator for ServerCluster {
                 Arc::clone(&self.pd_client),
                 resolver,
                 Arc::clone(&security_mgr),
-                &PessimisticTxnConfig::default(),
+                &cfg.pessimistic_txn,
             )
             .unwrap();
 

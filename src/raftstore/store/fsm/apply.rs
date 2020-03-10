@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -10,6 +11,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
+use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::Writable;
@@ -34,7 +36,7 @@ use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::metrics::*;
-use crate::raftstore::store::msg::{Callback, PeerMsg};
+use crate::raftstore::store::msg::{Callback, PeerMsg, SignificantMsg};
 use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
@@ -49,7 +51,6 @@ use tikv_util::Either;
 use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
-use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 
 use super::super::RegionTask;
 
@@ -175,7 +176,6 @@ pub enum ExecResult {
         region: Region,
         state: MergeState,
     },
-    CatchUpLogs(CatchUpLogs),
     CommitMerge {
         region: Region,
         source: Region,
@@ -204,6 +204,7 @@ pub enum ExecResult {
 /// The possible returned value when applying logs.
 pub enum ApplyResult {
     None,
+    Yield,
     /// Additional result that needs to be sent back to raftstore.
     Res(ExecResult),
     /// It is unable to apply the `CommitMerge` until the source peer
@@ -307,7 +308,7 @@ impl ApplyContext {
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
-        router: BatchRouter<ApplyFsm, ControlFsm>,
+        router: ApplyRouter,
         notifier: Notifier,
         cfg: &Config,
     ) -> ApplyContext {
@@ -548,6 +549,13 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
 /// this struct.
 /// TODO: check whether generator/coroutine is a good choice in this case.
 struct WaitSourceMergeState {
+    /// A flag that indicates whether the source peer has applied to the required
+    /// index. If the source peer is ready, this flag should be set to the region id
+    /// of source peer.
+    logs_up_to_date: Arc<AtomicU64>,
+}
+
+struct YieldState {
     /// All of the entries that need to continue to be applied after
     /// the source peer has applied its logs.
     pending_entries: Vec<Entry>,
@@ -555,17 +563,20 @@ struct WaitSourceMergeState {
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg>,
-    /// A flag that indicates whether the source peer has applied to the required
-    /// index. If the source peer is ready, this flag should be set to the region id
-    /// of source peer.
-    logs_up_to_date: Arc<AtomicU64>,
+}
+
+impl Debug for YieldState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("YieldState")
+            .field("pending_entries", &self.pending_entries.len())
+            .field("pending_msgs", &self.pending_msgs.len())
+            .finish()
+    }
 }
 
 impl Debug for WaitSourceMergeState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WaitSourceMergeState")
-            .field("pending_entries", &self.pending_entries.len())
-            .field("pending_msgs", &self.pending_msgs.len())
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
     }
@@ -598,6 +609,7 @@ pub struct ApplyDelegate {
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
+    written: bool,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -609,6 +621,7 @@ pub struct ApplyDelegate {
     is_merging: bool,
     /// Records the epoch version after the last merge.
     last_merge_version: u64,
+    yield_state: Option<YieldState>,
     /// A temporary state that keeps track of the progress of the source peer state when
     /// CommitMerge is unable to be executed.
     wait_merge_state: Option<WaitSourceMergeState>,
@@ -639,7 +652,9 @@ impl ApplyDelegate {
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             stopped: false,
+            written: false,
             ready_source_region_id: 0,
+            yield_state: None,
             wait_merge_state: None,
             is_merging: reg.is_merging,
             pending_cmds: Default::default(),
@@ -706,25 +721,31 @@ impl ApplyDelegate {
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => results.push_back(res),
-                ApplyResult::WaitMergeSource(logs_up_to_date) => {
+                _ => {
+                    // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= drainer.len() + 1;
                     let mut pending_entries = Vec::with_capacity(drainer.len() + 1);
-                    // Note that CommitMerge is skipped when `WaitMergeSource` is returned.
-                    // So we need to enqueue it again and execute it again when resuming.
+                    // Note that current entry is skipped when yield.
                     pending_entries.push(entry);
                     pending_entries.extend(drainer);
                     apply_ctx.finish_for(self, results);
-                    self.wait_merge_state = Some(WaitSourceMergeState {
+                    self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
-                        logs_up_to_date,
                     });
+                    if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
+                        self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
+                    }
                     return;
                 }
             }
         }
 
         apply_ctx.finish_for(self, results);
+
+        if self.pending_remove {
+            self.destroy(apply_ctx);
+        }
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
@@ -755,6 +776,10 @@ impl ApplyDelegate {
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
     ) -> ApplyResult {
+        fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
+            ApplyResult::Yield
+        });
+
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
@@ -764,6 +789,10 @@ impl ApplyDelegate {
 
             if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
                 apply_ctx.commit(self);
+                if self.written {
+                    return ApplyResult::Yield;
+                }
+                self.written = true;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -794,6 +823,11 @@ impl ApplyDelegate {
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
     ) -> ApplyResult {
+        // Although conf change can't yield in normal case, it is convenient to
+        // simulate yield before applying a conf change log.
+        fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
+            ApplyResult::Yield
+        });
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
@@ -814,7 +848,7 @@ impl ApplyDelegate {
                 }
                 ApplyResult::Res(res)
             }
-            ApplyResult::WaitMergeSource(_) => unreachable!(),
+            ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => unreachable!(),
         }
     }
 
@@ -954,8 +988,7 @@ impl ApplyDelegate {
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
-                | ExecResult::IngestSST { .. }
-                | ExecResult::CatchUpLogs { .. } => {}
+                | ExecResult::IngestSST { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1741,14 +1774,15 @@ impl ApplyDelegate {
     // The target peer should send missing log entries to the source peer.
     //
     // So, the merge process order would be:
-    // 1. `exec_commit_merge` in target apply worker
-    // 2. `catch_up_logs_for_merge` in source apply worker (check whether need to catch up logs)
-    // 3. `on_ready_catch_up_logs` in source raftstore
-    // 4. ... (raft append and apply logs)
-    // 5. `on_ready_prepare_merge` in source raftstore (means source region has finished applying all logs)
-    // 6. `catch_up_logs_for_merge` in source apply worker (destroy itself and send LogsUpToDate)
-    // 7. resume `exec_commit_merge` in target apply worker
-    // 8. `on_ready_commit_merge` in target raftstore
+    // 1.   `exec_commit_merge` in target apply fsm and send `CatchUpLogs` to source peer fsm
+    // 2.   `on_catch_up_logs_for_merge` in source peer fsm
+    // 3.   if the source peer has already executed the corresponding `on_ready_prepare_merge`, set pending_remove and jump to step 6
+    // 4.   ... (raft append and apply logs)
+    // 5.   `on_ready_prepare_merge` in source peer fsm and set pending_remove (means source region has finished applying all logs)
+    // 6.   `logs_up_to_date_for_merge` in source apply fsm (destroy its apply fsm and send Noop to trigger the target apply fsm)
+    // 7.   resume `exec_commit_merge` in target apply fsm
+    // 8.   `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source peer fsm
+    // 9.   `on_merge_result` in source peer fsm (destroy itself)
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext,
@@ -1789,15 +1823,16 @@ impl ApplyDelegate {
                 "peer_id" => self.id(),
                 "source_region_id" => source_region_id
             );
-
-            // Sends message to the source apply worker and pause `exec_commit_merge` process
+            fail_point!("before_handle_catch_up_logs_for_merge");
+            // Sends message to the source peer fsm and pause `exec_commit_merge` process
             let logs_up_to_date = Arc::new(AtomicU64::new(0));
-            let msg = Msg::CatchUpLogs(CatchUpLogs {
+            let msg = SignificantMsg::CatchUpLogs(CatchUpLogs {
                 target_region_id: self.region_id(),
                 merge: merge.to_owned(),
                 logs_up_to_date: logs_up_to_date.clone(),
             });
-            ctx.router.schedule_task(source_region_id, msg);
+            ctx.notifier
+                .notify(source_region_id, PeerMsg::SignificantMsg(msg));
             return Ok((
                 AdminResponse::default(),
                 ApplyResult::WaitMergeSource(logs_up_to_date),
@@ -2241,8 +2276,8 @@ pub enum Msg {
     },
     Registration(Registration),
     Proposal(RegionProposal),
-    CatchUpLogs(CatchUpLogs),
-    LogsUpToDate(u64),
+    LogsUpToDate(CatchUpLogs),
+    Noop,
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     #[cfg(test)]
@@ -2277,8 +2312,8 @@ impl Debug for Msg {
             Msg::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
-            Msg::CatchUpLogs(cul) => write!(f, "{:?}", cul.merge),
-            Msg::LogsUpToDate(region_id) => write!(f, "[region {}] logs are updated", region_id),
+            Msg::LogsUpToDate(_) => write!(f, "logs are updated"),
+            Msg::Noop => write!(f, "noop"),
             Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
             Msg::Snapshot(GenSnapTask { region_id, .. }) => {
                 write!(f, "[region {}] requests a snapshot", region_id)
@@ -2366,11 +2401,7 @@ impl ApplyFsm {
             apply_ctx.timer = Some(SlowTimer::new());
         }
 
-        fail_point!(
-            "on_handle_apply_1000_1003",
-            self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
-            |_| {}
-        );
+        fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         fail_point!("on_handle_apply", |_| {});
 
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
@@ -2382,12 +2413,8 @@ impl ApplyFsm {
 
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries);
-        if self.delegate.wait_merge_state.is_some() {
+        if self.delegate.yield_state.is_some() {
             return;
-        }
-
-        if self.delegate.pending_remove {
-            self.delegate.destroy(apply_ctx);
         }
     }
 
@@ -2429,8 +2456,8 @@ impl ApplyFsm {
             ctx.flush();
         }
         fail_point!(
-            "before_peer_destroy_1000_1003",
-            self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
+            "before_peer_destroy_1003",
+            self.delegate.id() == 1003,
             |_| {}
         );
         info!(
@@ -2460,21 +2487,17 @@ impl ApplyFsm {
         }
     }
 
-    fn resume_pending_merge(&mut self, ctx: &mut ApplyContext) -> bool {
-        match self.delegate.wait_merge_state {
-            Some(ref state) => {
-                let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
-                if source_region_id == 0 {
-                    return false;
-                }
-                self.delegate.ready_source_region_id = source_region_id;
+    fn resume_pending(&mut self, ctx: &mut ApplyContext) -> bool {
+        if let Some(ref state) = self.delegate.wait_merge_state {
+            let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
+            if source_region_id == 0 {
+                return false;
             }
-            None => panic!(
-                "{} is not in waiting state, can't be resume",
-                self.delegate.tag
-            ),
+            self.delegate.ready_source_region_id = source_region_id;
         }
-        let mut state = self.delegate.wait_merge_state.take().unwrap();
+        self.delegate.wait_merge_state = None;
+
+        let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {
             ctx.timer = Some(SlowTimer::new());
@@ -2482,8 +2505,10 @@ impl ApplyFsm {
         if !state.pending_entries.is_empty() {
             self.delegate
                 .handle_raft_committed_entries(ctx, state.pending_entries);
-            if let Some(ref mut s) = self.delegate.wait_merge_state {
-                // So the delegate is executing another `CommitMerge` in pending_entries.
+            if let Some(ref mut s) = self.delegate.yield_state {
+                // So the delegate is expected to yield the CPU.
+                // It can either be executing another `CommitMerge` in pending_msgs
+                // or has been written too much data.
                 s.pending_msgs = state.pending_msgs;
                 return false;
             }
@@ -2493,70 +2518,36 @@ impl ApplyFsm {
             self.handle_tasks(ctx, &mut state.pending_msgs);
         }
 
-        // So the delegate is executing another `CommitMerge` in pending_msgs.
-        if self.delegate.wait_merge_state.is_some() {
+        if self.delegate.yield_state.is_some() {
             return false;
         }
 
-        info!(
-            "all pending logs are applied";
-            "region_id" => self.delegate.region_id(),
-            "peer_id" => self.delegate.id(),
-        );
         true
     }
 
-    fn catch_up_logs_for_merge(&mut self, ctx: &mut ApplyContext, catch_up_logs: CatchUpLogs) {
-        if ctx.timer.is_none() {
-            ctx.timer = Some(SlowTimer::new());
-        }
-
-        // if it is already up to date, no need to catch up anymore
-        let apply_index = self.delegate.apply_state.get_applied_index();
-        debug!(
-            "check catch up logs for merge";
-            "apply_index" => apply_index,
-            "commit" => catch_up_logs.merge.get_commit(),
-            "region_id" => self.delegate.region_id(),
-            "peer_id" => self.delegate.id(),
-        );
-        if apply_index < catch_up_logs.merge.get_commit() {
-            fail_point!("on_handle_catch_up_logs_for_merge");
-            let mut res = VecDeque::new();
-            // send logs to raftstore to append
-            res.push_back(ExecResult::CatchUpLogs(catch_up_logs));
-
-            // TODO: can we use `ctx.finish_for()` directly? is it safe here?
-            ctx.apply_res.push(ApplyRes {
-                region_id: self.delegate.region_id(),
-                apply_state: self.delegate.apply_state.clone(),
-                exec_res: res,
-                metrics: self.delegate.metrics.clone(),
-                applied_index_term: self.delegate.applied_index_term,
-            });
-            return;
-        }
-
+    fn logs_up_to_date_for_merge(&mut self, ctx: &mut ApplyContext, catch_up_logs: CatchUpLogs) {
         fail_point!("after_handle_catch_up_logs_for_merge");
         fail_point!(
-            "after_handle_catch_up_logs_for_merge_1000_1003",
-            self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
+            "after_handle_catch_up_logs_for_merge_1003",
+            self.delegate.id() == 1003,
             |_| {}
         );
 
         let region_id = self.delegate.region_id();
-        self.destroy(ctx);
-        catch_up_logs
-            .logs_up_to_date
-            .store(region_id, Ordering::SeqCst);
         info!(
             "source logs are all applied now";
             "region_id" => region_id,
             "peer_id" => self.delegate.id(),
         );
-
+        // The source peer fsm will be destroyed when the target peer executes `on_ready_commit_merge`
+        // and sends `merge result` to the source peer fsm.
+        self.destroy(ctx);
+        catch_up_logs
+            .logs_up_to_date
+            .store(region_id, Ordering::SeqCst);
+        // To trigger the target apply fsm
         if let Some(mailbox) = ctx.router.mailbox(catch_up_logs.target_region_id) {
-            let _ = mailbox.force_send(Msg::LogsUpToDate(region_id));
+            let _ = mailbox.force_send(Msg::Noop);
         } else {
             error!(
                 "failed to get mailbox, are we shutting down?";
@@ -2602,7 +2593,7 @@ impl ApplyFsm {
                         channel_timer = Some(start);
                     }
                     self.handle_apply(apply_ctx, apply);
-                    if let Some(ref mut state) = self.delegate.wait_merge_state {
+                    if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
                         break;
                     }
@@ -2610,8 +2601,8 @@ impl ApplyFsm {
                 Some(Msg::Proposal(prop)) => self.handle_proposal(prop),
                 Some(Msg::Registration(reg)) => self.handle_registration(reg),
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
-                Some(Msg::CatchUpLogs(cul)) => self.catch_up_logs_for_merge(apply_ctx, cul),
-                Some(Msg::LogsUpToDate(_)) => {}
+                Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
+                Some(Msg::Noop) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
                 Some(Msg::Validate(_, f)) => f(&self.delegate),
@@ -2685,12 +2676,15 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm) -> Option<usize> {
         let mut expected_msg_count = None;
-        if normal.delegate.wait_merge_state.is_some() {
-            // We need to query the length first, otherwise there is a race
-            // condition that new messages are queued after resuming and before
-            // query the length.
-            expected_msg_count = Some(normal.receiver.len());
-            if !normal.resume_pending_merge(&mut self.apply_ctx) {
+        normal.delegate.written = false;
+        if normal.delegate.yield_state.is_some() {
+            if normal.delegate.wait_merge_state.is_some() {
+                // We need to query the length first, otherwise there is a race
+                // condition that new messages are queued after resuming and before
+                // query the length.
+                expected_msg_count = Some(normal.receiver.len());
+            }
+            if !normal.resume_pending(&mut self.apply_ctx) {
                 return expected_msg_count;
             }
             expected_msg_count = None;
@@ -2713,6 +2707,9 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
             expected_msg_count = Some(0);
+        } else if normal.delegate.yield_state.is_some() {
+            // Let it continue to run next time.
+            expected_msg_count = None;
         }
         expected_msg_count
     }
@@ -2773,7 +2770,24 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
     }
 }
 
-pub type ApplyRouter = BatchRouter<ApplyFsm, ControlFsm>;
+#[derive(Clone)]
+pub struct ApplyRouter {
+    pub router: BatchRouter<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyRouter {
+    type Target = BatchRouter<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchRouter<ApplyFsm, ControlFsm> {
+        &self.router
+    }
+}
+
+impl DerefMut for ApplyRouter {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm, ControlFsm> {
+        &mut self.router
+    }
+}
 
 impl ApplyRouter {
     pub fn schedule_task(&self, region_id: u64, msg: Msg) {
@@ -2792,7 +2806,7 @@ impl ApplyRouter {
                     }
                     return;
                 }
-                Msg::Apply { .. } | Msg::Destroy(_) | Msg::LogsUpToDate(_) => {
+                Msg::Apply { .. } | Msg::Destroy(_) | Msg::Noop => {
                     info!(
                         "target region is not found, drop messages";
                         "region_id" => region_id
@@ -2806,7 +2820,7 @@ impl ApplyRouter {
                     );
                     return;
                 }
-                Msg::CatchUpLogs(cul) => {
+                Msg::LogsUpToDate(cul) => {
                     warn!(
                         "region is removed before merged, are we shutting down?";
                         "region_id" => region_id,
@@ -2830,7 +2844,23 @@ impl ApplyRouter {
     }
 }
 
-pub type ApplyBatchSystem = BatchSystem<ApplyFsm, ControlFsm>;
+pub struct ApplyBatchSystem {
+    system: BatchSystem<ApplyFsm, ControlFsm>,
+}
+
+impl Deref for ApplyBatchSystem {
+    type Target = BatchSystem<ApplyFsm, ControlFsm>;
+
+    fn deref(&self) -> &BatchSystem<ApplyFsm, ControlFsm> {
+        &self.system
+    }
+}
+
+impl DerefMut for ApplyBatchSystem {
+    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm, ControlFsm> {
+        &mut self.system
+    }
+}
 
 impl ApplyBatchSystem {
     pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
@@ -2845,12 +2875,13 @@ impl ApplyBatchSystem {
 
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
-    super::batch::create_system(
+    let (router, system) = batch_system::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
         tx,
         Box::new(ControlFsm),
-    )
+    );
+    (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
 #[cfg(test)]
@@ -3521,6 +3552,10 @@ mod tests {
         check_db_range(&engines.kv, sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
+        // Two continuous writes inside the same region will yield.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
