@@ -274,14 +274,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                     let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
                     let (write_finished_pr, pipelined_write_pr) = if pipelined {
-                        (
-                            if let Some(v) = pr.maybe_clone() {
-                                v
-                            } else {
-                                ProcessResult::Res
-                            },
-                            pr,
-                        )
+                        (pr.maybe_clone().unwrap(), pr)
                     } else {
                         (pr, ProcessResult::Res)
                     };

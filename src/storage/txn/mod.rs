@@ -56,49 +56,12 @@ pub enum ProcessResult {
     },
 }
 
-// TODO: error info lost!
 impl ProcessResult {
     pub fn maybe_clone(&self) -> Option<ProcessResult> {
         match self {
-            ProcessResult::MultiRes { results } => Some(ProcessResult::MultiRes {
-                results: results
-                    .iter()
-                    .map(|e| match e {
-                        Ok(_) => Ok(()),
-                        Err(e) => match e.maybe_clone() {
-                            Some(e) => Err(e),
-                            None => Err(box_err!("clone failed in ProcessResult::MultiRes")),
-                        },
-                    })
-                    .collect(),
+            ProcessResult::PessimisticLockRes { res } => Some(ProcessResult::PessimisticLockRes {
+                res: Ok(res.as_ref().unwrap().clone()),
             }),
-            ProcessResult::PessimisticLockRes { res } => {
-                let cloned = match res {
-                    Ok(v) => match v {
-                        PessimisticLockRes::Values(values) => Ok(PessimisticLockRes::Values(
-                            values
-                                .iter()
-                                .map(|it| match it {
-                                    Some(v) => Some(v.to_vec()),
-                                    None => None,
-                                })
-                                .collect(),
-                        )),
-                        PessimisticLockRes::Empty => Ok(PessimisticLockRes::Empty),
-                    },
-                    Err(e) => match e.maybe_clone() {
-                        Some(e) => Err(e),
-                        None => Err(box_err!(
-                            "clone failed in ProcessResult::PessimisticLockRes"
-                        )),
-                    },
-                };
-                Some(ProcessResult::PessimisticLockRes { res: cloned })
-            }
-            ProcessResult::Failed { err } => match err.maybe_clone() {
-                Some(err) => Some(ProcessResult::Failed { err }),
-                None => None,
-            },
             _ => panic!("clone ProcessResult should be only in pipelined acquire pessimistic lock"),
         }
     }
