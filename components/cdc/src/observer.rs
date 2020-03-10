@@ -9,7 +9,7 @@ use raftstore::Error as RaftStoreError;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
 
-use crate::endpoint::Task;
+use crate::endpoint::{Deregister, Task};
 use crate::Error as CdcError;
 
 /// An Observer for CDC.
@@ -98,12 +98,11 @@ impl RoleObserver for CdcObserver {
             if self.is_subscribed(region_id) {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::NotLeader(region_id, None);
-                if let Err(e) = self.sched.schedule(Task::Deregister {
-                    region_id: Some(region_id),
-                    downstream_id: None,
-                    conn_id: None,
-                    err: Some(CdcError::Request(store_err.into())),
-                }) {
+                let deregister = Deregister::Region {
+                    region_id,
+                    err: CdcError::Request(store_err.into()),
+                };
+                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                     error!("schedule cdc task failed"; "error" => ?e);
                 }
             }
@@ -149,16 +148,8 @@ mod tests {
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, StateRole::Follower);
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::Deregister {
-                region_id,
-                downstream_id,
-                conn_id,
-                err,
-            } => {
-                assert_eq!(region_id.unwrap(), 1);
-                assert!(downstream_id.is_none(), "{:?}", downstream_id);
-                assert!(conn_id.is_none(), "{:?}", conn_id);
-                assert!(err.is_some(), "{:?}", err);
+            Task::Deregister(Deregister::Region { region_id, .. }) => {
+                assert_eq!(region_id, 1);
             }
             _ => panic!("unexpected task"),
         };

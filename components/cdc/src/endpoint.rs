@@ -28,18 +28,64 @@ use crate::delegate::{Delegate, Downstream, DownstreamID};
 use crate::service::{Conn, ConnID};
 use crate::{CdcObserver, Error, Result};
 
+pub enum Deregister {
+    Downstream {
+        region_id: u64,
+        downstream_id: DownstreamID,
+        conn_id: ConnID,
+        err: Option<Error>,
+    },
+    Region {
+        region_id: u64,
+        err: Error,
+    },
+    Conn(ConnID),
+}
+
+impl fmt::Display for Deregister {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+impl fmt::Debug for Deregister {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut de = f.debug_struct("CdcTask");
+        match self {
+            Deregister::Downstream {
+                ref region_id,
+                ref downstream_id,
+                ref conn_id,
+                ref err,
+            } => de
+                .field("deregister", &"downstream")
+                .field("region_id", region_id)
+                .field("downstream_id", downstream_id)
+                .field("conn_id", conn_id)
+                .field("err", err)
+                .finish(),
+            Deregister::Region {
+                ref region_id,
+                ref err,
+            } => de
+                .field("deregister", &"region")
+                .field("region_id", region_id)
+                .field("err", err)
+                .finish(),
+            Deregister::Conn(ref conn_id) => de
+                .field("deregister", &"conn")
+                .field("conn_id", conn_id)
+                .finish(),
+        }
+    }
+}
+
 pub enum Task {
     Register {
         request: ChangeDataRequest,
         downstream: Downstream,
         conn_id: ConnID,
     },
-    Deregister {
-        region_id: Option<u64>,
-        downstream_id: Option<DownstreamID>,
-        conn_id: Option<ConnID>,
-        err: Option<Error>,
-    },
+    Deregister(Deregister),
     OpenConn {
         conn: Conn,
     },
@@ -82,18 +128,7 @@ impl fmt::Debug for Task {
                 .field("id", &downstream.get_id())
                 .field("conn_id", conn_id)
                 .finish(),
-            Task::Deregister {
-                ref region_id,
-                ref downstream_id,
-                ref conn_id,
-                ref err,
-            } => de
-                .field("deregister", &"")
-                .field("region_id", region_id)
-                .field("err", err)
-                .field("downstream_id", downstream_id)
-                .field("conn_id", conn_id)
-                .finish(),
+            Task::Deregister(deregister) => de.field("deregister", deregister).finish(),
             Task::OpenConn { ref conn } => de.field("conn_id", &conn.get_id()).finish(),
             Task::MultiBatch { multi } => de.field("multibatch", &multi.len()).finish(),
             Task::MinTS { ref min_ts } => de.field("min_ts", min_ts).finish(),
@@ -159,28 +194,22 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
         self.scan_batch_size = scan_batch_size;
     }
 
-    fn on_deregister(
-        &mut self,
-        region_id: Option<u64>,
-        id: Option<DownstreamID>,
-        conn_id: Option<ConnID>,
-        err: Option<Error>,
-    ) {
-        info!("cdc deregister region";
-            "region_id" => region_id,
-            "downstream_id" => ?id,
-            "conn_id" => ?conn_id,
-            "error" => ?err);
-        match (id, err, conn_id) {
-            (Some(id), err, Some(conn_id)) => {
+    fn on_deregister(&mut self, deregister: Deregister) {
+        info!("cdc deregister region"; "deregister" => ?deregister);
+        match deregister {
+            Deregister::Downstream {
+                region_id,
+                downstream_id,
+                conn_id,
+                err,
+            } => {
                 // The peer wants to deregister
-                let region_id = region_id.unwrap();
                 let mut is_last = false;
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                    is_last = delegate.unsubscribe(id, err);
+                    is_last = delegate.unsubscribe(downstream_id, err);
                 }
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    if let Some(downstream_id) = conn.downstream_id(region_id) {
+                    if let Some(id) = conn.downstream_id(region_id) {
                         if downstream_id == id {
                             conn.unsubscribe(region_id);
                         }
@@ -192,9 +221,8 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                     self.observer.unsubscribe_region(region_id);
                 }
             }
-            (None, Some(err), None) => {
+            Deregister::Region { region_id, err } => {
                 // Something went wrong, deregister all downstreams of the region.
-                let region_id = region_id.unwrap();
                 if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                     delegate.stop(err);
                 }
@@ -204,7 +232,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 // Do not continue to observe the events of the region.
                 self.observer.unsubscribe_region(region_id);
             }
-            (None, None, Some(conn_id)) => {
+            Deregister::Conn(conn_id) => {
                 // The connection is closed, deregister all downstreams of the connection.
                 if let Some(conn) = self.connections.remove(&conn_id) {
                     conn.take_downstreams()
@@ -220,7 +248,6 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                         });
                 }
             }
-            _ => unreachable!(),
         }
     }
 
@@ -246,9 +273,11 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
 
         info!("cdc register region"; "region_id" => region_id, "conn_id" => ?conn.get_id(), "downstream_id" => ?downstream.get_id());
         let mut enabled = None;
+        let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
             let d = Delegate::new(region_id);
             enabled = Some(d.enabled());
+            is_new_delegate = true;
             d
         });
 
@@ -270,6 +299,9 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
         };
         if !delegate.subscribe(downstream) {
             conn.unsubscribe(request.get_region_id());
+            if is_new_delegate {
+                self.capture_regions.remove(&request.get_region_id());
+            }
             return;
         }
         let change_cmd = if let Some(enabled) = enabled {
@@ -297,14 +329,16 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 })),
             },
         ) {
-            error!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
-            let deregister = Task::Deregister {
-                region_id: Some(region_id),
-                downstream_id: Some(downstream_id),
-                conn_id: Some(conn_id),
+            warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
+            let deregister = Deregister::Downstream {
+                region_id,
+                downstream_id,
+                conn_id,
                 err: Some(Error::Request(e.into())),
             };
-            self.scheduler.schedule(deregister).unwrap();
+            if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
+                error!("schedule cdc task failed"; "error" => ?e);
+            }
         }
     }
 
@@ -319,12 +353,8 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 if let Err(e) = delegate.on_batch(batch) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
-                    if let Err(e) = self.scheduler.schedule(Task::Deregister {
-                        region_id: Some(region_id),
-                        downstream_id: None,
-                        conn_id: None,
-                        err: Some(e),
-                    }) {
+                    let deregister = Deregister::Region { region_id, err: e };
+                    if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
                         error!("schedule cdc task failed"; "error" => ?e);
                     }
                 }
@@ -350,12 +380,8 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             if let Err(e) = delegate.on_region_ready(resolver, region) {
                 assert!(delegate.has_failed());
                 // Delegate has error, deregister the corresponding region.
-                if let Err(e) = self.scheduler.schedule(Task::Deregister {
-                    region_id: Some(region_id),
-                    downstream_id: None,
-                    conn_id: None,
-                    err: Some(e),
-                }) {
+                let deregister = Deregister::Region { region_id, err: e };
+                if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
                     error!("schedule cdc task failed"; "error" => ?e);
                 }
             }
@@ -428,13 +454,15 @@ impl Initializer {
                 resp.response
             );
             let err = resp.response.take_header().take_error();
-            let deregister = Task::Deregister {
-                region_id: Some(self.region_id),
-                downstream_id: Some(self.downstream_id),
-                conn_id: Some(self.conn_id),
+            let deregister = Deregister::Downstream {
+                region_id: self.region_id,
+                downstream_id: self.downstream_id,
+                conn_id: self.conn_id,
                 err: Some(Error::Request(err)),
             };
-            self.sched.schedule(deregister).unwrap();
+            if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                error!("schedule cdc task failed"; "error" => ?e);
+            }
         }
     }
 
@@ -477,13 +505,14 @@ impl Initializer {
                             Err(e) => {
                                 error!("cdc scan entries failed"; "error" => ?e);
                                 // TODO: record in metrics.
-                                if let Err(e) = sched.schedule(Task::Deregister {
-                                    region_id: Some(region_id),
-                                    downstream_id: Some(downstream_id),
-                                    conn_id: Some(conn_id),
+                                let deregister = Deregister::Downstream {
+                                    region_id,
+                                    downstream_id,
+                                    conn_id,
                                     err: Some(e),
-                                }) {
-                                    error!("schedule task failed"; "error" => ?e);
+                                };
+                                if let Err(e) = sched.schedule(Task::Deregister(deregister)) {
+                                    error!("schedule cdc task failed"; "error" => ?e);
                                 }
                                 return Ok(());
                             }
@@ -590,12 +619,7 @@ impl<T: CasualRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
                 resolver,
                 region,
             } => self.on_region_ready(region_id, resolver, region),
-            Task::Deregister {
-                region_id,
-                downstream_id,
-                conn_id,
-                err,
-            } => self.on_deregister(region_id, downstream_id, conn_id, err),
+            Task::Deregister(deregister) => self.on_deregister(deregister),
             Task::IncrementalScan {
                 region_id,
                 downstream_id,
@@ -617,6 +641,8 @@ impl<T: CasualRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
 mod tests {
     use super::*;
     use engine_traits::DATA_CFS;
+    #[cfg(feature = "prost-codec")]
+    use kvproto::cdcpb::event::Event as Event_oneof_event;
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::kvrpcpb::Context;
     use std::collections::BTreeMap;
@@ -766,12 +792,13 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
-        ep.run(Task::Deregister {
-            region_id: Some(1),
-            downstream_id: Some(downstream_id),
-            conn_id: Some(conn_id),
+        let deregister = Deregister::Downstream {
+            region_id: 1,
+            downstream_id,
+            conn_id,
             err: Some(Error::Request(err_header.clone())),
-        });
+        };
+        ep.run(Task::Deregister(deregister));
         let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
         let event = change_data_event.event.take().unwrap();
         match event {
@@ -781,7 +808,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 0);
 
         let downstream = Downstream::new("".to_string(), region_epoch);
-        let downstream_id1 = downstream.get_id();
+        let new_downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -789,21 +816,23 @@ mod tests {
         });
         assert_eq!(ep.capture_regions.len(), 1);
 
-        ep.run(Task::Deregister {
-            region_id: Some(1),
-            downstream_id: Some(downstream_id),
-            conn_id: Some(conn_id),
+        let deregister = Deregister::Downstream {
+            region_id: 1,
+            downstream_id,
+            conn_id,
             err: Some(Error::Request(err_header.clone())),
-        });
+        };
+        ep.run(Task::Deregister(deregister));
         assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
         assert_eq!(ep.capture_regions.len(), 1);
 
-        ep.run(Task::Deregister {
-            region_id: Some(1),
-            downstream_id: Some(downstream_id1),
-            conn_id: Some(conn_id),
+        let deregister = Deregister::Downstream {
+            region_id: 1,
+            downstream_id: new_downstream_id,
+            conn_id,
             err: Some(Error::Request(err_header)),
-        });
+        };
+        ep.run(Task::Deregister(deregister));
         let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
         let event = change_data_event.event.take().unwrap();
         match event {

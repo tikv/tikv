@@ -11,7 +11,7 @@ use tikv_util::mpsc::batch::{self, Sender as BatchSender, SizedBatchReceiver};
 use tikv_util::worker::*;
 
 use crate::delegate::{Downstream, DownstreamID};
-use crate::endpoint::Task;
+use crate::endpoint::{Deregister, Task};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -24,7 +24,7 @@ pub struct ConnID(usize);
 
 impl ConnID {
     pub fn new() -> ConnID {
-        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -161,12 +161,8 @@ impl ChangeData for Service {
         let scheduler = self.scheduler.clone();
         ctx.spawn(recv_req.then(move |res| {
             // Unregister this downstream only.
-            if let Err(e) = scheduler.schedule(Task::Deregister {
-                region_id: None,
-                downstream_id: None,
-                conn_id: Some(conn_id),
-                err: None,
-            }) {
+            let deregister = Deregister::Conn(conn_id);
+            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("cdc deregister failed"; "error" => ?e);
             }
             match res {
@@ -183,12 +179,8 @@ impl ChangeData for Service {
         let scheduler = self.scheduler.clone();
         ctx.spawn(send_resp.then(move |res| {
             // Unregister this downstream only.
-            if let Err(e) = scheduler.schedule(Task::Deregister {
-                region_id: None,
-                downstream_id: None,
-                conn_id: Some(conn_id),
-                err: None,
-            }) {
+            let deregister = Deregister::Conn(conn_id);
+            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("cdc deregister failed"; "error" => ?e);
             }
             match res {

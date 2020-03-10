@@ -42,7 +42,7 @@ pub struct DownstreamID(usize);
 
 impl DownstreamID {
     pub fn new() -> DownstreamID {
-        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -183,7 +183,7 @@ impl Delegate {
             }
             d.id != id
         });
-        let is_last = downstreams.is_empty();
+        let is_last = self.downstreams.is_empty();
         if is_last {
             self.enabled.store(false, Ordering::SeqCst);
         }
@@ -603,9 +603,6 @@ mod tests {
     use std::cell::Cell;
     use tikv::storage::mvcc::test_util::*;
     use tikv_util::mpsc::batch::{self, SizedBatchReceiver};
-
-    // TODO add test_txn once cdc observer is ready.
-    // https://github.com/overvenus/tikv/blob/447d10ae80b5b7fc58a4bef4631874a11237fdcf/components/cdc/src/delegate.rs#L615-L701
 
     #[test]
     fn test_error() {
