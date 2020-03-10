@@ -115,6 +115,7 @@ pub fn init_log_for_test() {
         false, // disable async drainer
         true,  // init std log
         disabled_targets,
+        0,
     )
     .unwrap()
 }
