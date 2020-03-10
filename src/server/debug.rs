@@ -2042,13 +2042,14 @@ mod tests {
                 wb.put_msg_cf(cf2, &region_state_key, &region_state)
                     .unwrap();
             };
-            let mock_raft_state = |wb: &mut RocksWriteBatch, region_id: u64, last_index: u64, commit_index: u64| {
-                let raft_state_key = keys::raft_state_key(region_id);
-                let mut raft_state = RaftLocalState::default();
-                raft_state.set_last_index(last_index);
-                raft_state.mut_hard_state().set_commit(commit_index);
-                wb.put_msg_cf(cf1, &raft_state_key, &raft_state).unwrap();
-            };
+            let mock_raft_state =
+                |wb: &mut RocksWriteBatch, region_id: u64, last_index: u64, commit_index: u64| {
+                    let raft_state_key = keys::raft_state_key(region_id);
+                    let mut raft_state = RaftLocalState::default();
+                    raft_state.set_last_index(last_index);
+                    raft_state.mut_hard_state().set_commit(commit_index);
+                    wb.put_msg_cf(cf1, &raft_state_key, &raft_state).unwrap();
+                };
             let mock_apply_state = |wb: &mut RocksWriteBatch, region_id: u64, apply_index: u64| {
                 let raft_apply_key = keys::apply_state_key(region_id);
                 let mut apply_state = RaftApplyState::default();

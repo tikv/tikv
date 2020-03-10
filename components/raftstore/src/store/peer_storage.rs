@@ -953,7 +953,11 @@ impl PeerStorage {
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
-    pub fn clear_meta(&mut self, kv_wb: &mut RocksWriteBatch, raft_wb: &mut RocksWriteBatch) -> Result<()> {
+    pub fn clear_meta(
+        &mut self,
+        kv_wb: &mut RocksWriteBatch,
+        raft_wb: &mut RocksWriteBatch,
+    ) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
         self.cache = EntryCache::default();
@@ -1123,12 +1127,7 @@ impl PeerStorage {
         } else {
             fail_point!("raft_before_apply_snap");
             let (kv_wb, raft_wb) = ready_ctx.wb_mut();
-            self.apply_snapshot(
-                &mut ctx,
-                ready.snapshot(),
-                kv_wb,
-                raft_wb,
-            )?;
+            self.apply_snapshot(&mut ctx, ready.snapshot(), kv_wb, raft_wb)?;
             fail_point!("raft_after_apply_snap");
 
             last_index(&ctx.raft_state)

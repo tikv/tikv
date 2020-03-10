@@ -237,7 +237,6 @@ pub struct PollContext<T, C: 'static> {
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
-
     fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
         (&mut self.kv_wb, &mut self.raft_wb)
     }

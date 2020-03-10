@@ -117,9 +117,7 @@ where
 {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
 
-
     let mut write_to_wb = |batch: &mut Vec<_>, wb: &mut E::WriteBatch| {
-
         callback(batch);
         batch.drain(..).try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))
     };
