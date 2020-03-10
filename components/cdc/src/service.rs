@@ -3,11 +3,11 @@
 use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::{Future, Sink, Stream};
+use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
 use tikv_util::collections::HashMap;
-use tikv_util::mpsc::batch::{self, Sender as BatchSender, SizedBatchReceiver};
+use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender};
 use tikv_util::worker::*;
 
 use crate::delegate::{Downstream, DownstreamID};
@@ -17,6 +17,7 @@ static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 const CDC_MSG_NOTIFY_COUNT: usize = 8;
 const CDC_MAX_RESP_SIZE: usize = 6 * 1024 * 1024; // 6MB
+const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
 
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -142,21 +143,35 @@ impl ChangeData for Service {
                 })
         });
 
-        let rx = SizedBatchReceiver::new(rx, CDC_MAX_RESP_SIZE, Vec::new, |v, e| v.push(e));
-        let send_resp = sink.send_all(rx.then(|events| match events {
-            Ok(events) => {
-                let mut resp = ChangeDataEvent::default();
-                resp.set_events(events.into());
-                Ok((resp, WriteFlags::default()))
-            }
-            Err(e) => {
-                error!("cdc send failed"; "error" => ?e);
-                Err(Error::RpcFailure(RpcStatus::new(
-                    RpcStatusCode::UNKNOWN,
+        let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, |v, e| v.push(e));
+        let send_resp = sink.send_all(
+            rx.map(|events| {
+                let events_len = events.len();
+                let mut event_vecs = vec![Vec::with_capacity(events_len)];
+                let mut current_events_size = 0;
+                for (size, event) in events {
+                    if current_events_size + size >= CDC_MAX_RESP_SIZE {
+                        event_vecs.push(Vec::with_capacity(events_len));
+                        current_events_size = 0;
+                    }
+                    current_events_size += size;
+                    event_vecs.last_mut().unwrap().push(event);
+                }
+                let resps = event_vecs.into_iter().map(|events| {
+                    let mut resp = ChangeDataEvent::default();
+                    resp.set_events(events.into());
+                    (resp, WriteFlags::default())
+                });
+                stream::iter_ok(resps)
+            })
+            .flatten()
+            .map_err(|e: ()| {
+                Error::RpcFailure(RpcStatus::new(
+                    RpcStatusCode::INVALID_ARGUMENT,
                     Some(format!("{:?}", e)),
-                )))
-            }
-        }));
+                ))
+            }),
+        );
 
         let scheduler = self.scheduler.clone();
         ctx.spawn(recv_req.then(move |res| {

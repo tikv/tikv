@@ -183,7 +183,7 @@ impl Delegate {
             }
             d.id != id
         });
-        let is_last = self.downstreams.is_empty();
+        let is_last = downstreams.is_empty();
         if is_last {
             self.enabled.store(false, Ordering::SeqCst);
         }
@@ -602,7 +602,7 @@ mod tests {
     use kvproto::metapb::Region;
     use std::cell::Cell;
     use tikv::storage::mvcc::test_util::*;
-    use tikv_util::mpsc::batch::{self, SizedBatchReceiver};
+    use tikv_util::mpsc::batch::{self, BatchReceiver};
 
     #[test]
     fn test_error() {
@@ -615,7 +615,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let (sink, rx) = batch::unbounded(1);
-        let rx = SizedBatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
+        let rx = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
         let mut downstream = Downstream::new(String::new(), region_epoch);
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
@@ -635,7 +635,7 @@ mod tests {
             rx_wrap.set(Some(rx));
             let mut events = events.unwrap();
             assert_eq!(events.len(), 1);
-            let change_data_event = &mut events[0];
+            let (_, change_data_event) = &mut events[0];
             let event = change_data_event.event.take().unwrap();
             match event {
                 Event_oneof_event::Error(err) => err,
@@ -734,7 +734,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let (sink, rx) = batch::unbounded(1);
-        let rx = SizedBatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
+        let rx = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
         let mut downstream = Downstream::new(String::new(), region_epoch);
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
@@ -752,7 +752,7 @@ mod tests {
             rx_wrap.set(Some(rx));
             let mut events = events.unwrap();
             assert_eq!(events.len(), 1);
-            let change_data_event = &mut events[0];
+            let (_, change_data_event) = &mut events[0];
             assert_eq!(change_data_event.region_id, region_id);
             assert_eq!(change_data_event.index, 0);
             let event = change_data_event.event.take().unwrap();
