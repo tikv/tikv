@@ -400,8 +400,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
         // Apply committed entries more quickly.
-        if self.fsm.peer.raft_group.get_store().committed_index()
-            > self.fsm.peer.raft_group.get_store().applied_index()
+        if self.fsm.peer.raft_group.store().committed_index()
+            > self.fsm.peer.raft_group.store().applied_index()
         {
             self.fsm.has_ready = true;
         }
@@ -887,6 +887,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         match extra_msg.get_type() {
             ExtraMessageType::MsgRegionWakeUp => {
                 self.reset_raft_tick(GroupState::Ordered);
+            }
+            ExtraMessageType::MsgWantRollbackMerge => {
+                unimplemented!("remove this after #6584 merged")
             }
         }
     }
@@ -1471,9 +1474,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .retain(|&(p, _)| p != peer_id);
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
-            }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-                unimplemented!()
             }
         }
 

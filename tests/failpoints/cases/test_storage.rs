@@ -20,7 +20,6 @@ use txn_types::{Mutation, TimeStamp};
 
 #[test]
 fn test_scheduler_leader_change_twice() {
-    let _guard = crate::setup();
     let snapshot_fp = "scheduler_async_snapshot_finish";
     let mut cluster = new_server_cluster(0, 2);
     cluster.run();
@@ -75,7 +74,6 @@ fn test_scheduler_leader_change_twice() {
 
 #[test]
 fn test_server_catching_api_error() {
-    let _guard = crate::setup();
     let raftkv_fp = "raftkv_early_error_report";
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();

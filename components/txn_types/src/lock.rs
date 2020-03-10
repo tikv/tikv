@@ -27,11 +27,12 @@ const TXN_SIZE_PREFIX: u8 = b't';
 const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 impl LockType {
-    pub fn from_mutation(mutation: &Mutation) -> LockType {
+    pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
         match *mutation {
-            Mutation::Put(_) | Mutation::Insert(_) => LockType::Put,
-            Mutation::Delete(_) => LockType::Delete,
-            Mutation::Lock(_) => LockType::Lock,
+            Mutation::Put(_) | Mutation::Insert(_) => Some(LockType::Put),
+            Mutation::Delete(_) => Some(LockType::Delete),
+            Mutation::Lock(_) => Some(LockType::Lock),
+            Mutation::CheckNotExists(_) => None,
         }
     }
 
@@ -231,7 +232,7 @@ mod tests {
             ),
         ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
-            let lt = LockType::from_mutation(&mutation);
+            let lt = LockType::from_mutation(&mutation).unwrap();
             assert_eq!(
                 lt, lock_type,
                 "#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
