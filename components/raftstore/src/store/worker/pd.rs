@@ -1649,4 +1649,31 @@ mod tests {
             hub.update(&mut other_hub);
         });
     }
+
+    #[bench]
+    fn hub_scan(b: &mut test::Bencher){
+        let mut hub = SplitHub::new();
+        let start_key = Key::from_raw(b"a");
+        let end_key = Some(Key::from_raw(b"b"));
+
+        b.iter(|| {
+            if let Ok(start_key) = start_key.to_owned().into_raw() {
+                let mut key = vec![];
+                if let Some(end_key) = &end_key {
+                    if let Ok(end_key) = end_key.to_owned().into_raw() {
+                        key = end_key;
+                    }
+                }
+                hub.add(0,&metapb::Peer::default(),&start_key,&key);
+            }
+        });
+    }
+
+    #[bench]
+    fn hub_add(b: &mut test::Bencher){
+        let mut hub = SplitHub::new();
+        b.iter(|| {
+                hub.add(0,&metapb::Peer::default(),b"a",b"b");
+        });
+    }
 }
