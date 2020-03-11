@@ -146,6 +146,8 @@ impl ChangeData for Service {
         let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, |v, e| v.push(e));
         let send_resp = sink.send_all(
             rx.map(|events| {
+                // The size of the response should not exceed CDC_MAX_RESP_SIZE.
+                // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
                 let events_len = events.len();
                 let mut event_vecs = vec![Vec::with_capacity(events_len)];
                 let mut current_events_size = 0;
