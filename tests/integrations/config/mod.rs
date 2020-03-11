@@ -320,6 +320,7 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly,
+                gc_merge_rewrite: true,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -374,6 +375,7 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                gc_merge_rewrite: true,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -428,6 +430,7 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                gc_merge_rewrite: true,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
