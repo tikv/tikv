@@ -219,7 +219,7 @@ impl BackupRange {
                 return Ok(statistics);
             }
         } else {
-            if !cursor.seek_to_first(cfstatistics) {
+            if !cursor.seek_to_first(cfstatistics)? {
                 return Ok(statistics);
             }
         }
@@ -254,8 +254,8 @@ impl BackupRange {
         db: Arc<DB>,
         storage: &LimitedStorage,
         file_name: String,
-        backup_ts: TimeStamp,
-        start_ts: TimeStamp,
+        backup_ts: u64,
+        start_ts: u64,
     ) -> Result<(Vec<File>, Statistics)> {
         let mut writer = match BackupWriter::new(db, &file_name, storage.limiter.clone()) {
             Ok(w) => w,

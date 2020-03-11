@@ -11,8 +11,8 @@ use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::raftstore::store::keys;
 use tikv::storage::txn::TxnEntry;
+use tikv::storage::KvPair;
 use tikv_util::{self, box_err, file::Sha256Reader, time::Limiter};
-use txn_types::KvPair;
 
 use crate::metrics::*;
 use crate::{Error, Result};
