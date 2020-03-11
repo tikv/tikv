@@ -4,15 +4,15 @@ use super::ExternalStorage;
 
 use bytes::Bytes;
 use futures::executor::block_on;
-use futures::io::{empty, AllowStdIo, AsyncRead};
+use futures::io::{empty, AsyncRead};
 use futures01::stream::Stream;
-use futures_util::compat::AsyncRead01CompatExt;
-use futures_util::io::AsyncReadExt;
+use futures_util::compat::Stream01CompatExt;
+use futures_util::io::{AsyncReadExt, Cursor};
 use http::Method;
 use kvproto::backup::Gcs as Config;
 use reqwest::{Body, Client};
 use std::convert::TryInto;
-use std::io::{Cursor, Error, ErrorKind, Read, Result};
+use std::io::{Error, ErrorKind, Read, Result};
 use std::sync::Arc;
 use tame_gcs::common::{PredefinedAcl, StorageClass};
 use tame_gcs::objects::{InsertObjectOptional, Metadata, Object};
@@ -77,7 +77,7 @@ impl GCSStorage {
 
     fn convert_request<R>(&self, mut req: http::Request<R>) -> Result<reqwest::Request>
     where
-        R: Read,
+        R: AsyncRead + Send + Unpin,
     {
         let uri = req.uri().to_string();
         let builder = match req.method().clone() {
@@ -93,8 +93,9 @@ impl GCSStorage {
         Ok(builder
             .headers(req.headers().clone())
             .body(Body::wrap_stream(
-                FramedRead::new(AllowStdIo::new(req.body()).compat(), BytesCodec::new())
-                .map(|bytes| bytes.freeze()),
+                FramedRead::new(req.body().compat(), BytesCodec::new())
+                    .map(|bytes| bytes.freeze())
+                    .compat(),
             ))
             .build()
             .map_err(|e| Error::new(ErrorKind::Other, format!("failed to build request: {}", e)))?)
@@ -127,7 +128,7 @@ impl GCSStorage {
 
     fn set_auth<R>(&self, req: &mut http::Request<R>, scope: tame_gcs::Scopes) -> Result<()>
     where
-        R: Read,
+        R: AsyncRead + Send + Unpin,
     {
         let token_or_request = self
             .svc_access
@@ -140,7 +141,7 @@ impl GCSStorage {
                 scope_hash,
                 ..
             } => {
-                // Convert http::Request<Vec<u8>> into http::Request<Cursor>
+                // Convert http::Request<Vec<u8>> into http::Request<dyn AsyncRead>
                 let (parts, body) = request.into_parts();
                 let read_body = Cursor::new(body);
                 let new_request = http::Request::from_parts(parts, read_body);
@@ -177,7 +178,7 @@ impl GCSStorage {
         scope: tame_gcs::Scopes,
     ) -> Result<reqwest::Response>
     where
-        R: Read,
+        R: AsyncRead + Send + Unpin,
     {
         self.set_auth(&mut req, scope)?;
         let request = self.convert_request(req)?;
@@ -262,19 +263,13 @@ impl ExternalStorage for GCSStorage {
             predefined_acl,
             ..Default::default()
         });
-        let req = Object::insert_multipart(
-            &bucket,
-            reader,
-            content_length,
-            &metadata,
-            optional,
-        )
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("failed to create insert request: {}", e),
-            )
-        })?;
+        let req = Object::insert_multipart(&bucket, reader, content_length, &metadata, optional)
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::Other,
+                    format!("failed to create insert request: {}", e),
+                )
+            })?;
         self.make_request(req, tame_gcs::Scopes::ReadWrite)?;
 
         Ok(())
