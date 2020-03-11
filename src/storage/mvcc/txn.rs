@@ -431,7 +431,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     "key" => %key
                 );
                 MVCC_CONFLICT_COUNTER
-                    .pipelined_acquire_pessimistic_lock_false_success
+                    .pipelined_acquire_pessimistic_lock_amend_fail
                     .inc();
                 return Err(ErrorInner::PessimisticLockNotFound {
                     start_ts: self.start_ts,
@@ -439,17 +439,12 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
                 .into());
             }
-            // Used pipelined pessimistic lock acquiring in this txn but failed
-            // Luckily no other txn modified this lock, amend it by treat it as optimistic txn.
-            MVCC_CONFLICT_COUNTER
-                .pipelined_acquire_pessimistic_lock_amend_update
-                .inc();
-        } else {
-            // Key not exists, amend the related lock
-            MVCC_CONFLICT_COUNTER
-                .pipelined_acquire_pessimistic_lock_amend_insert
-                .inc();
         }
+        // Used pipelined pessimistic lock acquiring in this txn but failed
+        // Luckily no other txn modified this lock, amend it by treat it as optimistic txn.
+        MVCC_CONFLICT_COUNTER
+            .pipelined_acquire_pessimistic_lock_amend_success
+            .inc();
         Ok(())
     }
 

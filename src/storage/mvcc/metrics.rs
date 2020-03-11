@@ -9,9 +9,8 @@ make_static_metric! {
         commit_lock_not_found,
         rollback_committed,
         acquire_pessimistic_lock_conflict,
-        pipelined_acquire_pessimistic_lock_amend_update,
-        pipelined_acquire_pessimistic_lock_amend_insert,
-        pipelined_acquire_pessimistic_lock_false_success,
+        pipelined_acquire_pessimistic_lock_amend_fail,
+        pipelined_acquire_pessimistic_lock_amend_success,
     }
 
     pub label_enum MvccDuplicateCommandKind {
