@@ -134,9 +134,6 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
-        ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-            unimplemented!()
-        }
     }
 }
 
@@ -592,7 +589,7 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
         if p.get_is_learner() {
             conf_state.mut_learners().push(p.get_id());
         } else {
-            conf_state.mut_nodes().push(p.get_id());
+            conf_state.mut_voters().push(p.get_id());
         }
     }
     conf_state
@@ -626,6 +623,10 @@ impl<
             ),
         }
     }
+}
+
+pub fn integration_on_half_fail_quorum_fn(voters: usize) -> usize {
+    (voters + 1) / 2 + 1
 }
 
 #[cfg(test)]
@@ -816,7 +817,7 @@ mod tests {
         region.mut_peers().push(peer);
 
         let cs = conf_state_from_region(&region);
-        assert!(cs.get_nodes().contains(&1));
+        assert!(cs.get_voters().contains(&1));
         assert!(cs.get_learners().contains(&2));
     }
 
@@ -1116,6 +1117,16 @@ mod tests {
                 check_region_epoch(&req, &region, false).unwrap_err();
                 check_region_epoch(&req, &region, true).unwrap_err();
             }
+        }
+    }
+
+    #[test]
+    fn test_integration_on_half_fail_quorum_fn() {
+        let voters = vec![1, 2, 3, 4, 5, 6, 7];
+        let quorum = vec![2, 2, 3, 3, 4, 4, 5];
+        for (voter_count, expected_quorum) in voters.into_iter().zip(quorum) {
+            let quorum = super::integration_on_half_fail_quorum_fn(voter_count);
+            assert_eq!(quorum, expected_quorum);
         }
     }
 }

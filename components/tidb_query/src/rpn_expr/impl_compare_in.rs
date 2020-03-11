@@ -2,17 +2,59 @@
 
 use std::collections::HashSet;
 use std::hash::Hash;
+use std::marker::{PhantomData, Send, Sized};
 
 use codec::prelude::NumberDecoder;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::EvalType;
 use tipb::{Expr, ExprType};
 
+use crate::codec::collation::*;
 use crate::codec::data_type::*;
 use crate::codec::mysql::{Decimal, MAX_FSP};
 use crate::{Error, Result};
 
-pub trait Extract: std::marker::Sized {
+pub trait InByHash {
+    type Key: Evaluable + Extract + Eq;
+    type StoreKey: 'static + Hash + Eq + Sized + Send;
+
+    fn map(key: Self::Key) -> Result<Self::StoreKey>;
+    fn map_ref(key: &Self::Key) -> Result<&Self::StoreKey>;
+}
+
+pub struct NormalInByHash<K: Evaluable + Extract + Hash + Eq + Sized + Send>(PhantomData<K>);
+
+impl<K: Evaluable + Extract + Hash + Eq + Sized> InByHash for NormalInByHash<K> {
+    type Key = K;
+    type StoreKey = K;
+
+    #[inline]
+    fn map(key: Self::Key) -> Result<Self::StoreKey> {
+        Ok(key)
+    }
+
+    #[inline]
+    fn map_ref(key: &Self::Key) -> Result<&Self::StoreKey> {
+        Ok(key)
+    }
+}
+
+pub struct CollationAwareBytesInByHash<C: Collator>(PhantomData<C>);
+
+impl<C: Collator> InByHash for CollationAwareBytesInByHash<C> {
+    type Key = Bytes;
+    type StoreKey = SortKey<Bytes, C>;
+
+    fn map(key: Self::Key) -> Result<Self::StoreKey> {
+        SortKey::new(key).map_err(Error::from)
+    }
+
+    fn map_ref(key: &Self::Key) -> Result<&Self::StoreKey> {
+        SortKey::new_ref(key).map_err(Error::from)
+    }
+}
+
+pub trait Extract: Sized {
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self>;
 }
 
@@ -101,14 +143,7 @@ impl Extract for Duration {
     }
 }
 
-pub trait InByHash: Evaluable + Hash + Eq {}
 pub trait InByCompare: Evaluable + Eq {}
-
-impl InByHash for Int {}
-impl InByHash for Real {}
-impl InByHash for Bytes {}
-impl InByHash for Decimal {}
-impl InByHash for Duration {}
 
 impl InByCompare for Int {}
 impl InByCompare for Real {}
@@ -129,15 +164,16 @@ pub struct CompareInMeta<T: Eq + Hash> {
 
 #[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<T>)]
 #[inline]
-pub fn compare_in_by_hash<T: InByHash + Extract>(
-    metadata: &CompareInMeta<T>,
-    args: &[&Option<T>],
+pub fn compare_in_by_hash<T: InByHash>(
+    metadata: &CompareInMeta<T::StoreKey>,
+    args: &[&Option<T::Key>],
 ) -> Result<Option<Int>> {
     assert!(!args.is_empty());
     let base_val = args[0];
     match base_val {
         None => Ok(None),
         Some(base_val) => {
+            let base_val = T::map_ref(base_val)?;
             if metadata.lookup_set.contains(base_val) {
                 return Ok(Some(1));
             }
@@ -148,7 +184,8 @@ pub fn compare_in_by_hash<T: InByHash + Extract>(
                         default_ret = None;
                     }
                     Some(v) => {
-                        if v == base_val {
+                        let v = T::map_ref(v)?;
+                        if base_val == v {
                             return Ok(Some(1));
                         }
                     }
@@ -159,7 +196,7 @@ pub fn compare_in_by_hash<T: InByHash + Extract>(
     }
 }
 
-fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<CompareInMeta<T>> {
+fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T::StoreKey>> {
     let mut lookup_set = HashSet::new();
     let mut has_null = false;
     let children = expr.mut_children();
@@ -179,7 +216,8 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
                 has_null = true;
             }
             expr_type => {
-                let val = T::extract(expr_type, tree_node.take_val())?;
+                let val = T::Key::extract(expr_type, tree_node.take_val())?;
+                let val = T::map(val)?;
                 lookup_set.insert(val);
             }
         }
@@ -228,7 +266,8 @@ mod tests {
     use super::*;
 
     use test::{black_box, Bencher};
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::{Collation, FieldTypeTp};
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
@@ -293,6 +332,113 @@ mod tests {
 
         test_with_mapper(map_expr_node_to_rpn_func, true);
         test_with_mapper(by_compare_mapper, false);
+    }
+
+    #[test]
+    fn test_in_string() {
+        let cases = vec![
+            (
+                vec![Some("times naive"), Some("young"), Some("simple"), None],
+                Collation::Binary,
+                None,
+            ),
+            (
+                vec![
+                    Some("times naive"),
+                    Some("young"),
+                    Some("simple"),
+                    Some("times naive"),
+                ],
+                Collation::Binary,
+                Some(1),
+            ),
+            (
+                vec![
+                    Some("pINGcap"),
+                    Some("PINGCAP"),
+                    Some("PingCAP"),
+                    Some("pingcap"),
+                    Some("pingCap"),
+                ],
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                vec![
+                    Some("pINGcap"),
+                    Some("PINGCAP"),
+                    Some("PingCAP"),
+                    Some("pingcap"),
+                    Some("pingCap"),
+                ],
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+            (
+                vec![Some("breeswish"), Some("breezewish")],
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+            (
+                vec![Some("breeswish"), Some("breezewish")],
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+            (
+                vec![Some("codeworm96"), Some("CODEWORM96"), Some("CoDeWorm99")],
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+            (
+                vec![
+                    Some("扩散性百万甜🍞"),
+                    Some("扩散性百万辣🍞"),
+                    Some("扩散性百万咸🍞"),
+                ],
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+            (
+                vec![Some("🐰"), Some("🐇"), Some("🐻"), Some("🐰")],
+                Collation::Utf8Mb4GeneralCi,
+                Some(1),
+            ),
+        ];
+
+        for (args, collation, expected) in cases {
+            let ft = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .collation(collation)
+                .build();
+            let mut builder = ExprDefBuilder::scalar_func(ScalarFuncSig::InString, ft);
+            for arg in args {
+                builder = builder.push_child(match arg {
+                    Some(v) => ExprDefBuilder::constant_bytes(String::from(v).into_bytes()),
+                    None => ExprDefBuilder::constant_null(FieldTypeTp::String),
+                });
+            }
+            let node = builder.build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+                node,
+                map_expr_node_to_rpn_func,
+                1,
+            )
+            .unwrap();
+            if let RpnExpressionNode::FnCall { args_len, .. } = exp[0] {
+                // all constant args except base_val should be removed.
+                assert_eq!(args_len, 1);
+            }
+            let mut ctx = EvalContext::default();
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+            let result = exp.eval(&mut ctx, schema, &mut columns, &[], 1);
+            let val = result.unwrap();
+            assert!(val.is_vector());
+            assert_eq!(
+                val.vector_value().unwrap().as_ref().as_int_slice(),
+                &[expected]
+            );
+        }
     }
 
     #[test]
