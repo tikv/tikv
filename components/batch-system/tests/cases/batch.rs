@@ -2,9 +2,9 @@
 
 use batch_system::test_runner::*;
 use batch_system::*;
+use std::thread::sleep;
 use std::time::Duration;
 use tikv_util::mpsc;
-use std::thread::sleep;
 
 #[test]
 fn test_batch() {
