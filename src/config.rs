@@ -1638,6 +1638,7 @@ impl Default for CoprReadPoolConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(from = "RawReadPoolConfig")]
+#[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub unify_read_pool: bool,
     pub unified: UnifiedReadPoolConfig,
