@@ -298,7 +298,7 @@ audit: pre-audit
 
 .PHONY: check-udeps
 check-udeps:
-	bash scripts/check-udeps.sh
+	which cargo-udeps &>/dev/null || cargo install cargo-udeps && cargo udeps
 
 FUZZER ?= Honggfuzz
 
