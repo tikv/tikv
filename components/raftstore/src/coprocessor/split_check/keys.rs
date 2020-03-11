@@ -3,9 +3,9 @@
 use crate::store::{CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
-use engine_rocks::Compat;
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::CF_WRITE;
-use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{CFHandleExt, TableProperties, TablePropertiesCollection, TablePropertiesExt};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::{Arc, Mutex};
@@ -87,7 +87,7 @@ pub struct KeysCheckObserver<C> {
     router: Arc<Mutex<C>>,
 }
 
-impl<C: CasualRouter> KeysCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine>> KeysCheckObserver<C> {
     pub fn new(router: C) -> KeysCheckObserver<C> {
         KeysCheckObserver {
             router: Arc::new(Mutex::new(router)),
@@ -97,7 +97,7 @@ impl<C: CasualRouter> KeysCheckObserver<C> {
 
 impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
 
-impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -177,8 +177,8 @@ pub fn get_region_approximate_keys(db: &Arc<DB>, region: &Region) -> Result<u64>
 
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
-    let cf = box_try!(rocks::util::get_cf_handle(db, CF_WRITE));
-    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
+    let cf = box_try!(db.c().cf_handle(CF_WRITE));
+    let (_, keys) = get_range_entries_and_versions(db.c(), cf, &start, &end).unwrap_or_default();
     Ok(keys)
 }
 

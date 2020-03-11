@@ -17,10 +17,10 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use engine::rocks::util::config::BlobRunMode;
-use engine::rocks::{CompactionJobInfo, DB};
+use engine::rocks::DB;
 use engine::*;
-use engine_rocks::CompactionListener;
 use engine_rocks::RocksEngine;
+use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -541,13 +541,13 @@ pub fn must_error_read_on_peer<T: Simulator>(
     }
 }
 
-fn dummpy_filter(_: &CompactionJobInfo) -> bool {
+fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
     true
 }
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    router: RaftRouter,
+    router: RaftRouter<RocksEngine>,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine

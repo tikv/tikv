@@ -13,7 +13,7 @@ use raft::SnapshotStatus;
 
 use super::*;
 use engine::*;
-use engine_rocks::RocksEngine;
+use engine_rocks::{Compat, RocksEngine};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
@@ -166,7 +166,7 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines,
-        router: RaftRouter,
+        router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
@@ -213,7 +213,8 @@ impl Simulator for NodeCluster {
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader =
+            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
         let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default());
 
         let mut split_check_worker = Worker::new("split-check");
@@ -374,7 +375,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

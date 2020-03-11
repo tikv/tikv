@@ -409,6 +409,38 @@ pub fn find_in_set(s: &Option<Bytes>, str_list: &Option<Bytes>) -> Result<Option
     })
 }
 
+#[rpn_fn]
+#[inline]
+pub fn trim_1_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let l_pos = bytes.iter().position(|&x| x != SPACE);
+        if let Some(i) = l_pos {
+            let r_pos = bytes.iter().rposition(|&x| x != SPACE);
+            bytes[i..=r_pos.unwrap()].to_vec()
+        } else {
+            Vec::new()
+        }
+    }))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn char_length(bs: &Option<Bytes>) -> Result<Option<Int>> {
+    Ok(bs.as_ref().map(|b| b.len() as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn char_length_utf8(bs: &Option<Bytes>) -> Result<Option<Int>> {
+    match bs.as_ref() {
+        Some(bytes) => match str::from_utf8(bytes) {
+            Ok(s) => Ok(Some(s.chars().count() as i64)),
+            Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+        },
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1604,6 +1636,113 @@ mod tests {
                 .evaluate::<Int>(ScalarFuncSig::FindInSet)
                 .unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_trim_1_arg() {
+        let test_cases = vec![
+            (None, None),
+            (Some("   bar   "), Some("bar")),
+            (Some("   b   "), Some("b")),
+            (Some("   b   ar   "), Some("b   ar")),
+            (Some("bar"), Some("bar")),
+            (Some("    "), Some("")),
+            (Some("  \tbar\t   "), Some("\tbar\t")),
+            (Some("  \rbar\r   "), Some("\rbar\r")),
+            (Some("  \nbar\n   "), Some("\nbar\n")),
+            (Some(""), Some("")),
+            (Some("  你好"), Some("你好")),
+            (Some("  你  好  "), Some("你  好")),
+            (Some("  분산 데이터베이스    "), Some("분산 데이터베이스")),
+            (
+                Some("   あなたのことが好きです   "),
+                Some("あなたのことが好きです"),
+            ),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::Trim1Arg)
+                .unwrap();
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+
+        let invalid_utf8_output = RpnFnScalarEvaluator::new()
+            .push_param(Some(b"  \xF0 Hello \x90 World \x80 ".to_vec()))
+            .evaluate(ScalarFuncSig::Trim1Arg)
+            .unwrap();
+        assert_eq!(
+            invalid_utf8_output,
+            Some(b"\xF0 Hello \x90 World \x80".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_char_length() {
+        let cases = vec![
+            (Some(b"HELLO".to_vec()), Some(5)),
+            (Some(b"123".to_vec()), Some(3)),
+            (Some(b"".to_vec()), Some(0)),
+            (Some("CAFÉ".as_bytes().to_vec()), Some(5)),
+            (Some("数据库".as_bytes().to_vec()), Some(9)),
+            (Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()), Some(41)),
+            (Some("قاعدة البيانات".as_bytes().to_vec()), Some(27)),
+            (Some(vec![0x00, 0x9f, 0x92, 0x96]), Some(4)), // invalid utf8
+            (Some(b"Hello\xF0\x90\x80World".to_vec()), Some(13)), // invalid utf8
+            (None, None),
+        ];
+
+        for (arg, expected_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::CharLength)
+                .unwrap();
+            assert_eq!(output, expected_output);
+        }
+    }
+
+    #[test]
+    fn test_char_length_utf8() {
+        let cases = vec![
+            (Some(b"HELLO".to_vec()), Some(5)),
+            (Some(b"123".to_vec()), Some(3)),
+            (Some(b"".to_vec()), Some(0)),
+            (Some("CAFÉ".as_bytes().to_vec()), Some(4)),
+            (Some("数据库".as_bytes().to_vec()), Some(3)),
+            (Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()), Some(22)),
+            (Some("قاعدة البيانات".as_bytes().to_vec()), Some(14)),
+            (None, None),
+        ];
+
+        for (arg, expected_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::CharLengthUtf8)
+                .unwrap();
+            assert_eq!(output, expected_output);
+        }
+
+        let invalid_utf8_cases: Vec<Vec<u8>> = vec![
+            vec![0xc0],
+            vec![0xf6],
+            vec![0x00, 0x9f],
+            vec![0xc3, 0x28],
+            vec![0xe2, 0x28, 0xa1],
+            vec![0xe2, 0x82, 0x28],
+            vec![0xf0, 0x28, 0x8c, 0xbc],
+            vec![0xf0, 0x90, 0x28, 0xbc],
+            vec![0xf0, 0x28, 0x8c, 0x28],
+            vec![0xf8, 0xa1, 0xa1, 0xa1, 0xa0],
+            vec![0xfc, 0xa1, 0xa1, 0xa1, 0xa1, 0xa0],
+        ];
+
+        for arg in invalid_utf8_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<i64>(ScalarFuncSig::CharLengthUtf8);
+            assert!(output.is_err());
         }
     }
 }
