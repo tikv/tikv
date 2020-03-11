@@ -1216,6 +1216,7 @@ impl<T: Simulator> Cluster<T> {
 
 impl<T: Simulator> Drop for Cluster<T> {
     fn drop(&mut self) {
+        test_util::clear_failpoints();
         self.shutdown();
     }
 }
