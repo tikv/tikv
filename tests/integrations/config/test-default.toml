@@ -1,6 +1,6 @@
-[readpool.coprocessor]
+[readpool]
 
-[readpool.storage]
+[readpool.unified]
 
 [server]
 

@@ -1637,8 +1637,7 @@ impl Default for CoprReadPoolConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(from = "RawReadPoolConfig")]
 pub struct ReadPoolConfig {
     pub unify_read_pool: bool,
     pub unified: UnifiedReadPoolConfig,
@@ -1658,14 +1657,47 @@ impl ReadPoolConfig {
     }
 }
 
-impl Default for ReadPoolConfig {
-    fn default() -> ReadPoolConfig {
-        ReadPoolConfig {
-            unify_read_pool: true,
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+struct RawReadPoolConfig {
+    unify_read_pool: Option<bool>,
+    unified: UnifiedReadPoolConfig,
+    storage: Option<StorageReadPoolConfig>,
+    coprocessor: Option<CoprReadPoolConfig>,
+}
+
+impl Default for RawReadPoolConfig {
+    fn default() -> RawReadPoolConfig {
+        RawReadPoolConfig {
+            unify_read_pool: None,
             unified: Default::default(),
-            storage: Default::default(),
-            coprocessor: Default::default(),
+            storage: None,
+            coprocessor: None,
         }
+    }
+}
+
+impl From<RawReadPoolConfig> for ReadPoolConfig {
+    fn from(raw: RawReadPoolConfig) -> ReadPoolConfig {
+        let legacy_configured = raw.storage.is_some() || raw.coprocessor.is_some();
+        let mut config = ReadPoolConfig {
+            unify_read_pool: true,
+            unified: raw.unified,
+            storage: raw.storage.unwrap_or_default(),
+            coprocessor: raw.coprocessor.unwrap_or_default(),
+        };
+        match raw.unify_read_pool {
+            None => {
+                // If the user does not specify whether to unify read pools,
+                // only use the old pools when they are configured.
+                config.unify_read_pool = !legacy_configured;
+            }
+            Some(unify_read_pool) => {
+                config.unify_read_pool = unify_read_pool;
+            }
+        }
+        config
     }
 }
 
@@ -1841,7 +1873,7 @@ impl Default for TiKvConfig {
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             refresh_config_interval: ReadableDuration::secs(30),
-            readpool: ReadPoolConfig::default(),
+            readpool: RawReadPoolConfig::default().into(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),

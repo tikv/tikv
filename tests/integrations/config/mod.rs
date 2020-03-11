@@ -569,12 +569,23 @@ fn test_serde_default_config() {
 #[test]
 fn test_readpool_default_config() {
     let content = r#"
-        [readpool.storage]
-        high-concurrency = 1
+        [readpool.unified]
+        max-thread-count = 1
     "#;
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
     let mut expected = TiKvConfig::default();
-    expected.readpool.storage.high_concurrency = 1;
+    expected.readpool.unified.max_thread_count = 1;
+    assert_eq!(cfg, expected);
+}
+
+#[test]
+fn test_auto_enable_legacy_readpool() {
+    let content = r#"
+        [readpool.storage]
+    "#;
+    let cfg: TiKvConfig = toml::from_str(content).unwrap();
+    let mut expected = TiKvConfig::default();
+    expected.readpool.unify_read_pool = false;
     assert_eq!(cfg, expected);
 }
 
