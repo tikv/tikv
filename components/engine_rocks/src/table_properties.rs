@@ -2,6 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
+use engine_traits::DecodeProperties;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
 use engine_traits::{
@@ -114,11 +115,6 @@ impl UserCollectedProperties for RocksUserCollectedProperties {
         self.0.len()
     }
 }
-
-// FIXME: DecodeProperties doesn't belong in this crate,
-// and it looks like the properties module has functional overlap
-// with this module.
-use crate::properties::DecodeProperties;
 
 impl DecodeProperties for RocksUserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {

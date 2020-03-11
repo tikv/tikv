@@ -57,7 +57,8 @@ engine_traits = { path = "../engine_traits" }
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }
 test_util = { path = "../test_util" }
+panic_hook = { path = "../panic_hook" }
 
 [[test]]
-name = "integrations"
-path = "tests/integrations/mod.rs"
+name = "tests"
+path = "tests/mod.rs"

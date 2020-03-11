@@ -227,6 +227,8 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+mod properties;
+pub use crate::properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -254,5 +256,7 @@ pub use crate::range::*;
 pub mod metrics_flusher;
 pub mod util;
 pub use crate::metrics_flusher::*;
+pub mod compact;
+pub use compact::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

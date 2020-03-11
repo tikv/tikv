@@ -705,7 +705,11 @@ pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
     }
     let flen = flen as usize;
     if ft.as_accessor().tp() == FieldTypeTp::String
-        && ft.as_accessor().collation() == Collation::Binary
+        && ft
+            .as_accessor()
+            .collation()
+            .map(|col| col == Collation::Binary)
+            .unwrap_or(false)
         && s.len() < flen
     {
         // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
