@@ -411,6 +411,20 @@ pub fn find_in_set(s: &Option<Bytes>, str_list: &Option<Bytes>) -> Result<Option
 
 #[rpn_fn]
 #[inline]
+pub fn trim_1_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let l_pos = bytes.iter().position(|&x| x != SPACE);
+        if let Some(i) = l_pos {
+            let r_pos = bytes.iter().rposition(|&x| x != SPACE);
+            bytes[i..=r_pos.unwrap()].to_vec()
+        } else {
+            Vec::new()
+        }
+    }))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn char_length(bs: &Option<Bytes>) -> Result<Option<Int>> {
     Ok(bs.as_ref().map(|b| b.len() as i64))
 }
@@ -1623,6 +1637,46 @@ mod tests {
                 .unwrap();
             assert_eq!(got, exp);
         }
+    }
+
+    #[test]
+    fn test_trim_1_arg() {
+        let test_cases = vec![
+            (None, None),
+            (Some("   bar   "), Some("bar")),
+            (Some("   b   "), Some("b")),
+            (Some("   b   ar   "), Some("b   ar")),
+            (Some("bar"), Some("bar")),
+            (Some("    "), Some("")),
+            (Some("  \tbar\t   "), Some("\tbar\t")),
+            (Some("  \rbar\r   "), Some("\rbar\r")),
+            (Some("  \nbar\n   "), Some("\nbar\n")),
+            (Some(""), Some("")),
+            (Some("  你好"), Some("你好")),
+            (Some("  你  好  "), Some("你  好")),
+            (Some("  분산 데이터베이스    "), Some("분산 데이터베이스")),
+            (
+                Some("   あなたのことが好きです   "),
+                Some("あなたのことが好きです"),
+            ),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::Trim1Arg)
+                .unwrap();
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+
+        let invalid_utf8_output = RpnFnScalarEvaluator::new()
+            .push_param(Some(b"  \xF0 Hello \x90 World \x80 ".to_vec()))
+            .evaluate(ScalarFuncSig::Trim1Arg)
+            .unwrap();
+        assert_eq!(
+            invalid_utf8_output,
+            Some(b"\xF0 Hello \x90 World \x80".to_vec())
+        );
     }
 
     #[test]
