@@ -369,15 +369,16 @@ impl StatsMonitor {
                             unify_hub.update(&mut other_hub);
                         }
 
-                        let (top, split_infos) = unify_hub.flush();
+                        let (top, _) = unify_hub.flush();
                         unify_hub.clear();
-                        let task = Task::AutoSplit { split_infos };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!(
-                                "failed to send split infos to pd worker";
-                                "err" => ?e,
-                            );
-                        }
+                        // comment to test split effect
+                        // let task = Task::AutoSplit { split_infos };
+                        // if let Err(e) = scheduler.schedule(task) {
+                        //     error!(
+                        //         "failed to send split infos to pd worker";
+                        //         "err" => ?e,
+                        //     );
+                        // }
 
                         for i in 0..TOP_N {
                             if i < top.len() {
