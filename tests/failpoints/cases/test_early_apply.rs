@@ -10,10 +10,8 @@ use test_raftstore::*;
 /// Tests early apply is disabled for singleton.
 #[test]
 fn test_singleton_early_apply() {
-    let guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.early_apply = true;
-    let _drop_before_cluster = guard;
     cluster.cfg.raft_store.store_pool_size = 1;
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
@@ -70,9 +68,7 @@ fn test_singleton_early_apply() {
 /// Tests whether disabling early apply really works.
 #[test]
 fn test_disable_early_apply() {
-    let guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
-    let _drop_early = guard;
     cluster.cfg.raft_store.early_apply = false;
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster);

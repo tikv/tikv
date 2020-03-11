@@ -704,7 +704,6 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
 #[test]
 fn test_node_failed_merge_before_succeed_merge() {
     let mut cluster = new_node_cluster(0, 3);
-    let _drop_before_cluster = _guard;
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.merge_max_log_gap = 30;
     cluster.cfg.raft_store.store_max_batch_size = 1;
