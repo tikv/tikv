@@ -165,11 +165,8 @@ impl ChangeData for Service {
                 stream::iter_ok(resps)
             })
             .flatten()
-            .map_err(|e: ()| {
-                Error::RpcFailure(RpcStatus::new(
-                    RpcStatusCode::INVALID_ARGUMENT,
-                    Some(format!("{:?}", e)),
-                ))
+            .map_err(|_: ()| {
+                Error::RpcFailure(RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, None))
             }),
         );
 
