@@ -38,3 +38,5 @@ package = "rocksdb"
 tempfile = "3.1"
 hex =  "0.3"
 rusoto_mock = "0.42.0"
+rust-ini = "0.14.0"
+clap = { version = "2.32", features = ["yaml"] }
