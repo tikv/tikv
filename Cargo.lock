@@ -1941,7 +1941,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b67becf9add951538ff2b54a83bbc0e906a8f566"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f6c5af656e540e444afed704ffa0c8de6fa12e37"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1959,7 +1959,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b67becf9add951538ff2b54a83bbc0e906a8f566"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f6c5af656e540e444afed704ffa0c8de6fa12e37"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3447,7 +3447,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b67becf9add951538ff2b54a83bbc0e906a8f566"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f6c5af656e540e444afed704ffa0c8de6fa12e37"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -5205,7 +5205,7 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.15+zstd.1.4.4"
-source = "git+https://github.com/gyscos/zstd-rs.git#bc874a57298bdb500cdb5aeac5f23878b6480d0b"
+source = "git+https://github.com/gyscos/zstd-rs.git#d8c90d64aa55ee3e7e53b53eaf44bc6603c11d7f"
 dependencies = [
  "cc",
  "glob",

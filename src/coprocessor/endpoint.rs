@@ -28,6 +28,7 @@ use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::interceptors::limit_concurrency;
+use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
@@ -337,15 +338,15 @@ impl<E: Engine> Endpoint<E> {
         };
 
         tracker.on_begin_all_items();
-        tracker.on_begin_item();
 
         let child_span = span.child("coprocessor executor", |options| {
             options.start_with_state(())
         });
+        let handle_request_future = track(handler.handle_request(), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
-            limit_concurrency(handler.handle_request(), semaphore, LIGHT_TASK_THRESHOLD).await
+            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
-            handler.handle_request().await
+            handle_request_future.await
         };
         std::mem::drop(span);
         std::mem::drop(child_span);
@@ -358,8 +359,7 @@ impl<E: Engine> Endpoint<E> {
         // execution metrics.
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
-
-        tracker.on_finish_item(Some(storage_stats));
+        tracker.collect_storage_statistics(storage_stats);
         let exec_details = tracker.get_item_exec_details();
 
         tracker.on_finish_all_items();
