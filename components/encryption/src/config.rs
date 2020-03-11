@@ -3,6 +3,9 @@
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[config(skip)]
+    pub encryption_dir: String,
+
+    #[config(skip)]
     pub kms: KmsConfig,
     // TODO add file backend config
 }

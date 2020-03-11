@@ -88,7 +88,7 @@ fn create_kms_backend(
         config.region = region.to_string();
     }
     config.key_id = matches.value_of("key_id").unwrap().to_owned();
-    Ok(Arc::new(KmsBackend::new(config)?))
+    Ok(Arc::new(KmsBackend::new(config, ".")?))
 }
 
 fn process() -> Result<()> {
