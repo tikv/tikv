@@ -1,5 +1,7 @@
 log-level = "debug"
 log-file = "foo"
+slow-log-file = "slow_foo"
+slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 
@@ -146,6 +148,7 @@ store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = false
+quorum-algorithm = "integration-on-half-fail"
 
 [coprocessor]
 split-region-on-table = false

@@ -16,7 +16,6 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_wait_for_apply_index() {
-    let _guard = crate::setup();
     let mut cluster = new_server_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
@@ -74,7 +73,6 @@ fn test_wait_for_apply_index() {
 
 #[test]
 fn test_duplicate_read_index_ctx() {
-    let _guard = crate::setup();
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
@@ -154,7 +152,6 @@ fn test_duplicate_read_index_ctx() {
 
 #[test]
 fn test_read_before_init() {
-    let _guard = crate::setup();
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
@@ -206,7 +203,6 @@ fn test_read_before_init() {
 
 #[test]
 fn test_read_applying_snapshot() {
-    let _guard = crate::setup();
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
@@ -272,7 +268,6 @@ fn test_read_applying_snapshot() {
 
 #[test]
 fn test_read_after_cleanup_range_for_snap() {
-    let _guard = crate::setup();
     let mut cluster = new_server_cluster(1, 3);
     configure_for_snapshot(&mut cluster);
     configure_for_lease_read(&mut cluster, Some(100), Some(10_000));

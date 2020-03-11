@@ -593,6 +593,7 @@ fn test_region_split() {
     suite.stop();
 }
 
+#[cfg(feature = "failpoints")]
 #[test]
 fn test_duplicate_subscribe() {
     let mut suite = TestSuite::new(3);

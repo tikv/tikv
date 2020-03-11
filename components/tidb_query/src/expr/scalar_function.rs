@@ -119,6 +119,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Substring2ArgsUtf8
             | ScalarFuncSig::Substring2Args
+            | ScalarFuncSig::Repeat
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDatetimeAndDuration
             | ScalarFuncSig::AddDatetimeAndString
@@ -469,7 +470,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Password
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::ReleaseLock
-            | ScalarFuncSig::Repeat
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
             | ScalarFuncSig::SecToTime
@@ -1005,6 +1005,7 @@ dispatch_call! {
         LTrim => ltrim,
         RTrim => rtrim,
         ReverseUtf8 => reverse_utf8,
+        Repeat => repeat,
         Reverse => reverse,
         HexIntArg => hex_int_arg,
         HexStrArg => hex_str_arg,
@@ -1627,7 +1628,6 @@ mod tests {
             ScalarFuncSig::Password,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::ReleaseLock,
-            ScalarFuncSig::Repeat,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
             ScalarFuncSig::SecToTime,

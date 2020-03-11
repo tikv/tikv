@@ -1807,7 +1807,7 @@ mod tests {
     fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let mut cs = ConfState::default();
-        cs.set_nodes(vec![1, 2, 3]);
+        cs.set_voters(vec![1, 2, 3]);
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
@@ -2133,7 +2133,7 @@ mod tests {
             new_entry(6, 6),
         ];
         let mut cs = ConfState::default();
-        cs.set_nodes(vec![1, 2, 3]);
+        cs.set_voters(vec![1, 2, 3]);
 
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();

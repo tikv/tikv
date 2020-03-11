@@ -9,8 +9,6 @@ use test_storage::*;
 
 #[test]
 fn test_deadline() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -24,9 +22,6 @@ fn test_deadline() {
 #[test]
 fn test_deadline_2() {
     // It should not even take any snapshots when request is outdated from the beginning.
-
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -42,8 +37,6 @@ fn test_deadline_2() {
 /// Note: only
 #[test]
 fn test_deadline_3() {
-    let _guard = crate::setup();
-
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
@@ -77,8 +70,6 @@ fn test_deadline_3() {
 
 #[test]
 fn test_parse_request_failed() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -92,9 +83,6 @@ fn test_parse_request_failed() {
 #[test]
 fn test_parse_request_failed_2() {
     // It should not even take any snapshots when parse failed.
-
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -108,8 +96,6 @@ fn test_parse_request_failed_2() {
 
 #[test]
 fn test_readpool_full() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -122,8 +108,6 @@ fn test_readpool_full() {
 
 #[test]
 fn test_snapshot_failed() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -136,8 +120,6 @@ fn test_snapshot_failed() {
 
 #[test]
 fn test_snapshot_failed_2() {
-    let _guard = crate::setup();
-
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -150,8 +132,6 @@ fn test_snapshot_failed_2() {
 
 #[test]
 fn test_storage_error() {
-    let _guard = crate::setup();
-
     let data = vec![(1, Some("name:0"), 2), (2, Some("name:4"), 3)];
 
     let product = ProductTable::new();
@@ -166,8 +146,6 @@ fn test_storage_error() {
 
 #[test]
 fn test_region_error_in_scan() {
-    let _guard = crate::setup();
-
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
