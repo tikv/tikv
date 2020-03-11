@@ -57,6 +57,7 @@ impl Writer {
         }
         Ok(())
     }
+
     fn update_raw_with(&mut self, key: &[u8], value: &[u8], need_checksum: bool) -> Result<()> {
         self.total_kvs += 1;
         self.total_bytes += (key.len() + value.len()) as u64;
@@ -100,6 +101,7 @@ impl Writer {
         file.set_total_kvs(self.total_kvs);
         file.set_total_bytes(self.total_bytes);
         file.set_cf(cf.to_owned());
+        file.set_size(sst_info.file_size());
         Ok(file)
     }
 
@@ -305,7 +307,7 @@ mod tests {
                 },
             )
             .unwrap();
-            assert_eq!(map.len(), kv.len(), "{:?} {:?}", map, kv);
+            assert_eq!(map.len(), kv.len(), "{} {:?} {:?}", cf, map, kv);
             for (k, v) in *kv {
                 assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());
             }
@@ -362,10 +364,16 @@ mod tests {
         let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY)).unwrap();
         writer
             .write(
-                vec![TxnEntry::Commit {
-                    default: (vec![b'a'], vec![b'a']),
-                    write: (vec![b'a'], vec![b'a']),
-                }]
+                vec![
+                    TxnEntry::Commit {
+                        default: (vec![b'a'], vec![b'a']),
+                        write: (vec![b'a'], vec![b'a']),
+                    },
+                    TxnEntry::Commit {
+                        default: (vec![], vec![]),
+                        write: (vec![b'b'], vec![]),
+                    },
+                ]
                 .into_iter(),
                 false,
             )
@@ -390,7 +398,10 @@ mod tests {
                 ),
                 (
                     engine_traits::CF_WRITE,
-                    &[(&keys::data_key(&[b'a']), &[b'a'])],
+                    &[
+                        (&keys::data_key(&[b'a']), &[b'a']),
+                        (&keys::data_key(&[b'b']), &[]),
+                    ],
                 ),
             ],
         );

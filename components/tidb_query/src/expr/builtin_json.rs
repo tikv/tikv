@@ -9,6 +9,20 @@ use std::collections::BTreeMap;
 
 impl ScalarFunc {
     #[inline]
+    pub fn json_keys<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        let j = try_opt!(self.children[0].eval_json(ctx, row));
+        let parser = JsonFuncArgsParser::new(row);
+        if let Some(path_exprs) = parser.get_path_exprs(ctx, &self.children[1..])? {
+            return Ok(j.as_ref().as_ref().keys(&path_exprs)?.map(Cow::Owned));
+        }
+        Ok(None)
+    }
+
+    #[inline]
     pub fn json_depth<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -225,6 +239,127 @@ mod tests {
     use crate::expr::{EvalContext, Expression};
     use tipb::ScalarFuncSig;
 
+    #[test]
+    fn test_json_keys() {
+        let cases = vec![
+            // Tests nil arguments
+            (None, Some(Datum::Null), None, true),
+            (None, Some(Datum::Bytes(b"$.c".to_vec())), None, true),
+            (Some(r#"{"a": 1}"#), Some(Datum::Null), None, true),
+            (None, None, None, true),
+            // Tests with other type
+            (Some("1"), None, None, true),
+            (Some(r#""str""#), None, None, true),
+            (Some(r#"true"#), None, None, true),
+            (Some("null"), None, None, true),
+            (Some(r#"[1, 2]"#), None, None, true),
+            (Some(r#"["1", "2"]"#), None, None, true),
+            // Tests without path expression
+            (Some("{}"), None, Some("[]"), true),
+            (Some(r#"{"a": 1}"#), None, Some(r#"["a"]"#), true),
+            (
+                Some(r#"{"a": 1, "b": 2}"#),
+                None,
+                Some(r#"["a", "b"]"#),
+                true,
+            ),
+            (
+                Some(r#"{"a": {"c": 3}, "b": 2}"#),
+                None,
+                Some(r#"["a", "b"]"#),
+                true,
+            ),
+            // Tests with path expression
+            (
+                Some(r#"{"a": 1}"#),
+                Some(Datum::Bytes(b"$.a".to_vec())),
+                None,
+                true,
+            ),
+            (
+                Some(r#"{"a": {"c": 3}, "b": 2}"#),
+                Some(Datum::Bytes(b"$.a".to_vec())),
+                Some(r#"["c"]"#),
+                true,
+            ),
+            (
+                Some(r#"{"a": {"c": 3}, "b": 2}"#),
+                Some(Datum::Null),
+                None,
+                true,
+            ),
+            (
+                Some(r#"{"a": {"c": 3}, "b": 2}"#),
+                Some(Datum::Bytes(b"$.a.c".to_vec())),
+                None,
+                true,
+            ),
+            // Tests path expression contains any asterisk
+            (
+                Some(r#"{}"#),
+                Some(Datum::Bytes(b"$.*".to_vec())),
+                None,
+                false,
+            ),
+            (
+                Some(r#"{"a": 1}"#),
+                Some(Datum::Bytes(b"$.*".to_vec())),
+                None,
+                false,
+            ),
+            (
+                Some(r#"{"a": {"c": 3}, "b": 2}"#),
+                Some(Datum::Bytes(b"$.*".to_vec())),
+                None,
+                false,
+            ),
+            (
+                Some(r#"{"a": {"c": 3}, "b": 2}"#),
+                Some(Datum::Bytes(b"$.a.*".to_vec())),
+                None,
+                false,
+            ),
+            // Tests path expression does not identify a section of the target document
+            (
+                Some(r#"{"a": 1}"#),
+                Some(Datum::Bytes(b"$.b".to_vec())),
+                None,
+                true,
+            ),
+            (
+                Some(r#"{"a": {"c": 3}, "b": 2}"#),
+                Some(Datum::Bytes(b"$.c".to_vec())),
+                None,
+                true,
+            ),
+            (
+                Some(r#"{"a": {"c": 3}, "b": 2}"#),
+                Some(Datum::Bytes(b"$.a.d".to_vec())),
+                None,
+                true,
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (input, param, exp, is_success) in cases {
+            let json = datum_expr(match input {
+                None => Datum::Null,
+                Some(s) => Datum::Json(s.parse().unwrap()),
+            });
+            let op = if let Some(b) = param {
+                scalar_func_expr(ScalarFuncSig::JsonKeys2ArgsSig, &[json, datum_expr(b)])
+            } else {
+                scalar_func_expr(ScalarFuncSig::JsonKeysSig, &[json])
+            };
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]);
+            if is_success {
+                let exp = exp.map_or(Datum::Null, |s| Datum::Json(s.parse().unwrap()));
+                assert_eq!(got.unwrap(), exp);
+            } else {
+                assert!(got.is_err());
+            }
+        }
+    }
     #[test]
     fn test_json_length() {
         let cases = vec![

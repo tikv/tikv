@@ -8,8 +8,6 @@ use test_raftstore::*;
 /// requests.
 #[test]
 fn test_transfer_leader_slow_apply() {
-    let _guard = crate::setup();
-
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
 
