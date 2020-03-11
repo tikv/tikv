@@ -1190,12 +1190,6 @@ impl Peer {
 
         self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
 
-        if !ready.committed_entries.as_ref().map_or(true, Vec::is_empty)
-            && ctx.current_time.is_none()
-        {
-            ctx.current_time.replace(monotonic_raw_now());
-        }
-
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {

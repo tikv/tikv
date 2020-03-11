@@ -274,7 +274,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
         // Fetch batch after every round is finished. It's helpful to protect regions
         // from becoming hungry if some regions are hot points.
-        while self.fetch_batch(&mut batch) {
+        let mut run = true;
+        while run && self.fetch_batch(&mut batch) {
             // If there is some region wait to be deal, we must deal with it even if it has overhead
             // max size of batch. It's helpful to protect regions from becoming hungry
             // if some regions are hot points.
@@ -291,33 +292,41 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
 
             let mut hot_fsm_count = 0;
-            let mut fsm_cnt = 0;
+            for (i, p) in batch.normals.iter_mut().enumerate() {
+                let len = self.handler.handle_normal(p);
+                batch.counters[i] += 1;
+                if p.is_stopped() {
+                    reschedule_fsms.push((i, ReschedulePolicy::Remove));
+                } else {
+                    if batch.counters[i] > 3 {
+                        hot_fsm_count += 1;
+                        // We should only reschedule a half of the hot regions, otherwise,
+                        // it's possible all the hot regions are fetched in a batch the
+                        // next time.
+                        if hot_fsm_count % 2 == 0 {
+                            reschedule_fsms.push((i, ReschedulePolicy::Schedule));
+                            continue;
+                        }
+                    }
+                    if let Some(l) = len {
+                        reschedule_fsms.push((i, ReschedulePolicy::Release(l)));
+                    }
+                }
+            }
+            let mut fsm_cnt = batch.normals.len();
             while fsm_cnt < max_batch_size {
+                if !self.try_fetch_batch(&mut batch) {
+                    run = false;
+                    break;
+                }
                 if fsm_cnt >= batch.normals.len() {
-                    if !self.try_fetch_batch(&mut batch) {
-                        self.handler.end(&mut batch.normals[0..fsm_cnt]);
-                        return;
-                    }
-                    if fsm_cnt >= batch.normals.len() {
-                        break;
-                    }
+                    break;
                 }
                 let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);
                 batch.counters[fsm_cnt] += 1;
                 if batch.normals[fsm_cnt].is_stopped() {
                     reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Remove));
                 } else {
-                    if batch.counters[fsm_cnt] > 3 {
-                        hot_fsm_count += 1;
-                        // We should only reschedule a half of the hot regions, otherwise,
-                        // it's possible all the hot regions are fetched in a batch the
-                        // next time.
-                        if hot_fsm_count % 2 == 0 {
-                            reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Schedule));
-                            fsm_cnt += 1;
-                            continue;
-                        }
-                    }
                     if let Some(l) = len {
                         reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Release(l)));
                     }
