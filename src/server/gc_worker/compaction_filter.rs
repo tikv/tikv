@@ -89,6 +89,9 @@ struct WriteCompactionFilter {
 
 impl WriteCompactionFilter {
     fn new(db: Arc<DB>, safe_point: Arc<AtomicU64>) -> Self {
+        // Safe point must have been initialized.
+        assert!(safe_point.load(Ordering::Relaxed) > 0);
+
         let wb = RocksWriteBatch::with_capacity(Arc::clone(&db), DEFAULT_DELETE_BATCH_SIZE);
         WriteCompactionFilter {
             safe_point,
@@ -151,11 +154,7 @@ impl CompactionFilter for WriteCompactionFilter {
         _: &mut Vec<u8>,
         _: &mut bool,
     ) -> bool {
-        let safe_point = self.safe_point.load(Ordering::Acquire);
-        if safe_point == 0 {
-            return false;
-        }
-
+        let safe_point = self.safe_point.load(Ordering::Relaxed);
         let (key_prefix, commit_ts) = match Key::split_on_ts_for(key) {
             Ok((key, ts)) => (key, ts),
             // Invalid MVCC keys, don't touch them.
