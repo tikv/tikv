@@ -542,7 +542,8 @@ impl TiKVServer {
         let raft_router = node.get_router();
         let hub_config = SplitHubConfig {
             qps_threshold: self.config.server.split_qps_threshold,
-            split_score: self.config.server.split_score,
+            split_balance_score: self.config.server.split_balance_score,
+            split_contained_score: self.config.server.split_contained_score,
         };
 
         node.start(

@@ -338,7 +338,8 @@ impl StatsMonitor {
         let scheduler = self.scheduler.clone();
         let mut unify_hub = SplitHub::new();
         unify_hub.qps_threshold = hub_config.qps_threshold;
-        unify_hub.split_score = hub_config.split_score;
+        unify_hub.split_balance_score = hub_config.split_balance_score;
+        unify_hub.split_contained_score = hub_config.split_contained_score;
 
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
@@ -1201,7 +1202,8 @@ const DETECT_TIMES: u32 = 10;
 pub const TOP_N: usize = 10;
 const DETECT_INTERVAL: Duration = Duration::from_secs(1);
 const MIN_SAMPLE_NUM: i32 = 100;
-const DEFAULT_SPLIT_SCORE: f64 = 0.25;
+const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.25;
+const DEFAULT_SPLIT_CONTAINED_SCORE: f64 = 0.5;
 
 pub struct Sample {
     pub key: Vec<u8>,
@@ -1266,14 +1268,16 @@ impl Recorder {
     fn sample(&mut self, key_range: &KeyRange) {
         for mut sample in self.samples.iter_mut() {
             // we think key range is full open interval, such as (a,b) or (a,"").
-            if sample.key.cmp(&key_range.start_key) != Ordering::Greater {
-                sample.right += 1;
-            } else if key_range.end_key.is_empty()
-                || sample.key.cmp(&key_range.end_key) != Ordering::Less
-            {
-                sample.left += 1;
-            } else {
+            let order_start = sample.key.cmp(&key_range.start_key);
+            let order_end = sample.key.cmp(&key_range.end_key);
+            if order_start == Ordering::Greater && order_end == Ordering::Less {
                 sample.contained += 1;
+            } else {
+                if order_start != Ordering::Greater {
+                    sample.right += 1;
+                } else if order_start == Ordering::Greater {
+                    sample.left += 1;
+                }
             }
         }
     }
@@ -1282,9 +1286,9 @@ impl Recorder {
         self.times >= DETECT_TIMES
     }
 
-    fn split_key(&self, split_score: f64, min_sample_num: i32) -> Vec<u8> {
+    fn split_key(&self, split_balance_score: f64, split_contained_score: f64, min_sample_num: i32) -> Vec<u8> {
         let mut best_index: i32 = -1;
-        let mut best_score = split_score;
+        let mut best_score = 2.0;
         for index in 0..self.samples.len() {
             let sample = &self.samples[index];
             if sample.contained + sample.left + sample.right < min_sample_num {
@@ -1292,9 +1296,17 @@ impl Recorder {
             }
             let diff = (sample.left - sample.right) as f64;
             let balance_score = diff.abs() / (sample.left + sample.right) as f64;
-            if balance_score < best_score {
+            if balance_score >= split_balance_score {
+                continue;
+            }
+            let contained_score = sample.contained as f64 / (sample.left + sample.right + sample.contained) as f64;
+            if contained_score >= split_contained_score {
+                continue;
+            }
+            let final_score = balance_score + contained_score;
+            if final_score < best_score {
                 best_index = index as i32;
-                best_score = balance_score;
+                best_score = final_score;
             }
         }
         if best_index >= 0 {
@@ -1351,14 +1363,16 @@ impl RegionInfo {
 
 pub struct SplitHubConfig {
     pub qps_threshold: usize,
-    pub split_score: f64,
+    pub split_balance_score: f64,
+    pub split_contained_score: f64,
 }
 
 impl SplitHubConfig {
     pub fn default() -> SplitHubConfig {
         SplitHubConfig {
             qps_threshold: DEFAULT_QPS_THRESHOLD,
-            split_score: DEFAULT_SPLIT_SCORE,
+            split_balance_score: DEFAULT_SPLIT_BALANCE_SCORE,
+            split_contained_score: DEFAULT_SPLIT_CONTAINED_SCORE,
         }
     }
 }
@@ -1367,7 +1381,8 @@ pub struct SplitHub {
     pub region_qps: HashMap<u64, RegionInfo>,
     pub region_recorder: HashMap<u64, Recorder>,
     pub qps_threshold: usize,
-    pub split_score: f64,
+    pub split_balance_score: f64,
+    pub split_contained_score: f64,
     pub interval: Duration,
     pub min_sample_num: i32,
 }
@@ -1378,7 +1393,8 @@ impl SplitHub {
             region_qps: HashMap::default(),
             region_recorder: HashMap::default(),
             qps_threshold: DEFAULT_QPS_THRESHOLD,
-            split_score: DEFAULT_SPLIT_SCORE,
+            split_balance_score: DEFAULT_SPLIT_BALANCE_SCORE,
+            split_contained_score: DEFAULT_SPLIT_CONTAINED_SCORE,
             interval: DETECT_INTERVAL,
             min_sample_num: MIN_SAMPLE_NUM,
         }
@@ -1434,7 +1450,7 @@ impl SplitHub {
                     .or_insert_with(Recorder::new);
                 recorder.record(region_info.get_key_ranges());
                 if recorder.is_ready() {
-                    let key = recorder.split_key(self.split_score, self.min_sample_num);
+                    let key = recorder.split_key(self.split_balance_score, self.split_contained_score, self.min_sample_num);
                     if !key.is_empty() {
                         let split_info = SplitInfo {
                             region_id: *region_id,
@@ -1597,7 +1613,7 @@ mod tests {
         }
         assert_eq!(recorder.samples.len(), 20);
 
-        let split_key = recorder.split_key(DEFAULT_SPLIT_SCORE, MIN_SAMPLE_NUM);
+        let split_key = recorder.split_key(DEFAULT_SPLIT_BALANCE_SCORE, MIN_SAMPLE_NUM);
         if split_key != b"c" {
             for sample_key in recorder.samples {
                 assert_ne!(sample_key.key, b"c");
