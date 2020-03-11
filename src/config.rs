@@ -104,6 +104,8 @@ pub struct TitanCfConfig {
     #[config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
+    #[config(skip)]
+    pub gc_merge_rewrite: bool,
 }
 
 impl Default for TitanCfConfig {
@@ -118,6 +120,7 @@ impl Default for TitanCfConfig {
             sample_ratio: 0.1,
             merge_small_file_threshold: ReadableSize::mb(8),
             blob_run_mode: BlobRunMode::Normal,
+            gc_merge_rewrite: true,
         }
     }
 }
@@ -134,6 +137,7 @@ impl TitanCfConfig {
         opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
         opts.set_blob_run_mode(self.blob_run_mode.into());
+        opts.set_gc_merge_rewrite(self.gc_merge_rewrite);
         opts
     }
 }
@@ -903,9 +907,9 @@ impl DbConfig {
         self.raftcf.validate()?;
         self.titan.validate()?;
         if self.enable_unordered_write {
-            if self.titan.enabled {
-                return Err("RocksDB.unordered_write does not support Titan".into());
-            }
+            //            if self.titan.enabled {
+            //                return Err("RocksDB.unordered_write does not support Titan".into());
+            //            }
             if self.enable_pipelined_write || self.enable_multi_batch_write {
                 return Err("pipelined_write is not compatible with unordered_write".into());
             }
