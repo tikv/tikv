@@ -230,7 +230,7 @@ impl BackupRange {
                     cursor.key(cfstatistics).to_owned(),
                     cursor.value(cfstatistics).to_owned(),
                 )));
-                cursor.next(cfstatistics);
+                cursor.next(cfstatistics)?;
             }
             if batch.is_empty() {
                 break;
