@@ -387,7 +387,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 last_lock_ttl = lock.ttl;
             }
         } else if is_pessimistic_lock {
-            self.is_amendable_perssimistic_lock(pipelined_pessimistic_lock, &key)?;
+            self.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
         }
 
         // No need to check data constraint, it's resolved by pessimistic locks.
@@ -404,7 +404,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    fn is_amendable_perssimistic_lock(
+    fn amend_pessimistic_lock(
         &mut self,
         pipelined_pessimistic_lock: bool,
         key: &Key,

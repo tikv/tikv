@@ -62,7 +62,7 @@ impl ProcessResult {
             ProcessResult::PessimisticLockRes { res } => Some(ProcessResult::PessimisticLockRes {
                 res: Ok(res.as_ref().unwrap().clone()),
             }),
-            _ => panic!("clone ProcessResult should be only in pipelined acquire pessimistic lock"),
+            _ => None,
         }
     }
 }
