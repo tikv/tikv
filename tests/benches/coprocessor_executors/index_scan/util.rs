@@ -9,6 +9,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::ColumnInfo;
 use tipb::IndexScan;
 
+use rustracing::span::Span;
 use test_coprocessor::*;
 use tidb_query::batch::executors::BatchIndexScanExecutor;
 use tidb_query::batch::interface::*;
@@ -87,7 +88,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
-        executor.next_batch(1);
+        executor.next_batch(1, Span::inactive());
         Box::new(executor) as Box<dyn BatchExecutor<StorageStats = Statistics>>
     }
 }

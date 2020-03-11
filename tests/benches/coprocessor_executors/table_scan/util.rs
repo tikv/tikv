@@ -9,6 +9,9 @@ use kvproto::coprocessor::KeyRange;
 use tipb::ColumnInfo;
 use tipb::TableScan;
 
+use crate::util::executor_descriptor::table_scan;
+use crate::util::scan_bencher;
+use rustracing::span::Span;
 use test_coprocessor::*;
 use tidb_query::batch::executors::BatchTableScanExecutor;
 use tidb_query::batch::interface::*;
@@ -18,9 +21,6 @@ use tidb_query::expr::{EvalConfig, EvalContext};
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
-
-use crate::util::executor_descriptor::table_scan;
-use crate::util::scan_bencher;
 
 pub type TableScanParam = ();
 
@@ -84,7 +84,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
-        executor.next_batch(1);
+        executor.next_batch(1, Span::inactive());
         Box::new(executor) as Box<dyn BatchExecutor<StorageStats = Statistics>>
     }
 }

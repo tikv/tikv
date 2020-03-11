@@ -4206,6 +4206,7 @@ dependencies = [
  "raftstore",
  "rand 0.6.5",
  "rand_xorshift",
+ "rustracing",
  "serde_json",
  "slog",
  "slog-global",

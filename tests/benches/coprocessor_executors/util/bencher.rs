@@ -3,6 +3,7 @@
 use criterion::black_box;
 use criterion::measurement::Measurement;
 use futures03::executor::block_on;
+use rustracing::span::Span;
 use tidb_query::batch::interface::*;
 use tidb_query::executor::Executor;
 use tikv::coprocessor::RequestHandler;
@@ -106,7 +107,7 @@ impl<E: Executor, F: FnMut() -> E> Bencher for NormalNextAllBencher<E, F> {
     }
 }
 
-/// Invoke 1 next_batch(1024) for a batch executor.
+/// Invoke 1 next_batch(1024, Span::inactive()) for a batch executor.
 pub struct BatchNext1024Bencher<E: BatchExecutor, F: FnMut() -> E> {
     executor_builder: F,
 }
@@ -127,7 +128,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNext1024Bencher<E, F> {
             |executor| {
                 profiler::start("./BatchNext1024Bencher.profile");
                 let iter_times = black_box(1024);
-                let r = black_box(executor.next_batch(iter_times));
+                let r = black_box(executor.next_batch(iter_times, Span::inactive()));
                 r.is_drained.unwrap();
                 profiler::stop();
             },
@@ -136,7 +137,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNext1024Bencher<E, F> {
     }
 }
 
-/// Invoke next_batch(1024) for a batch executor until drained.
+/// Invoke next_batch(1024, Span::inactive()) for a batch executor until drained.
 pub struct BatchNextAllBencher<E: BatchExecutor, F: FnMut() -> E> {
     executor_builder: F,
 }
@@ -157,7 +158,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNextAllBencher<E, F> {
             |executor| {
                 profiler::start("./BatchNextAllBencher.profile");
                 loop {
-                    let r = executor.next_batch(1024);
+                    let r = executor.next_batch(1024, Span::inactive());
                     black_box(&r);
                     if r.is_drained.unwrap() {
                         break;
@@ -190,7 +191,7 @@ impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DAGHandleBencher<F> {
             &mut self.handler_builder,
             |handler| {
                 profiler::start("./DAGHandleBencher.profile");
-                black_box(block_on(handler.handle_request()).unwrap());
+                black_box(block_on(handler.handle_request(Span::inactive())).unwrap());
                 profiler::stop();
             },
             criterion::BatchSize::SmallInput,
