@@ -371,7 +371,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         let sort_key = match_template_collator! {
-                            TT, match field_type.as_accessor().collation() {
+                            TT, match field_type.collation()? {
                                 Collation::TT => TT::sort_key(val)?
                             }
                         };

@@ -287,7 +287,7 @@ impl FixtureBuilder {
                     .set_flag(ft.flag())
                     .set_flen(ft.flen())
                     .set_decimal(ft.decimal())
-                    .set_collation(ft.collation());
+                    .set_collation(ft.collation().unwrap());
                 ci
             })
             .collect();
