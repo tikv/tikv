@@ -342,6 +342,11 @@ impl<S: Snapshot> MvccTxn<S> {
             Mutation::Delete(key) => (key, None),
             Mutation::Lock(key) => (key, None),
             Mutation::Insert((key, value)) => (key, Some(value)),
+            Mutation::CheckNotExists(_) => {
+                return Err(box_err!(
+                    "cannot handle checkNotExists in pessimistic prewrite"
+                ));
+            }
         };
         let mut last_lock_ttl = 0;
 
@@ -388,7 +393,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // No need to check data constraint, it's resolved by pessimistic locks.
         self.prewrite_key_value(
             key,
-            lock_type,
+            lock_type.unwrap(),
             primary.to_vec(),
             value,
             ::std::cmp::max(last_lock_ttl, options.lock_ttl),
@@ -404,11 +409,12 @@ impl<S: Snapshot> MvccTxn<S> {
         options: &Options,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
-        let (key, value, should_not_exist) = match mutation {
-            Mutation::Put((key, value)) => (key, Some(value), false),
-            Mutation::Delete(key) => (key, None, false),
-            Mutation::Lock(key) => (key, None, false),
-            Mutation::Insert((key, value)) => (key, Some(value), true),
+        let (key, value, should_not_exist, should_not_write) = match mutation {
+            Mutation::Put((key, value)) => (key, Some(value), false, false),
+            Mutation::Delete(key) => (key, None, false, false),
+            Mutation::Lock(key) => (key, None, false, false),
+            Mutation::Insert((key, value)) => (key, Some(value), true, false),
+            Mutation::CheckNotExists(key) => (key, None, true, true),
         };
 
         {
@@ -431,6 +437,11 @@ impl<S: Snapshot> MvccTxn<S> {
                     self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
                 }
             }
+
+            if should_not_write {
+                return Ok(());
+            }
+
             // ... or locks at any timestamp.
             if let Some(lock) = self.reader.load_lock(&key)? {
                 if lock.ts != self.start_ts {
@@ -452,7 +463,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
         self.prewrite_key_value(
             key,
-            lock_type,
+            lock_type.unwrap(),
             primary.to_vec(),
             value,
             options.lock_ttl,
@@ -866,6 +877,50 @@ mod tests {
         // After delete "k1", insert returns ok.
         assert!(try_prewrite_insert(&engine, k1, v2, k1, 13).is_ok());
         must_commit(&engine, k1, 13, 14);
+    }
+
+    #[test]
+    fn test_mvcc_txn_prewrite_check_not_exist() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k1, v1, v2, v3) = (b"k1", b"v1", b"v2", b"v3");
+        must_prewrite_put(&engine, k1, v1, k1, 1);
+        must_commit(&engine, k1, 1, 2);
+
+        // "k1" already exist, returns AlreadyExist error.
+        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 3).is_err());
+
+        // Delete "k1"
+        must_prewrite_delete(&engine, k1, k1, 4);
+        must_commit(&engine, k1, 4, 5);
+
+        // After delete "k1", check_not_exists returns ok.
+        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 6).is_ok());
+
+        assert!(try_prewrite_insert(&engine, k1, v2, k1, 7).is_ok());
+        must_commit(&engine, k1, 7, 8);
+
+        // Rollback
+        must_prewrite_put(&engine, k1, v3, k1, 9);
+        must_rollback(&engine, k1, 9);
+        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 10).is_err());
+
+        // Delete "k1" again
+        must_prewrite_delete(&engine, k1, k1, 11);
+        must_commit(&engine, k1, 11, 12);
+
+        // Rollback again
+        must_prewrite_put(&engine, k1, v3, k1, 13);
+        must_rollback(&engine, k1, 13);
+
+        // After delete "k1", check_not_exists returns ok.
+        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 14).is_ok());
+    }
+
+    #[test]
+    fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"k1";
+        assert!(try_pessimistic_prewrite_check_not_exists(&engine, k, k, 3).is_err())
     }
 
     #[test]
