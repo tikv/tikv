@@ -1889,11 +1889,13 @@ impl TiKvConfig {
         self.storage.validate()?;
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
-        self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
-            config::canonicalize_sub_path(&self.storage.data_dir, "raft")?
-        } else {
-            config::canonicalize_path(&self.raft_store.raftdb_path)?
-        };
+
+        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
+        if self.raft_store.raftdb_path.is_empty() {
+            self.raft_store.raftdb_path = default_raftdb_path;
+        } else if self.raft_store.raftdb_path != default_raftdb_path {
+            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
+        }
 
         let kv_db_path =
             config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
