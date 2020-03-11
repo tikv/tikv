@@ -5095,10 +5095,11 @@ checksum = "e66366e18dc58b46801afbf2ca7661a9f59cc8c5962c29892b6039b4f86fa992"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#fe59cbc61657c5293d3537db5cfae3c9e83c9583"
+source = "git+https://github.com/tikv/yatp.git#f2af090606c6757b67f32ffd23b2b2a9855ed8d7"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
+ "fail",
  "lazy_static",
  "num_cpus",
  "parking_lot_core 0.7.0",
