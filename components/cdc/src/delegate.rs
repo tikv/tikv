@@ -281,17 +281,17 @@ impl Delegate {
     /// Try advance and broadcast resolved ts.
     pub fn on_min_ts(&mut self, min_ts: TimeStamp) {
         if self.resolver.is_none() {
-            info!("region resolver not ready";
+            debug!("region resolver not ready";
                 "region_id" => self.region_id, "min_ts" => min_ts);
             return;
         }
-        info!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
+        debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
             None => return,
         };
-        info!("resolved ts updated";
+        debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
