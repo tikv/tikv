@@ -14,7 +14,6 @@ use grpcio::{ChannelBuilder, Environment};
 use backup::Task;
 use engine::CF_DEFAULT;
 use engine::*;
-use engine_traits::IterOptions;
 use external_storage::*;
 use kvproto::backup::*;
 use kvproto::coprocessor::KeyRange;
@@ -273,7 +272,7 @@ impl TestSuite {
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
         let snapshot = engine.snapshot(&self.context.clone()).unwrap();
-        let mut iter_opt = IterOptions::default();
+        let mut iter_opt = IterOption::default();
         if !end.is_empty() {
             iter_opt.set_upper_bound(&end, DATA_KEY_PREFIX_LEN);
         }
@@ -511,7 +510,7 @@ fn test_backup_rawkv() {
         vec![], // start
         vec![], // end
         cf.clone(),
-        &tmp.path().join(format!("{}", backup_ts.next())),
+        &tmp.path().join(format!("{}", backup_ts + 1)),
     );
     let resps2 = rx.collect().wait().unwrap();
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
@@ -520,7 +519,7 @@ fn test_backup_rawkv() {
     let backend = make_local_backend(&storage_path);
     let storage = create_storage(&backend).unwrap();
     let region = suite.cluster.get_region(b"");
-    let mut sst_meta = SstMeta::default();
+    let mut sst_meta = SSTMeta::default();
     sst_meta.region_id = region.get_id();
     sst_meta.set_region_epoch(region.get_region_epoch().clone());
     sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
@@ -545,7 +544,7 @@ fn test_backup_rawkv() {
 
         // Make ingest command.
         let mut ingest = Request::default();
-        ingest.set_cmd_type(CmdType::IngestSst);
+        ingest.set_cmd_type(CmdType::IngestSST);
         ingest.mut_ingest_sst().set_sst(m.clone());
         let mut header = RaftRequestHeader::default();
         let leader = suite.context.get_peer().clone();
@@ -569,7 +568,7 @@ fn test_backup_rawkv() {
         vec![b'a'], // start
         vec![b'z'], // end
         cf,
-        &tmp.path().join(format!("{}", backup_ts.next().next())),
+        &tmp.path().join(format!("{}", backup_ts + 2)),
     );
     let resps3 = rx.collect().wait().unwrap();
     assert_eq!(files1, resps3[0].files);
