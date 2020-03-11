@@ -190,6 +190,7 @@ fn test_serde_custom_tikv_config() {
         sample_ratio: 0.982,
         merge_small_file_threshold: ReadableSize::kb(21),
         blob_run_mode: BlobRunMode::Fallback,
+        gc_merge_rewrite: true,
     };
     let titan_db_config = TitanDBConfig {
         enabled: true,
