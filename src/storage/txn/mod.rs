@@ -59,8 +59,8 @@ pub enum ProcessResult {
 impl ProcessResult {
     pub fn maybe_clone(&self) -> Option<ProcessResult> {
         match self {
-            ProcessResult::PessimisticLockRes { res } => Some(ProcessResult::PessimisticLockRes {
-                res: Ok(res.as_ref().unwrap().clone()),
+            ProcessResult::PessimisticLockRes { res: Ok(r) } => Some(ProcessResult::PessimisticLockRes {
+                res: Ok(r.clone()),
             }),
             _ => None,
         }
