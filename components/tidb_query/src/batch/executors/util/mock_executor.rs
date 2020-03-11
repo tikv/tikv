@@ -31,7 +31,11 @@ impl BatchExecutor for MockExecutor {
         &self.schema
     }
 
-    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    fn next_batch(
+        &mut self,
+        _scan_rows: usize,
+        _span: rustracing::span::Span<()>,
+    ) -> BatchExecuteResult {
         self.results.next().unwrap()
     }
 

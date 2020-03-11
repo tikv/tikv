@@ -4301,6 +4301,7 @@ dependencies = [
  "quick-error",
  "rand 0.6.5",
  "regex",
+ "rustracing",
  "safemem",
  "serde",
  "serde_json",

@@ -23,11 +23,11 @@ use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::storage::IntervalRange;
 use crate::Result;
 
-pub macro match_template_hashable($t:tt, $($tail:tt)*) {
-    match_template::match_template! {
-        $t = [Int, Real, Bytes, Duration, Decimal, DateTime],
-        $($tail)*
-    }
+pub macro match_template_hashable($ t: tt, $ ($ tail: tt) *) {
+match_template::match_template ! {
+$ t = [Int, Real, Bytes, Duration, Decimal, DateTime],
+$ ($ tail) *
+}
 }
 
 /// Fast Hash Aggregation Executor uses hash when comparing group key. It only supports one
@@ -45,8 +45,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    fn next_batch(
+        &mut self,
+        scan_rows: usize,
+        span: rustracing::span::Span<()>,
+    ) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows, span)
     }
 
     #[inline]
@@ -412,9 +416,9 @@ mod tests {
 
     #[test]
     fn test_it_works_integration() {
+        use rustracing::span::Span;
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
-
         // This test creates a hash aggregation executor with the following aggregate functions:
         // - COUNT(1)
         // - COUNT(col_1 + 5.0)
@@ -470,18 +474,17 @@ mod tests {
         for exec_builder in executor_builders {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
-
-            let r = exec.next_batch(1);
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1);
+            let mut r = exec.next_batch(1, Span::inactive());
             // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three groups.
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
@@ -545,9 +548,9 @@ mod tests {
 
     #[test]
     fn test_collation() {
+        use rustracing::span::Span;
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
-
         // This test creates a hash aggregation executor with the following aggregate functions:
         // - COUNT(col_0)
         // - AVG(col_1)
@@ -590,17 +593,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1);
+            let mut r = exec.next_batch(1, Span::inactive());
             // col_4 can result in [NULL, "aa", "aaa"], thus there will be three groups.
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
@@ -657,6 +660,7 @@ mod tests {
 
     #[test]
     fn test_no_row() {
+        use rustracing::span::Span;
         struct MyParser;
 
         impl AggrDefinitionParser for MyParser {
@@ -719,12 +723,12 @@ mod tests {
             );
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(r.is_drained.unwrap());
@@ -736,6 +740,7 @@ mod tests {
     /// E.g. SELECT 1 FROM t GROUP BY x
     #[test]
     fn test_no_aggr_fn() {
+        use rustracing::span::Span;
         let group_by_exp = || RpnExpressionBuilder::new().push_column_ref(0).build();
 
         let exec_fast = |src_exec| {
@@ -763,17 +768,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1);
+            let mut r = exec.next_batch(1, Span::inactive());
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column

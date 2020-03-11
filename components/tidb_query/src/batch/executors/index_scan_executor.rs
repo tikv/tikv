@@ -91,8 +91,12 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    fn next_batch(
+        &mut self,
+        scan_rows: usize,
+        span: rustracing::span::Span<()>,
+    ) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows, span)
     }
 
     #[inline]
@@ -292,16 +296,16 @@ mod tests {
 
     use std::sync::Arc;
 
-    use codec::prelude::NumberEncoder;
-    use kvproto::coprocessor::KeyRange;
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-    use tipb::ColumnInfo;
-
     use crate::codec::data_type::*;
     use crate::codec::{datum, table, Datum};
     use crate::expr::EvalConfig;
     use crate::storage::fixture::FixtureStorage;
     use crate::util::convert_to_prefix_next;
+    use codec::prelude::NumberEncoder;
+    use kvproto::coprocessor::KeyRange;
+    use rustracing::span::Span;
+    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tipb::ColumnInfo;
 
     #[test]
     fn test_basic() {
@@ -387,7 +391,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = executor.next_batch(10, Span::inactive());
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 3);
@@ -441,7 +445,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = executor.next_batch(10, Span::inactive());
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
@@ -516,7 +520,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = executor.next_batch(10, Span::inactive());
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
@@ -571,7 +575,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = executor.next_batch(10, Span::inactive());
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 1);

@@ -31,8 +31,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let mut result = self.src.next_batch(scan_rows);
+    fn next_batch(
+        &mut self,
+        scan_rows: usize,
+        span: rustracing::span::Span<()>,
+    ) -> BatchExecuteResult {
+        let mut result = self.src.next_batch(scan_rows, span);
         if result.logical_rows.len() < self.remaining_rows {
             self.remaining_rows -= result.logical_rows.len();
         } else {
@@ -65,12 +69,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 mod tests {
     use super::*;
 
-    use tidb_query_datatype::FieldTypeTp;
-
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::codec::batch::LazyBatchColumnVec;
     use crate::codec::data_type::VectorValue;
     use crate::expr::EvalWarnings;
+    use rustracing::span::Span;
+    use tidb_query_datatype::FieldTypeTp;
 
     #[test]
     fn test_limit_0() {
@@ -90,7 +94,7 @@ mod tests {
 
         let mut exec = BatchLimitExecutor::new(src_exec, 0).unwrap();
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.unwrap());
@@ -114,7 +118,7 @@ mod tests {
 
         let mut exec = BatchLimitExecutor::new(src_exec, 10).unwrap();
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.is_err());
@@ -150,12 +154,12 @@ mod tests {
 
         let mut exec = BatchLimitExecutor::new(src_exec, 10).unwrap();
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.unwrap());
@@ -191,12 +195,12 @@ mod tests {
 
         let mut exec = BatchLimitExecutor::new(src_exec, 4).unwrap();
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[0, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(r.is_drained.unwrap()); // No errors
@@ -240,17 +244,17 @@ mod tests {
 
         let mut exec = BatchLimitExecutor::new(src_exec, 4).unwrap();
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[0, 4]);
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert!(r.is_drained.unwrap());

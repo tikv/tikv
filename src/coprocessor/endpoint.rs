@@ -342,15 +342,14 @@ impl<E: Engine> Endpoint<E> {
         let child_span = span.child("coprocessor executor", |options| {
             options.start_with_state(())
         });
-        let handle_request_future = track(handler.handle_request(), &mut tracker);
+        let handle_request_future = track(handler.handle_request(child_span), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
             handle_request_future.await
         };
-        std::mem::drop(span);
-        std::mem::drop(child_span);
 
+        std::mem::drop(span);
         for _finished_span in receiver.iter() {
             //TODO 糊 generate span details
         }
@@ -647,7 +646,10 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
-        async fn handle_request(&mut self) -> Result<coppb::Response> {
+        async fn handle_request(
+            &mut self,
+            _span: rustracing::span::Span<()>,
+        ) -> Result<coppb::Response> {
             thread::sleep(Duration::from_millis(self.handle_duration_millis));
             self.result.take().unwrap()
         }

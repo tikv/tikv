@@ -119,7 +119,7 @@ impl DAGHandler {
 
 #[async_trait]
 impl RequestHandler for DAGHandler {
-    async fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self, _span: rustracing::span::Span<()>) -> Result<Response> {
         handle_qe_response(self.runner.handle_request(), self.data_version)
     }
 
@@ -159,8 +159,8 @@ impl BatchDAGHandler {
 
 #[async_trait]
 impl RequestHandler for BatchDAGHandler {
-    async fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.runner.handle_request().await, self.data_version)
+    async fn handle_request(&mut self, span: rustracing::span::Span<()>) -> Result<Response> {
+        handle_qe_response(self.runner.handle_request(span).await, self.data_version)
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {

@@ -150,10 +150,15 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     }
 
     #[inline]
-    fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
+    fn handle_next_batch(
+        &mut self,
+        span: rustracing::span::Span<()>,
+    ) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because top N
         // always needs to calculate over all data.
-        let src_result = self.src.next_batch(crate::batch::runner::BATCH_MAX_SIZE);
+        let src_result = self
+            .src
+            .next_batch(crate::batch::runner::BATCH_MAX_SIZE, span);
 
         self.context.warnings = src_result.warnings;
 
@@ -289,7 +294,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    fn next_batch(
+        &mut self,
+        _scan_rows: usize,
+        span: rustracing::span::Span<()>,
+    ) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
         if self.n == 0 {
@@ -302,7 +311,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
             };
         }
 
-        let result = self.handle_next_batch();
+        let result = self.handle_next_batch(span);
 
         match result {
             Err(e) => {
@@ -463,6 +472,7 @@ mod tests {
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::expr::EvalWarnings;
     use crate::rpn_expr::RpnExpressionBuilder;
+    use rustracing::span::Span;
 
     #[test]
     fn test_top_0() {
@@ -488,7 +498,7 @@ mod tests {
             0,
         );
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(r.is_drained.unwrap());
     }
@@ -522,11 +532,11 @@ mod tests {
             10,
         );
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(r.is_drained.unwrap());
     }
@@ -636,17 +646,17 @@ mod tests {
             100,
         );
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5, 6]);
         assert_eq!(r.physical_columns.rows_len(), 7);
         assert_eq!(r.physical_columns.columns_len(), 3);
@@ -702,17 +712,17 @@ mod tests {
             7,
         );
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5, 6]);
         assert_eq!(r.physical_columns.rows_len(), 7);
         assert_eq!(r.physical_columns.columns_len(), 3);
@@ -777,17 +787,17 @@ mod tests {
             5,
         );
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert_eq!(r.physical_columns.columns_len(), 3);
@@ -921,17 +931,17 @@ mod tests {
             5,
         );
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert_eq!(r.physical_columns.columns_len(), 3);
@@ -982,7 +992,7 @@ mod tests {
         // | aa     | aaa    | áaA    |
         // | áa     | áaA    | aa     |
         // +--------+--------+--------+
-
+        use rustracing::span::Span;
         let src_exec = make_bytes_src_executor();
 
         let mut exec = BatchTopNExecutor::new_for_test(
@@ -996,17 +1006,17 @@ mod tests {
             5,
         );
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert_eq!(r.physical_columns.columns_len(), 3);

@@ -45,6 +45,7 @@ protobuf = "2"
 quick-error = "1.2.2"
 rand = "0.6.5"
 regex = "1.1"
+rustracing = "0.4"
 safemem = { version = "0.3", default-features = false }
 serde = "1.0"
 serde_json = "1.0"

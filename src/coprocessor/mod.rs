@@ -52,7 +52,10 @@ type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 #[async_trait]
 pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
-    async fn handle_request(&mut self) -> Result<coppb::Response> {
+    async fn handle_request(
+        &mut self,
+        _span: rustracing::span::Span<()>,
+    ) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
 

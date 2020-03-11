@@ -36,6 +36,7 @@ extern crate static_assertions;
 extern crate slog_global;
 #[macro_use(box_err, box_try, try_opt)]
 extern crate tikv_util;
+extern crate rustracing;
 
 #[cfg(test)]
 extern crate test;

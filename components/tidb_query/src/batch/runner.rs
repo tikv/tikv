@@ -342,7 +342,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         })
     }
 
-    pub async fn handle_request(&mut self) -> Result<SelectResponse> {
+    pub async fn handle_request(
+        &mut self,
+        span: rustracing::span::Span<()>,
+    ) -> Result<SelectResponse> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
@@ -359,7 +362,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             self.deadline.check()?;
 
-            let mut result = self.out_most_executor.next_batch(batch_size);
+            let child_span = span.child("coprocessor next batch", |options| {
+                options.start_with_state(())
+            });
+            let mut result = self.out_most_executor.next_batch(batch_size, child_span);
 
             let is_drained;
 

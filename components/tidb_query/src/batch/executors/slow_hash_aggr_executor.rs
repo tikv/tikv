@@ -41,8 +41,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    fn next_batch(
+        &mut self,
+        scan_rows: usize,
+        span: rustracing::span::Span<()>,
+    ) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows, span)
     }
 
     #[inline]
@@ -452,6 +456,7 @@ impl Eq for GroupKeyRefUnsafe {}
 mod tests {
     use super::*;
 
+    use rustracing::span::Span;
     use tidb_query_datatype::FieldTypeTp;
     use tipb::ScalarFuncSig;
 
@@ -503,17 +508,17 @@ mod tests {
             AllAggrDefinitionParser,
         );
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = exec.next_batch(1, Span::inactive());
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let mut r = exec.next_batch(1);
+        let mut r = exec.next_batch(1, Span::inactive());
         // col_4 (sort_key),    col_0 + 1 can result in:
         // aaa,                 8
         // aa,                  NULL

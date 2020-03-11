@@ -26,7 +26,11 @@ pub trait BatchExecutor: Send {
     ///
     /// This function might return zero rows, which doesn't mean that there is no more result.
     /// See `is_drained` in `BatchExecuteResult`.
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult;
+    fn next_batch(
+        &mut self,
+        scan_rows: usize,
+        span: rustracing::span::Span<()>,
+    ) -> BatchExecuteResult;
 
     /// Collects execution statistics (including but not limited to metrics and execution summaries)
     /// accumulated during execution and prepares for next collection.
@@ -69,8 +73,12 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).schema()
     }
 
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        (**self).next_batch(scan_rows)
+    fn next_batch(
+        &mut self,
+        scan_rows: usize,
+        span: rustracing::span::Span<()>,
+    ) -> BatchExecuteResult {
+        (**self).next_batch(scan_rows, span)
     }
 
     fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
@@ -95,9 +103,13 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
         self.inner.schema()
     }
 
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+    fn next_batch(
+        &mut self,
+        scan_rows: usize,
+        span: rustracing::span::Span<()>,
+    ) -> BatchExecuteResult {
         let timer = self.summary_collector.on_start_iterate();
-        let result = self.inner.next_batch(scan_rows);
+        let result = self.inner.next_batch(scan_rows, span);
         self.summary_collector
             .on_finish_iterate(timer, result.logical_rows.len());
         result
