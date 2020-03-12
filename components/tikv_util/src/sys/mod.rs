@@ -2,8 +2,7 @@
 
 mod cgroup;
 use self::cgroup::CGroupSys;
-
-const KB: u64 = 1024;
+use super::config::KB;
 
 pub struct SysQuota {
     cgroup: CGroupSys,

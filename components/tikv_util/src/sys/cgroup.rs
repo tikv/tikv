@@ -18,7 +18,7 @@ const CPU_PERIOD: &str = "cpu.cfs_period_us";
 
 const MOUNTINFO_SEP: &str = " ";
 const OPTIONS_SEP: &str = ",";
-const OPTIONAL_FIELDS_SEP: &str = "_";
+const OPTIONAL_FIELDS_SEP: &str = "-";
 
 const CGROUP_SEP: &str = ":";
 const SUBSYS_SEP: &str = ",";
@@ -292,7 +292,7 @@ mod tests {
             CGroupSubsys {
                 id: 1,
                 sub_systems: vec!["cpu".to_string()],
-                name: "/docker/1234567890abcdef".to_string(),
+                name: "/".to_string(),
             },
             CGroupSubsys {
                 id: 8,
@@ -341,7 +341,7 @@ mod tests {
                     "rw".to_string(),
                     "nosuid".to_string(),
                     "nodev".to_string(),
-                    "nodev".to_string(),
+                    "noexec".to_string(),
                     "relatime".to_string(),
                 ],
                 optional_fields: vec!["shared:1".to_string()],
