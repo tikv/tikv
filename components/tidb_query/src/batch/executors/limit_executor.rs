@@ -36,7 +36,10 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
         scan_rows: usize,
         span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
-        let mut result = self.src.next_batch(scan_rows, span);
+        let child_span = span.child("coprocessor BatchLimitExecutor", |options| {
+            options.start_with_state(())
+        });
+        let mut result = self.src.next_batch(scan_rows, child_span);
         if result.logical_rows.len() < self.remaining_rows {
             self.remaining_rows -= result.logical_rows.len();
         } else {

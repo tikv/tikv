@@ -299,6 +299,10 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
         _scan_rows: usize,
         span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
+        let child_span = span.child("coprocessor BatchTopNExecutor", |options| {
+            options.start_with_state(())
+        });
+
         assert!(!self.is_ended);
 
         if self.n == 0 {
@@ -311,7 +315,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
             };
         }
 
-        let result = self.handle_next_batch(span);
+        let result = self.handle_next_batch(child_span);
 
         match result {
             Err(e) => {

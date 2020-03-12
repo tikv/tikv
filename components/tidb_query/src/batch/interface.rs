@@ -108,8 +108,12 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
         scan_rows: usize,
         span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
+        let child_span = span.child("coprocessor WithSummaryCollector", |options| {
+            options.start_with_state(())
+        });
+
         let timer = self.summary_collector.on_start_iterate();
-        let result = self.inner.next_batch(scan_rows, span);
+        let result = self.inner.next_batch(scan_rows, child_span);
         self.summary_collector
             .on_finish_iterate(timer, result.logical_rows.len());
         result

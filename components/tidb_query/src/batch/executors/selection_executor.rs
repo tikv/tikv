@@ -174,7 +174,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
         scan_rows: usize,
         span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
-        let mut src_result = self.src.next_batch(scan_rows, span);
+        let child_span = span.child("coprocessor BatchSelectionExecutor", |options| {
+            options.start_with_state(())
+        });
+
+        let mut src_result = self.src.next_batch(scan_rows, child_span);
 
         if let Err(e) = self.handle_src_result(&mut src_result) {
             // TODO: Rows before we meeting an evaluation error are innocent.

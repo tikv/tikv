@@ -287,9 +287,13 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
         _scan_rows: usize,
         span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
+        let child_span = span.child("coprocessor AggregationExecutor", |options| {
+            options.start_with_state(())
+        });
+
         assert!(!self.is_ended);
 
-        let result = self.handle_next_batch(span);
+        let result = self.handle_next_batch(child_span);
 
         match result {
             Err(e) => {
