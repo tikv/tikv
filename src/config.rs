@@ -1750,6 +1750,44 @@ mod readpool_tests {
         };
         assert!(cfg.validate().is_err());
     }
+
+    #[test]
+    fn test_is_unified() {
+        // Read pools are unified by default.
+        let cfg = ReadPoolConfig::default();
+        assert!(cfg.is_unified());
+
+        // If there is any customized configs in storage or coprocessor read pool,
+        // we don't enable the unified read pool.
+        let cfg = ReadPoolConfig {
+            storage: StorageReadPoolConfig {
+                high_concurrency: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cfg.is_unified());
+
+        let cfg = ReadPoolConfig {
+            coprocessor: CoprReadPoolConfig {
+                high_concurrency: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cfg.is_unified());
+
+        // `unify-read-pool` config is the most preferred.
+        let cfg = ReadPoolConfig {
+            unify_read_pool: Some(true),
+            storage: StorageReadPoolConfig {
+                high_concurrency: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(cfg.is_unified());
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
