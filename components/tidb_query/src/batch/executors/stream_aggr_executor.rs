@@ -254,7 +254,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             for group_by_result in &self.group_by_results_unsafe {
                 group_key_ref.push(group_by_result.get_logical_scalar_ref(logical_row_idx));
             }
-            let group_match = 'group_match: {
+            let group_match = || -> Result<bool> {
                 match self.keys.rchunks_exact(group_by_len).next() {
                     Some(current_key) => {
                         for group_by_col_index in 0..group_by_len {
@@ -266,15 +266,15 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
                                 )?
                                 != Ordering::Equal
                             {
-                                break 'group_match false;
+                                return Ok(false);
                             }
                         }
-                        true
+                        Ok(true)
                     }
-                    _ => false,
+                    _ => Ok(false),
                 }
             };
-            if group_match {
+            if group_match()? {
                 group_key_ref.clear();
             } else {
                 // Update the complete group

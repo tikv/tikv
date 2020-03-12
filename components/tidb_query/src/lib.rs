@@ -17,7 +17,6 @@
 #![feature(str_internals)]
 #![feature(const_loop)]
 #![feature(const_if_match)]
-#![feature(label_break_value)]
 #![feature(ptr_offset_from)]
 // FIXME: rustc says there are redundant semicolons here but isn't
 // saying where as of nightly-2019-09-05
