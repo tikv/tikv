@@ -239,7 +239,7 @@ impl TiKVServer {
                 cfg.server.cluster_id = cluster_id;
                 cfg.log_file = log_file;
                 cfg.enable_dynamic_config = true;
-                return (cfg, v);
+                (cfg, v)
             }
             Err(e) => {
                 if let Some(PdError::Grpc(grpcio::Error::RpcFailure(status))) =
