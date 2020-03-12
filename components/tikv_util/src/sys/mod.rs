@@ -1,5 +1,45 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod cgroup;
+use self::cgroup::CGroupSys;
+
+const KB: u64 = 1024;
+
+pub struct SysQuota {
+    cgroup: CGroupSys,
+}
+
+impl SysQuota {
+    pub fn new() -> Self {
+        Self {
+            cgroup: CGroupSys::default(),
+        }
+    }
+
+    pub fn cpu_cores_quota(&self) -> usize {
+        let cpu_num = sysinfo::get_logical_cores();
+        let cgroup_quota = self.cgroup.cpu_cores_quota();
+        if cgroup_quota < 0 {
+            cpu_num
+        } else {
+            std::cmp::min(cpu_num, cgroup_quota as usize)
+        }
+    }
+
+    pub fn memory_limits_in_bytes(&self) -> u64 {
+        use sysinfo::SystemExt;
+        let mut system = sysinfo::System::new();
+        system.refresh_all();
+        let total_mem = system.get_total_memory() * KB;
+        let cgroup_memory_limits = self.cgroup.memory_limits_in_bytes();
+        if cgroup_memory_limits < 0 {
+            total_mem
+        } else {
+            std::cmp::min(total_mem, cgroup_memory_limits as u64)
+        }
+    }
+}
+
 pub const HIGH_PRI: i32 = -1;
 
 #[cfg(target_os = "linux")]

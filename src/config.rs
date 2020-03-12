@@ -53,9 +53,10 @@ use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::PdTask;
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
+use tikv_util::sys::SysQuota;
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::FutureScheduler;
 use tikv_util::Either;
@@ -69,8 +70,7 @@ const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
-    use sysinfo::SystemExt;
-    let total_mem = sysinfo::System::new().get_total_memory() * KB;
+    let total_mem = SysQuota::new().memory_limits_in_bytes();
     let (ratio, min, max) = match (is_raft_db, cf) {
         (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
         (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
@@ -147,7 +147,7 @@ fn get_background_job_limit(
     default_sub_compactions: u32,
     default_background_gc: i32,
 ) -> (i32, u32, i32) {
-    let cpu_num = sysinfo::get_logical_cores();
+    let cpu_num = SysQuota::new().cpu_cores_quota();
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
@@ -1369,7 +1369,7 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 // FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
-        let cpu_num = sysinfo::get_logical_cores();
+        let cpu_num = SysQuota::new().cpu_cores_quota();
         let mut concurrency = (cpu_num as f64 * 0.8) as usize;
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
@@ -1595,7 +1595,7 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
-        let cpu_num = sysinfo::get_logical_cores();
+        let cpu_num = SysQuota::new().cpu_cores_quota();
         let mut concurrency = (cpu_num as f64 * 0.5) as usize;
         concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
         concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
@@ -1621,7 +1621,7 @@ readpool_config!(
 
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
-        let cpu_num = sysinfo::get_logical_cores();
+        let cpu_num = SysQuota::new().cpu_cores_quota();
         let mut concurrency = (cpu_num as f64 * 0.8) as usize;
         concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
