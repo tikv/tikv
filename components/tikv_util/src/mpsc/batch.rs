@@ -317,7 +317,8 @@ impl<T, E, I: Fn() -> E, C: BatchCollector<E, T>> Stream for BatchReceiver<T, E,
         let elem = self.elem.take();
         if let Some(m) = received {
             let collection = self.elem.get_or_insert_with(&self.initializer);
-            assert!(self.collector.collect(collection, m).is_none());
+            let _received = self.collector.collect(collection, m);
+            debug_assert!(_received.is_none());
         }
         Ok(Async::Ready(elem))
     }
