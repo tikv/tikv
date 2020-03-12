@@ -259,7 +259,7 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::DB;
     use engine_rocks::Compat;
-    use engine_traits::{CFHandleExt, KvEngine, Mutable};
+    use engine_traits::{CFHandleExt, Mutable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
