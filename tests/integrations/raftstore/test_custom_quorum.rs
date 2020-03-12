@@ -58,7 +58,11 @@ fn test_integration_on_half_fail_quorum_fn() {
     cluster.sim.wl().add_send_filter(1, filter);
 
     // No new leader can be elected.
-    if rx.recv_timeout(Duration::from_secs(3)) != Err(mpsc::RecvTimeoutError::Timeout) {
+    let election_timeout = {
+        let cfg = &cluster.cfg.raft_store;
+        cfg.raft_election_timeout_ticks as u32 * cfg.raft_base_tick_interval.0
+    };
+    if rx.recv_timeout(election_timeout) != Err(mpsc::RecvTimeoutError::Timeout) {
         panic!("No new leader should be elected");
     }
 }
