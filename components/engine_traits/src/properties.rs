@@ -81,3 +81,13 @@ pub trait DecodeProperties {
         IndexHandles::decode(buf)
     }
 }
+
+pub trait RangeProperties {
+    fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64;
+
+    fn get_approximate_keys_in_range(&self, start: &[u8], end: &[u8]) -> u64;
+
+    fn smallest_key(&self) -> Option<Vec<u8>>;
+
+    fn largest_key(&self) -> Option<Vec<u8>>;
+}

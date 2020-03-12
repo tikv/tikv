@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DecodeProperties, IndexHandles};
+use engine_traits::{DecodeProperties, IndexHandles, RangeProperties};
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
@@ -132,11 +132,29 @@ impl RangeOffsets {
 }
 
 #[derive(Debug, Default)]
-pub struct RangeProperties {
+pub struct RocksRangeProperties {
     pub offsets: Vec<(Vec<u8>, RangeOffsets)>,
 }
 
-impl RangeProperties {
+impl RangeProperties for RocksRangeProperties {
+    fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
+        self.get_approximate_distance_in_range(RangeOffsetKind::Size, start, end)
+    }
+
+    fn get_approximate_keys_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
+        self.get_approximate_distance_in_range(RangeOffsetKind::Keys, start, end)
+    }
+
+    fn smallest_key(&self) -> Option<Vec<u8>> {
+        self.offsets.first().map(|(k, _)| k.to_owned())
+    }
+
+    fn largest_key(&self) -> Option<Vec<u8>> {
+        self.offsets.last().map(|(k, _)| k.to_owned())
+    }
+}
+
+impl RocksRangeProperties {
     pub fn get(&self, key: &[u8]) -> &RangeOffsets {
         let idx = self
             .offsets
@@ -158,16 +176,18 @@ impl RangeProperties {
         props
     }
 
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
-        match RangeProperties::decode_from_range_properties(props) {
+    pub fn decode<T: DecodeProperties>(props: &T) -> Result<RocksRangeProperties> {
+        match RocksRangeProperties::decode_from_range_properties(props) {
             Ok(res) => return Ok(res),
             Err(e) => info!("decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?", e),
         }
         SizeProperties::decode(props).map(|res| res.into())
     }
 
-    fn decode_from_range_properties<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
-        let mut res = RangeProperties::default();
+    fn decode_from_range_properties<T: DecodeProperties>(
+        props: &T,
+    ) -> Result<RocksRangeProperties> {
+        let mut res = RocksRangeProperties::default();
         let mut buf = props.decode(PROP_RANGE_INDEX)?;
         while !buf.is_empty() {
             let klen = number::decode_u64(&mut buf)?;
@@ -179,14 +199,6 @@ impl RangeProperties {
             res.offsets.push((k, offsets));
         }
         Ok(res)
-    }
-
-    pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(RangeOffsetKind::Size, start, end)
-    }
-
-    pub fn get_approximate_keys_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(RangeOffsetKind::Keys, start, end)
     }
 
     fn get_approximate_distance_in_range(
@@ -273,19 +285,11 @@ impl RangeProperties {
 
         self.offsets.drain(start_offset..=end_offset).collect()
     }
-
-    pub fn smallest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.first().map(|(k, _)| k.to_owned())
-    }
-
-    pub fn largest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.last().map(|(k, _)| k.to_owned())
-    }
 }
 
-impl From<SizeProperties> for RangeProperties {
-    fn from(p: SizeProperties) -> RangeProperties {
-        let mut res = RangeProperties::default();
+impl From<SizeProperties> for RocksRangeProperties {
+    fn from(p: SizeProperties) -> RocksRangeProperties {
+        let mut res = RocksRangeProperties::default();
         for (key, size_handle) in p.index_handles.into_map() {
             let mut range = RangeOffsets::default();
             range.size = size_handle.offset;
@@ -296,7 +300,7 @@ impl From<SizeProperties> for RangeProperties {
 }
 
 pub struct RangePropertiesCollector {
-    props: RangeProperties,
+    props: RocksRangeProperties,
     last_offsets: RangeOffsets,
     last_key: Vec<u8>,
     cur_offsets: RangeOffsets,
@@ -307,7 +311,7 @@ pub struct RangePropertiesCollector {
 impl Default for RangePropertiesCollector {
     fn default() -> Self {
         RangePropertiesCollector {
-            props: RangeProperties::default(),
+            props: RocksRangeProperties::default(),
             last_offsets: RangeOffsets::default(),
             last_key: vec![],
             cur_offsets: RangeOffsets::default(),
@@ -440,7 +444,7 @@ mod tests {
         }
         let result = UserProperties(collector.finish());
 
-        let props = RangeProperties::decode(&result).unwrap();
+        let props = RocksRangeProperties::decode(&result).unwrap();
         assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
         assert_eq!(
             props.largest_key().unwrap(),
@@ -479,7 +483,7 @@ mod tests {
             ("g", "g", i, i, 0),
         ];
         for &(start, end, end_idx, start_idx, count) in &cases {
-            let props = RangeProperties::decode(&result).unwrap();
+            let props = RocksRangeProperties::decode(&result).unwrap();
             let size = end_idx.size - start_idx.size;
             assert_eq!(
                 props.get_approximate_size_in_range(start.as_bytes(), end.as_bytes()),
@@ -539,7 +543,7 @@ mod tests {
         }
         let result = UserProperties(collector.finish());
 
-        let props = RangeProperties::decode(&result).unwrap();
+        let props = RocksRangeProperties::decode(&result).unwrap();
         assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
         assert_eq!(
             props.largest_key().unwrap(),

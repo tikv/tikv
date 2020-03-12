@@ -32,7 +32,7 @@ use raft::{self, RawNode};
 use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::Iterator as EngineIterator;
-use engine_rocks::RangeProperties;
+use engine_rocks::RocksRangeProperties;
 use raftstore::coprocessor::properties::MvccProperties;
 use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
 use raftstore::store::util as raftstore_util;
@@ -1479,7 +1479,7 @@ fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> raftstore::Result<Vec<V
     let mut keys = Vec::new();
     let mut found_keys_count = 0;
     for (_, v) in collection.iter() {
-        let props = RangeProperties::decode(&v.user_collected_properties())?;
+        let props = RocksRangeProperties::decode(&v.user_collected_properties())?;
         keys.extend(
             props
                 .take_excluded_range(start.as_slice(), end.as_slice())

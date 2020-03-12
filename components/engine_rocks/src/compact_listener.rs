@@ -3,9 +3,9 @@
 use std::cmp;
 use std::path::Path;
 
-use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
+use crate::properties::{RocksRangeProperties, UserCollectedPropertiesDecoder};
 use engine::rocks::EventListener;
-use engine_traits::CompactionJobInfo;
+use engine_traits::{CompactionJobInfo, RangeProperties};
 use rocksdb::{
     CompactionJobInfo as RawCompactionJobInfo, CompactionReason, TablePropertiesCollectionView,
 };
@@ -95,8 +95,8 @@ pub struct CompactedEvent {
     pub total_output_bytes: u64,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
-    pub input_props: Vec<RangeProperties>,
-    pub output_props: Vec<RangeProperties>,
+    pub input_props: Vec<RocksRangeProperties>,
+    pub output_props: Vec<RocksRangeProperties>,
 }
 
 impl CompactedEvent {
@@ -104,8 +104,8 @@ impl CompactedEvent {
         info: &RocksCompactionJobInfo,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-        input_props: Vec<RangeProperties>,
-        output_props: Vec<RangeProperties>,
+        input_props: Vec<RocksRangeProperties>,
+        output_props: Vec<RocksRangeProperties>,
     ) -> CompactedEvent {
         CompactedEvent {
             cf: info.cf_name().to_owned(),
@@ -166,7 +166,7 @@ impl EventListener for CompactionListener {
         let iter = info.table_properties().into_iter();
         for (file, properties) in iter {
             let ucp = UserCollectedPropertiesDecoder(properties.user_collected_properties());
-            if let Ok(prop) = RangeProperties::decode(&ucp) {
+            if let Ok(prop) = RocksRangeProperties::decode(&ucp) {
                 if input_files.contains(file) {
                     input_props.push(prop);
                 } else if output_files.contains(file) {

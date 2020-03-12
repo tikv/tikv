@@ -4,8 +4,8 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-use engine_traits::LARGE_CFS;
 use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
+use engine_traits::{RangeProperties, LARGE_CFS};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
@@ -16,7 +16,7 @@ use super::super::error::Result;
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
-use engine_rocks::RangeProperties;
+use engine_rocks::RocksRangeProperties;
 
 pub struct Checker {
     max_size: u64,
@@ -213,7 +213,7 @@ pub fn get_region_approximate_size_cf(
 
     let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
     for (_, v) in collection.iter() {
-        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+        let props = box_try!(RocksRangeProperties::decode(&v.user_collected_properties()));
         size += props.get_approximate_size_in_range(&start_key, &end_key);
     }
     Ok(size)
@@ -266,7 +266,7 @@ fn get_approximate_split_keys_cf(
     let mut keys = vec![];
     let mut total_size = 0;
     for (_, v) in collection.iter() {
-        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+        let props = box_try!(RocksRangeProperties::decode(&v.user_collected_properties()));
         total_size += props.get_approximate_size_in_range(&start_key, &end_key);
 
         keys.extend(

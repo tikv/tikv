@@ -6,8 +6,8 @@ use engine::rocks;
 use engine::DB;
 use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch};
 use engine_traits::{
-    CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
-    WriteOptions,
+    CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, RangeProperties, WriteBatch,
+    WriteBatchExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -2108,13 +2108,13 @@ fn calc_region_declined_bytes(
 #[cfg(test)]
 mod tests {
     use engine_rocks::RangeOffsets;
-    use engine_rocks::RangeProperties;
+    use engine_rocks::RocksRangeProperties;
 
     use super::*;
 
     #[test]
     fn test_calc_region_declined_bytes() {
-        let prop = RangeProperties {
+        let prop = RocksRangeProperties {
             offsets: vec![
                 (
                     b"a".to_vec(),

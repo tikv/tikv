@@ -11,7 +11,7 @@ use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::size::get_region_approximate_size_cf;
 use super::Host;
-use engine_rocks::RangeProperties;
+use engine_rocks::RocksRangeProperties;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -143,7 +143,7 @@ fn get_region_approximate_middle_cf(
 
     let mut keys = Vec::new();
     for (_, v) in collection.iter() {
-        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+        let props = box_try!(RocksRangeProperties::decode(&v.user_collected_properties()));
         keys.extend(
             props
                 .take_excluded_range(start_key.as_slice(), end_key.as_slice())

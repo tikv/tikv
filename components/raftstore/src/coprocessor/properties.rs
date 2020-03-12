@@ -6,7 +6,7 @@ use std::u64;
 
 use engine::rocks::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 pub use engine_rocks::{
-    RangeOffsets, RangeProperties, RangePropertiesCollector, RangePropertiesCollectorFactory,
+    RangeOffsets, RangePropertiesCollector, RangePropertiesCollectorFactory, RocksRangeProperties,
     UserProperties,
 };
 use engine_traits::KvEngine;
