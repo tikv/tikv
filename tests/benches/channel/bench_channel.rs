@@ -125,9 +125,12 @@ fn bench_receiver_stream_batch(b: &mut Bencher) {
         });
     }
 
-    let mut rx = Some(mpsc::batch::BatchReceiver::new(rx, 32, Vec::new, |v, t| {
-        v.push(t)
-    }));
+    let mut rx = Some(mpsc::batch::BatchReceiver::new(
+        rx,
+        32,
+        Vec::new,
+        mpsc::batch::VecCollector,
+    ));
 
     b.iter(|| {
         let mut count = 0;
