@@ -59,7 +59,7 @@ fn test_wait_for_apply_index() {
         .unwrap();
     // Must timeout here
     assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
-    fail::cfg("on_apply_write_cmd", "off").unwrap();
+    fail::remove("on_apply_write_cmd");
 
     // After write cmd applied, the follower read will be executed.
     match rx.recv_timeout(Duration::from_secs(3)) {
@@ -143,7 +143,7 @@ fn test_duplicate_read_index_ctx() {
     for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
         router.send_raft_message(raft_msg).unwrap();
     }
-    fail::cfg("pause_on_peer_collect_message", "off").unwrap();
+    fail::remove("pause_on_peer_collect_message");
 
     // read index response must not be dropped
     rx2.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -190,6 +190,7 @@ fn test_read_before_init() {
         .async_command_on_node(3, request, cb)
         .unwrap();
     let resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    fail::remove("before_apply_snap_update_region");
     assert!(
         resp.get_header()
             .get_error()
@@ -250,11 +251,11 @@ fn test_read_applying_snapshot() {
     let resp = match rx.recv_timeout(Duration::from_secs(5)) {
         Ok(r) => r,
         Err(_) => {
-            fail::cfg("region_apply_snap", "off").unwrap();
+            fail::remove("region_apply_snap");
             panic!("cannot receive response");
         }
     };
-    fail::cfg("region_apply_snap", "off").unwrap();
+    fail::remove("region_apply_snap");
     assert!(
         resp.get_header()
             .get_error()
@@ -316,7 +317,7 @@ fn test_read_after_cleanup_range_for_snap() {
             })),
     );
     cluster.sim.wl().add_recv_filter(3, recv_filter);
-    fail::cfg("send_snapshot", "off").unwrap();
+    fail::remove("send_snapshot");
 
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
     let mut request = new_request(
@@ -346,11 +347,11 @@ fn test_read_after_cleanup_range_for_snap() {
     router.send_raft_message(heartbeat_msg).unwrap();
     router.send_raft_message(snap_msg).unwrap();
     router.send_raft_message(read_index_msg).unwrap();
-    fail::cfg("pause_on_peer_collect_message", "off").unwrap();
+    fail::remove("pause_on_peer_collect_message");
     must_get_none(&cluster.get_engine(3), b"k0");
     // Should not receive resp
     rx1.recv_timeout(Duration::from_millis(500)).unwrap_err();
-    fail::cfg("apply_snap_cleanup_range", "off").unwrap();
+    fail::remove("apply_snap_cleanup_range");
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 

@@ -348,6 +348,7 @@ impl<S: Snapshot> MvccTxn<S> {
         for_update_ts: TimeStamp,
         txn_size: u64,
         min_commit_ts: TimeStamp,
+        pipelined_pessimistic_lock: bool,
     ) -> Result<()> {
         if mutation.should_not_write() {
             return Err(box_err!(
@@ -385,18 +386,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 last_lock_ttl = lock.ttl;
             }
         } else if is_pessimistic_lock {
-            // Pessimistic lock does not exist, the transaction should be aborted.
-            warn!(
-                "prewrite failed (pessimistic lock not found)";
-                "start_ts" => self.start_ts,
-                "key" => %key
-            );
-
-            return Err(ErrorInner::PessimisticLockNotFound {
-                start_ts: self.start_ts,
-                key: key.into_raw()?,
-            }
-            .into());
+            self.amend_pessimistic_lock(pipelined_pessimistic_lock, &key)?;
         }
 
         // No need to check data constraint, it's resolved by pessimistic locks.
@@ -410,6 +400,50 @@ impl<S: Snapshot> MvccTxn<S> {
             txn_size,
             min_commit_ts,
         );
+        Ok(())
+    }
+
+    fn amend_pessimistic_lock(
+        &mut self,
+        pipelined_pessimistic_lock: bool,
+        key: &Key,
+    ) -> Result<()> {
+        if !pipelined_pessimistic_lock {
+            // Pessimistic lock does not exist, the transaction should be aborted.
+            warn!(
+                "prewrite failed (pessimistic lock not found)";
+                "start_ts" => self.start_ts,
+                "key" => %key
+            );
+            return Err(ErrorInner::PessimisticLockNotFound {
+                start_ts: self.start_ts,
+                key: key.clone().into_raw()?,
+            }
+            .into());
+        }
+        if let Some((commit_ts, _)) = self.reader.seek_write(key, TimeStamp::max())? {
+            if commit_ts >= self.start_ts {
+                warn!(
+                    "prewrite failed (pessimistic lock not found)";
+                    "start_ts" => self.start_ts,
+                    "commit_ts" => commit_ts,
+                    "key" => %key
+                );
+                MVCC_CONFLICT_COUNTER
+                    .pipelined_acquire_pessimistic_lock_amend_fail
+                    .inc();
+                return Err(ErrorInner::PessimisticLockNotFound {
+                    start_ts: self.start_ts,
+                    key: key.clone().into_raw()?,
+                }
+                .into());
+            }
+        }
+        // Used pipelined pessimistic lock acquiring in this txn but failed
+        // Luckily no other txn modified this lock, amend it by treat it as optimistic txn.
+        MVCC_CONFLICT_COUNTER
+            .pipelined_acquire_pessimistic_lock_amend_success
+            .inc();
         Ok(())
     }
 

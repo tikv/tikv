@@ -783,6 +783,10 @@
 ## one more likely acquires the lock.
 # wake-up-delay-duration = 20
 
+## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
+## Enabled this will improve performance, but slightly increase the transcation failure rate
+# pipelined = false
+
 [gc]
 ## The number of keys to GC in one batch.
 # batch-keys = 512
