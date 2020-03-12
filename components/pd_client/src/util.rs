@@ -344,6 +344,7 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
 where
     F: Fn(&PdClientStub) -> GrpcResult<R>,
 {
+    let mut err = None;
     for _ in 0..retry {
         // DO NOT put any lock operation in match statement, or it will cause dead lock!
         let ret = { func(&client.inner.rl().client_stub).map_err(Error::Grpc) };
@@ -356,11 +357,12 @@ where
                 if let Err(e) = client.reconnect() {
                     error!("reconnect failed"; "err" => ?e);
                 }
+                err.replace(e);
             }
         }
     }
 
-    Err(box_err!("fail to request"))
+    Err(err.unwrap_or(box_err!("fail to request"))
 }
 
 pub fn validate_endpoints(
