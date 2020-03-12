@@ -17,8 +17,6 @@ extern crate tikv_alloc;
 
 use std::sync::Arc;
 
-pub mod util;
-
 pub mod rocks;
 pub use crate::rocks::{CFHandle, DBIterator, DBVector, Range, ReadOptions, WriteOptions, DB};
 mod errors;
