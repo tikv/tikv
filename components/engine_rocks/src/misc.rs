@@ -2,7 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Result, SyncMutable};
+use engine_traits::{MiscExt, Result};
 
 impl MiscExt for RocksEngine {
     fn is_titan(&self) -> bool {
@@ -41,7 +41,7 @@ mod tests {
 
     use super::*;
     use engine_traits::ALL_CFS;
-    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, WriteBatchExt};
+    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt};
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
