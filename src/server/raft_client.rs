@@ -18,7 +18,7 @@ use grpcio::{
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
-use protobuf::{Message, RepeatedField};
+use protobuf::RepeatedField;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, BatchCollector, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
@@ -243,9 +243,9 @@ impl<T: RaftStoreRouter> RaftClient<T> {
 struct RaftMsgCollector(usize);
 impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
     fn collect(&mut self, v: &mut Vec<RaftMessage>, e: RaftMessage) -> Option<RaftMessage> {
-        let mut msg_size = 0;
+        let mut msg_size = e.start_key.len() + e.end_key.len();
         for entry in e.get_message().get_entries() {
-            msg_size += entry.compute_size() as usize;
+            msg_size += entry.data.len();
         }
         if self.0 > 0 && self.0 + msg_size + GRPC_SEND_MSG_BUF >= MAX_GRPC_SEND_MSG_LEN as usize {
             self.0 = 0;
