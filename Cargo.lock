@@ -181,7 +181,7 @@ dependencies = [
  "lazy_static 1.4.0",
  "prometheus",
  "protobuf",
- "raft",
+ "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.5",
  "serde",
  "serde_derive",
@@ -500,7 +500,7 @@ dependencies = [
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "nix 0.11.0",
  "protobuf",
- "raft",
+ "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.5",
  "serde",
  "serde_json",
@@ -947,7 +947,7 @@ dependencies = [
  "prometheus",
  "protobuf",
  "quick-error 1.2.2",
- "raft",
+ "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb",
  "serde",
  "serde_derive",
@@ -1761,7 +1761,7 @@ dependencies = [
  "prost-derive 0.4.0",
  "protobuf",
  "protobuf-build",
- "raft",
+ "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2803,8 +2803,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43648985159f2c4c25f934182a63b0dd4c5cc06a5ae96e5d40e12c3a3785abde"
+source = "git+https://github.com/tikv/raft-rs?rev=9782199fa6318f94bf0974129664d974b03f8f11#9782199fa6318f94bf0974129664d974b03f8f11"
 dependencies = [
  "fxhash",
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2812,6 +2811,13 @@ dependencies = [
  "quick-error 1.2.2",
  "rand 0.5.5",
 ]
+
+[[package]]
+name = "raft"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43648985159f2c4c25f934182a63b0dd4c5cc06a5ae96e5d40e12c3a3785abde"
+replace = "raft 0.4.3 (git+https://github.com/tikv/raft-rs?rev=9782199fa6318f94bf0974129664d974b03f8f11)"
 
 [[package]]
 name = "rand"
@@ -3889,7 +3895,7 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "protobuf",
- "raft",
+ "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.5",
  "slog",
  "slog-global",
@@ -4000,7 +4006,7 @@ dependencies = [
  "prost 0.5.0",
  "protobuf",
  "quick-error 1.2.2",
- "raft",
+ "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.5",
  "rand_xorshift",
  "regex",
@@ -4080,7 +4086,7 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "quick-error 1.2.2",
- "raft",
+ "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.5",
  "regex",
  "serde",
