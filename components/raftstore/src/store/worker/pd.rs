@@ -521,7 +521,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
             .pd_client
             .region_heartbeat(term, region.clone(), peer, region_stat)
             .map_err(move |e| {
-                warn!(
+                debug!(
                     "failed to send heartbeat";
                     "region_id" => region.get_id(),
                     "err" => ?e
