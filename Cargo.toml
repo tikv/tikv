@@ -155,10 +155,10 @@ zipf = "5.0.1"
 # TODO: remove this when new raft-rs is published.
 "raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", default-features = false }
 "raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", default-features = false }
-"protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
-"protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
+"protobuf:2.8.0" = { git = "https://github.com/pingcap/rust-protobuf", rev="b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
+"protobuf-codegen:2.8.0" = { git = "https://github.com/pingcap/rust-protobuf", rev="b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 "prost:0.5.0" = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
-"protobuf-build:0.10.0" = { git = "https://github.com/tikv/protobuf-build", rev="42e52b9311f7fb31bbbe089fef5a24ec0392f9ce" }
+"protobuf-build:0.10.0" = { git = "https://github.com/tikv/protobuf-build", rev="1fe5d77689d9691b7917215f3a1d32968115cc02" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
