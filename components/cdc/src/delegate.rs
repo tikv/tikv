@@ -604,7 +604,7 @@ mod tests {
     use kvproto::metapb::Region;
     use std::cell::Cell;
     use tikv::storage::mvcc::test_util::*;
-    use tikv_util::mpsc::batch::{self, BatchReceiver};
+    use tikv_util::mpsc::batch::{self, BatchReceiver, VecCollector};
 
     #[test]
     fn test_error() {
@@ -617,7 +617,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let (sink, rx) = batch::unbounded(1);
-        let rx = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
+        let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let mut downstream = Downstream::new(String::new(), region_epoch);
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
@@ -736,7 +736,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let (sink, rx) = batch::unbounded(1);
-        let rx = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
+        let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let mut downstream = Downstream::new(String::new(), region_epoch);
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
