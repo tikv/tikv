@@ -21,7 +21,6 @@ use futures::{stream, Future, Sink, Stream};
 use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
-
 use super::metrics::*;
 use super::{Config, Error, Result};
 use util::collections::HashMap;
@@ -71,17 +70,20 @@ impl Conn {
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
-        let (sink, _) = client.raft().unwrap();
+        let (sink, receiver) = client.raft().unwrap();
         let addr = addr.to_owned();
+        let addr1 = addr.clone();
         client.spawn(
             rx_close
                 .map_err(|_| ())
                 .select(
                     sink.sink_map_err(Error::from)
                         .send_all(rx.map(stream::iter_ok).flatten().map_err(|()| Error::Sink))
-                        .then(move |r| {
+                        .then(move |sink_r| {
                             alive.store(false, Ordering::SeqCst);
-                            r
+                            receiver.then(move |recv_r| {
+                                check_rpc_result("raft", &addr1, sink_r.err(), recv_r.err())
+                            })
                         })
                         .map(|_| ())
                         .map_err(move |e| {
@@ -201,4 +203,25 @@ impl Drop for RaftClient {
         // Drop conns here to make sure all streams are dropped before Environment.
         self.conns.clear();
     }
+}
+
+fn grpc_error_is_unimplemented(e: &GrpcError) -> bool {
+    if let GrpcError::RpcFailure(RpcStatus { ref status, .. }) = e {
+        let x = *status == RpcStatusCode::Unimplemented;
+        return x;
+    }
+    false
+}
+
+fn check_rpc_result(
+    rpc: &str,
+    addr: &str,
+    sink_e: Option<GrpcError>,
+    recv_e: Option<GrpcError>,
+) -> std::result::Result<(), bool> {
+    if sink_e.is_none() && recv_e.is_none() {
+        return Ok(());
+    }
+    warn!( "RPC {} fail", rpc; "to_addr" => addr, "sink_err" => ?sink_e, "err" => ?recv_e);
+    recv_e.map_or(Ok(()), |e| Err(grpc_error_is_unimplemented(&e)))
 }
