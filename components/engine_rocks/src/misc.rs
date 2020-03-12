@@ -2,7 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Result};
+use engine_traits::{MiscExt, Result, SyncMutable};
 
 impl MiscExt for RocksEngine {
     fn is_titan(&self) -> bool {
@@ -71,7 +71,7 @@ mod tests {
         let db = Arc::new(db);
         let db = RocksEngine::from_db(db);
 
-        let wb = db.write_batch();
+        let mut wb = db.write_batch();
         let ts: u8 = 12;
         let keys: Vec<_> = vec![
             b"k1".to_vec(),
@@ -181,7 +181,7 @@ mod tests {
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
         let db = Arc::new(db);
         let db = RocksEngine::from_db(db);
-        let wb = db.write_batch();
+        let mut wb = db.write_batch();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),
             (b"kabcdefg2", b"v2"),
