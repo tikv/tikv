@@ -704,6 +704,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
+        self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
+
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.group_state == GroupState::Idle {
