@@ -4,7 +4,7 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
-use engine::util::MAX_DELETE_BATCH_SIZE;
+use engine_traits::MAX_DELETE_BATCH_SIZE;
 use engine_traits::{KvEngine, Mutable, WriteBatch};
 use tikv_util::worker::Runnable;
 
@@ -129,7 +129,7 @@ mod tests {
     use super::*;
     use engine::rocks::util::new_engine;
     use engine_rocks::RocksEngine;
-    use engine_traits::{KvEngine, CF_DEFAULT};
+    use engine_traits::{KvEngine, WriteBatchExt, CF_DEFAULT};
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
     use tempfile::Builder;

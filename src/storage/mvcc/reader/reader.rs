@@ -454,7 +454,7 @@ mod tests {
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::IterOption;
     use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{KvEngine, Mutable};
+    use engine_traits::{Mutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
