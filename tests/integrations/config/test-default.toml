@@ -2,6 +2,10 @@
 
 [readpool.unified]
 
+[readpool.storage]
+
+[readpool.coprocessor]
+
 [server]
 
 [storage]

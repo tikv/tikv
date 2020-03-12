@@ -1636,69 +1636,31 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(from = "RawReadPoolConfig")]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
+#[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
-    pub unify_read_pool: bool,
+    pub unify_read_pool: Option<bool>,
     pub unified: UnifiedReadPoolConfig,
     pub storage: StorageReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
+    pub fn is_unified(&self) -> bool {
+        self.unify_read_pool.unwrap_or_else(|| {
+            self.storage == Default::default() && self.coprocessor == Default::default()
+        })
+    }
+
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.unify_read_pool {
+        if self.is_unified() {
             self.unified.validate()?;
         } else {
             self.storage.validate()?;
             self.coprocessor.validate()?;
         }
         Ok(())
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-struct RawReadPoolConfig {
-    unify_read_pool: Option<bool>,
-    unified: UnifiedReadPoolConfig,
-    storage: Option<StorageReadPoolConfig>,
-    coprocessor: Option<CoprReadPoolConfig>,
-}
-
-impl Default for RawReadPoolConfig {
-    fn default() -> RawReadPoolConfig {
-        RawReadPoolConfig {
-            unify_read_pool: None,
-            unified: Default::default(),
-            storage: None,
-            coprocessor: None,
-        }
-    }
-}
-
-impl From<RawReadPoolConfig> for ReadPoolConfig {
-    fn from(raw: RawReadPoolConfig) -> ReadPoolConfig {
-        let legacy_configured = raw.storage.is_some() || raw.coprocessor.is_some();
-        let mut config = ReadPoolConfig {
-            unify_read_pool: true,
-            unified: raw.unified,
-            storage: raw.storage.unwrap_or_default(),
-            coprocessor: raw.coprocessor.unwrap_or_default(),
-        };
-        match raw.unify_read_pool {
-            None => {
-                // If the user does not specify whether to unify read pools,
-                // only use the old pools when they are configured.
-                config.unify_read_pool = !legacy_configured;
-            }
-            Some(unify_read_pool) => {
-                config.unify_read_pool = unify_read_pool;
-            }
-        }
-        config
     }
 }
 
@@ -1721,7 +1683,7 @@ mod readpool_tests {
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
         let cfg = ReadPoolConfig {
-            unify_read_pool: false,
+            unify_read_pool: Some(false),
             unified,
             storage,
             coprocessor,
@@ -1738,7 +1700,7 @@ mod readpool_tests {
         assert!(storage.validate().is_err());
         let coprocessor = CoprReadPoolConfig::default();
         let invalid_cfg = ReadPoolConfig {
-            unify_read_pool: false,
+            unify_read_pool: Some(false),
             unified,
             storage,
             coprocessor,
@@ -1762,7 +1724,7 @@ mod readpool_tests {
         };
         assert!(coprocessor.validate().is_err());
         let cfg = ReadPoolConfig {
-            unify_read_pool: true,
+            unify_read_pool: Some(true),
             unified,
             storage,
             coprocessor,
@@ -1781,7 +1743,7 @@ mod readpool_tests {
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
         let cfg = ReadPoolConfig {
-            unify_read_pool: true,
+            unify_read_pool: Some(true),
             unified,
             storage,
             coprocessor,
@@ -1874,7 +1836,7 @@ impl Default for TiKvConfig {
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             refresh_config_interval: ReadableDuration::secs(30),
-            readpool: RawReadPoolConfig::default().into(),
+            readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),

@@ -58,8 +58,7 @@
 ## Max running tasks of each worker, reject if exceeded.
 # max-tasks-per-worker = 2000
 
-# Uncomment this section if you don't intend to unify the read pools.
-# [readpool.storage]
+[readpool.storage]
 ## Size of the thread pool for high-priority operations.
 # high-concurrency = 4
 
@@ -81,8 +80,7 @@
 ## Size of the stack for each thread in the thread pool.
 # stack-size = "10MB"
 
-# Uncomment this section if you don't intend to unify the read pools.
-# [readpool.coprocessor]
+[readpool.coprocessor]
 ## Most read requests from TiDB are sent to the coprocessor of TiKV. high/normal/low-concurrency is
 ## used to set the number of threads of the coprocessor.
 ## If there are many read requests, you can increase these config values (but keep it within the

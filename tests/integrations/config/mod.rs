@@ -89,7 +89,7 @@ fn test_serde_custom_tikv_config() {
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
-        unify_read_pool: true,
+        unify_read_pool: Some(true),
         unified: UnifiedReadPoolConfig {
             min_thread_count: 5,
             max_thread_count: 10,
@@ -575,17 +575,6 @@ fn test_readpool_default_config() {
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
     let mut expected = TiKvConfig::default();
     expected.readpool.unified.max_thread_count = 1;
-    assert_eq!(cfg, expected);
-}
-
-#[test]
-fn test_auto_enable_legacy_readpool() {
-    let content = r#"
-        [readpool.storage]
-    "#;
-    let cfg: TiKvConfig = toml::from_str(content).unwrap();
-    let mut expected = TiKvConfig::default();
-    expected.readpool.unify_read_pool = false;
     assert_eq!(cfg, expected);
 }
 
