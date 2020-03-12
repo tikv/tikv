@@ -17,10 +17,10 @@ use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Peekable};
 use engine_rocks::{Compat, RocksWriteBatch};
 use engine_traits::{
-    KvEngine, Mutable, TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteBatch,
+    Mutable, TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteBatch,
     WriteOptions,
 };
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
@@ -522,7 +522,7 @@ impl Debugger {
                 region,
                 fake_snap_worker.scheduler(),
                 peer_id,
-                tag.clone(),
+                tag,
             ));
 
             let raft_cfg = raft::Config {
@@ -533,12 +533,15 @@ impl Debugger {
                 max_inflight_msgs: 256,
                 applied: apply_state.get_applied_index(),
                 check_quorum: true,
-                tag,
                 skip_bcast_commit: true,
                 ..Default::default()
             };
 
-            box_try!(RawNode::new(&raft_cfg, peer_storage));
+            box_try!(RawNode::new(
+                &raft_cfg,
+                peer_storage,
+                &slog_global::get_global()
+            ));
             Ok(())
         };
 

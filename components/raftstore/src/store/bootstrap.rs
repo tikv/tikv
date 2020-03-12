@@ -8,7 +8,7 @@ use crate::Result;
 use engine::rocks::Writable;
 use engine::{Engines, Iterable, DB};
 use engine_rocks::Compat;
-use engine_traits::{KvEngine, Mutable};
+use engine_traits::{Mutable, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;

@@ -235,6 +235,32 @@ impl ScalarFunc {
         }
     }
 
+    // see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_repeat
+    #[inline]
+    pub fn repeat<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let num = try_opt!(self.children[1].eval_int(ctx, row));
+        let count = if num > std::i32::MAX.into() {
+            std::i32::MAX.into()
+        } else {
+            num
+        };
+
+        match count.cmp(&1) {
+            Ordering::Less => Ok(Some(Cow::Borrowed(b""))),
+
+            // return the input string when count is 1 to save one copy
+            Ordering::Equal => Ok(Some(val)),
+
+            // here count > 1, so convert it into usize should be ok
+            Ordering::Greater => Ok(Some(Cow::Owned(val.repeat(count as usize)))),
+        }
+    }
+
     pub fn replace<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -1550,6 +1576,59 @@ mod tests {
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "rtrim(NULL)");
+    }
+
+    #[test]
+    fn test_repeat() {
+        let cases = vec![
+            ("hello, world!", -1, ""),
+            ("hello, world!", 0, ""),
+            ("hello, world!", 1, "hello, world!"),
+            (
+                "hello, world!",
+                3,
+                "hello, world!hello, world!hello, world!",
+            ),
+            ("你好世界", 3, "你好世界你好世界你好世界"),
+            ("こんにちは", 2, "こんにちはこんにちは"),
+            ("\x2f\x35", 5, "\x2f\x35\x2f\x35\x2f\x35\x2f\x35\x2f\x35"),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input_str, input_count, expected) in cases {
+            let s = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let count = datum_expr(Datum::I64(input_count));
+            let op = scalar_func_expr(ScalarFuncSig::Repeat, &[s, count]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let expected = Datum::Bytes(expected.as_bytes().to_vec());
+            assert_eq!(got, expected, "repeat({:?}, {:?})", input_str, input_count);
+        }
+
+        // test NULL case
+        let null = datum_expr(Datum::Null);
+        let count = datum_expr(Datum::I64(42));
+        let op = scalar_func_expr(ScalarFuncSig::Repeat, &[null, count]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let expected = Datum::Null;
+        assert_eq!(got, expected, "repeat(NULL, count)");
+
+        let null = datum_expr(Datum::Null);
+        let s = datum_expr(Datum::Bytes(b"hi".to_vec()));
+        let op = scalar_func_expr(ScalarFuncSig::Repeat, &[s, null]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let expected = Datum::Null;
+        assert_eq!(got, expected, "repeat(s, NULL)");
+
+        let null1 = datum_expr(Datum::Null);
+        let null2 = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::Repeat, &[null1, null2]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let expected = Datum::Null;
+        assert_eq!(got, expected, "repeat(NULL, NULL)");
     }
 
     #[test]
