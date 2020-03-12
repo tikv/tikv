@@ -4,18 +4,21 @@ use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-#[cfg(not(feature = "prost-codec"))]
-use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
+    error::DuplicateRequest as ErrorDuplicateRequest,
     event::{
-        row::OpType as EventRowOpType, Entries as EventEntries, Error as EventError,
-        Event as Event_oneof_event, LogType as EventLogType, Row as EventRow,
+        row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
+        LogType as EventLogType, Row as EventRow,
     },
-    ChangeDataEvent, Event,
+    Error as EventError, Event,
+};
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::cdcpb::{
+    Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventRow,
+    EventRowOpType, Event_oneof_event,
 };
 
-use futures::sync::mpsc::*;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -25,19 +28,21 @@ use resolved_ts::Resolver;
 use tikv::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 use tikv::storage::txn::TxnEntry;
 use tikv_util::collections::HashMap;
+use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, TimeStamp};
 
-use crate::Error;
+use crate::{Error, Result};
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
 
 /// A unique identifier of a Downstream.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct DownstreamID(usize);
 
 impl DownstreamID {
     pub fn new() -> DownstreamID {
-        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -45,11 +50,11 @@ impl DownstreamID {
 pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
-    pub id: DownstreamID,
+    id: DownstreamID,
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
-    sink: UnboundedSender<ChangeDataEvent>,
+    sink: Option<BatchSender<(usize, Event)>>,
 }
 
 impl Downstream {
@@ -57,23 +62,46 @@ impl Downstream {
     ///
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
-    pub fn new(
-        peer: String,
-        region_epoch: RegionEpoch,
-        sink: UnboundedSender<ChangeDataEvent>,
-    ) -> Downstream {
+    pub fn new(peer: String, region_epoch: RegionEpoch) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
             peer,
-            sink,
             region_epoch,
+            sink: None,
         }
     }
 
-    fn sink(&self, change_data: ChangeDataEvent) {
-        if self.sink.unbounded_send(change_data).is_err() {
+    /// Sink events to the downstream.
+    /// The size of `Error` and `ResolvedTS` are considered zero.
+    pub fn sink_event(&self, change_data_event: Event, size: usize) {
+        if self
+            .sink
+            .as_ref()
+            .unwrap()
+            .send((size, change_data_event))
+            .is_err()
+        {
             error!("send event failed"; "downstream" => %self.peer);
         }
+    }
+
+    pub fn set_sink(&mut self, sink: BatchSender<(usize, Event)>) {
+        self.sink = Some(sink);
+    }
+
+    pub fn get_id(&self) -> DownstreamID {
+        self.id
+    }
+
+    pub fn sink_duplicate_error(&self, region_id: u64) {
+        let mut change_data_event = Event::default();
+        let mut cdc_err = EventError::default();
+        let mut err = ErrorDuplicateRequest::default();
+        err.set_region_id(region_id);
+        cdc_err.set_duplicate_request(err);
+        change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
+        change_data_event.region_id = region_id;
+        self.sink_event(change_data_event, 0);
     }
 }
 
@@ -132,7 +160,7 @@ impl Delegate {
             ) {
                 let err = Error::Request(e.into());
                 let change_data_error = self.error_event(err);
-                downstream.sink(change_data_error);
+                downstream.sink_event(change_data_error, 0);
                 return false;
             }
             self.downstreams.push(downstream);
@@ -152,19 +180,19 @@ impl Delegate {
         downstreams.retain(|d| {
             if d.id == id {
                 if let Some(change_data_error) = change_data_error.clone() {
-                    d.sink(change_data_error);
+                    d.sink_event(change_data_error, 0);
                 }
             }
             d.id != id
         });
-        let is_last = self.downstreams.is_empty();
+        let is_last = downstreams.is_empty();
         if is_last {
             self.enabled.store(false, Ordering::SeqCst);
         }
         is_last
     }
 
-    fn error_event(&self, err: Error) -> ChangeDataEvent {
+    fn error_event(&self, err: Error) -> Event {
         let mut change_data_event = Event::default();
         let mut cdc_err = EventError::default();
         let mut err = err.extract_error_header();
@@ -185,25 +213,10 @@ impl Delegate {
         }
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = self.region_id;
-        let mut change_data = ChangeDataEvent::default();
-        change_data.mut_events().push(change_data_event);
-        change_data
+        change_data_event
     }
 
-    /// Fail the delegate
-    ///
-    /// This means the region has met an unrecoverable error for CDC.
-    /// It broadcasts errors to all downstream and stops.
-    pub fn fail(&mut self, err: Error) {
-        // Stop observe further events.
-        self.enabled.store(false, Ordering::SeqCst);
-
-        info!("region met error";
-            "region_id" => self.region_id, "error" => ?err);
-        let change_data = self.error_event(err);
-        self.broadcast(change_data);
-
-        // Mark this delegate has failed.
+    pub fn mark_failed(&mut self) {
         self.failed = true;
     }
 
@@ -211,19 +224,38 @@ impl Delegate {
         self.failed
     }
 
-    fn broadcast(&self, change_data: ChangeDataEvent) {
+    /// Stop the delegate
+    ///
+    /// This means the region has met an unrecoverable error for CDC.
+    /// It broadcasts errors to all downstream and stops.
+    pub fn stop(&mut self, err: Error) {
+        self.mark_failed();
+        // Stop observe further events.
+        self.enabled.store(false, Ordering::SeqCst);
+
+        info!("region met error";
+            "region_id" => self.region_id, "error" => ?err);
+        let change_data_err = self.error_event(err);
+        self.broadcast(change_data_err, 0);
+    }
+
+    fn broadcast(&self, change_data_event: Event, size: usize) {
         let downstreams = if self.pending.is_some() {
             &self.pending.as_ref().unwrap().downstreams
         } else {
             &self.downstreams
         };
-        for d in downstreams {
-            d.sink(change_data.clone());
+        for i in 0..downstreams.len() - 1 {
+            downstreams[i].sink_event(change_data_event.clone(), size);
         }
+        downstreams
+            .last()
+            .unwrap()
+            .sink_event(change_data_event, size);
     }
 
     /// Install a resolver and notify downstreams this region if ready to serve.
-    pub fn on_region_ready(&mut self, resolver: Resolver, region: Region) {
+    pub fn on_region_ready(&mut self, resolver: Resolver, region: Region) -> Result<()> {
         assert!(
             self.resolver.is_none(),
             "region resolver should not be ready"
@@ -239,39 +271,38 @@ impl Delegate {
                 self.on_scan(downstream_id, entries);
             }
             for batch in pending.multi_batch {
-                self.on_batch(batch);
+                self.on_batch(batch)?;
             }
         }
         info!("region is ready"; "region_id" => self.region_id);
+        Ok(())
     }
 
     /// Try advance and broadcast resolved ts.
     pub fn on_min_ts(&mut self, min_ts: TimeStamp) {
         if self.resolver.is_none() {
-            info!("region resolver not ready";
+            debug!("region resolver not ready";
                 "region_id" => self.region_id, "min_ts" => min_ts);
             return;
         }
-        info!("try to advance ts"; "region_id" => self.region_id);
+        debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
             None => return,
         };
-        info!("resolved ts updated";
+        debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
-        let mut change_data = ChangeDataEvent::default();
-        change_data.mut_events().push(change_data_event);
-        self.broadcast(change_data);
+        self.broadcast(change_data_event, 0);
     }
 
-    pub fn on_batch(&mut self, batch: CmdBatch) {
+    pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
         if let Some(pending) = self.pending.as_mut() {
             pending.multi_batch.push(batch);
-            return;
+            return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
             let Cmd {
@@ -283,14 +314,15 @@ impl Delegate {
                 if !request.has_admin_request() {
                     self.sink_data(index, request.requests.into());
                 } else {
-                    self.sink_admin(request.take_admin_request(), response.take_admin_response());
+                    self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
                 }
             } else {
                 let err_header = response.mut_header().take_error();
-                let err = Error::Request(err_header);
-                self.fail(err);
+                self.mark_failed();
+                return Err(Error::Request(err_header));
             }
         }
+        Ok(())
     }
 
     pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
@@ -305,7 +337,9 @@ impl Delegate {
             return;
         };
 
-        let mut rows = Vec::with_capacity(entries.len());
+        let entries_len = entries.len();
+        let mut rows = vec![(0, Vec::with_capacity(entries_len))];
+        let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
                 Some(TxnEntry::Prewrite { default, lock }) => {
@@ -315,7 +349,14 @@ impl Delegate {
                         continue;
                     }
                     decode_default(default.1, &mut row);
-                    rows.push(row);
+                    let row_size = row.key.len() + row.value.len();
+                    if current_rows_size + row_size >= EVENT_MAX_SIZE {
+                        rows.last_mut().unwrap().0 = current_rows_size;
+                        rows.push((0, Vec::with_capacity(entries_len)));
+                        current_rows_size = 0;
+                    }
+                    current_rows_size += row_size;
+                    rows.last_mut().unwrap().1.push(row);
                 }
                 Some(TxnEntry::Commit { default, write }) => {
                     let mut row = EventRow::default();
@@ -337,30 +378,40 @@ impl Delegate {
                         continue;
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
-                    rows.push(row);
+                    let row_size = row.key.len() + row.value.len();
+                    if current_rows_size + row_size >= EVENT_MAX_SIZE {
+                        rows.last_mut().unwrap().0 = current_rows_size;
+                        rows.push((0, Vec::with_capacity(entries_len)));
+                        current_rows_size = 0;
+                    }
+                    current_rows_size += row_size;
+                    rows.last_mut().unwrap().1.push(row);
                 }
                 None => {
                     let mut row = EventRow::default();
 
                     // This type means scan has finised.
                     set_event_row_type(&mut row, EventLogType::Initialized);
-                    rows.push(row);
+                    rows.last_mut().unwrap().1.push(row);
                 }
             }
         }
 
-        let mut event_entries = EventEntries::default();
-        event_entries.entries = rows.into();
-        let mut change_data_event = Event::default();
-        change_data_event.region_id = self.region_id;
-        change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        let mut change_data = ChangeDataEvent::default();
-        change_data.mut_events().push(change_data_event);
-        d.sink(change_data);
+        for (s, rs) in rows {
+            if !rs.is_empty() {
+                let mut event_entries = EventEntries::default();
+                event_entries.entries = rs.into();
+                let mut change_data_event = Event::default();
+                change_data_event.region_id = self.region_id;
+                change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
+                d.sink_event(change_data_event, s);
+            }
+        }
     }
 
     fn sink_data(&mut self, index: u64, requests: Vec<Request>) {
         let mut rows = HashMap::default();
+        let mut total_size = 0;
         for mut req in requests {
             // CDC cares about put requests only.
             if req.get_cmd_type() != CmdType::Put {
@@ -429,6 +480,7 @@ impl Delegate {
                     let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
                     let row = rows.entry(key.to_raw().unwrap()).or_default();
                     decode_default(put.take_value(), row);
+                    total_size += row.value.len();
                 }
                 other => {
                     panic!("invalid cf {}", other);
@@ -445,12 +497,10 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.index = index;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        let mut change_data = ChangeDataEvent::default();
-        change_data.mut_events().push(change_data_event);
-        self.broadcast(change_data);
+        self.broadcast(change_data_event, total_size);
     }
 
-    fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) {
+    fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
         let store_err = match request.get_cmd_type() {
             AdminCmdType::Split => RaftStoreError::EpochNotMatch(
                 "split".to_owned(),
@@ -468,10 +518,10 @@ impl Delegate {
             | AdminCmdType::RollbackMerge => {
                 RaftStoreError::EpochNotMatch("merge".to_owned(), vec![])
             }
-            _ => return,
+            _ => return Ok(()),
         };
-        let err = Error::Request(store_err.into());
-        self.fail(err);
+        self.mark_failed();
+        Err(Error::Request(store_err.into()))
     }
 }
 
@@ -549,26 +599,12 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::rocks::*;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::Snapshot;
     use futures::{Future, Stream};
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
-    use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::router::RaftStoreRouter;
-    use raftstore::store::{Callback, CasualMessage, ReadResponse, RegionSnapshot, SignificantMsg};
-    use raftstore::Result as RaftStoreResult;
     use std::cell::Cell;
-    use std::sync::Arc;
-    use tikv::server::RaftKv;
     use tikv::storage::mvcc::test_util::*;
-    use tikv::storage::mvcc::tests::*;
-    use tikv_util::mpsc::{bounded, Sender as UtilSender};
-
-    // TODO add test_txn once cdc observer is ready.
-    // https://github.com/overvenus/tikv/blob/447d10ae80b5b7fc58a4bef4631874a11237fdcf/components/cdc/src/delegate.rs#L615-L701
+    use tikv_util::mpsc::batch::{self, BatchReceiver};
 
     #[test]
     fn test_error() {
@@ -580,27 +616,28 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, events) = unbounded();
+        let (sink, rx) = batch::unbounded(1);
+        let rx = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
+        let mut downstream = Downstream::new(String::new(), region_epoch);
+        downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
-        delegate.subscribe(Downstream::new(String::new(), region_epoch, sink));
+        delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
         let mut resolver = Resolver::new();
         resolver.init();
-        delegate.on_region_ready(resolver, region);
+        delegate.on_region_ready(resolver, region).unwrap();
 
-        let events_wrap = Cell::new(Some(events));
+        let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-            let (change_data, events) = events_wrap
-                .replace(None)
-                .unwrap()
-                .into_future()
-                .wait()
-                .unwrap();
-            events_wrap.set(Some(events));
-            let mut change_data = change_data.unwrap();
-            assert_eq!(change_data.events.len(), 1);
-            let change_data_event = &mut change_data.events[0];
+            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
+                Ok((events, rx)) => (events, rx),
+                Err(e) => panic!("unexpected recv error: {:?}", e.0),
+            };
+            rx_wrap.set(Some(rx));
+            let mut events = events.unwrap();
+            assert_eq!(events.len(), 1);
+            let (_, change_data_event) = &mut events[0];
             let event = change_data_event.event.take().unwrap();
             match event {
                 Event_oneof_event::Error(err) => err,
@@ -610,7 +647,7 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
-        delegate.fail(Error::Request(err_header));
+        delegate.stop(Error::Request(err_header));
         let err = receive_error();
         assert!(err.has_not_leader());
         // Enable is disabled by any error.
@@ -618,13 +655,13 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
-        delegate.fail(Error::Request(err_header));
+        delegate.stop(Error::Request(err_header));
         let err = receive_error();
         assert!(err.has_region_not_found());
 
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
-        delegate.fail(Error::Request(err_header));
+        delegate.stop(Error::Request(err_header));
         let err = receive_error();
         assert!(err.has_epoch_not_match());
 
@@ -635,7 +672,8 @@ mod tests {
         request.set_cmd_type(AdminCmdType::Split);
         let mut response = AdminResponse::default();
         response.mut_split().set_left(region.clone());
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -648,7 +686,8 @@ mod tests {
         request.set_cmd_type(AdminCmdType::BatchSplit);
         let mut response = AdminResponse::default();
         response.mut_splits().set_regions(vec![region].into());
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -661,7 +700,8 @@ mod tests {
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::PrepareMerge);
         let response = AdminResponse::default();
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -669,7 +709,8 @@ mod tests {
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::CommitMerge);
         let response = AdminResponse::default();
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -677,7 +718,8 @@ mod tests {
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::RollbackMerge);
         let response = AdminResponse::default();
-        delegate.sink_admin(request, response);
+        let err = delegate.sink_admin(request, response).err().unwrap();
+        delegate.stop(err);
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -693,26 +735,26 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, events) = unbounded();
+        let (sink, rx) = batch::unbounded(1);
+        let rx = BatchReceiver::new(rx, 1, Vec::new, |v, e| v.push(e));
+        let mut downstream = Downstream::new(String::new(), region_epoch);
+        let downstream_id = downstream.get_id();
+        downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
-        let downstream = Downstream::new(String::new(), region_epoch, sink);
-        let downstream_id = downstream.id;
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
 
-        let events_wrap = Cell::new(Some(events));
+        let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-            let (change_data, events) = events_wrap
-                .replace(None)
-                .unwrap()
-                .into_future()
-                .wait()
-                .unwrap();
-            events_wrap.set(Some(events));
-            let mut change_data = change_data.unwrap();
-            assert_eq!(change_data.events.len(), 1);
-            let change_data_event = &mut change_data.events[0];
+            let (events, rx) = match rx_wrap.replace(None).unwrap().into_future().wait() {
+                Ok((events, rx)) => (events, rx),
+                Err(e) => panic!("unexpected recv error: {:?}", e.0),
+            };
+            rx_wrap.set(Some(rx));
+            let mut events = events.unwrap();
+            assert_eq!(events.len(), 1);
+            let (_, change_data_event) = &mut events[0];
             assert_eq!(change_data_event.region_id, region_id);
             assert_eq!(change_data_event.index, 0);
             let event = change_data_event.event.take().unwrap();
@@ -766,7 +808,7 @@ mod tests {
 
         let mut resolver = Resolver::new();
         resolver.init();
-        delegate.on_region_ready(resolver, region);
+        delegate.on_region_ready(resolver, region).unwrap();
 
         // Flush all pending entries.
         let mut row1 = EventRow::default();
