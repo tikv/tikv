@@ -362,7 +362,7 @@ where
         }
     }
 
-    Err(err.unwrap_or(box_err!("fail to request"))
+    Err(err.unwrap_or(box_err!("fail to request")))
 }
 
 pub fn validate_endpoints(
