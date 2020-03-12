@@ -14,7 +14,7 @@ use engine::Engines;
 use engine::IterOption;
 use engine_rocks::{Compat, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_traits::{Iterable, Iterator, KvEngine, Mutable, Peekable, SeekKey};
+use engine_traits::{Iterable, Iterator, Mutable, Peekable, SeekKey, WriteBatchExt};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};

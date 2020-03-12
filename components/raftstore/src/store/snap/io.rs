@@ -92,15 +92,6 @@ where
     Ok(stats)
 }
 
-//fn write_to_wb<E, F>(batch: &mut Vec<u8>, wb: &mut E::WriteBatch, callback: &mut F) -> Result<(), Error>
-//where
-//    E: KvEngine,
-//    F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
-//{
-//    callback(batch);
-//    batch.drain(..).try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))
-//}
-
 /// Apply the given snapshot file into a column family. `callback` will be invoked for each batch of
 /// key value pairs written to db.
 pub fn apply_plain_cf_file<E, F>(

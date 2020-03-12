@@ -17,9 +17,9 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::WriteOptions;
 use engine::Engines;
-use engine::{util as engine_util, Peekable};
+use engine::Peekable;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
-use engine_traits::{KvEngine, Mutable as MutableTrait, WriteBatch};
+use engine_traits::{MiscExt, Mutable as MutableTrait, WriteBatch, WriteBatchExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -1359,23 +1359,20 @@ impl ApplyDelegate {
                 });
 
             // Delete all remaining keys.
-            engine_util::delete_all_in_range_cf(
-                &ctx.engines.kv,
-                cf,
-                &start_key,
-                &end_key,
-                use_delete_range,
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
-                    cf,
-                    e
-                );
-            });
+            ctx.engines
+                .kv
+                .c()
+                .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        cf,
+                        e
+                    );
+                });
         }
 
         // TODO: Should this be executed when `notify_only` is set?
