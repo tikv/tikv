@@ -10,7 +10,7 @@ use std::{cmp, mem, u64, usize};
 
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{KvEngine, Peekable, Snapshot, WriteOptions};
+use engine_traits::{KvEngine, Peekable, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -1803,11 +1803,14 @@ impl Peer {
             }
         }
         let healthy = self.count_healthy_node(progress.voters());
+        let voters_len = progress.voter_ids().len();
         let quorum_after_change = match ctx.cfg.quorum_algorithm {
             QuorumAlgorithm::IntegrationOnHalfFail => {
-                util::integration_on_half_fail_quorum_fn(progress.voter_ids().len())
+                let majority = raft::majority(voters_len);
+                let custom = util::integration_on_half_fail_quorum_fn(voters_len);
+                cmp::min(voters_len, cmp::max(majority, custom))
             }
-            QuorumAlgorithm::Majority => raft::majority(progress.voter_ids().len()),
+            QuorumAlgorithm::Majority => raft::majority(voters_len),
         };
         if healthy >= quorum_after_change {
             return Ok(());
