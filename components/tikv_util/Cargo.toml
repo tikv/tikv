@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 hashbrown = { version = "0.1", features = ["serde"] }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
-async-speed-limit = "0.2"
+async-speed-limit = "0.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = "2.3"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
