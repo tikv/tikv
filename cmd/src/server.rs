@@ -59,6 +59,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     security::SecurityManager,
+    sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
 };
@@ -76,6 +77,13 @@ pub fn run_tikv(config: TiKvConfig) {
 
     // Print version information.
     tikv::log_tikv_info();
+
+    // Print resource quota.
+    {
+        let quota = SysQuota::new();
+        info!("memory limits in bytes: {}", quota.memory_limits_in_bytes());
+        info!("cpu quota: {}", quota.cpu_cores_quota());
+    }
 
     // Do some prepare works before start.
     pre_start();
