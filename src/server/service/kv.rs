@@ -35,7 +35,7 @@ use prometheus::HistogramTimer;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use tikv_util::future::{paired_future_callback, AndThenWith};
-use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -836,10 +836,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
             BatchCommandsResponse::default,
-            |batch_resp, (id, resp)| {
-                batch_resp.mut_request_ids().push(id);
-                batch_resp.mut_responses().push(resp);
-            },
+            BatchRespCollector,
         );
 
         let response_retriever = response_retriever
@@ -1579,6 +1576,21 @@ pub mod batch_commands_request {
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
+
+struct BatchRespCollector;
+impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
+    for BatchRespCollector
+{
+    fn collect(
+        &mut self,
+        v: &mut BatchCommandsResponse,
+        e: (u64, batch_commands_response::Response),
+    ) -> Option<(u64, batch_commands_response::Response)> {
+        v.mut_request_ids().push(e.0);
+        v.mut_responses().push(e.1);
+        None
+    }
+}
 
 #[cfg(test)]
 mod tests {
