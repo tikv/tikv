@@ -2,6 +2,20 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.1.0-beta.2]
++ Raftstore
+  + Add the `peer_address` parameter to connect other nodes to the TiKV server [#6491](https://github.com/tikv/tikv/pull/6491)
+  + Fix the issue that the read requests cannot be processed because data is not properly read from Hibernate Regions [#6450](https://github.com/tikv/tikv/pull/6450)
+  + Add the `read_index` and `read_index_resp`  monitoring metrics to monitor the number of `ReadIndex` requests [#6610](https://github.com/tikv/tikv/pull/6610)
+  + Fix the panic issue caused by the `ReadIndex` requests during the leader transfer process [#6613](https://github.com/tikv/tikv/pull/6613)
+  + Fix the issue that Hibernate Regions are not correctly awakened in some special conditions [#6730](https://github.com/tikv/tikv/pull/6730) [#6737](https://github.com/tikv/tikv/pull/6737) [#6972](https://github.com/tikv/tikv/pull/6972)
++ PD Client
+  + Support reporting statistics of local threads to PD [#6605](https://github.com/tikv/tikv/pull/6605)
++ Backup
+  + Replace the `RocksIOLimiter` flow control library with Rust’s `async-speed-limit` flow control library to eliminate extra memory copies when backing up a file [#6462](https://github.com/tikv/tikv/pull/6462)
+  + Fix the inconsistent data index during the restoration caused by the backup of the extra data [#6659](https://github.com/tikv/tikv/pull/6659)
+  + Fix the panic caused by incorrectly processing the deleted values during the backup [#6726](https://github.com/tikv/tikv/pull/6726)
+
 ## [3.1.0-beta.1]
 + backup 
     + Change the name of the backup file from `start_key` to the hash value of `start_key` to reduce the file name's length for easy reading (https://github.com/tikv/tikv/pull/6198)
