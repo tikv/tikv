@@ -100,7 +100,7 @@ impl BlockCacheConfig {
         }
         let capacity = match self.capacity {
             None => {
-                let total_mem = SysQuota::new().memory_limits_in_bytes();
+                let total_mem = SysQuota::new().memory_limit_in_bytes();
                 ((total_mem as f64) * 0.45) as usize
             }
             Some(c) => c.0 as usize,

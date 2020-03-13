@@ -193,7 +193,7 @@ mod sys {
     fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
         system.refresh_all();
-        let total_memory = SysQuota::new().memory_limits_in_bytes();
+        let total_memory = SysQuota::new().memory_limit_in_bytes();
         let used_memory = system.get_used_memory();
         let free_memory = system.get_free_memory();
         let total_swap = system.get_total_swap();

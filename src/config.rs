@@ -70,7 +70,7 @@ const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
-    let total_mem = SysQuota::new().memory_limits_in_bytes();
+    let total_mem = SysQuota::new().memory_limit_in_bytes();
     let (ratio, min, max) = match (is_raft_db, cf) {
         (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
         (false, CF_DEFAULT) => (0.25, 0, usize::MAX),

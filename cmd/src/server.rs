@@ -81,7 +81,7 @@ pub fn run_tikv(config: TiKvConfig) {
     // Print resource quota.
     {
         let quota = SysQuota::new();
-        info!("memory limits in bytes: {}", quota.memory_limits_in_bytes());
+        info!("memory limit in bytes: {}", quota.memory_limit_in_bytes());
         info!("cpu quota: {}", quota.cpu_cores_quota());
     }
 

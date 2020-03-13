@@ -29,12 +29,12 @@ pub mod sys_quota {
             }
         }
 
-        pub fn memory_limits_in_bytes(&self) -> u64 {
+        pub fn memory_limit_in_bytes(&self) -> u64 {
             use sysinfo::SystemExt;
             let mut system = sysinfo::System::new();
             system.refresh_all();
             let total_mem = system.get_total_memory() * KB;
-            let cgroup_memory_limits = self.cgroup.memory_limits_in_bytes();
+            let cgroup_memory_limits = self.cgroup.memory_limit_in_bytes();
             if cgroup_memory_limits < 0 {
                 total_mem
             } else {
@@ -59,7 +59,7 @@ pub mod sys_quota {
             sysinfo::get_logical_cores()
         }
 
-        pub fn memory_limits_in_bytes(&self) -> u64 {
+        pub fn memory_limit_in_bytes(&self) -> u64 {
             use sysinfo::SystemExt;
             let mut system = sysinfo::System::new();
             system.refresh_all();

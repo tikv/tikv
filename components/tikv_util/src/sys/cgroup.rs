@@ -268,7 +268,7 @@ impl CGroupSys {
         -1
     }
 
-    pub fn memory_limits_in_bytes(&self) -> i64 {
+    pub fn memory_limit_in_bytes(&self) -> i64 {
         if let Some(sub_mem) = self.cgroups.get(MEM_SUBSYS) {
             if let Ok(limits_in_bytes) = sub_mem.read_num(MEM_LIMIT_IN_BYTES) {
                 return limits_in_bytes;
