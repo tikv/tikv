@@ -209,4 +209,41 @@ mod tests {
         assert!(ret.unwrap() == 0);
         assert!(buf.is_empty());
     }
+
+    #[test]
+    #[cfg(FALSE)]
+    // FIXME: enable this (or move this to an integration test) if we've got a
+    // reliable way to test s3 (rusoto_mock requires custom logic to verify the
+    // body stream which itself can have bug)
+    fn test_real_s3_storage() {
+        use std::f64::INFINITY;
+        use tikv_util::time::Limiter;
+
+        let mut s3 = Config::default();
+        s3.set_endpoint("http://127.0.0.1:9000".to_owned());
+        s3.set_bucket("bucket".to_owned());
+        s3.set_prefix("prefix".to_owned());
+        s3.set_access_key("93QZ01QRBYQQXC37XHZV".to_owned());
+        s3.set_secret_access_key("N2VcI4Emg0Nm7fDzGBMJvguHHUxLGpjfwt2y4+vJ".to_owned());
+        s3.set_force_path_style(true);
+
+        let limiter = Limiter::new(INFINITY);
+
+        let storage = S3Storage::new(&s3).unwrap();
+        const LEN: usize = 1024 * 1024 * 4;
+        static CONTENT: [u8; LEN] = [50_u8; LEN];
+        storage
+            .write(
+                "huge_file",
+                Box::new(limiter.limit(&CONTENT[..])),
+                LEN as u64,
+            )
+            .unwrap();
+
+        let mut reader = storage.read("huge_file").unwrap();
+        let mut buf = Vec::new();
+        futures::executor::block_on(reader.read_to_end(&mut buf)).unwrap();
+        assert_eq!(buf.len(), LEN);
+        assert_eq!(buf.iter().position(|b| *b != 50_u8), None);
+    }
 }
