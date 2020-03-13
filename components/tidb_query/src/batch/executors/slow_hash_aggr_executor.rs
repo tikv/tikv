@@ -46,7 +46,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
         scan_rows: usize,
         span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
-        let child_span = span.child("coprocessor BatchSlowHashAggregationExecutor", |options| {
+        let _child_span = span.child("coprocessor BatchSlowHashAggregationExecutor", |options| {
             options.start_with_state(())
         });
 
