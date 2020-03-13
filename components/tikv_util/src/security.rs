@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Read;
 
 use grpcio::{
-    Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
+    Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder, CertificateRequestType,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -128,10 +128,10 @@ impl SecurityManager {
             sb.bind(addr, port)
         } else {
             let cred = ServerCredentialsBuilder::new()
-                .root_cert(self.ca.clone(), true)
+                .root_cert(self.ca.clone(), CertificateRequestType::RequestAndRequireClientCertificateAndVerify)
                 .add_cert(self.cert.clone(), self.key.clone())
                 .build();
-            sb.bind_secure(addr, port, cred)
+            sb.bind_with_cred(addr, port, cred)
         }
     }
 

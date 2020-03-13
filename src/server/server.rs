@@ -202,7 +202,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     pub fn build_and_bind(&mut self) -> Result<SocketAddr> {
         let sb = self.builder_or_server.take().unwrap().left().unwrap();
         let server = sb.build()?;
-        let (ref host, port) = server.bind_addrs()[0];
+        let (ref host, port) = server.bind_addrs().next().unwrap();
         let addr = SocketAddr::new(IpAddr::from_str(host)?, port as u16);
         self.local_addr = addr;
         self.builder_or_server = Some(Either::Right(server));
