@@ -60,5 +60,5 @@ test_util = { path = "../test_util" }
 panic_hook = { path = "../panic_hook" }
 
 [[test]]
-name = "integrations"
-path = "tests/integrations/mod.rs"
+name = "tests"
+path = "tests/mod.rs"

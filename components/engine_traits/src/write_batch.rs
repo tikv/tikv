@@ -2,6 +2,18 @@
 
 use crate::errors::Result;
 use crate::mutable::Mutable;
+use crate::options::WriteOptions;
+
+pub trait WriteBatchExt {
+    type WriteBatch: WriteBatch;
+
+    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()>;
+    fn write(&self, wb: &Self::WriteBatch) -> Result<()> {
+        self.write_opt(wb, &WriteOptions::default())
+    }
+    fn write_batch(&self) -> Self::WriteBatch;
+    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
+}
 
 pub trait WriteBatch: Mutable + Send {
     fn data_size(&self) -> usize;
