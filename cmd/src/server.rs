@@ -79,11 +79,7 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv::log_tikv_info();
 
     // Print resource quota.
-    {
-        let quota = SysQuota::new();
-        info!("memory limit in bytes: {}", quota.memory_limit_in_bytes());
-        info!("cpu quota: {}", quota.cpu_cores_quota());
-    }
+    SysQuota::new().log_quota();
 
     // Do some prepare works before start.
     pre_start();

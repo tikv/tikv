@@ -41,6 +41,14 @@ pub mod sys_quota {
                 std::cmp::min(total_mem, cgroup_memory_limits as u64)
             }
         }
+
+        pub fn log_quota(&self) {
+            info!(
+                "memory limit in bytes: {}, cpu cores quota: {}",
+                self.memory_limit_in_bytes(),
+                self.cpu_cores_quota()
+            );
+        }
     }
 }
 
@@ -64,6 +72,14 @@ pub mod sys_quota {
             let mut system = sysinfo::System::new();
             system.refresh_all();
             system.get_total_memory() * KB
+        }
+
+        pub fn log_quota(&self) {
+            info!(
+                "memory limit in bytes: {}, cpu cores quota: {}",
+                self.memory_limit_in_bytes(),
+                self.cpu_cores_quota()
+            );
         }
     }
 }
