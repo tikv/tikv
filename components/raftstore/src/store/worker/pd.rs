@@ -407,7 +407,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                     send_admin_request(&router, region_id, epoch, peer, req, callback)
                 }
                 Err(e) => {
-                    debug!("failed to ask split";
+                    warn!("failed to ask split";
                     "region_id" => region.get_id(),
                     "err" => ?e);
                 }
@@ -483,7 +483,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                         }
                     }
                     Err(e) => {
-                        debug!(
+                        warn!(
                             "ask batch split failed";
                             "region_id" => region.get_id(),
                             "err" => ?e,
@@ -610,7 +610,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
 
     fn handle_report_batch_split(&self, handle: &Handle, regions: Vec<metapb::Region>) {
         let f = self.pd_client.report_batch_split(regions).map_err(|e| {
-            debug!("report split failed"; "err" => ?e);
+            warn!("report split failed"; "err" => ?e);
         });
         handle.spawn(f);
     }

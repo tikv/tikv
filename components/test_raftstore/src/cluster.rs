@@ -1051,7 +1051,7 @@ impl<T: Simulator> Cluster<T> {
             &router,
             region_id,
             CasualMessage::Test(Box::new(move |peer: &mut PeerFsm<RocksEngine>| {
-                let idx = peer.peer.raft_group.get_store().committed_index();
+                let idx = peer.peer.raft_group.store().committed_index();
                 peer.peer.raft_group.request_snapshot(idx).unwrap();
                 debug!("{} request snapshot at {}", idx, peer.peer.tag);
                 request_tx.send(idx).unwrap();
@@ -1064,6 +1064,7 @@ impl<T: Simulator> Cluster<T> {
 
 impl<T: Simulator> Drop for Cluster<T> {
     fn drop(&mut self) {
+        test_util::clear_failpoints();
         self.shutdown();
     }
 }

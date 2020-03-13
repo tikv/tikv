@@ -15,7 +15,7 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
-use super::time::SlowTimer;
+use super::time::Instant;
 use crate::slow_log;
 use configuration::ConfigValue;
 
@@ -937,9 +937,9 @@ impl<T> Tracker<T> {
             match self.inner.value.try_read() {
                 Ok(value) => Some(value),
                 Err(_) => {
-                    let t = SlowTimer::new();
+                    let t = Instant::now_coarse();
                     let value = self.inner.value.read().unwrap();
-                    slow_log!(t, "{} tracker get updated value", self.tag);
+                    slow_log!(t.elapsed(), "{} tracker get updated value", self.tag);
                     Some(value)
                 }
             }

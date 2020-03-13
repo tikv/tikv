@@ -36,7 +36,7 @@ use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
+use crate::store::{Callback, Config, PdTask, QuorumAlgorithm, ReadResponse, RegionSnapshot};
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -262,7 +262,7 @@ impl Peer {
 
         let applied_index = ps.applied_index();
 
-        let raft_cfg = raft::Config {
+        let mut raft_cfg = raft::Config {
             id: peer.get_id(),
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
@@ -272,13 +272,17 @@ impl Peer {
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: true,
-            tag: tag.clone(),
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
             ..Default::default()
         };
 
-        let raft_group = RawNode::with_logger(&raft_cfg, ps, &slog_global::get_global())?;
+        if let QuorumAlgorithm::IntegrationOnHalfFail = cfg.quorum_algorithm {
+            raft_cfg.quorum_fn = util::integration_on_half_fail_quorum_fn;
+        }
+
+        let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
+        let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -395,6 +399,7 @@ impl Peer {
             .raft
             .raft_log
             .maybe_append(log_idx, log_term, merge.get_commit(), entries)
+            .map(|(_, last_index)| last_index)
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
@@ -623,7 +628,7 @@ impl Peer {
 
     #[inline]
     pub fn get_store(&self) -> &PeerStorage {
-        self.raft_group.get_store()
+        self.raft_group.store()
     }
 
     #[inline]
@@ -644,7 +649,7 @@ impl Peer {
 
     #[inline]
     pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
-        self.raft_group.get_snap()
+        self.raft_group.snap()
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
@@ -773,7 +778,7 @@ impl Peer {
         }
 
         // Insert heartbeats in case that some peers never response heartbeats.
-        let region = self.raft_group.get_store().region();
+        let region = self.raft_group.store().region();
         for peer in region.get_peers() {
             self.peer_heartbeats
                 .entry(peer.get_id())
@@ -858,7 +863,7 @@ impl Peer {
             if self.peers_start_pending_time[i].0 != peer_id {
                 continue;
             }
-            let truncated_idx = self.raft_group.get_store().truncated_index();
+            let truncated_idx = self.raft_group.store().truncated_index();
             if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
@@ -889,7 +894,7 @@ impl Peer {
             self.leader_missing_time = None;
             return StaleState::Valid;
         }
-        let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
+        let naive_peer = !self.is_initialized() || !self.raft_group.raft.promotable();
         // Updates the `leader_missing_time` according to the current state.
         //
         // If we are checking this it means we suspect the leader might be missing.
@@ -1795,12 +1800,17 @@ impl Peer {
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-                unimplemented!()
-            }
         }
         let healthy = self.count_healthy_node(progress.voters());
-        let quorum_after_change = raft::majority(progress.voter_ids().len());
+        let voters_len = progress.voter_ids().len();
+        let quorum_after_change = match ctx.cfg.quorum_algorithm {
+            QuorumAlgorithm::IntegrationOnHalfFail => {
+                let majority = raft::majority(voters_len);
+                let custom = util::integration_on_half_fail_quorum_fn(voters_len);
+                cmp::min(voters_len, cmp::max(majority, custom))
+            }
+            QuorumAlgorithm::Majority => raft::majority(voters_len),
+        };
         if healthy >= quorum_after_change {
             return Ok(());
         }
@@ -2574,7 +2584,7 @@ impl Peer {
     }
 
     pub fn bcast_wake_up_message<T: Transport>(&self, trans: &mut T) {
-        let region = self.raft_group.get_store().region();
+        let region = self.raft_group.store().region();
         for peer in region.get_peers() {
             if peer.get_id() == self.peer_id() {
                 continue;
