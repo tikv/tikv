@@ -105,7 +105,9 @@
 # advertise-addr = ""
 
 ## Status address.
-## This is used for reporting the status of TiKV directly through the HTTP address.
+## This is used for reporting the status of TiKV directly through 
+## the HTTP address. Notice that there is a risk of leaking status
+## information if this port is exposed to the public.
 ## Empty string means disabling it.
 # status-addr = "127.0.0.1:20180"
 
