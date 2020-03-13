@@ -13,7 +13,7 @@ byteorder = "1.2"
 derive_more = "0.15.0"
 failure = "0.1"
 hex = "0.3"
-kvproto = { git = "https://github.com/busyjay/kvproto.git", branch = "set-apply-term", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "4.0-perf", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 
 [dev-dependencies]
