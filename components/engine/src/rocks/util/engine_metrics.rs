@@ -159,6 +159,7 @@ pub const ENGINE_HIST_TYPES: &[HistType] = &[
     HistType::BlobDbBlobFileReadMicros,
     HistType::BlobDbBlobFileSyncMicros,
     HistType::BlobDbGcMicros,
+    HistType::DbWriteWalTime,
 ];
 
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
@@ -806,6 +807,14 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
+        HistType::DbWriteWalTime => {
+            engine_histogram_metrics!(
+                STORE_ENGINE_WRITE_WAL_TIME_VEC,
+                "write_wal_micros",
+                name,
+                value
+            );
+        }
         _ => {}
     }
 }
@@ -1345,6 +1354,11 @@ lazy_static! {
         "tikv_engine_titandb_obsolete_blob_file_size",
         "Size of obsolete blob file",
         &["db", "cf"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_WRITE_WAL_TIME_VEC: GaugeVec = register_gauge_vec!(
+        "tikv_engine_write_wal_time_micro_seconds",
+        "Histogram of write wal micros",
+        &["db", "type"]
     ).unwrap();
 }
 
