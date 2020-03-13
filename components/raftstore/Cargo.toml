@@ -79,8 +79,7 @@ txn_types = { path = "../txn_types"}
 uuid = { version = "0.7", features = ["serde", "v4"] }
 
 [dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+version = "0.8"
 features = ["nightly", "push", "process"]
 
 [dependencies.yatp]

@@ -48,8 +48,7 @@ url = "2"
 zeroize = { version = "0.10", features = ["alloc"] }
 
 [dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+version = "0.8"
 features = ["nightly", "push", "process"]
 
 [target.'cfg(target_os = "linux")'.dependencies]

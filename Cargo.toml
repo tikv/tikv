@@ -134,8 +134,7 @@ vlog = "0.1.4"
 into_other = { path = "components/into_other" }
 
 [dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+version = "0.8"
 features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
