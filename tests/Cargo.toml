@@ -114,7 +114,7 @@ uuid = { version = "0.7", features = ["serde", "v4"] }
 # of `real_blackbox` feature.
 criterion = "0.3"
 criterion-cpu-time = "0.1"
-arrow = "0.10.0"
+arrow = "0.16"
 rand_xorshift = "0.1"
 
 engine_rocks = { path = "../components/engine_rocks" }
