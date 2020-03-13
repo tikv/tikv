@@ -203,7 +203,9 @@ impl CGroup {
     }
 
     pub fn read_num(&self, param: &str) -> Result<i64, Box<dyn error::Error>> {
-        Ok(fs::read_to_string(Path::new(&self.path).join(param))?.parse::<i64>()?)
+        Ok(fs::read_to_string(Path::new(&self.path).join(param))?
+            .trim()
+            .parse::<i64>()?)
     }
 }
 
@@ -410,6 +412,13 @@ mod tests {
         f3.write_all(b"abc").unwrap();
         f3.sync_all().unwrap();
         assert!(cgroup.read_num("cpu.cfs_period_us").is_err());
+
+        // Read number with \n from file `memory.max_usage`.
+        let path = tmp_dir.path().join("memory.max_usage");
+        let mut f1 = File::create(path).unwrap();
+        f1.write_all(b"123\n").unwrap();
+        f1.sync_all().unwrap();
+        assert_eq!(123, cgroup.read_num("memory.max_usage").unwrap());
     }
 
     #[test]
