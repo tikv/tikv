@@ -261,6 +261,21 @@ pub fn period_diff(p1: &Option<Int>, p2: &Option<Int>) -> Result<Option<Int>> {
     }
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn last_day(ctx: &mut EvalContext, t: &Option<Time>) -> Result<Option<Time>> {
+    if t.is_none() {
+        return Ok(None);
+    }
+    let t = t.as_ref().unwrap();
+    if t.month() == 0 {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .map(|_| Ok(None))?;
+    }
+    Ok(t.last_date_of_month())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -845,5 +860,32 @@ mod tests {
                 .unwrap();
             assert_eq!(output, Some(exp));
         }
+    }
+
+    #[test]
+    fn test_last_day() {
+        let cases = vec![
+            ("2011-11-11", "2011-11-30"),
+            ("2008-02-10", "2008-02-29"),
+            ("2000-02-11", "2000-02-29"),
+            ("2100-02-11", "2100-02-28"),
+            ("2011-11-11", "2011-11-30"),
+            ("2011-11-11 10:10:10", "2011-11-30 00:00:00"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let time = Some(Time::parse_date(&mut ctx, arg).unwrap());
+            let exp_val = Some(Time::parse_date(&mut ctx, exp).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time.clone())
+                .evaluate(ScalarFuncSig::LastDay)
+                .unwrap();
+            assert_eq!(output, exp_val);
+        }
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<Time>)
+            .evaluate::<Time>(ScalarFuncSig::LastDay)
+            .unwrap();
+        assert_eq!(output, None);
     }
 }

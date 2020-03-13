@@ -519,6 +519,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DayName => day_name_fn_meta(),
         ScalarFuncSig::PeriodAdd => period_add_fn_meta(),
         ScalarFuncSig::PeriodDiff => period_diff_fn_meta(),
+        ScalarFuncSig::LastDay => last_day_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
