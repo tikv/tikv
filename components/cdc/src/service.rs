@@ -7,7 +7,7 @@ use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
 use tikv_util::collections::HashMap;
-use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender};
+use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::worker::*;
 
 use crate::delegate::{Downstream, DownstreamID};
@@ -143,7 +143,7 @@ impl ChangeData for Service {
                 })
         });
 
-        let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, |v, e| v.push(e));
+        let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, VecCollector);
         let send_resp = sink.send_all(
             rx.map(|events| {
                 // The size of the response should not exceed CDC_MAX_RESP_SIZE.
