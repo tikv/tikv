@@ -150,6 +150,14 @@ impl StoreTick {
     }
 }
 
+#[derive(Debug)]
+pub enum MergeResultType {
+    FromTargetLog,
+    FromTargetSnapshotStep1,
+    FromTargetSnapshotStep2,
+    Stale,
+}
+
 /// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
 /// groups to update some important internal status.
 #[derive(Debug)]
@@ -172,10 +180,11 @@ pub enum SignificantMsg {
     CatchUpLogs(CatchUpLogs),
     /// Result of the fact that the region is merged.
     MergeResult {
+        target_region_id: u64,
         target: metapb::Peer,
         // True means it's a stale merge source.
         // False means it came from target region.
-        stale: bool,
+        result_type: MergeResultType,
     },
 }
 

@@ -253,6 +253,7 @@ pub struct ApplySnapResult {
     // prev_region is the region before snapshot applied.
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
+    pub destroyed_regions: Option<Vec<metapb::Region>>,
 }
 
 /// Returned by `PeerStorage::handle_raft_ready`, used for recording changed status of
@@ -266,6 +267,8 @@ pub struct InvokeContext {
     last_term: u64,
     /// The old region is stored here if there is a snapshot.
     pub snap_region: Option<Region>,
+
+    pub destroyed_regions: Option<Vec<metapb::Region>>,
 }
 
 impl InvokeContext {
@@ -276,6 +279,7 @@ impl InvokeContext {
             apply_state: store.apply_state.clone(),
             last_term: store.last_term,
             snap_region: None,
+            destroyed_regions: None,
         }
     }
 
@@ -898,6 +902,7 @@ impl PeerStorage {
         snap: &Snapshot,
         kv_wb: &RocksWriteBatch,
         raft_wb: &RocksWriteBatch,
+        destroy_regions: &Option<Vec<metapb::Region>>,
     ) -> Result<()> {
         info!(
             "begin to apply snapshot";
@@ -923,7 +928,12 @@ impl PeerStorage {
             // we can only delete the old data when the peer is initialized.
             self.clear_meta(kv_wb, raft_wb)?;
         }
-
+        // Write its source peers' `RegionLocalState`
+        if let Some(regions) = destroy_regions {
+            for r in regions {
+                write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
+            }
+        }
         write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
 
         let last_index = snap.get_metadata().get_index();
@@ -973,11 +983,14 @@ impl PeerStorage {
     }
 
     /// Delete all data that is not covered by `new_region`.
-    fn clear_extra_data(&self, new_region: &metapb::Region) -> Result<()> {
-        let (old_start_key, old_end_key) =
-            (enc_start_key(self.region()), enc_end_key(self.region()));
+    fn clear_extra_data(
+        &self,
+        region_id: u64,
+        old_region: &metapb::Region,
+        new_region: &metapb::Region,
+    ) -> Result<()> {
+        let (old_start_key, old_end_key) = (enc_start_key(old_region), enc_end_key(old_region));
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
-        let region_id = new_region.get_id();
         if old_start_key < new_start_key {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
                 region_id,
@@ -1117,6 +1130,7 @@ impl PeerStorage {
         &mut self,
         ready_ctx: &mut H,
         ready: &Ready,
+        destroy_regions: Option<Vec<metapb::Region>>,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
         let snapshot_index = if raft::is_empty_snap(ready.snapshot()) {
@@ -1128,11 +1142,13 @@ impl PeerStorage {
                 ready.snapshot(),
                 &ready_ctx.kv_wb(),
                 &ready_ctx.raft_wb(),
+                &destroy_regions,
             )?;
             fail_point!("raft_after_apply_snap");
 
             last_index(&ctx.raft_state)
         };
+        ctx.destroyed_regions = destroy_regions;
 
         if ready.must_sync() {
             ready_ctx.set_sync_log(true);
@@ -1182,17 +1198,29 @@ impl PeerStorage {
         };
         // cleanup data before scheduling apply task
         if self.is_initialized() {
-            if let Err(e) = self.clear_extra_data(self.region()) {
+            if let Err(e) = self.clear_extra_data(self.get_region_id(), self.region(), &snap_region)
+            {
                 // No need panic here, when applying snapshot, the deletion will be tried
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
                 // store is restarted.
                 error!(
                     "failed to cleanup data, may leave some dirty data";
-                    "region_id" => self.region.get_id(),
+                    "region_id" => self.get_region_id(),
                     "peer_id" => self.peer_id,
                     "err" => ?e,
                 );
+            }
+        }
+        if let Some(ref destroyed_regions) = ctx.destroyed_regions {
+            for r in destroyed_regions {
+                if let Err(e) = self.clear_extra_data(r.get_id(), r, &snap_region) {
+                    error!(
+                        "failed to cleanup data, may leave some dirty data";
+                        "region_id" => r.get_id(),
+                        "err" => ?e,
+                    );
+                }
             }
         }
 
@@ -1203,6 +1231,7 @@ impl PeerStorage {
         Some(ApplySnapResult {
             prev_region,
             region: self.region().clone(),
+            destroyed_regions: ctx.destroyed_regions.clone(),
         })
     }
 }

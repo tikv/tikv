@@ -54,8 +54,8 @@ use crate::store::worker::{
 use crate::store::DynamicConfig;
 use crate::store::PdTask;
 use crate::store::{
-    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
-    SnapshotDeleter, StoreMsg, StoreTick,
+    util, Callback, CasualMessage, MergeResultType, PeerMsg, RaftCommand, SignificantMsg,
+    SnapManager, SnapshotDeleter, StoreMsg, StoreTick,
 };
 use crate::Result;
 use engine::Engines;
@@ -64,7 +64,7 @@ use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{ConfigClient, PdClient};
 use sst_importer::SSTImporter;
-use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
@@ -100,10 +100,14 @@ pub struct StoreMeta {
     pub pending_snapshot_regions: Vec<Region>,
     /// A marker used to indicate the peer of a Region has received a merge target message and waits to be destroyed.
     /// target_region_id -> (source_region_id -> merge_target_epoch)
-    pub pending_merge_targets: HashMap<u64, HashMap<u64, RegionEpoch>>,
+    pub pending_merge_targets: HashMap<u64, HashMap<u64, metapb::Region>>,
     /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
     /// source_region_id -> target_region_id
     pub targets_map: HashMap<u64, u64>,
+
+    pub atomic_snap_regions: HashMap<u64, HashMap<u64, bool>>,
+
+    pub destroyed_region_for_snap: HashMap<u64, bool>,
 }
 
 impl StoreMeta {
@@ -117,6 +121,8 @@ impl StoreMeta {
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
             targets_map: HashMap::default(),
+            atomic_snap_regions: HashMap::default(),
+            destroyed_region_for_snap: HashMap::default(),
         }
     }
 
@@ -232,7 +238,6 @@ pub struct PollContext<T, C: 'static> {
     pub has_ready: bool,
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
-    pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
 }
 
@@ -694,12 +699,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
             self.handle_raft_ready(peers);
         }
         self.poll_ctx.current_time = None;
-        if !self.poll_ctx.queued_snapshot.is_empty() {
-            let mut meta = self.poll_ctx.store_meta.lock().unwrap();
-            meta.pending_snapshot_regions
-                .retain(|r| !self.poll_ctx.queued_snapshot.contains(&r.get_id()));
-            self.poll_ctx.queued_snapshot.clear();
-        }
         self.poll_ctx
             .raft_metrics
             .process_ready
@@ -943,7 +942,6 @@ where
             has_ready: false,
             ready_res: Vec::new(),
             need_flush_trans: false,
-            queued_snapshot: HashSet::default(),
             current_time: None,
         };
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1413,14 +1411,17 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             if util::is_first_vote_msg(msg.get_message()) {
                 meta.pending_votes.push(msg.to_owned());
             }
-
-            if maybe_destroy_source(
+            let (can_destroy, merge_to_this_peer) = maybe_destroy_source(
                 meta,
                 region_id,
+                msg.get_to_peer().get_id(),
                 exist_region.get_id(),
                 msg.get_region_epoch().to_owned(),
-            ) {
-                regions_to_destroy.push(exist_region.get_id());
+            );
+            if can_destroy {
+                if !merge_to_this_peer {
+                    regions_to_destroy.push(exist_region.get_id());
+                }
                 continue;
             }
             is_overlapped = true;
@@ -1445,13 +1446,13 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 .force_send(
                     id,
                     PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                        target_region_id: region_id,
                         target: target.clone(),
-                        stale: true,
+                        result_type: MergeResultType::Stale,
                     }),
                 )
                 .unwrap();
         }
-
         // New created peers should know it's learner or not.
         let (tx, peer) = PeerFsm::replicate(
             self.ctx.store_id(),

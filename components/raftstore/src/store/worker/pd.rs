@@ -29,7 +29,9 @@ use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::Callback;
 use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+use crate::store::{
+    CasualMessage, MergeResultType, PeerMsg, RaftCommand, RaftRouter, SignificantMsg,
+};
 use pd_client::metrics::*;
 use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -670,7 +672,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                                 .with_label_values(&["peer stale"])
                                 .inc();
                             if let Some(source) = merge_source {
-                                send_merge_fail(&router, source, peer);
+                                send_merge_fail(&router, source, local_region.get_id(), peer);
                             } else {
                                 send_destroy_peer_message(&router, local_region, peer, pd_region);
                             }
@@ -1046,18 +1048,23 @@ fn send_admin_request(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(router: &RaftRouter<RocksEngine>, source_region_id: u64, target: metapb::Peer) {
-    let target_id = target.get_id();
+fn send_merge_fail(
+    router: &RaftRouter<RocksEngine>,
+    source_region_id: u64,
+    target_region_id: u64,
+    target: metapb::Peer,
+) {
     if let Err(e) = router.force_send(
         source_region_id,
         PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+            target_region_id,
             target,
-            stale: true,
+            result_type: MergeResultType::Stale,
         }),
     ) {
         error!(
             "source region report merge failed";
-            "region_id" => source_region_id, "targe_region_id" => target_id, "err" => ?e,
+            "region_id" => source_region_id, "targe_region_id" => target_region_id, "err" => ?e,
         );
     }
 }

@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
@@ -19,7 +18,7 @@ use kvproto::raft_cmdpb::{
     TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
-    ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
+    ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
 };
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -39,7 +38,6 @@ use crate::store::fsm::{
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, PdTask, QuorumAlgorithm, ReadResponse, RegionSnapshot};
 use crate::{Error, Result};
-use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant as UtilInstant;
@@ -1099,8 +1097,8 @@ impl Peer {
             ctx.need_flush_trans = true;
             self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
-
-        if let Some(snap) = self.get_pending_snapshot() {
+        let mut destroy_regions: Option<Vec<metapb::Region>> = None;
+        if let Some(_) = self.get_pending_snapshot() {
             if !self.ready_to_handle_pending_snap() {
                 let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
@@ -1114,46 +1112,28 @@ impl Peer {
                 return None;
             }
 
-            let mut snap_data = RaftSnapshotData::default();
-            snap_data
-                .merge_from_bytes(snap.get_data())
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "failed to parse snap data";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
-            let region = snap_data.take_region();
-
             let meta = ctx.store_meta.lock().unwrap();
-            // Region's range changes if and only if epoch version change. So if the snapshot's
-            // version is not larger than now, we can make sure there is no overlap.
-            if region.get_region_epoch().get_version()
-                > meta.regions[&region.get_id()]
-                    .get_region_epoch()
-                    .get_version()
-            {
-                // For merge process, when applying snapshot or create new peer the stale source
-                // peer is destroyed asynchronously. So here checks whether there is any overlap, if
-                // so, wait and do not handle raft ready.
-                if let Some(r) = meta
-                    .region_ranges
-                    .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
-                    .map(|(_, &region_id)| &meta.regions[&region_id])
-                    .take_while(|r| enc_start_key(r) < enc_end_key(&region))
-                    .find(|r| r.get_id() != region.get_id())
-                {
-                    info!(
-                        "snapshot range overlaps, wait source destroy finish";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "apply_index" => self.get_store().applied_index(),
-                        "last_applying_index" => self.last_applying_idx,
-                        "overlap_region" => ?r,
-                    );
-                    return None;
+            // For merge process, when applying snapshot or create new peer the stale source
+            // peer is destroyed asynchronously. So here checks whether there is any overlap, if
+            // so, wait and do not handle raft ready.
+            if let Some(wait_destroy_regions) = meta.atomic_snap_regions.get(&self.region_id) {
+                destroy_regions = Some(vec![]);
+                for (source_region_id, flag) in wait_destroy_regions {
+                    if !flag {
+                        info!(
+                            "snapshot range overlaps, wait source destroy finish";
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer.get_id(),
+                            "apply_index" => self.get_store().applied_index(),
+                            "last_applying_index" => self.last_applying_idx,
+                            "overlap_region_id" => source_region_id,
+                        );
+                        return None;
+                    }
+                    destroy_regions
+                        .as_mut()
+                        .unwrap()
+                        .push(meta.regions[&source_region_id].clone());
                 }
             }
         }
@@ -1208,7 +1188,10 @@ impl Peer {
             self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
         }
 
-        let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
+        let invoke_ctx = match self
+            .mut_store()
+            .handle_raft_ready(ctx, &ready, destroy_regions)
+        {
             Ok(r) => r,
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
