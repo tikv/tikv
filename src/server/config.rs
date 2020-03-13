@@ -7,7 +7,7 @@ use grpcio::CompressionAlgorithms;
 
 use tikv_util::collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
-use tikv_util::sys::SysQuota;
+use tikv_util::sys::sys_quota::SysQuota;
 
 pub use crate::storage::config::Config as StorageConfig;
 pub use raftstore::store::Config as RaftStoreConfig;

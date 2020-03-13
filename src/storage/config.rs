@@ -6,7 +6,7 @@ use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, ReadableSize};
-use tikv_util::sys::SysQuota;
+use tikv_util::sys::sys_quota::SysQuota;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";

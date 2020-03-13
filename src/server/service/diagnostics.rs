@@ -124,7 +124,7 @@ mod sys {
 
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
     use sysinfo::{DiskExt, ProcessExt, SystemExt};
-    use tikv_util::sys::SysQuota;
+    use tikv_util::sys::sys_quota::SysQuota;
 
     fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
         // CPU load

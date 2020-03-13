@@ -56,7 +56,7 @@ use raftstore::store::PdTask;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
-use tikv_util::sys::SysQuota;
+use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::FutureScheduler;
 use tikv_util::Either;

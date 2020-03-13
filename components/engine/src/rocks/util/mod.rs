@@ -27,7 +27,7 @@ use crate::{Error, Result};
 
 pub use crate::rocks::CFHandle;
 use engine_traits::{ALL_CFS, CF_DEFAULT};
-use tikv_util::sys::SysQuota;
+use tikv_util::sys::sys_quota::SysQuota;
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [

@@ -191,7 +191,8 @@ where
     Ok(())
 }
 
-struct CGroup {
+#[derive(Debug, PartialEq)]
+pub struct CGroup {
     // subsystem path
     path: String,
 }
@@ -208,7 +209,7 @@ impl CGroup {
 
 pub struct CGroupSys {
     // subsystem name -> CGroup
-    cgroups: HashMap<String, CGroup>,
+    pub cgroups: HashMap<String, CGroup>,
 }
 
 impl Default for CGroupSys {
@@ -279,10 +280,11 @@ impl CGroupSys {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_mount_point_from_line, parse_subsys_from_line, CGroup, CGroupSubsys, MountPoint,
+        parse_mount_point_from_line, parse_subsys_from_line, CGroup, CGroupSubsys, MountPoint, CGroupSys,
     };
     use std::fs::File;
     use std::io::Write;
+    use std::collections::HashMap;
     use tempfile::TempDir;
 
     #[test]
@@ -357,6 +359,31 @@ mod tests {
     }
 
     #[test]
+    fn test_mount_point_translate() {
+        let mp = MountPoint {
+            mount_id: 31,
+            parent_id: 23,
+            device_id: "0:24".to_string(),
+            root: "/docker".to_string(),
+            mount_point: "/sys/fs/cgroup/cpu".to_string(),
+            options: vec![
+                "rw".to_string(),
+                "nosuid".to_string(),
+                "nodev".to_string(),
+                "noexec".to_string(),
+                "relatime".to_string(),
+            ],
+            optional_fields: vec!["shared:1".to_string()],
+            fs_type: "cgroup".to_string(),
+            mount_source: "cgroup".to_string(),
+            super_options: vec!["rw".to_string(), "cpu".to_string()],
+        };
+
+        let translated = mp.translate("/docker").unwrap();
+        assert_eq!(translated, "/sys/fs/cgroup/cpu/");
+    }
+
+    #[test]
     fn test_read_num() {
         let tmp_dir = TempDir::new().unwrap();
         let cgroup = CGroup::new(tmp_dir.path().to_str().unwrap().to_string());
@@ -381,5 +408,33 @@ mod tests {
         f3.write_all(b"abc").unwrap();
         f3.sync_all().unwrap();
         assert!(cgroup.read_num("cpu.cfs_period_us").is_err());
+    }
+
+    #[test]
+    fn test_cgroup_sys() {
+        let temp_dir = TempDir::new().unwrap();
+        let path1 = temp_dir.path().join("cgroup");
+        let mut f1 = File::create(path1.clone()).unwrap();
+        f1.write_all(b"4:memory:/kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575\n").unwrap();
+        f1.write_all(b"5:cpuacct,cpu:/kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575\n").unwrap();
+        f1.sync_all().unwrap();
+
+        let path2 = temp_dir.path().join("mountinfo");
+        let mut f2 = File::create(path2.clone()).unwrap();
+        f2.write_all(b"5871 5867 0:26 /kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575 /sys/fs/cgroup/memory ro,nosuid,nodev,noexec,relatime master:12 - cgroup cgroup rw,memory\n").unwrap();
+        f2.write_all(b"5872 5867 0:27 /kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575 /sys/fs/cgroup/cpu,cpuacct ro,nosuid,nodev,noexec,relatime master:13 - cgroup cgroup rw,cpuacct,cpu\n").unwrap();
+        f2.sync_all().unwrap();
+
+        // Create CGroupSys by f1 and f2.
+        let cgroup = CGroupSys::new(path1.to_str().unwrap(), path2.to_str().unwrap());
+
+        let mut expected_cgroups: HashMap<String, CGroup> = HashMap::new();
+        expected_cgroups.insert("memory".to_string(), CGroup::new("/sys/fs/cgroup/memory/".to_string()));
+        expected_cgroups.insert("cpu".to_string(), CGroup::new("/sys/fs/cgroup/cpu,cpuacct/".to_string()));
+        expected_cgroups.insert("cpuacct".to_string(), CGroup::new("/sys/fs/cgroup/cpu,cpuacct/".to_string()));
+        for (key, value) in expected_cgroups.iter() {
+            let v = cgroup.cgroups.get(key).unwrap_or_else(|| panic!("key {} doesn't exist", key));
+            assert_eq!(v, value);
+        }
     }
 }
