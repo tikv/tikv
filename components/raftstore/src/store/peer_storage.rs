@@ -1490,6 +1490,7 @@ mod tests {
     use engine::rocks::util::new_engine;
     use engine::Engines;
     use engine_rocks::{Compat, RocksWriteBatch};
+    use engine_traits::WriteBatchExt;
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
