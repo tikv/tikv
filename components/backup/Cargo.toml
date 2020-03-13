@@ -73,8 +73,7 @@ tokio-threadpool = "0.1"
 txn_types = { path = "../txn_types" }
 
 [dependencies.prometheus]
-git = "https://github.com/renkai/rust-prometheus.git"
-rev = "fcc6b1a7ac30f7591a157f4067a42482ac321fe0"
+version = "0.8"
 default-features = false
 features = ["nightly", "push", "process"]
 

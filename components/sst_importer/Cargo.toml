@@ -44,8 +44,7 @@ txn_types = { path = "../txn_types" }
 uuid = { version = "0.7", features = ["serde", "v4"] }
 
 [dependencies.prometheus]
-git = "https://github.com/renkai/rust-prometheus.git"
-rev = "fcc6b1a7ac30f7591a157f4067a42482ac321fe0"
+version = "0.8"
 default-features = false
 
 [dev-dependencies]
