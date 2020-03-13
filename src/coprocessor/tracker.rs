@@ -107,6 +107,10 @@ impl Tracker {
         self.current_stage = TrackerState::ItemFinished;
     }
 
+    pub fn collect_storage_statistics(&mut self, storage_stats: Statistics) {
+        self.total_storage_stats.add(&storage_stats);
+    }
+
     /// Get current item's ExecDetail according to previous collected metrics.
     /// TiDB asks for ExecDetail to be printed in its log.
     pub fn get_item_exec_details(&self) -> kvrpcpb::ExecDetails {
@@ -147,7 +151,7 @@ impl Tracker {
                 tidb_query::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
             });
 
-            info!("slow-query";
+            info!(#"slow_log", "slow-query";
                 "region_id" => self.req_ctx.context.get_region_id(),
                 "peer_id" => &self.req_ctx.peer,
                 "total_process_time" => ?self.total_process_time,

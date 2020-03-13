@@ -35,7 +35,7 @@ use crate::storage::{
 };
 use engine_traits::CF_WRITE;
 use tikv_util::collections::HashMap;
-use tikv_util::time::{Instant, SlowTimer};
+use tikv_util::time::Instant;
 
 pub const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -90,15 +90,23 @@ pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
     // If the task releases some locks, we wake up waiters waiting for them.
     lock_mgr: Option<L>,
 
+    pipelined_pessimistic_lock: bool,
+
     _phantom: PhantomData<E>,
 }
 
 impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
-    pub fn new(scheduler: S, pool: SchedPool, lock_mgr: Option<L>) -> Self {
+    pub fn new(
+        scheduler: S,
+        pool: SchedPool,
+        lock_mgr: Option<L>,
+        pipelined_pessimistic_lock: bool,
+    ) -> Self {
         Executor {
             sched_pool: Some(pool),
             scheduler: Some(scheduler),
             lock_mgr,
+            pipelined_pessimistic_lock,
             _phantom: Default::default(),
         }
     }
@@ -176,7 +184,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
 
                 let region_id = task.region_id;
                 let ts = task.ts;
-                let timer = SlowTimer::new();
+                let timer = Instant::now_coarse();
 
                 let statistics = if readonly {
                     self.process_read(snapshot, task)
@@ -186,7 +194,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
-                    timer,
+                    timer.elapsed(),
                     "[region {}] scheduler handle command: {}, ts: {}",
                     region_id,
                     tag,
@@ -225,7 +233,14 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
         let lock_mgr = self.take_lock_mgr();
-        let msg = match process_write_impl(task.cmd, snapshot, lock_mgr, &mut statistics) {
+        let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_pipelined();
+        let msg = match process_write_impl(
+            task.cmd,
+            snapshot,
+            lock_mgr,
+            &mut statistics,
+            self.pipelined_pessimistic_lock,
+        ) {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
@@ -252,11 +267,17 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         cid,
                         pr,
                         result: Ok(()),
+                        pipelined: false,
                         tag,
                     }
                 } else {
                     let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
+                    let (write_finished_pr, pipelined_write_pr) = if pipelined {
+                        (pr.maybe_clone().unwrap(), pr)
+                    } else {
+                        (pr, ProcessResult::Res)
+                    };
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
                         sched_pool
@@ -266,8 +287,9 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                                     sched,
                                     Msg::WriteFinished {
                                         cid,
-                                        pr,
+                                        pr: write_finished_pr,
                                         result,
+                                        pipelined,
                                         tag,
                                     },
                                 );
@@ -285,6 +307,14 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
+                    } else if pipelined {
+                        // The write task is scheduled to engine successfully.
+                        // Respond to client early.
+                        Msg::PipelinedWrite {
+                            cid,
+                            pr: pipelined_write_pr,
+                            tag,
+                        }
                     } else {
                         return statistics;
                     }
@@ -485,6 +515,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     snapshot: S,
     lock_mgr: Option<L>,
     statistics: &mut Statistics,
+    pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
         CommandKind::Prewrite(Prewrite {
@@ -578,6 +609,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     for_update_ts,
                     txn_size,
                     min_commit_ts,
+                    pipelined_pessimistic_lock,
                 ) {
                     Ok(_) => {}
                     e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
@@ -1122,7 +1154,7 @@ mod tests {
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
+        let ret = process_write_impl(cmd, snap, Some(m), statistics, false)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
             if !results.is_empty() {
                 let info = LockInfo::default();
@@ -1152,7 +1184,7 @@ mod tests {
             ctx,
         );
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd.into(), snap, Some(m), statistics)?;
+        let ret = process_write_impl(cmd.into(), snap, Some(m), statistics, false)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())
