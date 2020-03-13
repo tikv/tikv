@@ -15964,7 +15964,7 @@
             "x": 12,
             "y": 41
           },
-          "id": 126,
+          "id": 130,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -16000,7 +16000,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "max(tikv_engine_write_wal_time_micro_seconds{instance=~\"$instance\", db=\"$db\",type=\"write_max\"})",
+              "expr": "max(tikv_engine_write_wal_time_micro_seconds{instance=~\"$instance\", db=\"$db\",type=\"write_wal_micros_max\"})",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "max",
@@ -16008,7 +16008,7 @@
               "step": 10
             },
             {
-              "expr": "avg(tikv_engine_write_wal_time_micro_seconds{instance=~\"$instance\", db=\"$db\",type=\"write_percentile99\"})",
+              "expr": "avg(tikv_engine_write_wal_time_micro_seconds{instance=~\"$instance\", db=\"$db\",type=\"write_wal_micros_percentile99\"})",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "99%",
@@ -16016,7 +16016,7 @@
               "step": 10
             },
             {
-              "expr": "avg(tikv_engine_write_wal_time_micro_seconds{instance=~\"$instance\", db=\"$db\",type=\"write_percentile95\"})",
+              "expr": "avg(tikv_engine_write_wal_time_micro_seconds{instance=~\"$instance\", db=\"$db\",type=\"write_wal_micros_percentile95\"})",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "95%",
@@ -16024,7 +16024,7 @@
               "step": 10
             },
             {
-              "expr": "avg(tikv_engine_write_wal_time_micro_seconds{instance=~\"$instance\", db=\"$db\",type=\"write_average\"})",
+              "expr": "avg(tikv_engine_write_wal_time_micro_seconds{instance=~\"$instance\", db=\"$db\",type=\"write_wal_micros_average\"})",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "avg",
@@ -16036,7 +16036,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Write duration",
+          "title": "Write WAL duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
