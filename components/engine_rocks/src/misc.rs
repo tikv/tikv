@@ -1,108 +1,51 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rocks;
-use crate::rocks::{Writable, DB};
+use crate::engine::RocksEngine;
+use crate::util;
+use engine_traits::{MiscExt, Result};
 
-use super::Result;
-use super::{IterOption, Iterable};
-use engine_traits::CF_LOCK;
-use tikv_util::keybuilder::KeyBuilder;
-
-use crate::Mutable;
-use rocksdb::WriteBatch;
-impl Mutable for WriteBatch {}
-
-// In our tests, we found that if the batch size is too large, running delete_all_in_range will
-// reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
-pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
-
-pub fn delete_all_in_range(
-    db: &DB,
-    start_key: &[u8],
-    end_key: &[u8],
-    use_delete_range: bool,
-) -> Result<()> {
-    if start_key >= end_key {
-        return Ok(());
+impl MiscExt for RocksEngine {
+    fn is_titan(&self) -> bool {
+        self.as_inner().is_titan()
     }
 
-    for cf in db.cf_names() {
-        delete_all_in_range_cf(db, cf, start_key, end_key, use_delete_range)?;
+    fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self.as_inner().flush_cf(handle, sync)?)
     }
 
-    Ok(())
-}
-
-pub fn delete_all_in_range_cf(
-    db: &DB,
-    cf: &str,
-    start_key: &[u8],
-    end_key: &[u8],
-    use_delete_range: bool,
-) -> Result<()> {
-    let handle = rocks::util::get_cf_handle(db, cf)?;
-    let wb = WriteBatch::default();
-    if use_delete_range && cf != CF_LOCK {
-        wb.delete_range_cf(handle, start_key, end_key)?;
-    } else {
-        let start = KeyBuilder::from_slice(start_key, 0, 0);
-        let end = KeyBuilder::from_slice(end_key, 0, 0);
-        let mut iter_opt = IterOption::new(Some(start), Some(end), false);
-        if db.is_titan() {
-            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-            // to avoid referring to missing blob files.
-            iter_opt.set_key_only(true);
-        }
-        let mut it = db.new_iterator_cf(cf, iter_opt)?;
-        let mut it_valid = it.seek(start_key.into())?;
-        while it_valid {
-            wb.delete_cf(handle, it.key())?;
-            if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
-                // Can't use write_without_wal here.
-                // Otherwise it may cause dirty data when applying snapshot.
-                db.write(&wb)?;
-                wb.clear();
-            }
-            it_valid = it.next()?;
-        }
+    fn delete_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .delete_files_in_range_cf(handle, start_key, end_key, include_end)?)
     }
-
-    if wb.count() > 0 {
-        db.write(&wb)?;
-    }
-
-    Ok(())
-}
-
-pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-    if start_key >= end_key {
-        return Ok(());
-    }
-
-    for cf in db.cf_names() {
-        let handle = rocks::util::get_cf_handle(db, cf)?;
-        db.delete_files_in_range_cf(handle, start_key, end_key, false)?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use tempfile::Builder;
 
-    use crate::rocks;
-    use crate::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
-    use crate::rocks::{ColumnFamilyOptions, DBOptions, SeekKey, Writable};
-    use crate::DB;
+    use crate::engine::RocksEngine;
+    use engine::rocks;
+    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine::DB;
+    use std::sync::Arc;
 
     use super::*;
     use engine_traits::ALL_CFS;
+    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, WriteBatchExt};
 
-    fn check_data(db: &DB, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
+    fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
-            let handle = get_cf_handle(db, cf).unwrap();
-            let mut iter = db.iter_cf(handle);
+            let mut iter = db.iterator_cf(cf).unwrap();
             iter.seek(SeekKey::Start).unwrap();
             for &(k, v) in expected {
                 assert_eq!(k, iter.key());
@@ -125,8 +68,10 @@ mod tests {
             .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
             .collect();
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
+        let db = Arc::new(db);
+        let db = RocksEngine::from_db(db);
 
-        let wb = WriteBatch::default();
+        let wb = db.write_batch();
         let ts: u8 = 12;
         let keys: Vec<_> = vec![
             b"k1".to_vec(),
@@ -148,8 +93,7 @@ mod tests {
         let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
         for &(k, v) in kvs.as_slice() {
             for cf in ALL_CFS {
-                let handle = get_cf_handle(&db, cf).unwrap();
-                wb.put_cf(handle, k, v).unwrap();
+                wb.put_cf(cf, k, v).unwrap();
             }
         }
         db.write(&wb).unwrap();
@@ -158,7 +102,8 @@ mod tests {
         // Delete all in ["k2", "k4").
         let start = b"k2";
         let end = b"k4";
-        delete_all_in_range(&db, start, end, use_delete_range).unwrap();
+        db.delete_all_in_range(start, end, use_delete_range)
+            .unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -189,6 +134,8 @@ mod tests {
             })
             .collect();
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
+        let db = Arc::new(db);
+        let db = RocksEngine::from_db(db);
 
         let keys = vec![b"k1", b"k2", b"k3", b"k4"];
 
@@ -198,15 +145,14 @@ mod tests {
         }
         let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
         for cf in ALL_CFS {
-            let handle = get_cf_handle(&db, cf).unwrap();
             for &(k, v) in kvs.as_slice() {
-                db.put_cf(handle, k, v).unwrap();
-                db.flush_cf(handle, true).unwrap();
+                db.put_cf(cf, k, v).unwrap();
+                db.flush_cf(cf, true).unwrap();
             }
         }
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        delete_all_files_in_range(&db, b"k2", b"k4").unwrap();
+        db.delete_all_files_in_range(b"k2", b"k4").unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -233,7 +179,9 @@ mod tests {
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
         let cf = "default";
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
-        let wb = WriteBatch::default();
+        let db = Arc::new(db);
+        let db = RocksEngine::from_db(db);
+        let wb = db.write_batch();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),
             (b"kabcdefg2", b"v2"),
@@ -243,14 +191,14 @@ mod tests {
         let kvs_left: Vec<(&[u8], &[u8])> = vec![(b"kabcdefg1", b"v1"), (b"kabcdefg4", b"v4")];
 
         for &(k, v) in kvs.as_slice() {
-            let handle = get_cf_handle(&db, cf).unwrap();
-            wb.put_cf(handle, k, v).unwrap();
+            wb.put_cf(cf, k, v).unwrap();
         }
         db.write(&wb).unwrap();
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").
-        delete_all_in_range(&db, b"kabcdefg2", b"kabcdefg4", true).unwrap();
+        db.delete_all_in_range(b"kabcdefg2", b"kabcdefg4", true)
+            .unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
     }
 }
