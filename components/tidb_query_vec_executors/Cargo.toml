@@ -5,78 +5,25 @@ edition = "2018"
 publish = false
 description = "A vector query engine to run TiDB pushed down executors"
 
-[features]
-protobuf-codec = [
-  "kvproto/protobuf-codec",
-  "tidb_query_datatype/protobuf-codec",
-  "tipb/protobuf-codec",
-]
-prost-codec = [
-  "kvproto/prost-codec",
-  "tidb_query_datatype/prost-codec",
-  "tipb/prost-codec",
-]
-
 [dependencies]
-base64 = "0.10"
-bitfield = "0.13.2"
-bitflags = "1.0.1"
-boolinator = "2.4.0"
-bstr = "0.2.8"
-byteorder = "1.2"
-chrono = "0.4"
-chrono-tz = "0.5.1"
 codec = { path = "../codec" }
-derive_more = "0.15.0"
-failure = "0.1"
-flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 hex = "0.3"
-indexmap = { version = "1.0", features = ["serde-1"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-lazy_static = "1.3"
 match_template = { path = "../match_template" }
-nom = { version = "5.1.0", default-features = false, features = ["std"] }
-num = { version = "0.2", default-features = false }
-num-traits = "0.2"
-num-derive = "0.3"
-openssl = { version = "0.10" }
-ordered-float = "1.0"
-protobuf = "2"
-quick-error = "1.2.2"
-rand = "0.6.5"
-regex = "1.1"
-safemem = { version = "0.3", default-features = false }
-serde = "1.0"
-serde_json = "1.0"
 servo_arc = "0.1.1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 smallvec = "0.6"
-tidb_query_codegen = { path = "../tidb_query_codegen" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 tidb_query_vec_expr = { path = "../tidb_query_vec_expr" }
 tidb_query_vec_aggr = { path = "../tidb_query_vec_aggr" }
 tikv_util = { path = "../tikv_util" }
-time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-twoway = "0.2.0"
-uuid = { version = "0.8.1", features = ["v4"] }
-static_assertions = { version = "1.0", features = ["nightly"] }
-
-[dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
-features = ["nightly", "push", "process"]
-
-[dependencies.prometheus-static-metric]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
-profiler = { path = "../profiler" }
-panic_hook = { path = "../panic_hook" }
+failure = "0.1"
 tipb_helper = { path = "../tipb_helper" }
-futures = "0.3"
+tidb_query_codegen = { path = "../tidb_query_codegen" }
