@@ -32,7 +32,7 @@ use prometheus::HistogramTimer;
 use protobuf::RepeatedField;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
-use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
@@ -1008,11 +1008,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
-            BatchCommandsResponse::new,
-            |batch_resp, (id, resp)| {
-                batch_resp.mut_request_ids().push(id);
-                batch_resp.mut_responses().push(resp);
-            },
+            BatchCommandsResponse::default,
+            BatchRespCollector,
         );
 
         let response_retriever = response_retriever
@@ -2125,6 +2122,21 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
             })
             .collect(),
         Err(e) => vec![extract_key_error(&e)],
+    }
+}
+
+struct BatchRespCollector;
+impl BatchCollector<BatchCommandsResponse, (u64, BatchCommandsResponse_Response)>
+    for BatchRespCollector
+{
+    fn collect(
+        &mut self,
+        v: &mut BatchCommandsResponse,
+        e: (u64, BatchCommandsResponse_Response),
+    ) -> Option<(u64, BatchCommandsResponse_Response)> {
+        v.mut_request_ids().push(e.0);
+        v.mut_responses().push(e.1);
+        None
     }
 }
 

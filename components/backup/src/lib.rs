@@ -31,4 +31,4 @@ mod writer;
 pub use endpoint::{Endpoint, Task};
 pub use errors::{Error, Result};
 pub use service::Service;
-pub use writer::BackupWriter;
+pub use writer::{BackupRawKVWriter, BackupWriter};

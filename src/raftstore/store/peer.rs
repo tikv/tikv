@@ -1924,6 +1924,7 @@ impl Peer {
             poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
             cmd_resp::bind_error(&mut err_resp, e);
             cb.invoke_with_response(err_resp);
+            self.should_wake_up = true;
             return false;
         }
 
@@ -1969,6 +1970,7 @@ impl Peer {
                 self.bcast_wake_up_message(&mut poll_ctx.trans);
                 self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
             }
+            self.should_wake_up = true;
             cb.invoke_with_response(err_resp);
             return false;
         }
@@ -2490,9 +2492,6 @@ impl Peer {
             send_msg.set_from_peer(self.peer.clone());
             send_msg.set_region_epoch(self.region().get_region_epoch().clone());
             send_msg.set_to_peer(peer.clone());
-            send_msg
-                .mut_message()
-                .set_index(self.raft_group.get_store().committed_index());
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_field_type(ExtraMessageType::MsgRegionWakeUp);
             if let Err(e) = trans.send(send_msg) {

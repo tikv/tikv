@@ -101,6 +101,8 @@ pub enum Error {
     Txn(TxnError),
     #[fail(display = "ClusterID error current {}, request {}", current, request)]
     ClusterID { current: u64, request: u64 },
+    #[fail(display = "Invalid cf {}", cf)]
+    InvalidCf { cf: String },
 }
 
 macro_rules! impl_from {
