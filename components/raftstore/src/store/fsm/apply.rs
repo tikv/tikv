@@ -46,7 +46,7 @@ use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::MustConsumeVec;
@@ -278,7 +278,7 @@ impl Notifier {
 
 struct ApplyContext {
     tag: String,
-    timer: Option<SlowTimer>,
+    timer: Option<Instant>,
     host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
@@ -490,10 +490,11 @@ impl ApplyContext {
 
         self.host.on_flush_apply();
 
-        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        let elapsed = t.elapsed();
+        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
         slow_log!(
-            t,
+            elapsed,
             "{} handle ready {} committed entries",
             self.tag,
             self.committed_count
@@ -758,6 +759,7 @@ impl ApplyDelegate {
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
                 EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, &entry),
+                EntryType::EntryConfChangeV2 => unimplemented!(),
             };
 
             match res {
@@ -1588,9 +1590,6 @@ impl ApplyDelegate {
                     "peer" => ?peer,
                     "region" => ?&self.region,
                 );
-            }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-                unimplemented!()
             }
         }
 
@@ -2487,7 +2486,7 @@ impl ApplyFsm {
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
     fn handle_apply(&mut self, apply_ctx: &mut ApplyContext, apply: Apply) {
         if apply_ctx.timer.is_none() {
-            apply_ctx.timer = Some(SlowTimer::new());
+            apply_ctx.timer = Some(Instant::now_coarse());
         }
 
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
@@ -2589,7 +2588,7 @@ impl ApplyFsm {
         let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {
-            ctx.timer = Some(SlowTimer::new());
+            ctx.timer = Some(Instant::now_coarse());
         }
         if !state.pending_entries.is_empty() {
             self.delegate
@@ -2661,7 +2660,7 @@ impl ApplyFsm {
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
-                apply_ctx.timer = Some(SlowTimer::new());
+                apply_ctx.timer = Some(Instant::now_coarse());
             }
             if apply_ctx.kv_wb.is_none() {
                 apply_ctx.kv_wb = Some(
