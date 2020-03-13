@@ -37,6 +37,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
         scan_rows: usize,
         span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
+        let child_span = span.child("coprocessor BatchStreamAggregationExecutor", |options| {
+            options.start_with_state(())
+        });
         self.0.next_batch(scan_rows, span)
     }
 

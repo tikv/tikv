@@ -36,6 +36,9 @@ impl BatchExecutor for MockExecutor {
         _scan_rows: usize,
         _span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
+        let child_span = span.child("coprocessor MockExecutor", |options| {
+            options.start_with_state(())
+        });
         self.results.next().unwrap()
     }
 

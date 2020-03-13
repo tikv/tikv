@@ -163,8 +163,12 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     fn next_batch(
         &mut self,
         scan_rows: usize,
-        _span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
+        let child_span = span.child("coprocessor BatchExecutor", |options| {
+            options.start_with_state(())
+        });
+
         assert!(!self.is_ended);
         assert!(scan_rows > 0);
 

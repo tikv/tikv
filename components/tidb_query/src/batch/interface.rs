@@ -56,8 +56,8 @@ pub trait BatchExecutor: Send {
         self,
         output_index: usize,
     ) -> WithSummaryCollector<ExecSummaryCollectorEnabled, Self>
-    where
-        Self: Sized,
+        where
+            Self: Sized,
     {
         WithSummaryCollector {
             summary_collector: ExecSummaryCollectorEnabled::new(output_index),
@@ -95,7 +95,7 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
 }
 
 impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
-    for WithSummaryCollector<C, T>
+for WithSummaryCollector<C, T>
 {
     type StorageStats = T::StorageStats;
 
