@@ -812,17 +812,22 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.destroy_peer(false);
                 } else {
                     // Wait for its target peer to apply snapshot and then send `MergeResult` back
-                    // to itself to destroy peer
+                    // to destroy itself
                     let mut meta = self.ctx.store_meta.lock().unwrap();
-                    let target_region_id = meta.targets_map.get(&region_id).unwrap().clone();
-                    assert!(
-                        meta.atomic_snap_regions
-                            .get_mut(&target_region_id)
-                            .unwrap()
-                            .insert(region_id, true)
-                            .is_none(),
+                    // The `need_atomic` flag must be true
+                    assert_eq!(
+                        *meta.destroyed_region_for_snap.get(&region_id).unwrap(),
                         true
                     );
+
+                    let target_region_id = meta.targets_map.get(&region_id).unwrap().clone();
+                    let flag = meta
+                        .atomic_snap_regions
+                        .get_mut(&target_region_id)
+                        .unwrap()
+                        .get_mut(&region_id)
+                        .unwrap();
+                    *flag = true;
                 }
             }
         }
@@ -1443,8 +1448,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         // Clear merge related structures.
-        if let Some(&is_need_atomic) = meta.destroyed_region_for_snap.get(&region_id) {
-            if is_need_atomic {
+        if let Some(&need_atomic) = meta.destroyed_region_for_snap.get(&region_id) {
+            if need_atomic {
                 panic!(
                     "{} should destroy with target region atomically",
                     self.fsm.peer.tag
@@ -1452,14 +1457,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             } else {
                 // The order is important! Must be set this flag after clearing region_ranges and regions.
                 let target_region_id = meta.targets_map.get(&region_id).unwrap().clone();
-                assert!(
-                    meta.atomic_snap_regions
-                        .get_mut(&target_region_id)
-                        .unwrap()
-                        .insert(region_id, true)
-                        .is_none(),
-                    true
-                );
+                let flag = meta
+                    .atomic_snap_regions
+                    .get_mut(&target_region_id)
+                    .unwrap()
+                    .get_mut(&region_id)
+                    .unwrap();
+                *flag = true;
             }
         }
 
@@ -2181,15 +2185,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
             "check snapshot range";
-            "region_id" => self.region_id(),
+            "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "prev_region" => ?prev_region,
         );
 
-        // remove this region's snapshot region from the pending_snapshot_regions
+        // Remove this region's snapshot region from the pending_snapshot_regions
+        // The `pending_snapshot_regions` is only used to occupy the key range, so if this
+        // peer is added to `region_ranges`, it can be remove from `pending_snapshot_regions`
         meta.pending_snapshot_regions
             .retain(|r| !(self.fsm.region_id() == r.get_id()));
 
+        // Remove its source peers' metadata
         if let Some(ref destroyed_regions) = apply_result.destroyed_regions {
             for r in destroyed_regions {
                 let prev = meta.region_ranges.remove(&enc_end_key(&r));
@@ -2197,6 +2204,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 assert!(meta.regions.remove(&r.get_id()).is_some());
                 let reader = meta.readers.remove(&r.get_id()).unwrap();
                 reader.mark_invalid();
+            }
+        }
+        // Remove the data from `atomic_snap_regions` and `destroyed_region_for_snap`
+        // which are added before applying snapshot
+        if let Some(wait_destroy_regions) = meta.atomic_snap_regions.remove(&self.fsm.region_id()) {
+            for (source_region_id, _) in wait_destroy_regions {
+                assert_eq!(
+                    meta.destroyed_region_for_snap
+                        .remove(&source_region_id)
+                        .is_some(),
+                    true
+                );
             }
         }
 

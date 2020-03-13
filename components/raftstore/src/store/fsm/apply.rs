@@ -3419,10 +3419,12 @@ mod tests {
             );
         });
 
-        router.schedule_task(2, Msg::destroy(2, true));
+        router.schedule_task(2, Msg::destroy(2, true, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Destroy { region_id, peer_id } => (region_id, peer_id),
+                TaskRes::Destroy {
+                    region_id, peer_id, ..
+                } => (region_id, peer_id),
                 e => panic!("expected destroy result, but got {:?}", e),
             },
             e => panic!("expected destroy result, but got {:?}", e),

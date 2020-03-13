@@ -928,7 +928,7 @@ impl PeerStorage {
             // we can only delete the old data when the peer is initialized.
             self.clear_meta(kv_wb, raft_wb)?;
         }
-        // Write its source peers' `RegionLocalState`
+        // Write its source peers' `RegionLocalState` together with itself for atomicity
         if let Some(regions) = destroy_regions {
             for r in regions {
                 write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
@@ -2202,7 +2202,7 @@ mod tests {
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let kv_wb = s2.engines.kv.c().write_batch();
         let raft_wb = s2.engines.raft.c().write_batch();
-        s2.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+        s2.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb, &None)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
@@ -2220,7 +2220,7 @@ mod tests {
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let kv_wb = s3.engines.kv.c().write_batch();
         let raft_wb = s3.engines.raft.c().write_batch();
-        s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+        s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb, &None)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
