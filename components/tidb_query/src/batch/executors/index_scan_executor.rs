@@ -96,7 +96,10 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
         scan_rows: usize,
         span: rustracing::span::Span<()>,
     ) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows, span)
+        let child_span = span.child("coprocessor BatchIndexScanExecutor", |options| {
+            options.start_with_state(())
+        });
+        self.0.next_batch(scan_rows, child_span)
     }
 
     #[inline]
