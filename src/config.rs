@@ -907,9 +907,6 @@ impl DbConfig {
         self.raftcf.validate()?;
         self.titan.validate()?;
         if self.enable_unordered_write {
-            //            if self.titan.enabled {
-            //                return Err("RocksDB.unordered_write does not support Titan".into());
-            //            }
             if self.enable_pipelined_write || self.enable_multi_batch_write {
                 return Err("pipelined_write is not compatible with unordered_write".into());
             }
