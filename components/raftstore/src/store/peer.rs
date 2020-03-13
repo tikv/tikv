@@ -271,7 +271,7 @@ impl Peer {
             max_election_tick: cfg.raft_max_election_timeout_ticks,
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
-            applied: cmp::min(applied_index, ps.committed_index()),
+            applied: applied_index,
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
@@ -1385,12 +1385,15 @@ impl Peer {
                     self.raft_group.skip_bcast_commit(true);
                     self.last_urgent_proposal_idx = u64::MAX;
                 }
-                let last_commit_index = self.get_store().committed_index();
+                let committed_index = self.raft_group.raft.raft_log.committed;
+                let term = self.raft_group.raft.raft_log.term(committed_index).unwrap();
                 let apply = Apply::new(
                     self.region_id,
                     self.term(),
                     committed_entries,
-                    last_commit_index,
+                    self.get_store().committed_index(),
+                    term,
+                    committed_index,
                 );
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
@@ -1422,13 +1425,6 @@ impl Peer {
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
-        } else {
-            let applied_index = self.get_store().applied_index();
-            let raft_applied_index = self.raft_group.raft.raft_log.applied;
-            let committed_index = self.get_store().committed_index();
-            if applied_index > raft_applied_index && raft_applied_index < committed_index {
-                self.raft_group.advance_apply(committed_index);
-            }
         }
         self.proposals.gc();
     }
