@@ -98,12 +98,23 @@ checksum = "cff77d8686867eceff3105329d4698d96c2391c176d5d03adc90c7389162b5b8"
 
 [[package]]
 name = "arrow"
-version = "0.10.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "398bc55d60097e7b7e9be67d1cb03cb41e5bf4901381607ba0fca8b1328584d6"
+checksum = "2a6d33abfb1eadeb0c1fa1ead0c045ea3bb92f7581530582cb919815f4cd70cf"
 dependencies = [
- "bytes 0.4.12",
+ "chrono",
+ "csv",
+ "flatbuffers",
+ "hex 0.4.0",
+ "indexmap",
+ "lazy_static",
  "libc",
+ "num",
+ "packed_simd",
+ "rand 0.6.5",
+ "regex",
+ "serde",
+ "serde_derive",
  "serde_json",
 ]
 
@@ -1139,6 +1150,15 @@ name = "fixedbitset"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
+
+[[package]]
+name = "flatbuffers"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a788f068dd10687940565bf4b5480ee943176cbd114b12e811074bcf7c04e4b9"
+dependencies = [
+ "smallvec 1.1.0",
+]
 
 [[package]]
 name = "flate2"
@@ -2317,10 +2337,22 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf4825417e1e1406b3782a8ce92f4d53f26ec055e3622e1881ca8e9f5f9e08db"
 dependencies = [
+ "num-bigint",
  "num-complex",
  "num-integer",
  "num-iter",
  "num-rational",
+ "num-traits",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "343b3df15c945a59e72aae31e89a7cfc9e11850e96d4fde6fed5e3c7c8d9c887"
+dependencies = [
+ "autocfg",
+ "num-integer",
  "num-traits",
 ]
 
@@ -2383,6 +2415,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2885278d5fe2adc2f75ced642d52d879bffaceb5a2e0b1d4309ffdfb239b454"
 dependencies = [
  "autocfg",
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -2471,6 +2504,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49a4b8ea2179e6a2e27411d3bca09ca6dd630821cf6894c6c7c8467a8ee7ef13"
 dependencies = [
  "stable_deref_trait",
+]
+
+[[package]]
+name = "packed_simd"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a85ea9fc0d4ac0deb6fe7911d38786b32fc11119afd9e9d38b84ff691ce64220"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -3660,6 +3702,7 @@ version = "1.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "051c49229f282f7c6f3813f8286cc1e3323e8051823fce42c7ea80fe13521704"
 dependencies = [
+ "indexmap",
  "itoa",
  "ryu",
  "serde",
