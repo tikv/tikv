@@ -207,6 +207,7 @@ impl CGroup {
     }
 }
 
+#[derive(Debug)]
 pub struct CGroupSys {
     // subsystem name -> CGroup
     pub cgroups: HashMap<String, CGroup>,
@@ -280,11 +281,12 @@ impl CGroupSys {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_mount_point_from_line, parse_subsys_from_line, CGroup, CGroupSubsys, MountPoint, CGroupSys,
+        parse_mount_point_from_line, parse_subsys_from_line, CGroup, CGroupSubsys, CGroupSys,
+        MountPoint,
     };
+    use std::collections::HashMap;
     use std::fs::File;
     use std::io::Write;
-    use std::collections::HashMap;
     use tempfile::TempDir;
 
     #[test]
@@ -429,11 +431,23 @@ mod tests {
         let cgroup = CGroupSys::new(path1.to_str().unwrap(), path2.to_str().unwrap());
 
         let mut expected_cgroups: HashMap<String, CGroup> = HashMap::new();
-        expected_cgroups.insert("memory".to_string(), CGroup::new("/sys/fs/cgroup/memory/".to_string()));
-        expected_cgroups.insert("cpu".to_string(), CGroup::new("/sys/fs/cgroup/cpu,cpuacct/".to_string()));
-        expected_cgroups.insert("cpuacct".to_string(), CGroup::new("/sys/fs/cgroup/cpu,cpuacct/".to_string()));
+        expected_cgroups.insert(
+            "memory".to_string(),
+            CGroup::new("/sys/fs/cgroup/memory/".to_string()),
+        );
+        expected_cgroups.insert(
+            "cpu".to_string(),
+            CGroup::new("/sys/fs/cgroup/cpu,cpuacct/".to_string()),
+        );
+        expected_cgroups.insert(
+            "cpuacct".to_string(),
+            CGroup::new("/sys/fs/cgroup/cpu,cpuacct/".to_string()),
+        );
         for (key, value) in expected_cgroups.iter() {
-            let v = cgroup.cgroups.get(key).unwrap_or_else(|| panic!("key {} doesn't exist", key));
+            let v = cgroup
+                .cgroups
+                .get(key)
+                .unwrap_or_else(|| panic!("key {} doesn't exist", key));
             assert_eq!(v, value);
         }
     }

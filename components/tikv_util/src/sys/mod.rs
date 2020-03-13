@@ -14,9 +14,10 @@ pub mod sys_quota {
 
     impl SysQuota {
         pub fn new() -> Self {
-            Self {
-                cgroup: CGroupSys::default(),
-            }
+            let cgroup = CGroupSys::default();
+            info!("cgroup system: {:?}", cgroup);
+
+            Self { cgroup }
         }
 
         pub fn cpu_cores_quota(&self) -> usize {
