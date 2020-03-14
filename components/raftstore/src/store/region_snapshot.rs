@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot, IterOptions};
+use engine_traits::{KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot, IterOptions, KvEngines};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -377,28 +377,24 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
     }
 }
 
-pub fn new_temp_engine(path: &tempfile::TempDir) -> engine::Engines {
+pub fn new_temp_engine(path: &tempfile::TempDir) -> KvEngines<RocksEngine, RocksEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));
     let shared_block_cache = false;
-    engine::Engines::new(
-        Arc::new(
-            engine::rocks::util::new_engine(
-                path.path().to_str().unwrap(),
-                None,
-                engine_traits::ALL_CFS,
-                None,
-            )
+    KvEngines::new(
+        engine_rocks::util::new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            engine_traits::ALL_CFS,
+            None,
+        )
             .unwrap(),
-        ),
-        Arc::new(
-            engine::rocks::util::new_engine(
-                raft_path.to_str().unwrap(),
-                None,
-                &[engine_traits::CF_DEFAULT],
-                None,
-            )
+        engine_rocks::util::new_engine(
+            raft_path.to_str().unwrap(),
+            None,
+            &[engine_traits::CF_DEFAULT],
+            None,
+        )
             .unwrap(),
-        ),
         shared_block_cache,
     )
 }
@@ -408,11 +404,9 @@ mod tests {
     use crate::store::PeerStorage;
     use crate::Result;
 
-    use engine::rocks::Writable;
-    use engine::Engines;
     use engine::*;
-    use engine_rocks::{Compat, RocksEngine, CloneCompat};
-    use engine_traits::{Mutable, Peekable, CompactExt};
+    use engine_rocks::{RocksEngine};
+    use engine_traits::{Mutable, Peekable, CompactExt, KvEngines, MiscExt};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -422,12 +416,12 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
+    fn new_peer_storage(engines: KvEngines<RocksEngine, RocksEngine>, r: &Region) -> PeerStorage {
         let (sched, _) = worker::dummy_scheduler();
-        PeerStorage::new(engines.c(), r, sched, 0, "".to_owned()).unwrap()
+        PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
-    fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+    fn load_default_dataset(engines: KvEngines<RocksEngine, RocksEngine>) -> (PeerStorage, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -449,7 +443,7 @@ mod tests {
         (store, base_data)
     }
 
-    fn load_multiple_levels_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+    fn load_multiple_levels_dataset(engines: KvEngines<RocksEngine, RocksEngine>) -> (PeerStorage, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -484,7 +478,7 @@ mod tests {
                 db.put(&data_key(k), k).unwrap();
                 db.flush(true).unwrap();
                 data.push((k.to_vec(), k.to_vec()));
-                db.c().compact_files_in_range(Some(&data_key(k)), Some(&data_key(k)), Some(level))
+                db.compact_files_in_range(Some(&data_key(k)), Some(&data_key(k)), Some(level))
                     .unwrap();
             }
         }
@@ -504,7 +498,7 @@ mod tests {
         let store = new_peer_storage(engines.clone(), &r);
 
         let key3 = b"key3";
-        engines.kv.c().put_msg(&data_key(key3), &r).expect("");
+        engines.kv.put_msg(&data_key(key3), &r).expect("");
 
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
         let v3 = snap.get_msg(key3).expect("");
