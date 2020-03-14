@@ -1495,7 +1495,7 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.to_str().unwrap();
-        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
+        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         Ok(Arc::new(db))
     }
 
@@ -1505,7 +1505,7 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.to_str().unwrap();
-        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
+        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         let db = Arc::new(db);
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
