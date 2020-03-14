@@ -350,8 +350,9 @@ impl<E: Engine> Endpoint<E> {
         };
 
         std::mem::drop(span);
-        for _finished_span in receiver.iter() {
+        for finished_span in receiver.iter() {
             //TODO 糊 generate span details
+            info!("receive span: {:?}", finished_span);
         }
 
         // There might be errors when handling requests. In this case, we still need its
