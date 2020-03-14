@@ -5,8 +5,16 @@ edition = "2018"
 publish = false
 
 [features]
-protobuf-codec = ["engine/protobuf-codec"]
-prost-codec = ["engine/prost-codec"]
+protobuf-codec = [
+  "engine/protobuf-codec",
+  "keys/protobuf-codec",
+  "txn_types/protobuf-codec",
+]
+prost-codec = [
+  "engine/prost-codec",
+  "keys/protobuf-codec",
+  "txn_types/protobuf-codec",
+]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
@@ -14,11 +22,13 @@ sse = ["rocksdb/sse"]
 [dependencies]
 engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
+keys = { path = "../keys" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
+txn_types = { path = "../txn_types"}
 lazy_static = "1.4.0"
 time = "0.1"
 

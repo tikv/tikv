@@ -33,7 +33,7 @@ use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::Iterator as EngineIterator;
 use engine_rocks::RangeProperties;
-use raftstore::coprocessor::properties::MvccProperties;
+use engine_rocks::properties::MvccProperties;
 use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;

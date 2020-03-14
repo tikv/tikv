@@ -11,7 +11,7 @@ use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::size::get_region_approximate_size_cf;
 use super::Host;
-use engine_rocks::RangeProperties;
+use engine_rocks::properties::RangeProperties;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -178,7 +178,7 @@ mod tests {
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
-    use crate::coprocessor::properties::RangePropertiesCollectorFactory;
+    use engine_rocks::properties::RangePropertiesCollectorFactory;
     use crate::store::{SplitCheckRunner, SplitCheckTask};
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;

@@ -14,12 +14,17 @@
 //!
 //! Please read the engine_trait crate docs before hacking.
 
+#![cfg_attr(test, feature(test))]
+
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
 #[macro_use]
 extern crate slog_global;
+
+#[cfg(test)]
+extern crate test;
 
 mod cf_handle;
 pub use crate::cf_handle::*;
@@ -60,7 +65,7 @@ pub use compat::*;
 mod compact_listener;
 pub use compact_listener::*;
 
-mod properties;
+pub mod properties;
 pub use properties::*;
 
 pub mod metrics_flusher;

@@ -344,7 +344,7 @@ fn get_approximate_split_keys_cf(
 #[cfg(test)]
 pub mod tests {
     use super::Checker;
-    use crate::coprocessor::properties::RangePropertiesCollectorFactory;
+    use engine_rocks::properties::RangePropertiesCollectorFactory;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use engine::rocks;

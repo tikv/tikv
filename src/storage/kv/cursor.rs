@@ -498,11 +498,10 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use engine::rocks::Writable;
-    use engine::Engines;
     use engine::*;
 
-    use engine_rocks::{RocksEngine, Compat};
+    use engine_rocks::{RocksEngine};
+    use engine_traits::{KvEngines, Mutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -513,7 +512,7 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn load_default_dataset(engines: Engines) -> (Region, DataSet) {
+    fn load_default_dataset(engines: KvEngines<RocksEngine, RocksEngine>) -> (Region, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -540,7 +539,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (region, test_data) = load_default_dataset(engines.clone());
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv.c().clone(), region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv.clone(), region);
         let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
@@ -591,7 +590,7 @@ mod tests {
         // test last region
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv.c().clone(), region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv.clone(), region);
         let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter

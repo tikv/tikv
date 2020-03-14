@@ -49,7 +49,7 @@ use engine_rocks::{
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient};
-use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
+use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::PdTask;

@@ -11,7 +11,7 @@ use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
-use crate::coprocessor::properties::get_range_entries_and_versions;
+use engine_rocks::properties::get_range_entries_and_versions;
 
 type Key = Vec<u8>;
 
@@ -257,8 +257,8 @@ mod tests {
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
-    use crate::coprocessor::properties::get_range_entries_and_versions;
-    use crate::coprocessor::properties::MvccPropertiesCollectorFactory;
+    use engine_rocks::get_range_entries_and_versions;
+    use engine_rocks::MvccPropertiesCollectorFactory;
     use keys::data_key;
     use txn_types::{Key, TimeStamp, Write, WriteType};
     use std::sync::Arc;

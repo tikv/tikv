@@ -1033,6 +1033,7 @@ version = "0.0.1"
 dependencies = [
  "engine",
  "engine_traits",
+ "keys",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -1045,6 +1046,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time",
+ "txn_types",
 ]
 
 [[package]]

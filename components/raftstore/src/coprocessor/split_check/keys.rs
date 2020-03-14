@@ -8,9 +8,9 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
+use engine_rocks::properties::{get_range_entries_and_versions, RangeProperties};
 use super::super::error::Result;
 use super::super::metrics::*;
-use super::super::properties::{get_range_entries_and_versions, RangeProperties};
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
@@ -212,7 +212,7 @@ pub fn get_region_approximate_keys_cf(
 #[cfg(test)]
 mod tests {
     use super::super::size::tests::must_split_at;
-    use crate::coprocessor::properties::{
+    use engine_rocks::properties::{
         MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
     };
     use crate::coprocessor::{Config, CoprocessorHost};

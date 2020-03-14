@@ -7,7 +7,7 @@ use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use raftstore::coprocessor::properties::MvccProperties;
+use engine_rocks::properties::MvccProperties;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -458,7 +458,7 @@ mod tests {
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
+    use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use raftstore::store::RegionSnapshot;
     use std::ops::Bound;
     use std::sync::Arc;
