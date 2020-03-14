@@ -224,6 +224,16 @@ impl From<Error> for errorpb::Error {
                     .mut_key_not_in_region()
                     .set_end_key(end_key.to_vec());
             }
+            Error::EngineTraits(engine_traits::Error::NotInRange(key, region_id, start_key, end_key)) => {
+                errorpb.mut_key_not_in_region().set_key(key);
+                errorpb.mut_key_not_in_region().set_region_id(region_id);
+                errorpb
+                    .mut_key_not_in_region()
+                    .set_start_key(start_key.to_vec());
+                errorpb
+                    .mut_key_not_in_region()
+                    .set_end_key(end_key.to_vec());
+            }
             _ => {}
         };
 
