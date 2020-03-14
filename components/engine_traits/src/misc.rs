@@ -24,6 +24,8 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
         false
     }
 
+    fn flush(&self, sync: bool) -> Result<()>;
+
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
 
     fn delete_files_in_range_cf(

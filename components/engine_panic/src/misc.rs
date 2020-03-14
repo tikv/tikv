@@ -4,6 +4,10 @@ use crate::engine::PanicEngine;
 use engine_traits::{MiscExt, Range, Result};
 
 impl MiscExt for PanicEngine {
+    fn flush(&self, sync: bool) -> Result<()> {
+        panic!()
+    }
+
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
         panic!()
     }
