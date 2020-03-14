@@ -10,7 +10,6 @@ publish = false
 failpoints = ["fail/failpoints"]
 prost-codec = [
   "prost",
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "into_other/prost-codec",
   "keys/prost-codec",
@@ -22,7 +21,6 @@ prost-codec = [
   "txn_types/prost-codec",
 ]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "into_other/protobuf-codec",
   "keys/protobuf-codec",
@@ -42,7 +40,6 @@ byteorder = "1.2"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.7.2"
-engine = { path = "../engine" }
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
 fail = "0.3"
@@ -87,5 +84,6 @@ features = ["nightly", "push", "process"]
 git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
+engine = { path = "../engine" }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer" }
