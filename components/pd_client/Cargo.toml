@@ -32,7 +32,4 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
-
-[dependencies.prometheus]
-version = "0.8"
-features = ["nightly", "push", "process"]
+prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
