@@ -366,13 +366,13 @@ fn test_delete_files_in_range_for_titan() {
     let engines1 = new_temp_engine(&dir1);
     apply_sst_cf_file(
         &default_sst_file_path.to_str().unwrap(),
-        engines1.kv.c(),
+        &engines1.kv,
         CF_DEFAULT,
     )
     .unwrap();
     apply_sst_cf_file(
         &write_sst_file_path.to_str().unwrap(),
-        engines1.kv.c(),
+        &engines1.kv,
         CF_WRITE,
     )
     .unwrap();
@@ -382,7 +382,7 @@ fn test_delete_files_in_range_for_titan() {
     r.mut_peers().push(Peer::default());
     r.set_start_key(b"a".to_vec());
     r.set_end_key(b"z".to_vec());
-    let snapshot = RegionSnapshot::<RocksEngine>::from_raw(engines1.kv.c().clone(), r);
+    let snapshot = RegionSnapshot::<RocksEngine>::from_raw(engines1.kv.clone(), r);
     let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
         .range(Some(Key::from_raw(b"a")), None)
         .build()
