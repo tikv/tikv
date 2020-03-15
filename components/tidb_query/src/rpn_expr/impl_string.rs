@@ -425,6 +425,36 @@ pub fn trim_1_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
+pub fn trim_2_args(s: &Option<Bytes>, remstr: &Option<Bytes>) -> Result<Option<Bytes>> {
+    // As per MySQL doc `https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_trim`,
+    // `remstr` is optional and, if not specified, spaces are removed.
+    let (s, remstr) = match (s, remstr) {
+        (Some(v1), Some(v2)) => (v1, v2),
+        (Some(_), None) => return trim_1_arg(s),
+        _ => return Ok(None),
+    };
+
+    let s_len = s.len();
+    let rem_len = remstr.len();
+    if s_len < rem_len || rem_len == 0 {
+        return Ok(Some(s.clone()));
+    }
+
+    let mut start = 0;
+    while start + rem_len < s_len && &s[start..start + rem_len] == remstr.as_slice() {
+        start += rem_len;
+    }
+
+    let mut end = s_len;
+    while end >= start + rem_len && &s[end - rem_len..end] == remstr.as_slice() {
+        end -= rem_len;
+    }
+
+    Ok(Some(s[start..end].to_vec()))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn char_length(bs: &Option<Bytes>) -> Result<Option<Int>> {
     Ok(bs.as_ref().map(|b| b.len() as i64))
 }
@@ -1676,6 +1706,49 @@ mod tests {
         assert_eq!(
             invalid_utf8_output,
             Some(b"\xF0 Hello \x90 World \x80".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_trim_2_args() {
+        let test_cases = vec![
+            (None, None, None),
+            (None, Some("bar"), None),
+            (Some("   bar   "), None, Some("bar")),
+            (Some("   bar   "), Some(" "), Some("bar")),
+            (Some("   bar   "), Some(""), Some("   bar   ")),
+            (Some("xxxbarxxx"), Some("x"), Some("bar")),
+            (Some("xyzbarxxx"), Some("xyz"), Some("barxxx")),
+            (Some("xxxbarxyz"), Some("xyz"), Some("xxxbar")),
+            (Some("xyzbarxyz"), Some("xyz"), Some("bar")),
+            (Some("xyzba xyz rxyz"), Some("xyz"), Some("ba xyz r")),
+            (Some("barbar"), Some("bar"), Some("")),
+            (Some(""), Some(""), Some("")),
+            (Some("bar"), Some("barb"), Some("bar")),
+            (Some("你你好"), Some("你好"), Some("你")),
+            (Some("你好好"), Some("你好"), Some("好")),
+            (Some("你好你你好"), Some("你好"), Some("你")),
+        ];
+
+        for (s, remstr, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(s.map(|v| v.as_bytes().to_vec()))
+                .push_param(remstr.map(|v| v.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::Trim2Args)
+                .unwrap();
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+
+        let invalid_utf8_output = RpnFnScalarEvaluator::new()
+            .push_param(Some(
+                b"\xF0\x90\x80Hello\xF0\x90\x80World\xF0\x90\x80".to_vec(),
+            ))
+            .push_param(Some(b"\xF0\x90\x80".to_vec()))
+            .evaluate(ScalarFuncSig::Trim2Args)
+            .unwrap();
+        assert_eq!(
+            invalid_utf8_output,
+            Some(b"Hello\xF0\x90\x80World".to_vec())
         );
     }
 
