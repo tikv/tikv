@@ -13,6 +13,15 @@
 ## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
+## File to store slow logs.
+## If "log-file" is set, but this is not set, the slow logs will be appeneded
+## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
+## will be appended to stderr.
+# slow-log-file = ""
+
+## The minimum operation cost to output relative logs.
+# slow-log-threshold = "1s"
+
 ## Timespan between rotating the log files.
 ## Once this timespan passes, log files will be rotated, i.e. existing log file will have a
 ## timestamp appended to its name and a new file will be created.
@@ -96,7 +105,9 @@
 # advertise-addr = ""
 
 ## Status address.
-## This is used for reporting the status of TiKV directly through the HTTP address.
+## This is used for reporting the status of TiKV directly through 
+## the HTTP address. Notice that there is a risk of leaking status
+## information if this port is exposed to the public.
 ## Empty string means disabling it.
 # status-addr = "127.0.0.1:20180"
 
@@ -773,6 +784,10 @@
 ## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
 ## one more likely acquires the lock.
 # wake-up-delay-duration = 20
+
+## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
+## Enabled this will improve performance, but slightly increase the transcation failure rate
+# pipelined = false
 
 [gc]
 ## The number of keys to GC in one batch.

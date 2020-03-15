@@ -17,9 +17,9 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::WriteOptions;
 use engine::Engines;
-use engine::{util as engine_util, Peekable};
+use engine::Peekable;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
-use engine_traits::{KvEngine, Mutable as MutableTrait, WriteBatch};
+use engine_traits::{MiscExt, Mutable as MutableTrait, WriteBatch, WriteBatchExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -47,7 +47,7 @@ use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::MustConsumeVec;
@@ -279,7 +279,7 @@ impl Notifier {
 
 struct ApplyContext {
     tag: String,
-    timer: Option<SlowTimer>,
+    timer: Option<Instant>,
     host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
@@ -491,10 +491,11 @@ impl ApplyContext {
 
         self.host.on_flush_apply();
 
-        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        let elapsed = t.elapsed();
+        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
         slow_log!(
-            t,
+            elapsed,
             "{} handle ready {} committed entries",
             self.tag,
             self.committed_count
@@ -759,6 +760,7 @@ impl ApplyDelegate {
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
                 EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, &entry),
+                EntryType::EntryConfChangeV2 => unimplemented!(),
             };
 
             match res {
@@ -1357,23 +1359,20 @@ impl ApplyDelegate {
                 });
 
             // Delete all remaining keys.
-            engine_util::delete_all_in_range_cf(
-                &ctx.engines.kv,
-                cf,
-                &start_key,
-                &end_key,
-                use_delete_range,
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
-                    cf,
-                    e
-                );
-            });
+            ctx.engines
+                .kv
+                .c()
+                .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        cf,
+                        e
+                    );
+                });
         }
 
         // TODO: Should this be executed when `notify_only` is set?
@@ -1592,9 +1591,6 @@ impl ApplyDelegate {
                     "peer" => ?peer,
                     "region" => ?&self.region,
                 );
-            }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-                unimplemented!()
             }
         }
 
@@ -2489,7 +2485,7 @@ impl ApplyFsm {
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
     fn handle_apply(&mut self, apply_ctx: &mut ApplyContext, apply: Apply) {
         if apply_ctx.timer.is_none() {
-            apply_ctx.timer = Some(SlowTimer::new());
+            apply_ctx.timer = Some(Instant::now_coarse());
         }
 
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
@@ -2591,7 +2587,7 @@ impl ApplyFsm {
         let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {
-            ctx.timer = Some(SlowTimer::new());
+            ctx.timer = Some(Instant::now_coarse());
         }
         if !state.pending_entries.is_empty() {
             self.delegate
@@ -2663,7 +2659,7 @@ impl ApplyFsm {
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
-                apply_ctx.timer = Some(SlowTimer::new());
+                apply_ctx.timer = Some(Instant::now_coarse());
             }
             if apply_ctx.kv_wb.is_none() {
                 apply_ctx.kv_wb = Some(

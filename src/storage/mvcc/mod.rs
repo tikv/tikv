@@ -363,6 +363,48 @@ pub mod tests {
         Ok(())
     }
 
+    pub fn try_prewrite_check_not_exists<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: impl Into<TimeStamp>,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        txn.prewrite(
+            Mutation::CheckNotExists(Key::from_raw(key)),
+            pk,
+            false,
+            0,
+            0,
+            TimeStamp::default(),
+        )?;
+        Ok(())
+    }
+
+    pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: impl Into<TimeStamp>,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        txn.pessimistic_prewrite(
+            Mutation::CheckNotExists(Key::from_raw(key)),
+            pk,
+            false,
+            0,
+            TimeStamp::default(),
+            0,
+            TimeStamp::default(),
+            false,
+        )?;
+        Ok(())
+    }
+
     pub fn must_prewrite_put_impl<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -391,6 +433,7 @@ pub mod tests {
                 for_update_ts,
                 txn_size,
                 min_commit_ts,
+                false,
             )
             .unwrap();
         }
@@ -518,6 +561,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap_err()
         }
@@ -578,6 +622,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap();
         }
@@ -629,6 +674,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap();
         }

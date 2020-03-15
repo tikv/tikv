@@ -13,11 +13,14 @@ pub trait KvEngine:
     Peekable
     + Mutable
     + Iterable
+    + WriteBatchExt
     + DBOptionsExt
+    + CFNamesExt
     + CFHandleExt
     + ImportExt
     + SstExt
     + TablePropertiesExt
+    + MiscExt
     + Send
     + Sync
     + Clone
@@ -25,18 +28,9 @@ pub trait KvEngine:
     + 'static
 {
     type Snapshot: Snapshot<Self>;
-    type WriteBatch: WriteBatch;
 
-    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()>;
-    fn write(&self, wb: &Self::WriteBatch) -> Result<()> {
-        self.write_opt(wb, &WriteOptions::default())
-    }
-    fn write_batch(&self) -> Self::WriteBatch;
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
     fn snapshot(&self) -> Self::Snapshot;
     fn sync(&self) -> Result<()>;
-
-    fn cf_names(&self) -> Vec<&str>;
 
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
