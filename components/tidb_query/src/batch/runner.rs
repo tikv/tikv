@@ -480,8 +480,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.out_most_executor.collect_storage_stats(dest);
     }
 
-    pub fn found_newer_data(&mut self) -> bool {
-        // TODO: issue-6690: self.storage.found_newer_data()
-        false
+    pub fn can_be_cached(&mut self) -> bool {
+        self.out_most_executor.can_be_cached()
     }
 }

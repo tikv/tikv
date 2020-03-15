@@ -141,7 +141,7 @@ impl<S: Snapshot> PointGetter<S> {
     /// Get the value of a user key.
     ///
     /// If `multi == false`, this function must be called only once. Future calls return nothing.
-    pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
+    pub fn get(&mut self, user_key: &Key, can_be_cached: &mut bool) -> Result<Option<Value>> {
         if !self.multi {
             // Protect from calling `get()` multiple times when `multi == false`.
             if self.drained {
@@ -151,41 +151,17 @@ impl<S: Snapshot> PointGetter<S> {
             }
         }
 
+        *can_be_cached = true;
+
         match self.isolation_level {
             IsolationLevel::Si => {
                 // Check for locks that signal concurrent writes in Si.
-                self.load_and_check_lock(user_key)?;
+                self.load_and_check_lock(user_key, can_be_cached)?;
             }
             IsolationLevel::Rc => {}
         }
 
-        self.load_data(user_key)
-    }
-
-    // TODO: optimize: we read lock again, could be cached in get()
-    pub fn found_newer_data(&mut self, user_key: &Key) -> Result<bool> {
-        if let IsolationLevel::Si = self.isolation_level {
-            self.statistics.lock.get += 1;
-            let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
-            if let Some(ref lock_value) = lock_value {
-                self.statistics.lock.processed += 1;
-                let lock = Lock::parse(lock_value)?;
-                if lock.ts > self.ts {
-                    return Ok(true);
-                }
-            }
-        };
-
-        self.write_cursor.seek(
-            &user_key.clone().append_ts(TimeStamp::max()),
-            &mut self.statistics.write,
-        )?;
-        if !self.write_cursor.valid()? {
-            return Ok(false);
-        }
-
-        let current_key = self.write_cursor.key(&mut self.statistics.write);
-        Ok(Key::decode_ts_from(current_key)? > self.ts)
+        self.load_data(user_key, can_be_cached)
     }
 
     /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
@@ -194,13 +170,16 @@ impl<S: Snapshot> PointGetter<S> {
     /// In common cases we expect to get nothing in lock cf. Using a `get_cf` instead of `seek`
     /// is fast in such cases due to no need for RocksDB to continue move and skip deleted entries
     /// until find a user key.
-    fn load_and_check_lock(&mut self, user_key: &Key) -> Result<()> {
+    fn load_and_check_lock(&mut self, user_key: &Key, can_be_cached: &mut bool) -> Result<()> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
 
         if let Some(ref lock_value) = lock_value {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
+            if lock.ts > self.ts {
+                *can_be_cached = false;
+            }
             lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks)
                 .map_err(Into::into)
         } else {
@@ -212,7 +191,7 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
     /// from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
+    fn load_data(&mut self, user_key: &Key, can_be_cached: &mut bool) -> Result<Option<Value>> {
         if !self.write_cursor.seek(
             &user_key.clone().append_ts(self.ts),
             &mut self.statistics.write,
@@ -239,10 +218,14 @@ impl<S: Snapshot> PointGetter<S> {
                     }
                     match write.short_value {
                         Some(value) => {
+                            let current_key = self.write_cursor.key(&mut self.statistics.write);
+                            *can_be_cached = Key::decode_ts_from(current_key)? <= self.ts;
                             // Value is carried in `write`.
                             return Ok(Some(value.to_vec()));
                         }
                         None => {
+                            let current_key = self.write_cursor.key(&mut self.statistics.write);
+                            *can_be_cached = Key::decode_ts_from(current_key)? <= self.ts;
                             let start_ts = write.start_ts;
                             return Ok(Some(self.load_data_from_default_cf(start_ts, user_key)?));
                         }

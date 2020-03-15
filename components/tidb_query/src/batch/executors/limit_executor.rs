@@ -59,6 +59,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.src.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&mut self) -> bool {
+        self.src.can_be_cached()
+    }
 }
 
 #[cfg(test)]

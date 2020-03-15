@@ -50,6 +50,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.0.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&mut self) -> bool {
+        self.0.can_be_cached()
+    }
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type

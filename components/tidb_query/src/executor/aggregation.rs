@@ -146,6 +146,11 @@ impl<Src: Executor> AggExecutor<Src> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.src.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&mut self) -> bool {
+        self.src.can_be_cached()
+    }
 }
 // HashAggExecutor deals with the aggregate functions.
 // When Next() is called, it reads all the data from src
@@ -262,6 +267,11 @@ impl<Src: Executor> Executor for HashAggExecutor<Src> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.inner.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&mut self) -> bool {
+        self.inner.can_be_cached()
+    }
 }
 
 impl<Src: Executor> Executor for StreamAggExecutor<Src> {
@@ -320,6 +330,11 @@ impl<Src: Executor> Executor for StreamAggExecutor<Src> {
     #[inline]
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.inner.take_scanned_range()
+    }
+
+    #[inline]
+    fn can_be_cached(&mut self) -> bool {
+        self.inner.can_be_cached()
     }
 }
 

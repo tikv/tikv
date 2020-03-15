@@ -115,8 +115,8 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     is_started: bool,
     statistics: Statistics,
     scan_policy: P,
-    check_newer_data: bool,
-    found_newer_data: bool,
+    check_can_be_cached: bool,
+    can_be_cached: bool,
 }
 
 impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
@@ -138,8 +138,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             statistics: Statistics::default(),
             is_started: false,
             scan_policy,
-            check_newer_data: false,
-            found_newer_data: false,
+            check_can_be_cached: false,
+            can_be_cached: true,
         }
     }
 
@@ -148,12 +148,12 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
-    pub fn check_newer_data(&mut self, enabled: bool) {
-        self.check_newer_data = enabled;
+    pub fn set_check_can_be_cached(&mut self, enabled: bool) {
+        self.check_can_be_cached = enabled;
     }
 
-    pub fn found_newer_data(&mut self) -> Result<bool> {
-        Ok(self.found_newer_data)
+    pub fn can_be_cached(&mut self) -> bool {
+        self.can_be_cached
     }
 
     /// Get the next key-value pair, in forward order.
@@ -251,6 +251,13 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             };
 
             if has_lock {
+                if self.check_can_be_cached && self.can_be_cached {
+                    let lock_value = self.cursors.lock.value(&mut self.statistics.lock);
+                    let lock = Lock::parse(lock_value)?;
+                    if lock.ts > self.cfg.ts {
+                        self.can_be_cached = false;
+                    }
+                }
                 current_user_key = match self.scan_policy.handle_lock(
                     current_user_key,
                     &mut self.cfg,
@@ -308,8 +315,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
-                } else if self.check_newer_data {
-                    self.found_newer_data = true;
+                } else if self.check_can_be_cached {
+                    self.can_be_cached = false;
                 }
             }
         }
@@ -317,7 +324,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
-            let seek_ts = if self.check_newer_data && !self.found_newer_data {
+            let seek_ts = if self.check_can_be_cached && self.can_be_cached {
                 // TODO: use "write.seek(ts) + write.prev()" to check newer data maybe faster?
                 TimeStamp::max()
             } else {
@@ -350,7 +357,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Meet another key.
                     return Ok(false);
                 }
-                self.found_newer_data = true;
+                self.can_be_cached = false;
             }
         }
         Ok(true)

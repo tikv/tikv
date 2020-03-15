@@ -205,4 +205,9 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
         // TODO: check if there is a better way to reuse this method impl.
         self.scanner.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&mut self) -> bool {
+        self.scanner.can_be_cached()
+    }
 }

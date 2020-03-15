@@ -323,6 +323,11 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.entities.src.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&mut self) -> bool {
+        self.entities.src.can_be_cached()
+    }
 }
 
 /// Shared test facilities for different aggregation executors.

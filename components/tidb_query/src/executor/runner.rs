@@ -321,8 +321,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
         self.executor.collect_storage_stats(dest);
     }
 
-    pub fn found_newer_data(&mut self) -> bool {
-        // TODO: issue-6690: self.storage.found_newer_data()
-        false
+    pub fn can_be_cached(&mut self) -> bool {
+        self.executor.can_be_cached()
     }
 }

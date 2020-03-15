@@ -73,8 +73,6 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
                 self.store,
                 self.data_version,
                 self.deadline,
-                self.execution_time_limit,
-                self.semaphore,
                 self.is_cache_enabled,
             )?
             .into_boxed())
@@ -129,7 +127,7 @@ impl DAGHandler {
 impl RequestHandler for DAGHandler {
     async fn handle_request(&mut self) -> Result<Response> {
         let result = self.runner.handle_request();
-        handle_qe_response(result, !self.runner.found_newer_data(), self.data_version)
+        handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
@@ -153,8 +151,6 @@ impl BatchDAGHandler {
         store: S,
         data_version: Option<u64>,
         deadline: Deadline,
-        execution_time_limit: Option<Duration>,
-        semaphore: Option<Arc<Semaphore>>,
         is_cache_enabled: bool,
     ) -> Result<Self> {
         Ok(Self {
@@ -173,7 +169,7 @@ impl BatchDAGHandler {
 impl RequestHandler for BatchDAGHandler {
     async fn handle_request(&mut self) -> Result<Response> {
         let result = self.runner.handle_request().await;
-        handle_qe_response(result, !self.runner.found_newer_data(), self.data_version)
+        handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
@@ -192,8 +188,7 @@ fn handle_qe_response(
         Ok(sel_resp) => {
             let mut resp = Response::default();
             resp.set_data(box_try!(sel_resp.write_to_bytes()));
-            // TODO: issue-6690
-            // resp.set_can_be_cached(can_be_cached);
+            resp.set_can_be_cached(can_be_cached);
             resp.set_is_cache_hit(false);
             if let Some(v) = data_version {
                 resp.set_cache_last_version(v);
@@ -208,8 +203,7 @@ fn handle_qe_response(
                 sel_resp.mut_error().set_code(err.code());
                 sel_resp.mut_error().set_msg(err.to_string());
                 resp.set_data(box_try!(sel_resp.write_to_bytes()));
-                // TODO: issue-6690
-                // resp.set_can_be_cached(can_be_cached);
+                resp.set_can_be_cached(can_be_cached);
                 resp.set_is_cache_hit(false);
                 Ok(resp)
             }

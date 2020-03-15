@@ -12,18 +12,18 @@ pub struct TiKVStorage<S: Store> {
     store: S,
     scanner: Option<S::Scanner>,
     cf_stats_backlog: Statistics,
-    check_newer_data: bool,
-    found_newer_data: bool,
+    check_can_be_cached: bool,
+    can_be_cached: bool,
 }
 
 impl<S: Store> TiKVStorage<S> {
-    pub fn new(store: S, check_newer_data: bool) -> Self {
+    pub fn new(store: S, check_can_be_cached: bool) -> Self {
         Self {
             store,
             scanner: None,
             cf_stats_backlog: Statistics::default(),
-            check_newer_data,
-            found_newer_data: false,
+            check_can_be_cached,
+            can_be_cached: true,
         }
     }
 }
@@ -55,8 +55,8 @@ impl<S: Store> Storage for TiKVStorage<S> {
             // There is no transform from storage error to QE's StorageError,
             // so an intermediate error is needed.
         );
-        if self.check_newer_data && !self.found_newer_data {
-            self.scanner.as_mut().unwrap().check_newer_data(true);
+        if self.check_can_be_cached && self.can_be_cached {
+            self.scanner.as_mut().unwrap().set_check_can_be_cached(true);
         }
         Ok(())
     }
@@ -64,21 +64,21 @@ impl<S: Store> Storage for TiKVStorage<S> {
     fn scan_next(&mut self) -> QEResult<Option<OwnedKvPair>> {
         // Unwrap is fine because we must have called `reset_range` before calling `scan_next`.
         let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
-        if self.check_newer_data
-            && !self.found_newer_data
-            && self.scanner.as_mut().unwrap().found_newer_data()
+        if self.check_can_be_cached
+            && self.can_be_cached
+            && !self.scanner.as_mut().unwrap().can_be_cached()
         {
-            self.found_newer_data = true;
+            self.can_be_cached = false;
         }
         Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
     }
 
-    fn check_newer_data(&mut self, enabled: bool) {
-        self.check_newer_data = enabled;
+    fn set_check_can_be_cached(&mut self, enabled: bool) {
+        self.check_can_be_cached = enabled;
     }
 
-    fn found_newer_data(&mut self) -> bool {
-        self.found_newer_data
+    fn can_be_cached(&mut self) -> bool {
+        self.can_be_cached
     }
 
     fn get(&mut self, _is_key_only: bool, range: PointRange) -> QEResult<Option<OwnedKvPair>> {
@@ -87,16 +87,8 @@ impl<S: Store> Storage for TiKVStorage<S> {
         let key = range.0;
         let value = self
             .store
-            .incremental_get(&Key::from_raw(&key))
+            .incremental_get(&Key::from_raw(&key), &mut self.can_be_cached)
             .map_err(Error::from)?;
-        if self.check_newer_data
-            && !self.found_newer_data
-            && self
-                .store
-                .incremental_get_found_newer_data(&Key::from_raw(&key))
-        {
-            self.found_newer_data = true;
-        }
         Ok(value.map(move |v| (key, v)))
     }
 

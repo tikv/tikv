@@ -19,9 +19,7 @@ pub trait Store: Send {
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
 
     /// Re-use last cursor to incrementally (if possible) fetch the provided key.
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>>;
-
-    fn incremental_get_found_newer_data(&mut self, key: &Key) -> bool;
+    fn incremental_get(&mut self, key: &Key, can_be_cached: &mut bool) -> Result<Option<Value>>;
 
     /// Take the statistics. Currently only available for `incremental_get`.
     fn incremental_get_take_statistics(&mut self) -> Statistics;
@@ -74,8 +72,8 @@ pub trait Scanner: Send {
         Ok(results)
     }
 
-    fn check_newer_data(&mut self, enabled: bool);
-    fn found_newer_data(&mut self) -> bool;
+    fn set_check_can_be_cached(&mut self, enabled: bool);
+    fn can_be_cached(&mut self) -> bool;
 
     /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
@@ -207,12 +205,13 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .multi(false)
             .bypass_locks(self.bypass_locks.clone())
             .build()?;
-        let v = point_getter.get(key)?;
+        let mut can_be_cached = true;
+        let v = point_getter.get(key, &mut can_be_cached)?;
         statistics.add(&point_getter.take_statistics());
         Ok(v)
     }
 
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
+    fn incremental_get(&mut self, key: &Key, can_be_cached: &mut bool) -> Result<Option<Value>> {
         if self.point_getter_cache.is_none() {
             self.point_getter_cache = Some(
                 PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
@@ -223,19 +222,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .build()?,
             );
         }
-        Ok(self.point_getter_cache.as_mut().unwrap().get(key)?)
-    }
-
-    fn incremental_get_found_newer_data(&mut self, key: &Key) -> bool {
-        if self.point_getter_cache.is_none() {
-            false
-        } else {
-            self.point_getter_cache
-                .as_mut()
-                .unwrap()
-                .found_newer_data(key)
-                .unwrap_or(false)
-        }
+        Ok(self.point_getter_cache.as_mut().unwrap().get(key, can_be_cached)?)
     }
 
     fn incremental_get_take_statistics(&mut self) -> Statistics {
@@ -272,8 +259,9 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         for _ in 0..keys.len() {
             values.push(MaybeUninit::uninit());
         }
+        let mut can_be_cached = true;
         for (original_order, key) in order_and_keys {
-            let value = point_getter.get(key).map_err(Error::from);
+            let value = point_getter.get(key, &mut can_be_cached).map_err(Error::from);
             unsafe {
                 values[original_order].as_mut_ptr().write(value);
             }
@@ -442,14 +430,10 @@ impl Store for FixtureStore {
     }
 
     #[inline]
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Vec<u8>>> {
+    fn incremental_get(&mut self, key: &Key, can_be_cached: &mut bool) -> Result<Option<Vec<u8>>> {
+        *can_be_cached = true;
         let mut s = Statistics::default();
         self.get(key, &mut s)
-    }
-
-    #[inline]
-    fn incremental_get_found_newer_data(&mut self, _: &Key) -> bool {
-        false
     }
 
     #[inline]
@@ -538,10 +522,10 @@ impl Scanner for FixtureStoreScanner {
         }
     }
 
-    fn check_newer_data(&mut self, _: bool) {}
+    fn set_check_can_be_cached(&mut self, _: bool) {}
 
-    fn found_newer_data(&mut self) -> bool {
-        false
+    fn can_be_cached(&mut self) -> bool {
+        true
     }
 
     #[inline]

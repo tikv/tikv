@@ -174,18 +174,17 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
             Scanner::Backward(scanner) => scanner.take_statistics(),
         }
     }
-    fn check_newer_data(&mut self, enabled: bool) {
+    fn set_check_can_be_cached(&mut self, enabled: bool) {
         match self {
-            Scanner::Forward(scanner) => scanner.check_newer_data(enabled),
-            Scanner::Backward(scanner) => scanner.check_newer_data(enabled),
+            Scanner::Forward(scanner) => scanner.set_check_can_be_cached(enabled),
+            Scanner::Backward(scanner) => scanner.set_check_can_be_cached(enabled),
         };
     }
-    fn found_newer_data(&mut self) -> bool {
+    fn can_be_cached(&mut self) -> bool {
         match self {
-            Scanner::Forward(scanner) => scanner.found_newer_data(),
-            Scanner::Backward(scanner) => scanner.found_newer_data(),
+            Scanner::Forward(scanner) => scanner.can_be_cached(),
+            Scanner::Backward(scanner) => scanner.can_be_cached(),
         }
-        .unwrap_or(false)
     }
 }
 

@@ -109,6 +109,11 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.0.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&mut self) -> bool {
+        self.0.can_be_cached()
+    }
 }
 
 struct IndexScanExecutorImpl {

@@ -34,8 +34,8 @@ pub struct BackwardKvScanner<S: Snapshot> {
     /// Is iteration started
     is_started: bool,
     statistics: Statistics,
-    check_newer_data: bool,
-    found_newer_data: bool,
+    check_can_be_cached: bool,
+    can_be_cached: bool,
 }
 
 impl<S: Snapshot> BackwardKvScanner<S> {
@@ -51,8 +51,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
-            check_newer_data: false,
-            found_newer_data: false,
+            check_can_be_cached: false,
+            can_be_cached: true,
         }
     }
 
@@ -61,12 +61,12 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
-    pub fn check_newer_data(&mut self, enabled: bool) {
-        self.check_newer_data = enabled;
+    pub fn set_check_can_be_cached(&mut self, enabled: bool) {
+        self.check_can_be_cached = enabled;
     }
 
-    pub fn found_newer_data(&mut self) -> Result<bool> {
-        Ok(self.found_newer_data)
+    pub fn can_be_cached(&mut self) -> bool {
+        self.can_be_cached
     }
 
     /// Get the next key-value pair, in backward order.
@@ -148,6 +148,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
+                        if lock.ts > self.cfg.ts {
+                            self.can_be_cached = false;
+                        }
                         result = lock
                             .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
                             .map(|_| None)
@@ -216,7 +219,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 } else if last_checked_commit_ts > ts {
                     // Meet an unwanted version, use `last_version` as the return as well.
                     is_done = true;
-                    self.found_newer_data = true;
+                    self.can_be_cached = false;
                 }
             }
             if is_done {
@@ -242,7 +245,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
         // Check newer data if needed
         // TODO: use near_seek later
-        if self.check_newer_data && !self.found_newer_data {
+        if self.check_can_be_cached && self.can_be_cached {
             let seek_key = user_key.clone().append_ts(TimeStamp::max());
             self.write_cursor
                 .internal_seek(&seek_key, &mut self.statistics.write)?;
@@ -254,7 +257,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             ));
             let current_ts = Key::decode_ts_from(current_key)?;
             if current_ts > ts {
-                self.found_newer_data = true
+                self.can_be_cached = false
             }
         }
 

@@ -7,7 +7,6 @@ pub mod ranges_iter;
 pub mod scanner;
 
 pub use self::range::*;
-use std::sync::Arc;
 
 pub type Result<T> = std::result::Result<T, crate::error::StorageError>;
 
@@ -33,9 +32,8 @@ pub trait Storage: Send {
     // TODO: Use reference is better.
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>>;
 
-    // If all data is newest, the result can be cached
-    fn check_newer_data(&mut self, enabled: bool);
-    fn found_newer_data(&mut self) -> bool;
+    fn set_check_can_be_cached(&mut self, enabled: bool);
+    fn can_be_cached(&mut self) -> bool;
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics);
 }
@@ -60,50 +58,15 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         (**self).get(is_key_only, range)
     }
 
-    fn check_newer_data(&mut self, enabled: bool) {
-        (**self).check_newer_data(enabled)
+    fn set_check_can_be_cached(&mut self, enabled: bool) {
+        (**self).set_check_can_be_cached(enabled);
     }
 
-    fn found_newer_data(&mut self) -> bool {
-        (**self).found_newer_data()
+    fn can_be_cached(&mut self) -> bool {
+        (**self).can_be_cached()
     }
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics) {
         (**self).collect_statistics(dest);
-    }
-}
-
-impl<T: Storage + ?Sized + Sync> Storage for Arc<T> {
-    type Statistics = T::Statistics;
-
-    fn begin_scan(
-        &mut self,
-        is_backward_scan: bool,
-        is_key_only: bool,
-        range: IntervalRange,
-    ) -> Result<()> {
-        Arc::get_mut(self)
-            .unwrap()
-            .begin_scan(is_backward_scan, is_key_only, range)
-    }
-
-    fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
-        Arc::get_mut(self).unwrap().scan_next()
-    }
-
-    fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {
-        Arc::get_mut(self).unwrap().get(is_key_only, range)
-    }
-
-    fn check_newer_data(&mut self, enabled: bool) {
-        Arc::get_mut(self).unwrap().check_newer_data(enabled)
-    }
-
-    fn found_newer_data(&mut self) -> bool {
-        Arc::get_mut(self).unwrap().found_newer_data()
-    }
-
-    fn collect_statistics(&mut self, dest: &mut Self::Statistics) {
-        Arc::get_mut(self).unwrap().collect_statistics(dest);
     }
 }
