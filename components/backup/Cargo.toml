@@ -71,11 +71,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 txn_types = { path = "../txn_types" }
-
-[dependencies.prometheus]
-version = "0.8"
-default-features = false
-features = ["nightly", "push", "process"]
+prometheus = { version = "0.8",default-features = false,features = ["nightly", "push", "process"] }
 
 [dev-dependencies]
 futures-executor = "0.3"
