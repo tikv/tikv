@@ -10,6 +10,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::fsm::*;
+use raftstore::store::util::StoreGroup;
 use raftstore::store::{SnapManager, StoreMsg, Transport};
 use raftstore::Result;
 use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
@@ -31,6 +32,9 @@ impl Transport for MockTransport {
     }
     fn flush(&mut self) {
         unimplemented!()
+    }
+    fn store_group(&self) -> Arc<Mutex<StoreGroup>> {
+        Default::default()
     }
 }
 

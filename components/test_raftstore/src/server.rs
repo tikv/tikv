@@ -216,7 +216,9 @@ impl Simulator for ServerCluster {
         let deadlock_service = lock_mgr.deadlock_service();
 
         // Create pd client, snapshot manager, server.
-        let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
+        let (worker, resolver, store_groups) =
+            resolve::new_resolver(Arc::clone(&self.pd_client), &cfg.raft_store.replicate_label)
+                .unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
@@ -237,6 +239,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 gc_worker.clone(),
                 None,
+                store_groups.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

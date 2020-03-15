@@ -26,7 +26,9 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-        new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
+        new_compaction_listener,
+        util::StoreGroup,
+        LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
     },
 };
 use std::{
@@ -110,6 +112,7 @@ struct TiKVServer {
     router: RaftRouter<RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
+    store_groups: Arc<Mutex<StoreGroup>>,
     store_path: PathBuf,
     engines: Option<Engines>,
     servers: Option<Servers>,
@@ -151,8 +154,9 @@ impl TiKVServer {
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
-        let (resolve_worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
-            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
+        let (resolve_worker, resolver, store_groups) =
+            resolve::new_resolver(Arc::clone(&pd_client), &config.raft_store.replicate_label)
+                .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
@@ -168,6 +172,7 @@ impl TiKVServer {
             router,
             system: Some(system),
             resolver,
+            store_groups,
             store_path,
             engines: None,
             servers: None,
@@ -496,6 +501,7 @@ impl TiKVServer {
             snap_mgr.clone(),
             gc_worker.clone(),
             unified_read_pool,
+            self.store_groups.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 

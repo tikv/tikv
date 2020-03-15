@@ -148,6 +148,18 @@ where
             )));
             self.bootstrap_cluster(&engines, first_region)?;
         }
+        let replicate_label = self.store_cfg.value().replicate_label.clone();
+        if !replicate_label.is_empty() {
+            for l in self.store.get_labels() {
+                if l.key == replicate_label {
+                    trans
+                        .store_group()
+                        .lock()
+                        .unwrap()
+                        .register_store(store_id, l.value.to_lowercase());
+                }
+            }
+        }
 
         self.start_store(
             store_id,

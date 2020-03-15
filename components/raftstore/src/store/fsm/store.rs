@@ -739,7 +739,7 @@ pub struct RaftPollerBuilder<T, C> {
     applying_snap_count: Arc<AtomicUsize>,
 }
 
-impl<T, C> RaftPollerBuilder<T, C> {
+impl<T: Transport, C> RaftPollerBuilder<T, C> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
@@ -797,6 +797,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 region,
+                &self.trans,
             ));
             if local_state.get_state() == PeerState::Merging {
                 info!("region is merging"; "region" => ?region, "store_id" => store_id);
@@ -834,6 +835,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 &region,
+                &self.trans,
             )?;
             peer.schedule_applying_snapshot();
             meta.region_ranges
@@ -1460,6 +1462,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             self.ctx.engines.clone(),
             region_id,
             target.clone(),
+            &self.ctx.trans,
         )?;
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.

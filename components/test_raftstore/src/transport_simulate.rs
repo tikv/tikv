@@ -13,8 +13,8 @@ use engine_rocks::RocksEngine;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-
 use raftstore::router::RaftStoreRouter;
+use raftstore::store::util::StoreGroup;
 use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
@@ -185,6 +185,10 @@ impl<C: Transport> Transport for SimulateTransport<C> {
 
     fn flush(&mut self) {
         self.ch.flush();
+    }
+
+    fn store_group(&self) -> Arc<Mutex<StoreGroup>> {
+        self.ch.store_group()
     }
 }
 

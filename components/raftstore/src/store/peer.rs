@@ -37,7 +37,7 @@ use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, QuorumAlgorithm, ReadResponse, RegionSnapshot};
+use crate::store::{Callback, CommitAlgorithm, Config, PdTask, ReadResponse, RegionSnapshot};
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -52,7 +52,7 @@ use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
+use super::util::{self, check_region_epoch, is_initial_msg, LabelSolver, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -252,6 +252,7 @@ impl Peer {
         engines: Engines,
         region: &metapb::Region,
         peer: metapb::Peer,
+        trans: &impl Transport,
     ) -> Result<Peer> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -263,7 +264,7 @@ impl Peer {
 
         let applied_index = ps.applied_index();
 
-        let mut raft_cfg = raft::Config {
+        let raft_cfg = raft::Config {
             id: peer.get_id(),
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
@@ -278,12 +279,15 @@ impl Peer {
             ..Default::default()
         };
 
-        if let QuorumAlgorithm::IntegrationOnHalfFail = cfg.quorum_algorithm {
-            raft_cfg.quorum_fn = util::integration_on_half_fail_quorum_fn;
+        let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
+        let mut raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
+        if CommitAlgorithm::IntegrityOverLabel == cfg.commit_algorithm {
+            raft_group.set_solver(Some(Box::new(LabelSolver::new(
+                trans.store_group(),
+                &region,
+            ))));
         }
 
-        let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
-        let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -1714,25 +1718,6 @@ impl Peer {
         self.proposals.push(meta);
     }
 
-    /// Count the number of the healthy nodes.
-    /// A node is healthy when
-    /// 1. it's the leader of the Raft group, which has the latest logs
-    /// 2. it's a follower, and it does not lag behind the leader a lot.
-    ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
-    ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn count_healthy_node<'a, I>(&self, progress: I) -> usize
-    where
-        I: Iterator<Item = (&'a u64, &'a Progress)>,
-    {
-        let mut healthy = 0;
-        for (_, pr) in progress {
-            if pr.matched >= self.get_store().truncated_index() {
-                healthy += 1;
-            }
-        }
-        healthy
-    }
-
     /// Validate the `ConfChange` request and check whether it's safe to
     /// propose the specified conf change request.
     /// It's safe iff at least the quorum of the Raft group is still healthy
@@ -1781,13 +1766,15 @@ impl Peer {
             return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
-        let status = self.raft_group.status_ref();
-        let total = status.progress.unwrap().voter_ids().len();
-        if total == 1 {
-            // It's always safe if there is only one node in the cluster.
-            return Ok(());
-        }
-        let mut progress = status.progress.unwrap().clone();
+        let (total, mut progress) = {
+            let status = self.raft_group.status_ref();
+            let total = status.progress.unwrap().voter_ids().len();
+            if total == 1 {
+                // It's always safe if there is only one node in the cluster.
+                return Ok(());
+            }
+            (total, status.progress.unwrap().clone())
+        };
 
         match change_type {
             ConfChangeType::AddNode => {
@@ -1802,14 +1789,9 @@ impl Peer {
                 return Ok(());
             }
         }
-        let healthy = self.count_healthy_node(progress.voters());
-        let quorum_after_change = match ctx.cfg.quorum_algorithm {
-            QuorumAlgorithm::IntegrationOnHalfFail => {
-                util::integration_on_half_fail_quorum_fn(progress.voter_ids().len())
-            }
-            QuorumAlgorithm::Majority => raft::majority(progress.voter_ids().len()),
-        };
-        if healthy >= quorum_after_change {
+        // TODO: should store_group be updated?
+        let promoted_commit_index = progress.maximal_committed_index(self.raft_group.solver_mut());
+        if promoted_commit_index >= self.get_store().truncated_index() {
             return Ok(());
         }
 
@@ -1817,24 +1799,27 @@ impl Peer {
             .with_label_values(&["conf_change", "reject_unsafe"])
             .inc();
 
+        let voters: Vec<_> = progress.voters().collect();
         info!(
             "rejects unsafe conf change request";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "request" => ?change_peer,
             "total" => total,
-            "healthy" => healthy,
-            "quorum_after_change" => quorum_after_change,
+            "after" => progress.voter_ids().len(),
+            "progress" => ?voters,
+            "truncated_index" => self.get_store().truncated_index(),
+            "promoted_commit_index" => promoted_commit_index,
         );
         // Waking it up to replicate logs to candidate.
         self.should_wake_up = true;
         Err(box_err!(
-            "unsafe to perform conf change {:?}, total {}, healthy {}, quorum after \
-             change {}",
+            "unsafe to perform conf change {:?}, total {}, truncated index {}, promoted commit \
+             index {}",
             change_peer,
             total,
-            healthy,
-            quorum_after_change
+            self.get_store().truncated_index(),
+            promoted_commit_index
         ))
     }
 

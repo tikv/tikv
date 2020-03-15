@@ -23,11 +23,14 @@ lazy_static! {
 /// Custom quorum function for a Raft node.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum QuorumAlgorithm {
+pub enum CommitAlgorithm {
     /// Default quorum function described in Raft paper.
     Majority,
-    /// Ensure no data lost when ceil(voters_len / 2) voters fail.
-    IntegrationOnHalfFail,
+    /// Ensures committed logs are replicated to at least two peers that have different
+    /// label value.
+    ///
+    /// If all peers have the same first level label, it fallbacks to `Majority`.
+    IntegrityOverLabel,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
@@ -180,7 +183,9 @@ pub struct Config {
     pub region_split_size: ReadableSize,
 
     #[config(skip)]
-    pub quorum_algorithm: QuorumAlgorithm,
+    pub commit_algorithm: CommitAlgorithm,
+    #[config(skip)]
+    pub replicate_label: String,
 }
 
 impl Default for Config {
@@ -250,7 +255,8 @@ impl Default for Config {
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
 
-            quorum_algorithm: QuorumAlgorithm::Majority,
+            commit_algorithm: CommitAlgorithm::Majority,
+            replicate_label: String::new(),
         }
     }
 }
@@ -476,6 +482,13 @@ impl Config {
         if self.future_poll_size == 0 {
             rollback_or!(rb_collector, future_poll_size, {
                 Err(box_err!("future-poll-size should be greater than 0."))
+            })
+        }
+        if self.commit_algorithm == CommitAlgorithm::IntegrityOverLabel
+            && self.replicate_label.is_empty()
+        {
+            rollback_or!(rb_collector, replicate_label, {
+                Err(box_err!("replicate_label should not be empty when commit algorithm is integrity-over-label"))
             })
         }
         Ok(())

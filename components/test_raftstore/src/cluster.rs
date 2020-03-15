@@ -435,7 +435,7 @@ impl<T: Simulator> Cluster<T> {
     // Multiple nodes with fixed node id, like node 1, 2, .. 5,
     // First region 1 is in all stores with peer 1, 2, .. 5.
     // Peer 1 is in node 1, store 1, etc.
-    fn bootstrap_region(&mut self) -> Result<()> {
+    pub fn bootstrap_region(&mut self) -> Result<()> {
         for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engines.clone());

@@ -133,6 +133,7 @@ impl<E: KvEngine> PeerFsm<E> {
         sched: Scheduler<RegionTask>,
         engines: Engines,
         region: &metapb::Region,
+        trans: &impl Transport,
     ) -> Result<SenderFsmPair<E>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -154,7 +155,7 @@ impl<E: KvEngine> PeerFsm<E> {
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
+                peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer, trans)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 group_state: GroupState::Ordered,
@@ -176,6 +177,7 @@ impl<E: KvEngine> PeerFsm<E> {
         engines: Engines,
         region_id: u64,
         peer: metapb::Peer,
+        trans: &impl Transport,
     ) -> Result<SenderFsmPair<E>> {
         // We will remove tombstone key when apply snapshot
         info!(
@@ -191,7 +193,7 @@ impl<E: KvEngine> PeerFsm<E> {
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
+                peer: Peer::new(store_id, cfg, sched, engines, &region, peer, trans)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 group_state: GroupState::Ordered,
@@ -1449,6 +1451,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
+                self.ctx
+                    .trans
+                    .store_group()
+                    .lock()
+                    .unwrap()
+                    .register_peer(peer.id, peer.store_id);
                 if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
                     self.fsm.peer.peer = peer.clone();
                 }
@@ -1466,6 +1474,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             ConfChangeType::RemoveNode => {
                 // Remove this peer from cache.
+                self.ctx
+                    .trans
+                    .store_group()
+                    .lock()
+                    .unwrap()
+                    .remove_peer(peer_id);
                 self.fsm.peer.peer_heartbeats.remove(&peer_id);
                 if self.fsm.peer.is_leader() {
                     self.fsm
@@ -1613,6 +1627,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.ctx.region_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                &self.ctx.trans,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -2085,6 +2100,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "peer_id" => self.fsm.peer_id(),
             "region" => ?region,
         );
+
+        {
+            let store_groups = self.ctx.trans.store_group();
+            let mut guard = store_groups.lock().unwrap();
+            for peer in prev_region.get_peers() {
+                guard.remove_peer(peer.id);
+            }
+            for peer in region.get_peers() {
+                guard.register_peer(peer.id, peer.store_id);
+            }
+        }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(

@@ -153,8 +153,8 @@ zipf = "5.0.1"
 
 [replace]
 # TODO: remove this when new raft-rs is published.
-"raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", default-features = false }
-"raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", default-features = false }
+"raft:0.6.0-alpha" = { git = "https://github.com/busyjay/raft-rs", branch = "custom-quorum-only-on-committing-logs", default-features = false }
+"raft-proto:0.6.0-alpha" = { git = "https://github.com/busyjay/raft-rs", branch = "custom-quorum-only-on-committing-logs", default-features = false }
 "protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "prost:0.5.0" = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }

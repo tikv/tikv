@@ -1,12 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use kvproto::metapb;
 
 use pd_client::{take_peer_address, PdClient};
+use raftstore::store::util::StoreGroup;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -44,6 +45,8 @@ struct StoreAddr {
 struct Runner<T: PdClient> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
+    store_group: Arc<Mutex<StoreGroup>>,
+    key: String,
 }
 
 impl<T: PdClient> Runner<T> {
@@ -70,6 +73,17 @@ impl<T: PdClient> Runner<T> {
     fn get_address(&self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
         let mut s = box_try!(pd_client.get_store(store_id));
+        if !self.key.is_empty() {
+            for l in s.get_labels() {
+                if l.key == self.key {
+                    self.store_group
+                        .lock()
+                        .unwrap()
+                        .register_store(s.id, l.value.to_lowercase());
+                    break;
+                }
+            }
+        }
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER
                 .with_label_values(&["tombstone"])
@@ -108,19 +122,24 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T>(pd_client: Arc<T>) -> Result<(Worker<Task>, PdStoreAddrResolver)>
+pub fn new_resolver<T>(
+    pd_client: Arc<T>,
+    key: &str,
+) -> Result<(Worker<Task>, PdStoreAddrResolver, Arc<Mutex<StoreGroup>>)>
 where
     T: PdClient + 'static,
 {
     let mut worker = Worker::new("addr-resolver");
-
+    let store_group = Arc::new(Mutex::new(StoreGroup::default()));
     let runner = Runner {
         pd_client,
         store_addrs: HashMap::default(),
+        store_group: store_group.clone(),
+        key: key.to_owned(),
     };
     box_try!(worker.start(runner));
     let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver))
+    Ok((worker, resolver, store_group))
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -179,6 +198,8 @@ mod tests {
         Runner {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
+            store_group: Default::default(),
+            key: String::new(),
         }
     }
 
