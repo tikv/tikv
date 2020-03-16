@@ -459,9 +459,9 @@ impl ApplyContext {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(need_sync);
             if self.enable_multi_batch_write {
-                self.write_opt(&write_opts);
-            } else {
                 self.write_vec_opt(&write_opts);
+            } else {
+                self.write_opt(&write_opts);
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
