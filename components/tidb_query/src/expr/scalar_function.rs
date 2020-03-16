@@ -76,8 +76,8 @@ impl ScalarFunc {
             | ScalarFuncSig::MultiplyIntUnsigned
             | ScalarFuncSig::PlusIntUnsignedUnsigned
             | ScalarFuncSig::PlusIntUnsignedSigned
-            | ScalarFuncSig::PlusIntSignedUnsigned 
-            | ScalarFuncSig::PlusIntSignedSigned 
+            | ScalarFuncSig::PlusIntSignedUnsigned
+            | ScalarFuncSig::PlusIntSignedSigned
             | ScalarFuncSig::IfNullInt
             | ScalarFuncSig::IfNullReal
             | ScalarFuncSig::IfNullString
