@@ -39,7 +39,7 @@ use std::{
     time::Duration,
 };
 use tikv::{
-    config::{ConfigController, ConfigHandler, DBConfigManger, DBType, TiKvConfig},
+    config::{CfgError, ConfigController, ConfigHandler, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
     read_pool::{build_yatp_read_pool, ReadPool},
@@ -241,17 +241,15 @@ impl TiKVServer {
                 cfg.enable_dynamic_config = true;
                 (cfg, v)
             }
-            Err(e) => {
-                if let Some(PdError::Grpc(grpcio::Error::RpcFailure(status))) =
-                    e.downcast_ref::<PdError>()
-                {
+            Err(err) => {
+                if let CfgError::Pd(PdError::Grpc(grpcio::Error::RpcFailure(status))) = &err {
                     if status.status == grpcio::RpcStatusCode::UNIMPLEMENTED {
                         config.enable_dynamic_config = false;
                         warn!("can not use dynamic config because pd did not implement service configpb.Config");
                         return (config, configpb::Version::default());
                     }
                 }
-                fatal!("failed to register config to pd: {}", e);
+                fatal!("failed to register config to pd: {:?}", err);
             }
         }
     }

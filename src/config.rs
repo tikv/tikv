@@ -48,7 +48,7 @@ use engine_rocks::{
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
-use pd_client::{Config as PdConfig, ConfigClient};
+use pd_client::{Config as PdConfig, ConfigClient, Error as PdError};
 use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
@@ -2426,6 +2426,14 @@ impl ConfigHandler {
     }
 }
 
+#[derive(Debug)]
+pub enum CfgError {
+    Pd(PdError),
+    TomlDe(toml::de::Error),
+    TomlSer(toml::ser::Error),
+    Other(Box<dyn std::error::Error + Sync + Send>),
+}
+
 impl ConfigHandler {
     /// Register the local config to pd and get the latest
     /// version and config
@@ -2433,13 +2441,16 @@ impl ConfigHandler {
         id: String,
         cfg_client: Arc<impl ConfigClient>,
         local_config: TiKvConfig,
-    ) -> CfgResult<(configpb::Version, TiKvConfig)> {
-        let cfg = toml::to_string(&local_config.get_encoder())?;
+    ) -> Result<(configpb::Version, TiKvConfig), CfgError> {
+        let cfg = toml::to_string(&local_config.get_encoder()).map_err(CfgError::TomlSer)?;
         let version = configpb::Version::default();
-        let mut resp = cfg_client.register_config(id, version, cfg)?;
+        let mut resp = cfg_client
+            .register_config(id, version, cfg)
+            .map_err(CfgError::Pd)?;
         match resp.get_status().get_code() {
             StatusCode::Ok | StatusCode::WrongVersion => {
-                let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
+                let mut incoming: TiKvConfig =
+                    toml::from_str(resp.get_config()).map_err(CfgError::TomlDe)?;
                 let mut version = resp.take_version();
                 incoming.compatible_adjust();
                 if let Err(e) = incoming.validate() {
@@ -2455,7 +2466,9 @@ impl ConfigHandler {
                 info!("register config success"; "version" => ?version);
                 Ok((version, incoming))
             }
-            _ => Err(format!("failed to register config, response: {:?}", resp).into()),
+            _ => Err(CfgError::Other(
+                format!("failed to register config, response: {:?}", resp).into(),
+            )),
         }
     }
 
