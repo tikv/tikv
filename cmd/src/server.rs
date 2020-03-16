@@ -286,11 +286,6 @@ impl TiKVServer {
     }
 
     fn init_yatp(&self) {
-        let yatp_enabled = self.config.readpool.unify_read_pool;
-        if !yatp_enabled {
-            return;
-        }
-
         yatp::metrics::set_namespace(Some("tikv"));
         prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone())).unwrap();
         prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
@@ -420,7 +415,9 @@ impl TiKVServer {
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
-        let unified_read_pool = if self.config.readpool.unify_read_pool {
+        let is_unified = self.config.readpool.is_unified();
+
+        let unified_read_pool = if is_unified {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
@@ -430,7 +427,7 @@ impl TiKVServer {
             None
         };
 
-        let storage_read_pool_handle = if self.config.readpool.unify_read_pool {
+        let storage_read_pool_handle = if is_unified {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let storage_read_pools = ReadPool::from(storage::build_read_pool(
@@ -446,6 +443,7 @@ impl TiKVServer {
             &self.config.storage,
             storage_read_pool_handle,
             lock_mgr.clone(),
+            self.config.pessimistic_txn.pipelined,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -466,7 +464,7 @@ impl TiKVServer {
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.
-        let cop_read_pool_handle = if self.config.readpool.unify_read_pool {
+        let cop_read_pool_handle = if is_unified {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(

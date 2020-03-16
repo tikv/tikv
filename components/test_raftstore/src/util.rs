@@ -159,7 +159,7 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
-        unify_read_pool: false,
+        unify_read_pool: Some(false),
         unified: UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 1,

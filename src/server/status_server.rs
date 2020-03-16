@@ -126,7 +126,7 @@ impl StatusServer {
                         let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
                         let path = match os_path.into_string() {
                             Ok(path) => path,
-                            Err(path) => return Box::new(err(ProfError::PathError(path))),
+                            Err(path) => return Box::new(err(ProfError::PathEncodingError(path))),
                         };
 
                         if let Err(e) = tikv_alloc::dump_prof(&path) {

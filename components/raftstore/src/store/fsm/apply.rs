@@ -17,9 +17,9 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::WriteOptions;
 use engine::Engines;
-use engine::{util as engine_util, Peekable};
+use engine::Peekable;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
-use engine_traits::{KvEngine, Mutable as MutableTrait, WriteBatch};
+use engine_traits::{MiscExt, Mutable as MutableTrait, WriteBatch, WriteBatchExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -47,7 +47,7 @@ use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::MustConsumeVec;
@@ -279,7 +279,7 @@ impl Notifier {
 
 struct ApplyContext {
     tag: String,
-    timer: Option<SlowTimer>,
+    timer: Option<Instant>,
     host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
@@ -418,7 +418,7 @@ impl ApplyContext {
                 self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
-                self.kv_wb().clear();
+                self.kv_wb_mut().clear();
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -458,7 +458,7 @@ impl ApplyContext {
     }
 
     #[inline]
-    pub fn kv_kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
+    pub fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
         self.kv_wb.as_mut().unwrap()
     }
 
@@ -491,10 +491,11 @@ impl ApplyContext {
 
         self.host.on_flush_apply();
 
-        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        let elapsed = t.elapsed();
+        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
         slow_log!(
-            t,
+            elapsed,
             "{} handle ready {} committed entries",
             self.tag,
             self.committed_count
@@ -797,7 +798,7 @@ impl ApplyDelegate {
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, wb: &RocksWriteBatch) {
+    fn write_apply_state(&self, wb: &mut RocksWriteBatch) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -992,15 +993,15 @@ impl ApplyDelegate {
         assert!(!self.pending_remove);
 
         ctx.exec_ctx = Some(self.new_ctx(index, term));
-        ctx.kv_kv_wb_mut().set_save_point();
+        ctx.kv_wb_mut().set_save_point();
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
             Ok(a) => {
-                ctx.kv_kv_wb_mut().pop_save_point().unwrap();
+                ctx.kv_wb_mut().pop_save_point().unwrap();
                 a
             }
             Err(e) => {
                 // clear dirty values.
-                ctx.kv_kv_wb_mut().rollback_to_save_point().unwrap();
+                ctx.kv_wb_mut().rollback_to_save_point().unwrap();
                 match e {
                     Error::EpochNotMatch(..) => debug!(
                         "epoch not match";
@@ -1150,7 +1151,7 @@ impl ApplyDelegate {
 
     fn exec_write_cmd(
         &mut self,
-        ctx: &ApplyContext,
+        ctx: &mut ApplyContext,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         fail_point!(
@@ -1169,8 +1170,8 @@ impl ApplyDelegate {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Put => self.handle_put(ctx, req),
-                CmdType::Delete => self.handle_delete(ctx, req),
+                CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
+                CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
                     self.handle_delete_range(ctx, req, &mut ranges, ctx.use_delete_range)
                 }
@@ -1220,7 +1221,7 @@ impl ApplyDelegate {
 
 // Write commands related.
 impl ApplyDelegate {
-    fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+    fn handle_put(&mut self, wb: &mut RocksWriteBatch, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1237,7 +1238,7 @@ impl ApplyDelegate {
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            ctx.kv_wb().put_cf(cf, &key, value).unwrap_or_else(|e| {
+            wb.put_cf(cf, &key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
@@ -1248,7 +1249,7 @@ impl ApplyDelegate {
                 )
             });
         } else {
-            ctx.kv_wb().put(&key, value).unwrap_or_else(|e| {
+            wb.put(&key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
@@ -1261,7 +1262,7 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+    fn handle_delete(&mut self, wb: &mut RocksWriteBatch, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1273,7 +1274,7 @@ impl ApplyDelegate {
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            ctx.kv_wb().delete_cf(cf, &key).unwrap_or_else(|e| {
+            wb.delete_cf(cf, &key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
@@ -1289,7 +1290,7 @@ impl ApplyDelegate {
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            ctx.kv_wb().delete(&key).unwrap_or_else(|e| {
+            wb.delete(&key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
@@ -1358,23 +1359,20 @@ impl ApplyDelegate {
                 });
 
             // Delete all remaining keys.
-            engine_util::delete_all_in_range_cf(
-                &ctx.engines.kv,
-                cf,
-                &start_key,
-                &end_key,
-                use_delete_range,
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
-                    cf,
-                    e
-                );
-            });
+            ctx.engines
+                .kv
+                .c()
+                .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        cf,
+                        e
+                    );
+                });
         }
 
         // TODO: Should this be executed when `notify_only` is set?
@@ -1601,8 +1599,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        if let Err(e) = write_peer_state(kv_wb_mut, &region, state, None) {
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -2487,7 +2484,7 @@ impl ApplyFsm {
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
     fn handle_apply(&mut self, apply_ctx: &mut ApplyContext, apply: Apply) {
         if apply_ctx.timer.is_none() {
-            apply_ctx.timer = Some(SlowTimer::new());
+            apply_ctx.timer = Some(Instant::now_coarse());
         }
 
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
@@ -2589,7 +2586,7 @@ impl ApplyFsm {
         let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {
-            ctx.timer = Some(SlowTimer::new());
+            ctx.timer = Some(Instant::now_coarse());
         }
         if !state.pending_entries.is_empty() {
             self.delegate
@@ -2661,7 +2658,7 @@ impl ApplyFsm {
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
-                apply_ctx.timer = Some(SlowTimer::new());
+                apply_ctx.timer = Some(Instant::now_coarse());
             }
             if apply_ctx.kv_wb.is_none() {
                 apply_ctx.kv_wb = Some(
@@ -2672,7 +2669,7 @@ impl ApplyFsm {
                         .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE),
                 );
             }
-            self.delegate.write_apply_state(apply_ctx.kv_wb());
+            self.delegate.write_apply_state(apply_ctx.kv_wb_mut());
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,
@@ -3191,7 +3188,7 @@ mod tests {
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let wb = engines.kv.c().write_batch();
+        let mut wb = engines.kv.c().write_batch();
         for i in 0..WRITE_BATCH_MAX_KEYS {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -3200,7 +3197,7 @@ mod tests {
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let wb = engines.kv.c().write_batch();
+        let mut wb = engines.kv.c().write_batch();
         for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();

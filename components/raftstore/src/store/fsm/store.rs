@@ -6,9 +6,9 @@ use engine::rocks;
 use engine::DB;
 use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch};
 use engine_traits::{
-    CompactionJobInfo, KvEngine, Mutable, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE,
+    CompactionJobInfo, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions,
 };
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -67,7 +67,7 @@ use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
@@ -237,19 +237,13 @@ pub struct PollContext<T, C: 'static> {
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
-    #[inline]
-    fn kv_wb(&self) -> &RocksWriteBatch {
-        &self.kv_wb
+    fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
+        (&mut self.kv_wb, &mut self.raft_wb)
     }
 
     #[inline]
     fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
         &mut self.kv_wb
-    }
-
-    #[inline]
-    fn raft_wb(&self) -> &RocksWriteBatch {
-        &self.raft_wb
     }
 
     #[inline]
@@ -399,7 +393,7 @@ struct StoreFsmDelegate<'a, T: 'static, C: 'static> {
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     fn on_tick(&mut self, tick: StoreTick) {
-        let t = SlowTimer::new();
+        let t = TiInstant::now_coarse();
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(),
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
@@ -408,10 +402,16 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
         }
+        let elapsed = t.elapsed();
         RAFT_EVENT_DURATION
             .with_label_values(&[tick.tag()])
-            .observe(duration_to_sec(t.elapsed()) as f64);
-        slow_log!(t, "[store {}] handle timeout {:?}", self.fsm.store.id, tick);
+            .observe(duration_to_sec(elapsed) as f64);
+        slow_log!(
+            elapsed,
+            "[store {}] handle timeout {:?}",
+            self.fsm.store.id,
+            tick
+        );
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg>) {
@@ -468,7 +468,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     store_msg_buf: Vec<StoreMsg>,
     peer_msg_buf: Vec<PeerMsg<RocksEngine>>,
     previous_metrics: RaftMetrics,
-    timer: SlowTimer,
+    timer: TiInstant,
     poll_ctx: PollContext<T, C>,
     pending_proposals: Vec<RegionProposal>,
     messages_per_tick: usize,
@@ -571,7 +571,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             .observe(duration_to_sec(dur) as f64);
 
         slow_log!(
-            self.timer,
+            dur,
             "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
              snapshots",
             self.tag,
@@ -593,7 +593,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         if self.pending_proposals.capacity() == 0 {
             self.pending_proposals = Vec::with_capacity(batch_size);
         }
-        self.timer = SlowTimer::new();
+        self.timer = TiInstant::now_coarse();
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
@@ -777,7 +777,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 // but not write raft_local_state to raft rocksdb in time.
                 box_try!(peer_storage::recover_from_applying_state(
                     &self.engines,
-                    &raft_wb,
+                    &mut raft_wb,
                     region_id
                 ));
                 applying_count += 1;
@@ -946,7 +946,7 @@ where
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             previous_metrics: ctx.raft_metrics.clone(),
-            timer: SlowTimer::new(),
+            timer: TiInstant::now_coarse(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             pending_proposals: Vec::new(),

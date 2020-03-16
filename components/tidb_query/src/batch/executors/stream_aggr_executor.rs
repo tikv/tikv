@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::TryFrom;
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::Aggregation;
@@ -79,6 +79,8 @@ pub struct BatchStreamAggregationImpl {
     /// used in the `iterate_each_group_for_aggregation` method
     group_by_exps_types: Vec<EvalType>,
 
+    group_by_field_type: Vec<FieldType>,
+
     /// Stores all group keys for the current result partial.
     /// The last `group_by_exps.len()` elements are the keys of the last group.
     keys: Vec<ScalarValue>,
@@ -148,13 +150,17 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
-        let group_by_exps_types = group_by_exps
+        let group_by_field_type: Vec<FieldType> = group_by_exps
             .iter()
-            .map(|exp| {
+            .map(|exp| exp.ret_field_type(src.schema()).clone())
+            .collect();
+        let group_by_exps_types: Vec<EvalType> = group_by_field_type
+            .iter()
+            .map(|field_type| {
                 // The unwrap is fine because aggregate function parser should never return an
                 // eval type that we cannot process later. If we made a mistake there, then we
                 // should panic.
-                EvalType::try_from(exp.ret_field_type(src.schema()).as_accessor().tp()).unwrap()
+                EvalType::try_from(field_type.as_accessor().tp()).unwrap()
             })
             .collect();
 
@@ -162,6 +168,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
         let aggr_impl = BatchStreamAggregationImpl {
             group_by_exps,
             group_by_exps_types,
+            group_by_field_type,
             keys: Vec::new(),
             states: Vec::new(),
             group_by_results_unsafe: Vec::with_capacity(group_by_len),
@@ -247,30 +254,47 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             for group_by_result in &self.group_by_results_unsafe {
                 group_key_ref.push(group_by_result.get_logical_scalar_ref(logical_row_idx));
             }
-            match self.keys.rchunks_exact(group_by_len).next() {
-                Some(current_key) if &group_key_ref[..] == current_key => {
-                    group_key_ref.clear();
+            let group_match = || -> Result<bool> {
+                match self.keys.rchunks_exact(group_by_len).next() {
+                    Some(current_key) => {
+                        for group_by_col_index in 0..group_by_len {
+                            if current_key[group_by_col_index]
+                                .as_scalar_value_ref()
+                                .cmp_sort_key(
+                                    &group_key_ref[group_by_col_index],
+                                    &self.group_by_field_type[group_by_col_index],
+                                )?
+                                != Ordering::Equal
+                            {
+                                return Ok(false);
+                            }
+                        }
+                        Ok(true)
+                    }
+                    _ => Ok(false),
                 }
-                _ => {
-                    // Update the complete group
-                    if logical_row_idx > 0 {
-                        update_current_states(
-                            context,
-                            &mut self.states,
-                            aggr_fn_len,
-                            &self.aggr_expr_results_unsafe,
-                            group_start_logical_row,
-                            logical_row_idx,
-                        )?;
-                    }
+            };
+            if group_match()? {
+                group_key_ref.clear();
+            } else {
+                // Update the complete group
+                if logical_row_idx > 0 {
+                    update_current_states(
+                        context,
+                        &mut self.states,
+                        aggr_fn_len,
+                        &self.aggr_expr_results_unsafe,
+                        group_start_logical_row,
+                        logical_row_idx,
+                    )?;
+                }
 
-                    // create a new group
-                    group_start_logical_row = logical_row_idx;
-                    self.keys
-                        .extend(group_key_ref.drain(..).map(ScalarValueRef::to_owned));
-                    for aggr_fn in &entities.each_aggr_fn {
-                        self.states.push(aggr_fn.create_state());
-                    }
+                // create a new group
+                group_start_logical_row = logical_row_idx;
+                self.keys
+                    .extend(group_key_ref.drain(..).map(ScalarValueRef::to_owned));
+                for aggr_fn in &entities.each_aggr_fn {
+                    self.states.push(aggr_fn.create_state());
                 }
             }
         }
@@ -412,7 +436,8 @@ fn update_current_states(
 mod tests {
     use super::*;
 
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::{Collation, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
     use crate::batch::executors::util::mock_executor::MockExecutor;
@@ -515,7 +540,7 @@ mod tests {
         // col_0
         assert_eq!(
             r.physical_columns[3].decoded().as_bytes_slice(),
-            &[Some(b"abc".to_vec())]
+            &[Some(b"ABC".to_vec())]
         );
         // col_1
         assert_eq!(
@@ -571,7 +596,7 @@ mod tests {
         // col_0
         assert_eq!(
             r.physical_columns[0].decoded().as_bytes_slice(),
-            &[Some(b"abc".to_vec())]
+            &[Some(b"ABC".to_vec())]
         );
         // col_1
         assert_eq!(
@@ -583,33 +608,39 @@ mod tests {
     /// Builds an executor that will return these data:
     ///
     /// == Schema ==
-    /// Col0(Bytes)   Col1(Real)
+    /// Col0(Bytes-utf8_general_ci)     Col1(Real)
     /// == Call #1 ==
-    /// NULL          NULL
-    /// NULL          1.5
-    /// NULL          1.5
-    /// abc           -5.0
-    /// abc           -5.0
+    /// NULL                            NULL
+    /// NULL                            1.5
+    /// NULL                            1.5
+    /// ABC                             -5.0
+    /// ABC                             -5.0
     /// == Call #2 ==
-    /// abc           -5.0
+    /// ABC                             -5.0
     /// == Call #3 ==
-    /// abc           -5.0
-    /// abc           -5.0
+    /// abc                             -5.0
+    /// abc                             -5.0
     /// (drained)
     pub fn make_src_executor() -> MockExecutor {
         MockExecutor::new(
-            vec![FieldTypeTp::VarString.into(), FieldTypeTp::Double.into()],
+            vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4GeneralCi)
+                    .into(),
+                FieldTypeTp::Double.into(),
+            ],
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
                         VectorValue::Bytes(vec![
                             Some(b"foo".to_vec()),
                             None,
-                            Some(b"abc".to_vec()),
+                            Some(b"ABC".to_vec()),
                             None,
                             None,
                             None,
-                            Some(b"abc".to_vec()),
+                            Some(b"ABC".to_vec()),
                         ]),
                         VectorValue::Real(vec![
                             Real::new(100.0).ok(),
@@ -627,7 +658,7 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Bytes(vec![None, None, Some(b"abc".to_vec())]),
+                        VectorValue::Bytes(vec![None, None, Some(b"ABC".to_vec())]),
                         VectorValue::Real(vec![None, Real::new(100.0).ok(), Real::new(-5.0).ok()]),
                     ]),
                     logical_rows: vec![2],

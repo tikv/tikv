@@ -228,9 +228,9 @@ impl CacheQueryStats {
 }
 
 pub trait HandleRaftReadyContext {
-    fn kv_wb(&self) -> &RocksWriteBatch;
+    /// Returns the mutable references of WriteBatch for both KvDB and RaftDB in one interface.
+    fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch);
     fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch;
-    fn raft_wb(&self) -> &RocksWriteBatch;
     fn raft_wb_mut(&mut self) -> &mut RocksWriteBatch;
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
@@ -323,7 +323,7 @@ impl InvokeContext {
 
 pub fn recover_from_applying_state(
     engines: &Engines,
-    raft_wb: &RocksWriteBatch,
+    raft_wb: &mut RocksWriteBatch,
     region_id: u64,
 ) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
@@ -896,8 +896,8 @@ impl PeerStorage {
         &mut self,
         ctx: &mut InvokeContext,
         snap: &Snapshot,
-        kv_wb: &RocksWriteBatch,
-        raft_wb: &RocksWriteBatch,
+        kv_wb: &mut RocksWriteBatch,
+        raft_wb: &mut RocksWriteBatch,
     ) -> Result<()> {
         info!(
             "begin to apply snapshot";
@@ -954,7 +954,11 @@ impl PeerStorage {
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
-    pub fn clear_meta(&mut self, kv_wb: &RocksWriteBatch, raft_wb: &RocksWriteBatch) -> Result<()> {
+    pub fn clear_meta(
+        &mut self,
+        kv_wb: &mut RocksWriteBatch,
+        raft_wb: &mut RocksWriteBatch,
+    ) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
         self.cache = EntryCache::default();
@@ -1123,12 +1127,8 @@ impl PeerStorage {
             0
         } else {
             fail_point!("raft_before_apply_snap");
-            self.apply_snapshot(
-                &mut ctx,
-                ready.snapshot(),
-                &ready_ctx.kv_wb(),
-                &ready_ctx.raft_wb(),
-            )?;
+            let (kv_wb, raft_wb) = ready_ctx.wb_mut();
+            self.apply_snapshot(&mut ctx, ready.snapshot(), kv_wb, raft_wb)?;
             fail_point!("raft_after_apply_snap");
 
             last_index(&ctx.raft_state)
@@ -1297,8 +1297,8 @@ pub fn fetch_entries_to(
 /// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_meta(
     engines: &Engines,
-    kv_wb: &RocksWriteBatch,
-    raft_wb: &RocksWriteBatch,
+    kv_wb: &mut RocksWriteBatch,
+    raft_wb: &mut RocksWriteBatch,
     region_id: u64,
     raft_state: &RaftLocalState,
 ) -> Result<()> {
@@ -1431,7 +1431,7 @@ where
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.
-pub fn write_initial_raft_state<T: MutableTrait>(raft_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_raft_state<T: MutableTrait>(raft_wb: &mut T, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::default();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -1443,7 +1443,7 @@ pub fn write_initial_raft_state<T: MutableTrait>(raft_wb: &T, region_id: u64) ->
 
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region apply state first.
-pub fn write_initial_apply_state<T: MutableTrait>(kv_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_apply_state<T: MutableTrait>(kv_wb: &mut T, region_id: u64) -> Result<()> {
     let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
     apply_state
@@ -1458,7 +1458,7 @@ pub fn write_initial_apply_state<T: MutableTrait>(kv_wb: &T, region_id: u64) -> 
 }
 
 pub fn write_peer_state<T: MutableTrait>(
-    kv_wb: &T,
+    kv_wb: &mut T,
     region: &metapb::Region,
     state: PeerState,
     merge_state: Option<MergeState>,
@@ -1490,6 +1490,7 @@ mod tests {
     use engine::rocks::util::new_engine;
     use engine::Engines;
     use engine_rocks::{Compat, RocksWriteBatch};
+    use engine_traits::WriteBatchExt;
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
@@ -1538,14 +1539,11 @@ mod tests {
     }
 
     impl HandleRaftReadyContext for ReadyContext {
-        fn kv_wb(&self) -> &RocksWriteBatch {
-            &self.kv_wb
+        fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
+            (&mut self.kv_wb, &mut self.raft_wb)
         }
         fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
             &mut self.kv_wb
-        }
-        fn raft_wb(&self) -> &RocksWriteBatch {
-            &self.raft_wb
         }
         fn raft_wb_mut(&mut self) -> &mut RocksWriteBatch {
             &mut self.raft_wb
@@ -1688,9 +1686,9 @@ mod tests {
 
         assert_eq!(6, get_meta_key_count(&store));
 
-        let kv_wb = store.engines.kv.c().write_batch();
-        let raft_wb = store.engines.raft.c().write_batch();
-        store.clear_meta(&kv_wb, &raft_wb).unwrap();
+        let mut kv_wb = store.engines.kv.c().write_batch();
+        let mut raft_wb = store.engines.raft.c().write_batch();
+        store.clear_meta(&mut kv_wb, &mut raft_wb).unwrap();
         store.engines.kv.c().write(&kv_wb).unwrap();
         store.engines.raft.c().write(&raft_wb).unwrap();
 
@@ -2170,9 +2168,9 @@ mod tests {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let kv_wb = s2.engines.kv.c().write_batch();
-        let raft_wb = s2.engines.raft.c().write_batch();
-        s2.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+        let mut kv_wb = s2.engines.kv.c().write_batch();
+        let mut raft_wb = s2.engines.raft.c().write_batch();
+        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
@@ -2188,9 +2186,9 @@ mod tests {
         validate_cache(&s3, &ents[1..]);
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let kv_wb = s3.engines.kv.c().write_batch();
-        let raft_wb = s3.engines.raft.c().write_batch();
-        s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+        let mut kv_wb = s3.engines.kv.c().write_batch();
+        let mut raft_wb = s3.engines.raft.c().write_batch();
+        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);

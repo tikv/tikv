@@ -14,6 +14,7 @@ pub struct Config {
     pub enabled: bool,
     pub wait_for_lock_timeout: u64,
     pub wake_up_delay_duration: u64,
+    pub pipelined: bool,
 }
 
 impl Default for Config {
@@ -22,6 +23,7 @@ impl Default for Config {
             enabled: true,
             wait_for_lock_timeout: 1000,
             wake_up_delay_duration: 20,
+            pipelined: false,
         }
     }
 }
