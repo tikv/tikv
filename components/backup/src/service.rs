@@ -97,7 +97,7 @@ mod tests {
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
         server.start();
-        let (_, port) = server.bind_addrs()[0];
+        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = BackupClient::new(channel);
