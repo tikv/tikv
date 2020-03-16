@@ -2,7 +2,7 @@
 
 use kvproto::encryptionpb::EncryptedContent;
 
-use crate::Result;
+use crate::{Error, Result};
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///
@@ -38,5 +38,42 @@ impl Backend for PlainTextBackend {
     fn is_secure(&self) -> bool {
         // plain text backend is insecure.
         false
+    }
+}
+
+pub(crate) struct WithMetadata<T: Backend> {
+    pub metadata: Vec<(metadata::MetadataKey, Vec<u8>)>,
+    pub backend: T,
+}
+
+impl<T: Backend> Backend for WithMetadata<T> {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
+        let mut content = self.backend.encrypt(plaintext)?;
+        for (key, value) in &self.metadata {
+            content
+                .mut_metadata()
+                .insert(key.as_str().to_owned(), value.clone());
+        }
+        Ok(content)
+    }
+    fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
+        for (key, value) in &self.metadata {
+            match ciphertext.get_metadata().get(key.as_str()) {
+                Some(val) if val == value => (),
+                other => {
+                    return Err(Error::Other(
+                        format!(
+                            "metadata {:?} mismatch expect {:?} got {:?}",
+                            key, value, other
+                        )
+                        .into(),
+                    ))
+                }
+            }
+        }
+        self.backend.decrypt(ciphertext)
+    }
+    fn is_secure(&self) -> bool {
+        self.backend.is_secure()
     }
 }

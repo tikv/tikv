@@ -9,7 +9,7 @@ use rusoto_core::request::HttpClient;
 use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 
-use super::{Backend, FileBackend, PlainTextBackend};
+use super::{metadata::MetadataKey, Backend, FileBackend, PlainTextBackend, WithMetadata};
 use crate::config::KmsConfig;
 use crate::encrypted_file::EncryptedFile;
 use crate::{Error, Result};
@@ -19,6 +19,7 @@ const KMS_ENCRYPTION_KEY_NAME: &str = "kms_encryption.key";
 // Always use AES 256 for encrypting master key.
 const KMS_DATA_KEY_METHOD: EncryptionMethod = EncryptionMethod::Aes256Ctr;
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
+const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
 
 struct AwsKms {
     client: KmsClient,
@@ -138,6 +139,13 @@ impl KmsBackend {
     }
 
     fn with_kms(kms: AwsKms, base: &str) -> Result<KmsBackend> {
+        let vendor_backend = WithMetadata {
+            // For now, we only support AWS.
+            metadata: vec![(MetadataKey::KmsVendor, AWS_KMS_VENDOR_NAME.to_vec())],
+            // ciphertext_key has already be ecrypted by KMS.
+            backend: PlainTextBackend::default(),
+        };
+
         // Create base dir if it is missing.
         create_dir_all(base)?;
 
@@ -146,12 +154,11 @@ impl KmsBackend {
         let key = if !key_path.exists() {
             let (ciphertext_key, plaintext_key) = kms.generate_data_key()?;
             let f = EncryptedFile::new(Path::new(base), KMS_ENCRYPTION_KEY_NAME);
-            // ciphertext_key has already be ecrypted by KMS.
-            f.write(&ciphertext_key, &PlainTextBackend::default())?;
+            f.write(&ciphertext_key, &vendor_backend)?;
             plaintext_key
         } else {
             let f = EncryptedFile::new(Path::new(base), KMS_ENCRYPTION_KEY_NAME);
-            let ciphertext_key = f.read(&PlainTextBackend::default())?;
+            let ciphertext_key = f.read(&vendor_backend)?;
             kms.decrypt(&ciphertext_key)?
         };
 
