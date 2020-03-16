@@ -42,11 +42,7 @@ tikv_util = { path = "../tikv_util" }
 tokio-sync = "0.1.7"
 txn_types = { path = "../txn_types" }
 uuid = { version = "0.7", features = ["serde", "v4"] }
-
-[dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
-default-features = false
+prometheus = { version = "0.8",default-features = false }
 
 [dev-dependencies]
 tempfile = "3.0"
