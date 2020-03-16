@@ -36,8 +36,7 @@ sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
-
-prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
+prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
