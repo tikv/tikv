@@ -655,11 +655,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
             |_| unreachable!()
         );
 
-        // We must renew current_time because this value may be created a long time ago.
-        // If we do not renew it, this time may be smaller than propose_time of a command,
-        // which was proposed in another thread while this thread receives its AppendEntriesResponse
-        //  and is ready to calculate its commit-log-duration.
-        self.poll_ctx.current_time.replace(monotonic_raw_now());
         while self.peer_msg_buf.len() < self.messages_per_tick {
             match peer.receiver.try_recv() {
                 // TODO: we may need a way to optimize the message copy.
