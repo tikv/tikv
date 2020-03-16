@@ -29,7 +29,7 @@ impl WriteBatch for PanicWriteBatch {
     fn is_empty(&self) -> bool {
         panic!()
     }
-    fn clear(&self) {
+    fn clear(&mut self) {
         panic!()
     }
 
@@ -45,20 +45,20 @@ impl WriteBatch for PanicWriteBatch {
 }
 
 impl Mutable for PanicWriteBatch {
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         panic!()
     }
-    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         panic!()
     }
 
-    fn delete(&self, key: &[u8]) -> Result<()> {
+    fn delete(&mut self, key: &[u8]) -> Result<()> {
         panic!()
     }
-    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         panic!()
     }
-    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         panic!()
     }
 }
