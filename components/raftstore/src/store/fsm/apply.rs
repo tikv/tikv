@@ -14,12 +14,11 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine::rocks;
-use engine::rocks::WriteOptions;
-use engine::Engines;
-use engine::Peekable;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
-use engine_traits::{MiscExt, Mutable as MutableTrait, WriteBatch, WriteBatchExt};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch};
+use engine_traits::{
+    KvEngine, MiscExt, Mutable as MutableTrait, Peekable, Snapshot as SnapshotTrait, WriteBatch,
+    WriteBatchExt,
+};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -285,7 +284,7 @@ struct ApplyContext {
     region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
     notifier: Notifier,
-    engines: Engines,
+    engine: RocksEngine,
     cbs: MustConsumeVec<ApplyCallback>,
     apply_res: Vec<ApplyRes>,
     exec_ctx: Option<ExecContext>,
@@ -311,7 +310,7 @@ impl ApplyContext {
         host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
-        engines: Engines,
+        engine: RocksEngine,
         router: ApplyRouter,
         notifier: Notifier,
         cfg: &Config,
@@ -322,7 +321,7 @@ impl ApplyContext {
             host,
             importer,
             region_scheduler,
-            engines,
+            engine,
             router,
             notifier,
             kv_wb: None,
@@ -346,12 +345,8 @@ impl ApplyContext {
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate) {
         if self.kv_wb.is_none() {
-            let kb_wb = self
-                .engines
-                .kv
-                .c()
-                .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
-            self.kv_wb = Some(kb_wb);
+            let kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+            self.kv_wb = Some(kv_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
@@ -398,11 +393,10 @@ impl ApplyContext {
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
-            let mut write_opts = WriteOptions::new();
+            let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.engines
-                .kv
-                .write_opt(self.kv_wb().as_inner(), &write_opts)
+            self.engine
+                .write_opt(self.kv_wb(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
@@ -410,11 +404,7 @@ impl ApplyContext {
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                let kv_wb = self
-                    .engines
-                    .kv
-                    .c()
-                    .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
                 self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
@@ -1337,17 +1327,13 @@ impl ApplyDelegate {
         if ALL_CFS.iter().find(|x| **x == cf).is_none() {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
-        let handle = rocks::util::get_cf_handle(&ctx.engines.kv, cf).unwrap();
 
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
-            ctx.engines
-                .kv
-                .delete_files_in_range_cf(
-                    handle, &start_key, &end_key, /* include_end */ false,
-                )
+            ctx.engine
+                .delete_files_in_range_cf(cf, &start_key, &end_key, /* include_end */ false)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
@@ -1359,9 +1345,7 @@ impl ApplyDelegate {
                 });
 
             // Delete all remaining keys.
-            ctx.engines
-                .kv
-                .c()
+            ctx.engine
                 .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1403,13 +1387,11 @@ impl ApplyDelegate {
             return Err(e);
         }
 
-        ctx.importer
-            .ingest(sst, RocksEngine::from_ref(&ctx.engines.kv))
-            .unwrap_or_else(|e| {
-                // If this failed, it means that the file is corrupted or something
-                // is wrong with the engine, but we can do nothing about that.
-                panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
-            });
+        ctx.importer.ingest(sst, &ctx.engine).unwrap_or_else(|e| {
+            // If this failed, it means that the file is corrupted or something
+            // is wrong with the engine, but we can do nothing about that.
+            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+        });
 
         ssts.push(sst.clone());
         Ok(Response::default())
@@ -1897,7 +1879,7 @@ impl ApplyDelegate {
         self.ready_source_region_id = 0;
 
         let region_state_key = keys::region_state_key(source_region_id);
-        let state: RegionLocalState = match ctx.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
+        let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
             e => panic!(
                 "{} failed to get regions state of {:?}: {:?}",
@@ -1973,7 +1955,7 @@ impl ApplyDelegate {
             .with_label_values(&["rollback_merge", "all"])
             .inc();
         let region_state_key = keys::region_state_key(self.region_id());
-        let state: RegionLocalState = match ctx.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
+        let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
             e => panic!("{} failed to get regions state: {:?}", self.tag, e),
         };
@@ -2089,7 +2071,7 @@ impl ApplyDelegate {
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: RocksSnapshot::new(Arc::clone(&ctx.engines.kv)),
+                snap: ctx.engine.snapshot(),
             }),
         ))
     }
@@ -2281,7 +2263,7 @@ pub struct CatchUpLogs {
 }
 
 pub struct GenSnapTask {
-    region_id: u64,
+    pub(crate) region_id: u64,
     commit_index: u64,
     snap_notifier: SyncSender<RaftSnapshot>,
 }
@@ -2305,17 +2287,19 @@ impl GenSnapTask {
 
     pub fn generate_and_schedule_snapshot(
         self,
-        engines: &Engines,
+        kv_snap: RocksSnapshot,
+        last_applied_index_term: u64,
+        last_applied_state: RaftApplyState,
         region_sched: &Scheduler<RegionTask>,
     ) -> Result<()> {
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
             notifier: self.snap_notifier,
+            last_applied_index_term,
+            last_applied_state,
             // This snapshot may be held for a long time, which may cause too many
             // open files in rocksdb.
-            // TODO: figure out another way to do raft snapshot with short life rocksdb snapshots.
-            raft_snap: RocksSnapshot::new(engines.raft.clone()),
-            kv_snap: RocksSnapshot::new(engines.kv.clone()),
+            kv_snap,
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
@@ -2661,13 +2645,8 @@ impl ApplyFsm {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
             if apply_ctx.kv_wb.is_none() {
-                apply_ctx.kv_wb = Some(
-                    apply_ctx
-                        .engines
-                        .kv
-                        .c()
-                        .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE),
-                );
+                apply_ctx.kv_wb =
+                    Some(apply_ctx.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
             }
             self.delegate.write_apply_state(apply_ctx.kv_wb_mut());
             fail_point!(
@@ -2682,9 +2661,12 @@ impl ApplyFsm {
             self.delegate.last_sync_apply_index = applied_index;
         }
 
-        if let Err(e) = snap_task
-            .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
-        {
+        if let Err(e) = snap_task.generate_and_schedule_snapshot(
+            apply_ctx.engine.snapshot(),
+            self.delegate.applied_index_term,
+            self.delegate.apply_state.clone(),
+            &apply_ctx.region_scheduler,
+        ) {
             error!(
                 "schedule snapshot failed";
                 "error" => ?e,
@@ -2742,8 +2724,8 @@ impl ApplyFsm {
                 }
                 ReadResponse {
                     response: Default::default(),
-                    snapshot: Some(RegionSnapshot::<RocksEngine>::from_raw(
-                        apply_ctx.engines.kv.clone(),
+                    snapshot: Some(RegionSnapshot::<RocksEngine>::from_snapshot(
+                        apply_ctx.engine.snapshot().into_sync(),
                         self.delegate.region.clone(),
                     )),
                 }
@@ -2924,7 +2906,7 @@ pub struct Builder {
     coprocessor_host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
-    engines: Engines,
+    engine: RocksEngine,
     sender: Notifier,
     router: ApplyRouter,
 }
@@ -2941,7 +2923,7 @@ impl Builder {
             coprocessor_host: builder.coprocessor_host.clone(),
             importer: builder.importer.clone(),
             region_scheduler: builder.region_scheduler.clone(),
-            engines: builder.engines.clone(),
+            engine: RocksEngine::from_db(builder.engines.kv.clone()),
             sender,
             router,
         }
@@ -2960,7 +2942,7 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
                 self.coprocessor_host.clone(),
                 self.importer.clone(),
                 self.region_scheduler.clone(),
-                self.engines.clone(),
+                self.engine.clone(),
                 self.router.clone(),
                 self.sender.clone(),
                 &cfg,
@@ -3114,6 +3096,8 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
+    use engine::rocks;
+    use engine::Engines;
     use engine::Peekable;
     use engine::DB;
     use engine_rocks::{Compat, RocksEngine};
@@ -3265,6 +3249,7 @@ mod tests {
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let engine = RocksEngine::from_db(engines.kv.clone());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3272,7 +3257,7 @@ mod tests {
             importer,
             region_scheduler,
             sender,
-            engines: engines.clone(),
+            engine,
             router: router.clone(),
         };
         system.spawn("test-basic".to_owned(), builder);
@@ -3637,6 +3622,7 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let engine = RocksEngine::from_db(engines.kv.clone());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3644,7 +3630,7 @@ mod tests {
             region_scheduler,
             coprocessor_host: host,
             importer: importer.clone(),
-            engines: engines.clone(),
+            engine,
             router: router.clone(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
@@ -3879,6 +3865,7 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
+        let engine = RocksEngine::from_db(engines.kv.clone());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
@@ -3886,7 +3873,7 @@ mod tests {
             region_scheduler,
             coprocessor_host: host,
             importer,
-            engines,
+            engine,
             router: router.clone(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
@@ -4139,6 +4126,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let engine = RocksEngine::from_db(engines.kv.clone());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -4146,7 +4134,7 @@ mod tests {
             importer,
             region_scheduler,
             coprocessor_host: host,
-            engines: engines.clone(),
+            engine,
             router: router.clone(),
         };
         system.spawn("test-split".to_owned(), builder);
