@@ -94,11 +94,11 @@ make_auto_flush_static_metric! {
     }
 
     pub struct GcTaskCounterVec: LocalIntCounter {
-        "type" => GcCommandKind,
+        "task" => GcCommandKind,
     }
 
     pub struct GcTaskFailCounterVec: LocalIntCounter {
-        "type" => GcCommandKind,
+        "task" => GcCommandKind,
     }
 
     pub struct ResolveStoreCounterVec: LocalIntCounter {
@@ -181,7 +181,7 @@ lazy_static! {
     pub static ref GC_GCTASK_COUNTER_STATIC: GcTaskCounterVec =
         auto_flush_from!(GC_GCTASK_COUNTER_VEC, GcTaskCounterVec);
     pub static ref GC_GCTASK_FAIL_COUNTER_STATIC: GcTaskFailCounterVec =
-        auto_flush_from!(GC_GCTASK_COUNTER_VEC, GcTaskFailCounterVec);
+        auto_flush_from!(GC_GCTASK_FAIL_COUNTER_VEC, GcTaskFailCounterVec);
     pub static ref RESOLVE_STORE_COUNTER_STATIC: ResolveStoreCounterVec =
         auto_flush_from!(RESOLVE_STORE_COUNTER, ResolveStoreCounterVec);
     pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec =
