@@ -349,6 +349,28 @@ impl ApplyContext {
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate) {
+        self.prepare_write_batch();
+        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
+        self.last_applied_index = delegate.apply_state.get_applied_index();
+
+        if let Some(enabled) = &delegate.observe_cmd {
+            let region_id = delegate.region_id();
+            if enabled.load(Ordering::Acquire) {
+                self.host.prepare_for_apply(region_id);
+            } else {
+                info!("region is no longer observerd";
+                    "region_id" => region_id);
+                delegate.observe_cmd.take();
+            }
+        }
+    }
+
+    /// Prepares WriteBatch.
+    ///
+    /// If `enable_multi_batch_write` was set false, we use first `RawWriteBatch`
+    /// of `RocksWriteBatchVec`. Otherwise we limit size of each `RawWriteBatch` in
+    /// `RocksWriteBatchVec` not exceed `WRITE_BATCH_LIMIT`.
+    pub fn prepare_write_batch(&mut self) {
         if self.kv_wb.is_none() {
             let kb_wb = {
                 if self.enable_multi_batch_write {
@@ -366,19 +388,6 @@ impl ApplyContext {
             self.kv_wb = Some(kb_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
-        }
-        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
-        self.last_applied_index = delegate.apply_state.get_applied_index();
-
-        if let Some(enabled) = &delegate.observe_cmd {
-            let region_id = delegate.region_id();
-            if enabled.load(Ordering::Acquire) {
-                self.host.prepare_for_apply(region_id);
-            } else {
-                info!("region is no longer observerd";
-                    "region_id" => region_id);
-                delegate.observe_cmd.take();
-            }
         }
     }
 
@@ -2703,7 +2712,7 @@ impl ApplyFsm {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
-            apply_ctx.prepare_for(&mut self.delegate);
+            apply_ctx.prepare_write_batch();
             self.delegate.write_apply_state(apply_ctx.kv_wb_mut());
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
