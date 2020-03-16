@@ -43,6 +43,12 @@ args:
         short: c
         long: credential_file
         takes_value: true
+    - key_dir:
+        help: Encryption base dir where master key is saved.
+        short: d
+        long: key_dir
+        takes_value: true
+        required: true
 
 subcommands:
     - kms:
@@ -66,6 +72,7 @@ subcommands:
 fn create_kms_backend(
     matches: &ArgMatches,
     credential_file: Option<&str>,
+    key_dir: &str,
 ) -> Result<Arc<dyn Backend>> {
     let mut config = KmsConfig::default();
     if let Some(credential_file) = credential_file {
@@ -88,7 +95,7 @@ fn create_kms_backend(
         config.region = region.to_string();
     }
     config.key_id = matches.value_of("key_id").unwrap().to_owned();
-    Ok(Arc::new(KmsBackend::new(config, ".")?))
+    Ok(Arc::new(KmsBackend::new(config, key_dir)?))
 }
 
 fn process() -> Result<()> {
@@ -101,9 +108,10 @@ fn process() -> Result<()> {
     let mut content = Vec::new();
     file.read_to_end(&mut content)?;
 
+    let base_dir = matches.value_of("key_dir").unwrap().to_owned();
     let credential_file = matches.value_of("credential_file");
     let backend = if let Some(matches) = matches.subcommand_matches("kms") {
-        create_kms_backend(matches, credential_file)?
+        create_kms_backend(matches, credential_file, &base_dir)?
     } else {
         return Err(Error::Other("subcommand unrecognized".to_owned().into()));
     };
