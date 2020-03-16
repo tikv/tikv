@@ -156,6 +156,9 @@ protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b6
 prost = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
 protobuf-build = { git = "https://github.com/tikv/protobuf-build", rev = "1fe5d77689d9691b7917215f3a1d32968115cc02" }
 
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = { git = "https://github.com/5kbpers/kvproto", rev = "1e3bcbdb107554ec36d13597a53600642629c329" }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 

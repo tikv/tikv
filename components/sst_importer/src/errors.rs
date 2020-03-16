@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::result;
 
 use grpcio::Error as GrpcError;
+use kvproto::import_sstpb;
 use tokio_sync::oneshot::error::RecvError;
 use uuid::{parser::ParseError, BytesError};
 
@@ -107,3 +108,11 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl From<Error> for import_sstpb::Error {
+    fn from(e: Error) -> import_sstpb::Error {
+        let mut err = import_sstpb::Error::default();
+        err.set_message(format!("{}", e));
+        err
+    }
+}
