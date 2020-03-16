@@ -4,11 +4,10 @@ use std::sync::Arc;
 
 use crate::engine::RocksEngine;
 use crate::options::RocksWriteOptions;
-use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteBatchTrait, WriteOptions};
+use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::util::get_cf_handle;
-const WRITE_BATCH_MAX_KEYS: usize = 16;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
@@ -38,12 +37,17 @@ impl WriteBatchExt for RocksEngine {
             .map_err(Error::Engine)
     }
 
+    fn support_write_batch_vec(&self) -> bool {
+        let options = self.as_inner().get_db_options();
+        options.is_enable_multi_batch_write()
+    }
+
     fn write_batch(&self) -> Self::WriteBatch {
         Self::WriteBatch::new(Arc::clone(&self.as_inner()))
     }
 
-    fn write_batch_vec(&self) -> Self::WriteBatchVec {
-        Self::WriteBatchVec::new(Arc::clone(&self.as_inner()))
+    fn write_batch_vec(&self, limit: usize, cap: usize) -> Self::WriteBatchVec {
+        Self::WriteBatchVec::new(Arc::clone(&self.as_inner()), limit, cap)
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
@@ -146,20 +150,22 @@ impl Mutable for RocksWriteBatch {
 pub struct RocksWriteBatchVec {
     db: Arc<DB>,
     wbs: Vec<RawWriteBatch>,
+    save_points: Vec<usize>,
     index: usize,
     cur_batch_size: usize,
-    save_points: Vec<usize>,
+    batch_size_limit: usize,
 }
 
 impl RocksWriteBatchVec {
-    pub fn new(db: Arc<DB>) -> RocksWriteBatchVec {
-        let wb = RawWriteBatch::default(),
+    pub fn new(db: Arc<DB>, batch_size_limit: usize, cap: usize) -> RocksWriteBatchVec {
+        let wb = RawWriteBatch::with_capacity(cap);
         RocksWriteBatchVec {
             db,
             wbs: vec![wb],
+            save_points: vec![],
             index: 0,
             cur_batch_size: 0,
-            save_points: vec![],
+            batch_size_limit,
         }
     }
 
@@ -167,29 +173,8 @@ impl RocksWriteBatchVec {
         &self.wbs[0..=self.index]
     }
 
-    pub fn with_capacity(db: Arc<DB>, cap: usize) -> RocksWriteBatchVec {
-        let wb = if cap == 0 {
-            RawWriteBatch::default()
-        } else {
-            RawWriteBatch::with_capacity(cap)
-        };
-        RocksWriteBatchVec {
-            db,
-            wbs: vec![wb],
-            index: 0,
-            cur_batch_size: 0,
-            save_points: vec![],
-        }
-    }
-
-    pub fn from_raw(db: Arc<DB>, wb: RawWriteBatch) -> RocksWriteBatchVec {
-        RocksWriteBatchVec {
-            db,
-            wbs: vec![wb],
-            index: 0,
-            cur_batch_size: 0,
-            save_points: vec![],
-        }
+    pub fn as_raw(&self) -> &RawWriteBatch {
+        &self.wbs[0]
     }
 
     pub fn get_db(&self) -> &DB {
@@ -197,7 +182,7 @@ impl RocksWriteBatchVec {
     }
 
     pub fn check_switch_batch(&mut self) {
-        if self.cur_batch_size >= WRITE_BATCH_MAX_KEYS {
+        if self.batch_size_limit > 0 && self.cur_batch_size >= self.batch_size_limit {
             self.index += 1;
             self.cur_batch_size = 0;
             if self.index >= self.wbs.len() {
@@ -214,11 +199,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     }
 
     fn count(&self) -> usize {
-        let sum = self.cur_batch_size;
-        for i in 0..self.index {
-            sum += self.wbs[i].count();
-        }
-        sum
+        self.cur_batch_size + self.index * self.batch_size_limit
     }
 
     fn is_empty(&self) -> bool {
@@ -242,7 +223,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         if let Some(x) = self.save_points.pop() {
             return self.wbs[x].pop_save_point().map_err(Error::Engine);
         }
-        return Err(Error::Engine(String("no save points")));
+        return Err(Error::Engine("no save points".into()));
     }
 
     fn rollback_to_save_point(&mut self) -> Result<()> {
@@ -253,7 +234,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
             self.index = x;
             return self.wbs[x].rollback_to_save_point().map_err(Error::Engine);
         }
-        return Err(Error::Engine(String("no save points")));
+        return Err(Error::Engine("no save points".into()));
     }
 }
 
@@ -266,7 +247,9 @@ impl Mutable for RocksWriteBatchVec {
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         self.check_switch_batch();
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        self.wbs[self.index].put_cf(handle, key, value).map_err(Error::Engine)
+        self.wbs[self.index]
+            .put_cf(handle, key, value)
+            .map_err(Error::Engine)
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<()> {
@@ -277,7 +260,9 @@ impl Mutable for RocksWriteBatchVec {
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         self.check_switch_batch();
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        self.wbs[self.index].delete_cf(handle, key).map_err(Error::Engine)
+        self.wbs[self.index]
+            .delete_cf(handle, key)
+            .map_err(Error::Engine)
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {

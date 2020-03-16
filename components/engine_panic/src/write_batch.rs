@@ -5,11 +5,21 @@ use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
 
 impl WriteBatchExt for PanicEngine {
     type WriteBatch = PanicWriteBatch;
+    type WriteBatchVec = PanicWriteBatch;
 
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
         panic!()
     }
+    fn write_vec_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
+        panic!()
+    }
+    fn support_write_batch_vec(&self) -> bool {
+        panic!()
+    }
     fn write_batch(&self) -> Self::WriteBatch {
+        panic!()
+    }
+    fn write_batch_vec(&self, limit: usize, cap: usize) -> Self::WriteBatchVec {
         panic!()
     }
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {

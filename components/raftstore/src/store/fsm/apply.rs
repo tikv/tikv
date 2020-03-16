@@ -18,8 +18,8 @@ use engine::rocks;
 use engine::rocks::WriteOptions;
 use engine::Engines;
 use engine::Peekable;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
-use engine_traits::{MiscExt, Mutable as MutableTrait, WriteBatch, WriteBatchExt};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatchVec};
+use engine_traits::{MiscExt, WriteBatch, WriteBatchExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -56,8 +56,9 @@ use super::metrics::*;
 
 use super::super::RegionTask;
 
-const WRITE_BATCH_MAX_KEYS: usize = 128;
+const WRITE_BATCH_MAX_KEYS: usize = 256;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
@@ -290,7 +291,7 @@ struct ApplyContext {
     apply_res: Vec<ApplyRes>,
     exec_ctx: Option<ExecContext>,
 
-    kv_wb: Option<RocksWriteBatch>,
+    kv_wb: Option<RocksWriteBatchVec>,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
@@ -303,6 +304,8 @@ struct ApplyContext {
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+    // Whether to enable multi_batch_write
+    enable_multi_batch_write: bool,
 }
 
 impl ApplyContext {
@@ -336,6 +339,7 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
+            enable_multi_batch_write: cfg.enable_multi_batch_write,
         }
     }
 
@@ -346,11 +350,19 @@ impl ApplyContext {
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate) {
         if self.kv_wb.is_none() {
-            let kb_wb = self
-                .engines
-                .kv
-                .c()
-                .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+            let kb_wb = {
+                if self.enable_multi_batch_write {
+                    self.engines
+                        .kv
+                        .c()
+                        .write_batch_vec(WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE)
+                } else {
+                    self.engines
+                        .kv
+                        .c()
+                        .write_batch_vec(0, DEFAULT_APPLY_WB_SIZE)
+                }
+            };
             self.kv_wb = Some(kb_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -393,6 +405,52 @@ impl ApplyContext {
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
     }
 
+    fn write_vec_opt(&mut self, write_opts: &WriteOptions) {
+        self.engines
+            .kv
+            .multi_batch_write(self.kv_wb().as_inner(), write_opts)
+            .unwrap_or_else(|e| {
+                panic!("failed to write to engine: {:?}", e);
+            });
+        self.sync_log_hint = false;
+        let data_size = self.kv_wb().data_size();
+        if data_size > APPLY_WB_SHRINK_SIZE {
+            // Control the memory usage for the WriteBatch.
+            let kv_wb = self
+                .engines
+                .kv
+                .c()
+                .write_batch_vec(WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+            self.kv_wb = Some(kv_wb);
+        } else {
+            // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+            self.kv_wb_mut().clear();
+        }
+    }
+
+    fn write_opt(&mut self, write_opts: &WriteOptions) {
+        self.engines
+            .kv
+            .write_opt(self.kv_wb().as_raw(), write_opts)
+            .unwrap_or_else(|e| {
+                panic!("failed to write to engine: {:?}", e);
+            });
+        self.sync_log_hint = false;
+        let data_size = self.kv_wb().data_size();
+        if data_size > APPLY_WB_SHRINK_SIZE {
+            // Control the memory usage for the WriteBatch.
+            let kv_wb = self
+                .engines
+                .kv
+                .c()
+                .write_batch_vec(0, DEFAULT_APPLY_WB_SIZE);
+            self.kv_wb = Some(kv_wb);
+        } else {
+            // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+            self.kv_wb_mut().clear();
+        }
+    }
+
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
@@ -400,25 +458,10 @@ impl ApplyContext {
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.engines
-                .kv
-                .write_opt(self.kv_wb().as_inner(), &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("failed to write to engine: {:?}", e);
-                });
-            self.sync_log_hint = false;
-            let data_size = self.kv_wb().data_size();
-            if data_size > APPLY_WB_SHRINK_SIZE {
-                // Control the memory usage for the WriteBatch.
-                let kv_wb = self
-                    .engines
-                    .kv
-                    .c()
-                    .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
-                self.kv_wb = Some(kv_wb);
+            if self.enable_multi_batch_write {
+                self.write_opt(&write_opts);
             } else {
-                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
-                self.kv_wb_mut().clear();
+                self.write_vec_opt(&write_opts);
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -453,12 +496,12 @@ impl ApplyContext {
     }
 
     #[inline]
-    pub fn kv_wb(&self) -> &RocksWriteBatch {
+    pub fn kv_wb(&self) -> &RocksWriteBatchVec {
         self.kv_wb.as_ref().unwrap()
     }
 
     #[inline]
-    pub fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
+    pub fn kv_wb_mut(&mut self) -> &mut RocksWriteBatchVec {
         self.kv_wb.as_mut().unwrap()
     }
 
@@ -798,7 +841,7 @@ impl ApplyDelegate {
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, wb: &mut RocksWriteBatch) {
+    fn write_apply_state<W: WriteBatch>(&self, wb: &mut W) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -1221,7 +1264,7 @@ impl ApplyDelegate {
 
 // Write commands related.
 impl ApplyDelegate {
-    fn handle_put(&mut self, wb: &mut RocksWriteBatch, req: &Request) -> Result<Response> {
+    fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1262,7 +1305,7 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_delete(&mut self, wb: &mut RocksWriteBatch, req: &Request) -> Result<Response> {
+    fn handle_delete<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -2660,15 +2703,7 @@ impl ApplyFsm {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
-            if apply_ctx.kv_wb.is_none() {
-                apply_ctx.kv_wb = Some(
-                    apply_ctx
-                        .engines
-                        .kv
-                        .c()
-                        .write_batch_with_cap(DEFAULT_APPLY_WB_SIZE),
-                );
-            }
+            apply_ctx.prepare_for(&mut self.delegate);
             self.delegate.write_apply_state(apply_ctx.kv_wb_mut());
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
@@ -3117,7 +3152,7 @@ mod tests {
     use engine::Peekable;
     use engine::DB;
     use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{Peekable as PeekableTrait, WriteBatch};
+    use engine_traits::{Mutable, Peekable as PeekableTrait, WriteBatch};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
