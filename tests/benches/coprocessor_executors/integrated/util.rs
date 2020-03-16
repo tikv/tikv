@@ -75,10 +75,7 @@ where
         store: &Store<RocksEngine>,
     ) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
-            tidb_query_normal_executors::executor::runner::build_executors::<
-                _,
-                ExecSummaryCollectorDisabled,
-            >(
+            tidb_query_normal_executors::runner::build_executors::<_, ExecSummaryCollectorDisabled>(
                 black_box(executors.to_vec()),
                 black_box(TiKVStorage::from(ToTxnStore::<T>::to_store(store))),
                 black_box(ranges.to_vec()),

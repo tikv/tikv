@@ -9,9 +9,7 @@ use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 use tidb_query_datatype::codec::datum;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_normal_executors::executor::{
-    Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor,
-};
+use tidb_query_normal_executors::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
 use super::cmsketch::CmSketch;

@@ -154,8 +154,6 @@ impl EvalConfig {
         EvalWarnings::new(self.max_warning_cnt)
     }
 
-    // TODO: builtin_cast test case can not cimpile if #[cfg(test)]
-    //    #[cfg(test)]
     pub fn default_for_test() -> EvalConfig {
         let mut config = EvalConfig::new();
         config.set_flag(Flag::IGNORE_TRUNCATE);

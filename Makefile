@@ -327,7 +327,7 @@ ctl:
 # A special target for testing only "coprocessor::dag::expr"
 # per https://github.com/tikv/tikv/pull/3280
 expression: format clippy
-	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query_datatype "expr" -- --nocapture
+	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package "expr" -- --nocapture
 
 # A special target for building TiKV docker image.
 .PHONY: docker

@@ -529,7 +529,7 @@ impl ValidatorFnGenerator {
                 expr: &tipb::Expr
             ) -> tidb_query_datatype::Result<()> #where_clause {
                 use tidb_query_datatype::codec::data_type::Evaluable;
-                use crate::rpn_expr::function;
+                use crate::function;
                 #( #inners )*
                 Ok(())
             }
@@ -545,12 +545,12 @@ fn generate_init_metadata_fn(
 ) -> TokenStream {
     let fn_body = match (metadata_type, metadata_mapper) {
         (Some(metadata_type), Some(metadata_mapper)) => quote! {
-            crate::rpn_expr::types::function::extract_metadata_from_val::<#metadata_type>(expr.get_val())
+            crate::types::function::extract_metadata_from_val::<#metadata_type>(expr.get_val())
                 .and_then(|metadata| #metadata_mapper(expr, metadata))
                 .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
         },
         (Some(metadata_type), None) => quote! {
-            crate::rpn_expr::types::function::extract_metadata_from_val::<#metadata_type>(expr.get_val())
+            crate::types::function::extract_metadata_from_val::<#metadata_type>(expr.get_val())
                 .map_err(|e| other_err!("Decode metadata failed: {}", e))
                 .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
         },
@@ -599,8 +599,8 @@ fn generate_metadata_type_checker(
                 fn _type_checker #impl_generics (
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     expr: &mut ::tipb::Expr,
                 ) #where_clause {
                     for row_index in 0..output_rows {
@@ -715,19 +715,19 @@ impl VargsRpnFn {
 
         quote! {
             pub const fn #constructor_ident #impl_generics ()
-            -> crate::rpn_expr::RpnFnMeta
+            -> crate::RpnFnMeta
             #where_clause
             {
                 #[inline]
                 fn run #impl_generics (
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
                     #downcast_metadata
-                    crate::rpn_expr::function::VARG_PARAM_BUF.with(|vargs_buf| {
+                    crate::function::VARG_PARAM_BUF.with(|vargs_buf| {
                         use tidb_query_datatype::codec::data_type::Evaluable;
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
@@ -753,7 +753,7 @@ impl VargsRpnFn {
 
                 #validator_fn
 
-                crate::rpn_expr::RpnFnMeta {
+                crate::RpnFnMeta {
                     name: #fn_name,
                     metadata_expr_ptr: init_metadata #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
@@ -854,19 +854,19 @@ impl RawVargsRpnFn {
 
         quote! {
             pub const fn #constructor_ident #impl_generics ()
-            -> crate::rpn_expr::RpnFnMeta
+            -> crate::RpnFnMeta
             #where_clause
             {
                 #[inline]
                 fn run #impl_generics (
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
                     #downcast_metadata
-                    crate::rpn_expr::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
+                    crate::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         let mut result = Vec::with_capacity(output_rows);
@@ -893,7 +893,7 @@ impl RawVargsRpnFn {
 
                 #validator_fn
 
-                crate::rpn_expr::RpnFnMeta {
+                crate::RpnFnMeta {
                     name: #fn_name,
                     metadata_expr_ptr: init_metadata #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
@@ -975,8 +975,8 @@ impl NormalRpnFn {
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue>;
             }
@@ -987,7 +987,7 @@ impl NormalRpnFn {
         let mut generics = self.item_fn.sig.generics.clone();
         generics
             .params
-            .push(parse_str("D_: crate::rpn_expr::function::ArgDef").unwrap());
+            .push(parse_str("D_: crate::function::ArgDef").unwrap());
         let fn_trait_ident = &self.fn_trait_ident;
         let tp_ident = Ident::new("D_", Span::call_site());
         let (_, ty_generics, _) = self.item_fn.sig.generics.split_for_impl();
@@ -998,8 +998,8 @@ impl NormalRpnFn {
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     unreachable!()
@@ -1013,16 +1013,16 @@ impl NormalRpnFn {
         generics
             .params
             .push(LifetimeDef::new(Lifetime::new("'arg_", Span::call_site())).into());
-        let mut tp = quote! { crate::rpn_expr::function::Null };
+        let mut tp = quote! { crate::function::Null };
         for (arg_index, arg_type) in self.arg_types.iter().enumerate().rev() {
             let arg_name = Ident::new(&format!("Arg{}_", arg_index), Span::call_site());
             let generic_param = quote! {
-                #arg_name: crate::rpn_expr::function::RpnFnArg<
+                #arg_name: crate::function::RpnFnArg<
                     Type = &'arg_ Option<#arg_type>
                 >
             };
             generics.params.push(parse2(generic_param).unwrap());
-            tp = quote! { crate::rpn_expr::function::Arg<#arg_name, #tp> };
+            tp = quote! { crate::function::Arg<#arg_name, #tp> };
         }
         let fn_ident = &self.item_fn.sig.ident;
         let fn_trait_ident = &self.fn_trait_ident;
@@ -1056,8 +1056,8 @@ impl NormalRpnFn {
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     #downcast_metadata
@@ -1088,16 +1088,16 @@ impl NormalRpnFn {
                 std::marker::PhantomData <(#(#generic_types),*)>
             ) #where_clause ;
 
-            impl #impl_generics crate::rpn_expr::function::Evaluator
+            impl #impl_generics crate::function::Evaluator
                 for #evaluator_ident #ty_generics #where_clause {
                 #[inline]
                 fn eval(
                     self,
-                    def: impl crate::rpn_expr::function::ArgDef,
+                    def: impl crate::function::ArgDef,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, output_rows, args, extra, metadata)
@@ -1135,18 +1135,18 @@ impl NormalRpnFn {
 
         quote! {
             pub const fn #constructor_ident #impl_generics ()
-            -> crate::rpn_expr::RpnFnMeta
+            -> crate::RpnFnMeta
             #where_clause
             {
                 #[inline]
                 fn run #impl_generics (
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
-                    use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
+                    use crate::function::{ArgConstructor, Evaluator, Null};
                     #evaluator.eval(Null, ctx, output_rows, args, extra, metadata)
                 }
 
@@ -1154,7 +1154,7 @@ impl NormalRpnFn {
 
                 #validator_fn
 
-                crate::rpn_expr::RpnFnMeta {
+                crate::RpnFnMeta {
                     name: #fn_name,
                     metadata_expr_ptr: init_metadata #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
@@ -1191,8 +1191,8 @@ mod tests_normal {
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue>;
             }
@@ -1204,13 +1204,13 @@ mod tests_normal {
     fn test_no_generic_generate_dummy_fn_trait_impl() {
         let gen = no_generic_fn();
         let expected: TokenStream = quote! {
-            impl<D_: crate::rpn_expr::function::ArgDef> Foo_Fn for D_ {
+            impl<D_: crate::function::ArgDef> Foo_Fn for D_ {
                 default fn eval(
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     unreachable!()
@@ -1229,21 +1229,21 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             impl<
                 'arg_,
-                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Real> > ,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Int> >
-            > Foo_Fn for crate::rpn_expr::function::Arg<
+                Arg1_: crate::function::RpnFnArg<Type = &'arg_ Option<Real> > ,
+                Arg0_: crate::function::RpnFnArg<Type = &'arg_ Option<Int> >
+            > Foo_Fn for crate::function::Arg<
                 Arg0_,
-                crate::rpn_expr::function::Arg<
+                crate::function::Arg<
                     Arg1_,
-                    crate::rpn_expr::function::Null
+                    crate::function::Null
                 >
             > {
                 default fn eval(
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
@@ -1269,15 +1269,15 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             pub struct Foo_Evaluator(std::marker::PhantomData<()>);
 
-            impl crate::rpn_expr::function::Evaluator for Foo_Evaluator {
+            impl crate::function::Evaluator for Foo_Evaluator {
                 #[inline]
                 fn eval(
                     self,
-                    def: impl crate::rpn_expr::function::ArgDef,
+                    def: impl crate::function::ArgDef,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     Foo_Fn::eval(def, ctx, output_rows, args, extra, metadata)
@@ -1291,16 +1291,16 @@ mod tests_normal {
     fn test_no_generic_generate_constructor() {
         let gen = no_generic_fn();
         let expected: TokenStream = quote! {
-            pub const fn foo_fn_meta() -> crate::rpn_expr::RpnFnMeta {
+            pub const fn foo_fn_meta() -> crate::RpnFnMeta {
                 #[inline]
                 fn run(
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
-                    use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
+                    use crate::function::{ArgConstructor, Evaluator, Null};
                     <ArgConstructor<Real, _>>::new(
                         1usize,
                         <ArgConstructor<Int, _>>::new(0usize, Foo_Evaluator(std::marker::PhantomData))
@@ -1313,7 +1313,7 @@ mod tests_normal {
                 }
                 fn validate(expr: &tipb::Expr) -> tidb_query_datatype::Result<()> {
                     use tidb_query_datatype::codec::data_type::Evaluable;
-                    use crate::rpn_expr::function;
+                    use crate::function;
 
                     function::validate_expr_return_type(expr, Decimal::EVAL_TYPE)?;
                     function::validate_expr_arguments_eq(expr, 2usize)?;
@@ -1322,7 +1322,7 @@ mod tests_normal {
                     function::validate_expr_return_type(&children[1usize], Real::EVAL_TYPE)?;
                     Ok(())
                 }
-                crate::rpn_expr::RpnFnMeta {
+                crate::RpnFnMeta {
                     name: "foo",
                     metadata_expr_ptr: init_metadata,
                     validator_ptr: validate,
@@ -1358,8 +1358,8 @@ mod tests_normal {
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue>;
             }
@@ -1371,7 +1371,7 @@ mod tests_normal {
     fn test_generic_generate_dummy_fn_trait_impl() {
         let gen = generic_fn();
         let expected: TokenStream = quote! {
-            impl<A: M, B, D_: crate::rpn_expr::function::ArgDef> Foo_Fn<A, B> for D_
+            impl<A: M, B, D_: crate::function::ArgDef> Foo_Fn<A, B> for D_
             where
                 B: N<A>
             {
@@ -1379,8 +1379,8 @@ mod tests_normal {
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     unreachable!()
@@ -1401,17 +1401,17 @@ mod tests_normal {
                 'arg_,
                 A: M,
                 B,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<A::X> >
-            > Foo_Fn<A, B> for crate::rpn_expr::function::Arg<
+                Arg0_: crate::function::RpnFnArg<Type = &'arg_ Option<A::X> >
+            > Foo_Fn<A, B> for crate::function::Arg<
                 Arg0_,
-                crate::rpn_expr::function::Null
+                crate::function::Null
             > where B: N<A> {
                 default fn eval(
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
@@ -1438,18 +1438,18 @@ mod tests_normal {
             where
                 B: N<A>;
 
-            impl<A: M, B> crate::rpn_expr::function::Evaluator for Foo_Evaluator<A, B>
+            impl<A: M, B> crate::function::Evaluator for Foo_Evaluator<A, B>
             where
                 B: N<A>
             {
                 #[inline]
                 fn eval(
                     self,
-                    def: impl crate::rpn_expr::function::ArgDef,
+                    def: impl crate::function::ArgDef,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     Foo_Fn::<A, B>::eval(def, ctx, output_rows, args, extra, metadata)
@@ -1463,7 +1463,7 @@ mod tests_normal {
     fn test_generic_generate_constructor() {
         let gen = generic_fn();
         let expected: TokenStream = quote! {
-            pub const fn foo_fn_meta<A: M, B>() -> crate::rpn_expr::RpnFnMeta
+            pub const fn foo_fn_meta<A: M, B>() -> crate::RpnFnMeta
             where
                 B: N<A>
             {
@@ -1471,14 +1471,14 @@ mod tests_normal {
                 fn run<A: M, B>(
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue>
                 where
                     B: N<A>
                 {
-                    use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
+                    use crate::function::{ArgConstructor, Evaluator, Null};
                     <ArgConstructor<A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
                                 .eval(Null, ctx, output_rows, args, extra, metadata)
                 }
@@ -1493,14 +1493,14 @@ mod tests_normal {
                     B: N<A>
                 {
                     use tidb_query_datatype::codec::data_type::Evaluable;
-                    use crate::rpn_expr::function;
+                    use crate::function;
                     function::validate_expr_return_type(expr, B::EVAL_TYPE)?;
                     function::validate_expr_arguments_eq(expr, 1usize)?;
                     let children = expr.get_children();
                     function::validate_expr_return_type(&children[0usize], A::X::EVAL_TYPE)?;
                     Ok(())
                 }
-                crate::rpn_expr::RpnFnMeta {
+                crate::RpnFnMeta {
                     name: "foo",
                     metadata_expr_ptr: init_metadata::<A, B>,
                     validator_ptr: validate::<A, B>,
@@ -1543,21 +1543,21 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             impl<
                 'arg_,
-                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Real> > ,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Int> >
-            > Foo_Fn for crate::rpn_expr::function::Arg<
+                Arg1_: crate::function::RpnFnArg<Type = &'arg_ Option<Real> > ,
+                Arg0_: crate::function::RpnFnArg<Type = &'arg_ Option<Int> >
+            > Foo_Fn for crate::function::Arg<
                 Arg0_,
-                crate::rpn_expr::function::Arg<
+                crate::function::Arg<
                     Arg1_,
-                    crate::rpn_expr::function::Null
+                    crate::function::Null
                 >
             > {
                 default fn eval(
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
                     output_rows: usize,
-                    args: &[crate::rpn_expr::RpnStackNode<'_>],
-                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;

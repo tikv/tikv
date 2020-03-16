@@ -11,8 +11,8 @@ use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
 use yatp::task::future::reschedule;
 
-use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
+use super::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::metrics::*;
 use tidb_query_datatype::storage::Storage;

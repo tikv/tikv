@@ -89,7 +89,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
 }
 
 pub struct DAGHandler {
-    runner: tidb_query_normal_executors::executor::ExecutorsRunner<Statistics>,
+    runner: tidb_query_normal_executors::ExecutorsRunner<Statistics>,
     data_version: Option<u64>,
 }
 
@@ -104,7 +104,7 @@ impl DAGHandler {
         is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self {
-            runner: tidb_query_normal_executors::executor::ExecutorsRunner::from_request(
+            runner: tidb_query_normal_executors::ExecutorsRunner::from_request(
                 req,
                 ranges,
                 TiKVStorage::from(store),

@@ -177,9 +177,7 @@ pub fn fuzz_hash_decimal(data: &[u8]) -> Result<()> {
 }
 
 trait ReadAsTimeType: ReadLiteralExt {
-    fn read_as_time_type(
-        &mut self,
-    ) -> Result<::tidb_query_datatype::codec::mysql::TimeType> {
+    fn read_as_time_type(&mut self) -> Result<::tidb_query_datatype::codec::mysql::TimeType> {
         Ok(match self.read_as_u8()? % 3 {
             0 => tidb_query_datatype::codec::mysql::TimeType::Date,
             1 => tidb_query_datatype::codec::mysql::TimeType::DateTime,
@@ -190,10 +188,7 @@ trait ReadAsTimeType: ReadLiteralExt {
 
 impl<T: ReadLiteralExt> ReadAsTimeType for T {}
 
-fn fuzz_time(
-    t: tidb_query_datatype::codec::mysql::Time,
-    mut cursor: Cursor<&[u8]>,
-) -> Result<()> {
+fn fuzz_time(t: tidb_query_datatype::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Result<()> {
     use tidb_query_datatype::codec::convert::ConvertTo;
     use tidb_query_datatype::codec::data_type::{Decimal, Duration};
     use tidb_query_datatype::codec::mysql::TimeEncoder;

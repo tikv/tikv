@@ -21,7 +21,7 @@ use tidb_query_datatype::codec::datum::{Datum, DatumEncoder};
 use tidb_query_datatype::codec::table::RowColsDict;
 use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
 use tidb_query_datatype::storage::IntervalRange;
-use tidb_query_normal_executors::executor::{Executor, Row};
+use tidb_query_normal_executors::{Executor, Row};
 use tidb_query_vec_executors::interface::*;
 use tikv::storage::{RocksEngine, Statistics};
 

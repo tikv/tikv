@@ -3,7 +3,7 @@
 use criterion::black_box;
 use criterion::measurement::Measurement;
 use futures03::executor::block_on;
-use tidb_query_normal_executors::executor::Executor;
+use tidb_query_normal_executors::Executor;
 use tidb_query_vec_executors::interface::*;
 use tikv::coprocessor::RequestHandler;
 

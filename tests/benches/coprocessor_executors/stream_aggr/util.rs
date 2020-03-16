@@ -8,9 +8,9 @@ use criterion::measurement::Measurement;
 use tipb::Expr;
 
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_normal_executors::executor::{Executor, StreamAggExecutor};
-use tidb_query_vec_executors::executors::BatchStreamAggregationExecutor;
+use tidb_query_normal_executors::{Executor, StreamAggExecutor};
 use tidb_query_vec_executors::interface::BatchExecutor;
+use tidb_query_vec_executors::BatchStreamAggregationExecutor;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;

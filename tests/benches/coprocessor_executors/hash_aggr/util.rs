@@ -9,10 +9,10 @@ use tipb::Aggregation;
 use tipb::Expr;
 
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_normal_executors::executor::{Executor, HashAggExecutor};
-use tidb_query_vec_executors::executors::BatchFastHashAggregationExecutor;
-use tidb_query_vec_executors::executors::BatchSlowHashAggregationExecutor;
+use tidb_query_normal_executors::{Executor, HashAggExecutor};
 use tidb_query_vec_executors::interface::*;
+use tidb_query_vec_executors::BatchFastHashAggregationExecutor;
+use tidb_query_vec_executors::BatchSlowHashAggregationExecutor;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
