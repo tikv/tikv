@@ -52,6 +52,7 @@ make_static_metric! {
     pub label_enum GcCommandKind {
         gc,
         unsafe_destroy_range,
+        physical_scan_lock,
     }
 
     pub struct GrpcMsgHistogramVec: Histogram {

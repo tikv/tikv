@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
-use engine::{name_to_cf, CF_DEFAULT};
+use engine_traits::{name_to_cf, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -13,11 +13,11 @@ use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::Callback;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::Callback;
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};

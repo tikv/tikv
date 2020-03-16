@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
-use prometheus_static_metric::make_static_metric;
+use prometheus_static_metric::*;
 
 use tikv_util::metrics::TLSMetricGroup;
 

@@ -316,6 +316,17 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn to_seconds(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.invalid_zero() {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .map(|_| None);
+        }
+        Ok(Some(t.second_number()))
+    }
+
+    #[inline]
     pub fn date_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if lhs.invalid_zero() {
@@ -1295,6 +1306,30 @@ mod tests {
             Datum::Time(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 6, true).unwrap());
         // test ZERO case
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::ToDays, datetime);
+    }
+
+    #[test]
+    fn test_to_seconds() {
+        let cases = vec![
+            ("950501", 62966505600),
+            ("2009-11-29", 63426672000),
+            ("2009-11-29 13:43:32", 63426721412),
+            ("09-11-29 13:43:32", 63426721412),
+            ("99-11-29 13:43:32", 63111102212),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let time = Datum::Time(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::ToSeconds, time, Datum::I64(exp));
+        }
+
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::ToSeconds, Datum::Null);
+
+        let datetime =
+            Datum::Time(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 6, true).unwrap());
+        // test ZERO case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::ToSeconds, datetime);
     }
 
     #[test]

@@ -5,17 +5,30 @@ edition = "2018"
 publish = false
 
 [features]
-prost-codec = ["prost"]
+protobuf-codec = [
+  "kvproto/protobuf-codec",
+  "test_storage/protobuf-codec",
+  "tidb_query/protobuf-codec",
+  "tikv/protobuf-codec",
+  "tipb/protobuf-codec",
+  "txn_types/protobuf-codec",
+]
+prost-codec = [
+  "kvproto/prost-codec",
+  "test_storage/prost-codec",
+  "tidb_query/prost-codec",
+  "tikv/prost-codec",
+  "tipb/prost-codec",
+  "txn_types/prost-codec",
+]
 
 [dependencies]
 futures = "0.1"
-keys = { path = "../keys" }
-txn_types = { path = "../txn_types" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-prost = { version = "0.5", optional = true }
 protobuf = "2"
 test_storage = { path = "../test_storage" }
 tidb_query = { path = "../tidb_query" }
-tikv = { path = "../../", default-features = false}
+tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+txn_types = { path = "../txn_types" }

@@ -404,9 +404,18 @@ where
         let name_prefix = self.name_prefix.take().unwrap();
         info!("shutdown batch system {}", name_prefix);
         self.router.broadcast_shutdown();
+        let mut last_error = None;
         for h in self.workers.drain(..) {
             debug!("waiting for {}", h.thread().name().unwrap());
-            h.join().unwrap();
+            if let Err(e) = h.join() {
+                error!("failed to join worker thread: {:?}", e);
+                last_error = Some(e);
+            }
+        }
+        if let Some(e) = last_error {
+            if !thread::panicking() {
+                panic!("failed to join worker thread: {:?}", e);
+            }
         }
         info!("batch system {} is stopped.", name_prefix);
     }

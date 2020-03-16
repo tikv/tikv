@@ -1,36 +1,49 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Json;
+use super::super::Result;
+use super::{JsonRef, JsonType};
 
-impl Json {
-    pub fn depth(&self) -> i64 {
-        match &self {
-            Json::Object(_) | Json::Array(_) => depth_json(self),
-            _ => 1,
-        }
+impl<'a> JsonRef<'a> {
+    /// Returns maximum depth of JSON document
+    pub fn depth(&self) -> Result<i64> {
+        depth_json(&self)
     }
 }
 
-pub fn depth_json(j: &Json) -> i64 {
-    (match *j {
-        Json::Array(ref array) => array
-            .iter()
-            .map(|child| depth_json(child))
-            .max()
-            .unwrap_or(0),
-
-        Json::Object(ref map) => map
-            .iter()
-            .map(|(_, value)| depth_json(value))
-            .max()
-            .unwrap_or(0),
+// See `GetElemDepth()` in TiDB `json/binary_function.go`
+fn depth_json(j: &JsonRef<'_>) -> Result<i64> {
+    Ok(match j.get_type() {
+        JsonType::Object => {
+            let length = j.get_elem_count();
+            let mut max_depth = 0;
+            for i in 0..length {
+                let val = j.object_get_val(i)?;
+                let depth = depth_json(&val)?;
+                if depth > max_depth {
+                    max_depth = depth;
+                }
+            }
+            max_depth
+        }
+        JsonType::Array => {
+            let length = j.get_elem_count();
+            let mut max_depth = 0;
+            for i in 0..length {
+                let val = j.array_get_elem(i)?;
+                let depth = depth_json(&val)?;
+                if depth > max_depth {
+                    max_depth = depth;
+                }
+            }
+            max_depth
+        }
         _ => 0,
     } + 1)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::Json;
 
     #[test]
     fn test_json_depth() {
@@ -70,7 +83,7 @@ mod tests {
             let j = js.parse();
             assert!(j.is_ok(), "#{} expect parse ok but got {:?}", i, j);
             let j: Json = j.unwrap();
-            let got = j.depth();
+            let got = j.as_ref().depth().unwrap();
             assert_eq!(
                 got, expected,
                 "#{} expect {:?}, but got {:?}",

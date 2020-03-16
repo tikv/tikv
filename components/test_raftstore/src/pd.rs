@@ -3,13 +3,14 @@
 use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
+use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use tokio_timer::timer::Handle;
 
 use kvproto::configpb;
@@ -19,12 +20,13 @@ use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{ConfigClient, Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
-use tikv::raftstore::store::util::check_key_in_region;
-use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
+use raftstore::store::util::check_key_in_region;
+use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
+use txn_types::TimeStamp;
 
 use super::*;
 
@@ -668,6 +670,9 @@ pub struct TestPdClient {
     cluster: Arc<RwLock<Cluster>>,
     timer: Handle,
     is_incompatible: bool,
+    tso: AtomicUsize,
+    poller: CpuPool,
+    trigger_tso_failure: AtomicBool,
 }
 
 impl TestPdClient {
@@ -677,6 +682,9 @@ impl TestPdClient {
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: GLOBAL_TIMER_HANDLE.clone(),
             is_incompatible,
+            tso: AtomicUsize::new(1),
+            poller: CpuPoolBuilder::new().pool_size(1).create(),
+            trigger_tso_failure: AtomicBool::new(false),
         }
     }
 
@@ -868,23 +876,26 @@ impl TestPdClient {
     pub fn must_merge(&self, from: u64, target: u64) {
         self.merge_region(from, target);
 
-        for _ in 1..500 {
-            sleep_ms(10);
-
-            if self.get_region_by_id(from).wait().unwrap().is_none() {
-                return;
-            }
-        }
-
-        let region = self.get_region_by_id(from).wait().unwrap();
-        if region.is_none() {
-            return;
-        }
-        panic!("region {:?} is still not merged.", region.unwrap());
+        self.check_merged_timeout(from, Duration::from_secs(5));
     }
 
     pub fn check_merged(&self, from: u64) -> bool {
         self.get_region_by_id(from).wait().unwrap().is_none()
+    }
+
+    pub fn check_merged_timeout(&self, from: u64, duration: Duration) {
+        let timer = Instant::now();
+        loop {
+            let region = self.get_region_by_id(from).wait().unwrap();
+            if let Some(r) = region {
+                if timer.elapsed() > duration {
+                    panic!("region {:?} is still not merged.", r);
+                }
+            } else {
+                return;
+            }
+            sleep_ms(10);
+        }
     }
 
     pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
@@ -965,6 +976,10 @@ impl TestPdClient {
 
     pub fn set_gc_safe_point(&self, safe_point: u64) {
         self.cluster.wl().set_gc_safe_point(safe_point);
+    }
+
+    pub fn trigger_tso_failure(&self) {
+        self.trigger_tso_failure.store(true, Ordering::SeqCst);
     }
 }
 
@@ -1206,6 +1221,23 @@ impl PdClient for TestPdClient {
         resp.set_header(header);
         resp.set_region_id(region_id);
         Ok(resp)
+    }
+
+    fn get_tso(&self) -> PdFuture<TimeStamp> {
+        if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
+            return Box::new(futures::future::result(Err(
+                pd_client::errors::Error::Grpc(grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
+                    grpcio::RpcStatusCode::UNKNOWN,
+                    Some("tso error".to_owned()),
+                ))),
+            )));
+        }
+        let tso = self.tso.fetch_add(1, Ordering::SeqCst);
+        Box::new(futures::future::result(Ok(TimeStamp::new(tso as _))))
+    }
+
+    fn spawn(&self, fut: PdFuture<()>) {
+        self.poller.spawn(fut).forget();
     }
 }
 

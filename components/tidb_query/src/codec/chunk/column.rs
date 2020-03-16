@@ -780,7 +780,7 @@ impl Column {
     /// Append a json datum to the column.
     #[inline]
     pub fn append_json(&mut self, j: &Json) -> Result<()> {
-        self.data.write_json(j)?;
+        self.data.write_json(j.as_ref())?;
         self.finished_append_var();
         Ok(())
     }

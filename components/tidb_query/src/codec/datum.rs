@@ -245,21 +245,21 @@ impl Datum {
     fn cmp_json(&self, ctx: &mut EvalContext, json: &Json) -> Result<Ordering> {
         let order = match *self {
             Datum::Json(ref j) => j.cmp(json),
-            Datum::I64(d) => Json::I64(d).cmp(json),
-            Datum::U64(d) => Json::U64(d).cmp(json),
-            Datum::F64(d) => Json::Double(d).cmp(json),
+            Datum::I64(d) => Json::from_i64(d)?.cmp(json),
+            Datum::U64(d) => Json::from_u64(d)?.cmp(json),
+            Datum::F64(d) => Json::from_f64(d)?.cmp(json),
             Datum::Dec(ref d) => {
                 // FIXME: it this same as TiDB's?
                 let ff = d.convert(ctx)?;
-                Json::Double(ff).cmp(json)
+                Json::from_f64(ff)?.cmp(json)
             }
             Datum::Bytes(ref d) => {
                 let data = str::from_utf8(d)?;
-                Json::String(String::from(data)).cmp(json)
+                Json::from_string(String::from(data))?.cmp(json)
             }
             _ => {
                 let data = self.to_string().unwrap_or_default();
-                Json::String(data).cmp(json)
+                Json::from_string(data)?.cmp(json)
             }
         };
         Ok(order)
@@ -431,31 +431,31 @@ impl Datum {
                 let json: Json = s.parse()?;
                 Ok(json)
             }
-            Datum::I64(d) => Ok(Json::I64(d)),
-            Datum::U64(d) => Ok(Json::U64(d)),
-            Datum::F64(d) => Ok(Json::Double(d)),
+            Datum::I64(d) => Json::from_i64(d),
+            Datum::U64(d) => Json::from_u64(d),
+            Datum::F64(d) => Json::from_f64(d),
             Datum::Dec(d) => {
                 // TODO: remove the `cast_as_json` method
                 let ff = d.convert(&mut EvalContext::default())?;
-                Ok(Json::Double(ff))
+                Json::from_f64(ff)
             }
             Datum::Json(d) => Ok(d),
             _ => {
                 let s = self.into_string()?;
-                Ok(Json::String(s))
+                Json::from_string(s)
             }
         }
     }
 
-    /// into_json would convert Datum::Bytes(bs) into Json::String(bs)
-    /// and convert Datum::Null into Json::None.
+    /// into_json would convert Datum::Bytes(bs) into Json::from_string(bs)
+    /// and convert Datum::Null into Json::none().
     /// This func would be used in json_unquote and json_modify
     pub fn into_json(self) -> Result<Json> {
         match self {
-            Datum::Null => Ok(Json::None),
+            Datum::Null => Json::none(),
             Datum::Bytes(bs) => {
                 let s = String::from_utf8(bs)?;
-                Ok(Json::String(s))
+                Json::from_string(s)
             }
             _ => self.cast_as_json(),
         }
@@ -901,7 +901,7 @@ pub trait DatumEncoder:
                 }
                 Datum::Json(ref j) => {
                     self.write_u8(JSON_FLAG)?;
-                    self.write_json(j)?;
+                    self.write_json(j.as_ref())?;
                 }
             }
         }
@@ -944,7 +944,7 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                     }
                 }
                 Datum::Dec(ref d) => d.approximate_encoded_size(),
-                Datum::Json(ref d) => d.binary_len(),
+                Datum::Json(ref d) => d.as_ref().binary_len(),
                 Datum::Null | Datum::Min | Datum::Max => 0,
             }
         })
@@ -1592,16 +1592,24 @@ mod tests {
                 Datum::Json(Json::from_str(r#"{"key":"value"}"#).unwrap()),
                 Ordering::Equal,
             ),
-            (Datum::I64(18), Datum::Json(Json::I64(18)), Ordering::Equal),
-            (Datum::U64(18), Datum::Json(Json::I64(20)), Ordering::Less),
+            (
+                Datum::I64(18),
+                Datum::Json(Json::from_i64(18).unwrap()),
+                Ordering::Equal,
+            ),
+            (
+                Datum::U64(18),
+                Datum::Json(Json::from_i64(20).unwrap()),
+                Ordering::Less,
+            ),
             (
                 Datum::F64(1.2),
-                Datum::Json(Json::Double(1.0)),
+                Datum::Json(Json::from_f64(1.0).unwrap()),
                 Ordering::Greater,
             ),
             (
                 Datum::Dec(i32::MIN.into()),
-                Datum::Json(Json::Double(f64::from(i32::MIN))),
+                Datum::Json(Json::from_f64(f64::from(i32::MIN)).unwrap()),
                 Ordering::Equal,
             ),
             (

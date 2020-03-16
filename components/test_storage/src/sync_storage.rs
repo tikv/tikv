@@ -3,7 +3,7 @@
 use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::raftstore::coprocessor::RegionInfoProvider;
+use raftstore::coprocessor::RegionInfoProvider;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;

@@ -11,10 +11,10 @@ use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
 use pd_client::Config as PdConfig;
+use raftstore::coprocessor::Config as CopConfig;
+use raftstore::store::{Config as RaftstoreConfig, QuorumAlgorithm};
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
-use tikv::raftstore::coprocessor::Config as CopConfig;
-use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
 use tikv::server::Config as ServerConfig;
@@ -22,6 +22,7 @@ use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
+mod dynamic;
 mod test_config_client;
 
 #[test]
@@ -49,6 +50,8 @@ fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
     value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
+    value.slow_log_file = "slow_foo".to_owned();
+    value.slow_log_threshold = ReadableDuration::secs(1);
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
@@ -86,10 +89,12 @@ fn test_serde_custom_tikv_config() {
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
-        unify_read_pool: true,
+        unify_read_pool: Some(true),
         unified: UnifiedReadPoolConfig {
             min_thread_count: 5,
             max_thread_count: 10,
+            stack_size: ReadableSize::mb(20),
+            max_tasks_per_worker: 2200,
         },
         storage: StorageReadPoolConfig {
             high_concurrency: 1,
@@ -173,6 +178,7 @@ fn test_serde_custom_tikv_config() {
         store_pool_size: 3,
         future_poll_size: 2,
         hibernate_regions: false,
+        quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -563,13 +569,23 @@ fn test_serde_default_config() {
 #[test]
 fn test_readpool_default_config() {
     let content = r#"
-        [readpool.storage]
-        high-concurrency = 1
+        [readpool.unified]
+        max-thread-count = 1
     "#;
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
     let mut expected = TiKvConfig::default();
-    expected.readpool.storage.high_concurrency = 1;
+    expected.readpool.unified.max_thread_count = 1;
     assert_eq!(cfg, expected);
+}
+
+#[test]
+fn test_do_not_unify_readpool_with_legacy_config() {
+    let content = r#"
+        [readpool.storage]
+        normal-concurrency = 1
+    "#;
+    let cfg: TiKvConfig = toml::from_str(content).unwrap();
+    assert!(!cfg.readpool.is_unified());
 }
 
 #[test]

@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cfdefs::CfName;
+use crate::cf_defs::CfName;
 use crate::errors::Result;
 use crate::iterable::Iterable;
 use std::path::PathBuf;
@@ -17,27 +17,6 @@ pub trait SstReader: Iterable + Sized {
     fn verify_checksum(&self) -> Result<()>;
     // FIXME: Shouldn't this me a method on Iterable?
     fn iter(&self) -> Self::Iterator;
-}
-
-/// A builder builds a SstWriter.
-pub trait SstWriterBuilder<E>
-where
-    E: SstExt,
-{
-    /// Create a new SstWriterBuilder.
-    fn new() -> Self;
-
-    /// Set DB for the builder. The builder may need some config from the DB.
-    fn set_db(self, db: &E) -> Self;
-
-    /// Set CF for the builder. The builder may need some config from the CF.
-    fn set_cf(self, cf: CfName) -> Self;
-
-    /// Set it to true, the builder builds a in-memory SST builder.
-    fn set_in_memory(self, in_memory: bool) -> Self;
-
-    /// Builder a SstWriter.
-    fn build(self, path: &str) -> Result<E::SstWriter>;
 }
 
 /// SstWriter is used to create sst files that can be added to database later.
@@ -61,6 +40,27 @@ pub trait SstWriter {
 
     /// Finalize writing to sst file and read the contents into the buffer.
     fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
+}
+
+/// A builder builds a SstWriter.
+pub trait SstWriterBuilder<E>
+where
+    E: SstExt,
+{
+    /// Create a new SstWriterBuilder.
+    fn new() -> Self;
+
+    /// Set DB for the builder. The builder may need some config from the DB.
+    fn set_db(self, db: &E) -> Self;
+
+    /// Set CF for the builder. The builder may need some config from the CF.
+    fn set_cf(self, cf: CfName) -> Self;
+
+    /// Set it to true, the builder builds a in-memory SST builder.
+    fn set_in_memory(self, in_memory: bool) -> Self;
+
+    /// Builder a SstWriter.
+    fn build(self, path: &str) -> Result<E::SstWriter>;
 }
 
 pub trait ExternalSstFileInfo {

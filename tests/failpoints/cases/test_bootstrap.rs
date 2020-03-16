@@ -9,7 +9,7 @@ use test_raftstore::*;
 fn test_bootstrap_half_way_failure(fp: &str) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = Cluster::new(0, 5, sim.clone(), pd_client.clone());
+    let mut cluster = Cluster::new(0, 5, sim, pd_client);
 
     // Try to start this node, return after persisted some keys.
     fail::cfg(fp, "return").unwrap();
@@ -46,24 +46,18 @@ fn test_bootstrap_half_way_failure(fp: &str) {
 
 #[test]
 fn test_bootstrap_half_way_failure_after_bootstrap_store() {
-    let _guard = crate::setup();
-
     let fp = "node_after_bootstrap_store";
     test_bootstrap_half_way_failure(fp);
 }
 
 #[test]
 fn test_bootstrap_half_way_failure_after_prepare_bootstrap_cluster() {
-    let _guard = crate::setup();
-
     let fp = "node_after_prepare_bootstrap_cluster";
     test_bootstrap_half_way_failure(fp);
 }
 
 #[test]
 fn test_bootstrap_half_way_failure_after_bootstrap_cluster() {
-    let _guard = crate::setup();
-
     let fp = "node_after_bootstrap_cluster";
     test_bootstrap_half_way_failure(fp);
 }

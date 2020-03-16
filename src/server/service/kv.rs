@@ -5,8 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::coprocessor::Endpoint;
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::{Callback, CasualMessage};
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -34,8 +32,10 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use prometheus::HistogramTimer;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{Callback, CasualMessage};
 use tikv_util::future::{paired_future_callback, AndThenWith};
-use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -396,29 +396,31 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         &mut self,
         ctx: RpcContext<'_>,
         mut req: PhysicalScanLockRequest,
-        sink: ServerStreamingSink<PhysicalScanLockResponse>,
+        sink: UnarySink<PhysicalScanLockResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .physical_scan_lock
             .start_coarse_timer();
 
-        let stream = self
-            .gc_worker
-            .physical_scan_lock(req.take_context(), req.get_max_ts().into())
-            .then(|result| {
-                let mut resp = PhysicalScanLockResponse::default();
-                match result {
-                    Ok(locks) => resp.set_locks(locks.into()),
-                    Err(e) => resp.set_error(format!("{:?}", e)),
-                }
-                Ok::<_, GrpcError>(resp)
-            })
-            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)));
+        let (cb, f) = paired_future_callback();
+        let res = self.gc_worker.physical_scan_lock(
+            req.take_context(),
+            req.get_max_ts().into(),
+            Key::from_raw(req.get_start_key()),
+            req.get_limit() as _,
+            cb,
+        );
 
-        let future = sink
-            .send_all(stream)
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = PhysicalScanLockResponse::default();
+                match v {
+                    Ok(locks) => resp.set_locks(locks.into()),
+                    Err(e) => resp.set_error(format!("{}", e)),
+                }
+                sink.success(resp).map_err(Error::from)
+            })
             .map(|_| timer.observe_duration())
-            .map_err(Error::from)
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "physical_scan_lock",
@@ -834,10 +836,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
             BatchCommandsResponse::default,
-            |batch_resp, (id, resp)| {
-                batch_resp.mut_request_ids().push(id);
-                batch_resp.mut_responses().push(resp);
-            },
+            BatchRespCollector,
         );
 
         let response_retriever = response_retriever
@@ -954,7 +953,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         Commit, future_commit(storage), kv_commit;
         Cleanup, future_cleanup(storage), kv_cleanup;
         BatchGet, future_batch_get(storage), kv_batch_get;
-        BatchRollback, future_batch_rollback(storage), kv_batch_get;
+        BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
         TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
         CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
         ScanLock, future_scan_lock(storage), kv_scan_lock;
@@ -1458,7 +1457,10 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     resp.set_errors(extract_key_errors(v).into())
 });
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
-    resp.set_errors(extract_key_errors(v).into())
+    match v {
+        Ok(Ok(res)) => resp.set_values(res.into_vec().into()),
+        Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+    }
 });
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
@@ -1574,6 +1576,21 @@ pub mod batch_commands_request {
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
+
+struct BatchRespCollector;
+impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
+    for BatchRespCollector
+{
+    fn collect(
+        &mut self,
+        v: &mut BatchCommandsResponse,
+        e: (u64, batch_commands_response::Response),
+    ) -> Option<(u64, batch_commands_response::Response)> {
+        v.mut_request_ids().push(e.0);
+        v.mut_responses().push(e.1);
+        None
+    }
+}
 
 #[cfg(test)]
 mod tests {

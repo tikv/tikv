@@ -25,7 +25,7 @@ use protobuf::Message;
 use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use keys;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -35,8 +35,8 @@ use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
+use raftstore::store::INIT_EPOCH_CONF_VER;
 use tikv::config::TiKvConfig;
-use tikv::raftstore::store::INIT_EPOCH_CONF_VER;
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 use tikv_util::{escape, unescape};
@@ -194,6 +194,7 @@ trait DebugExecutor {
                 cmd.merge_from_bytes(&ctx).unwrap();
                 v1!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
+            EntryType::EntryConfChangeV2 => unimplemented!(),
         }
     }
 

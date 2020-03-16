@@ -157,7 +157,7 @@ dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
-	bash scripts/check-sse4_2.sh
+	@python scripts/check-bins.py --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
@@ -215,7 +215,8 @@ docker-tag-with-git-tag:
 # Run tests under a variety of conditions. This should pass before
 # submitting pull requests. Note though that the CI system tests TiKV
 # through its own scripts and does not use this rule.
-test:
+.PHONY: run-test
+run-test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
 	# The special linux case below is testing the mem-profiling
@@ -223,27 +224,22 @@ test:
 	# they require special compile-time and run-time setup
 	# Forturately rebuilding with the mem-profiling feature will only
 	# rebuild starting at jemalloc-sys.
+	# TODO: remove cd commands after https://github.com/rust-lang/cargo/issues/5364 is resolved.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --workspace --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored; \
 	fi
-	bash scripts/check-bins-for-jemalloc.sh
-	bash scripts/check-udeps.sh
-	# TODO: remove the section after https://github.com/rust-lang/cargo/issues/5364 is resolved.
-	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
-	export LOG_LEVEL=DEBUG && \
-	export RUST_BACKTRACE=1 && \
-	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture
 
-# This is used for CI test
-ci_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --all-targets --no-run --message-format=json
-	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
+.PHONY: test
+test: run-test
+	@if [[ "`uname`" = "Linux" ]]; then \
+		env EXTRA_CARGO_ARGS="--message-format=json-render-diagnostics -q --no-run" make run-test |\
+                python scripts/check-bins.py --check-tests; \
+	fi
 
 ## Static analysis
 ## ---------------
@@ -273,21 +269,21 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 clippy: pre-clippy
-	@cargo clippy --all --exclude cdc --exclude backup \
+	@cargo clippy --all --exclude cdc --exclude backup --exclude tests --exclude cmd \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--all-targets --no-default-features \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
-	@for pkg in "cdc" "backup"; do \
-		cd components/$$pkg && \
-		cargo clippy -p $$pkg --all-targets --no-default-features \
+	@for pkg in "components/cdc" "components/backup" "cmd" "tests"; do \
+		cd $$pkg && \
+		cargo clippy --all-targets --no-default-features \
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-		cd ../.. ;\
+		cd - ;\
 	done
-
-# TODO fix tests warnings
-# @cd tests && \
-# cargo clippy -p tests --all-targets --no-default-features \
-# 	--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-# cd ..
+	@for pkg in "fuzz" "fuzz/fuzzer-afl" "fuzz/fuzzer-honggfuzz" "fuzz/fuzzer-libfuzzer"; do \
+		cd $$pkg && \
+		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
+		cd - >/dev/null; \
+	done
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
@@ -300,6 +296,16 @@ pre-audit:
 audit: pre-audit
 	cargo audit
 
+.PHONY: check-udeps
+check-udeps:
+	which cargo-udeps &>/dev/null || cargo install cargo-udeps && cargo udeps
+
+FUZZER ?= Honggfuzz
+
+.PHONY: fuzz
+fuzz:
+	@cargo run --package fuzz --no-default-features --features "${ENABLE_FEATURES}" -- run ${FUZZER} ${FUZZ_TARGET} \
+	|| echo "" && echo "Set the target for fuzzing using FUZZ_TARGET and the fuzzer using FUZZER (default is Honggfuzz)"
 
 ## Special targets
 ## ---------------

@@ -1,7 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
-use engine::{Peekable, CF_RAFT, DB};
+use engine::{Peekable, DB};
+use engine_traits::CF_RAFT;
 use fail;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
@@ -15,7 +16,6 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_wait_for_apply_index() {
-    let _guard = crate::setup();
     let mut cluster = new_server_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
@@ -33,7 +33,7 @@ fn test_wait_for_apply_index() {
     cluster.pd_client.must_none_pending_peer(p3.clone());
 
     let region = cluster.get_region(b"k0");
-    cluster.must_transfer_leader(region.get_id(), p2.clone());
+    cluster.must_transfer_leader(region.get_id(), p2);
 
     // Block all write cmd applying of Peer 3.
     fail::cfg("on_apply_write_cmd", "sleep(2000)").unwrap();
@@ -49,7 +49,7 @@ fn test_wait_for_apply_index() {
         vec![new_get_cf_cmd("default", b"k1")],
         false,
     );
-    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_peer(p3);
     request.mut_header().set_replica_read(true);
     let (cb, rx) = make_cb(&request);
     cluster
@@ -59,7 +59,7 @@ fn test_wait_for_apply_index() {
         .unwrap();
     // Must timeout here
     assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
-    fail::cfg("on_apply_write_cmd", "off").unwrap();
+    fail::remove("on_apply_write_cmd");
 
     // After write cmd applied, the follower read will be executed.
     match rx.recv_timeout(Duration::from_secs(3)) {
@@ -73,7 +73,6 @@ fn test_wait_for_apply_index() {
 
 #[test]
 fn test_duplicate_read_index_ctx() {
-    let _guard = crate::setup();
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
@@ -117,7 +116,7 @@ fn test_duplicate_read_index_ctx() {
         vec![new_read_index_cmd()],
         true,
     );
-    request.mut_header().set_peer(p2.clone());
+    request.mut_header().set_peer(p2);
     let (cb2, rx2) = make_cb(&request);
     // send to peer 2
     cluster
@@ -128,13 +127,13 @@ fn test_duplicate_read_index_ctx() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
-    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_peer(p3);
     let (cb3, rx3) = make_cb(&request);
     // send to peer 3
     cluster
         .sim
         .rl()
-        .async_command_on_node(3, request.clone(), cb3)
+        .async_command_on_node(3, request, cb3)
         .unwrap();
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
@@ -144,7 +143,7 @@ fn test_duplicate_read_index_ctx() {
     for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
         router.send_raft_message(raft_msg).unwrap();
     }
-    fail::cfg("pause_on_peer_collect_message", "off").unwrap();
+    fail::remove("pause_on_peer_collect_message");
 
     // read index response must not be dropped
     rx2.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -153,7 +152,6 @@ fn test_duplicate_read_index_ctx() {
 
 #[test]
 fn test_read_before_init() {
-    let _guard = crate::setup();
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
@@ -166,7 +164,7 @@ fn test_read_before_init() {
     let p2 = new_peer(2, 2);
     cluster.pd_client.must_add_peer(r1, p2.clone());
     cluster.must_put(b"k0", b"v0");
-    cluster.pd_client.must_none_pending_peer(p2.clone());
+    cluster.pd_client.must_none_pending_peer(p2);
     must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
 
     fail::cfg("before_apply_snap_update_region", "return").unwrap();
@@ -183,7 +181,7 @@ fn test_read_before_init() {
         vec![new_get_cf_cmd("default", b"k0")],
         false,
     );
-    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_peer(p3);
     request.mut_header().set_replica_read(true);
     let (cb, rx) = make_cb(&request);
     cluster
@@ -192,6 +190,7 @@ fn test_read_before_init() {
         .async_command_on_node(3, request, cb)
         .unwrap();
     let resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    fail::remove("before_apply_snap_update_region");
     assert!(
         resp.get_header()
             .get_error()
@@ -204,7 +203,6 @@ fn test_read_before_init() {
 
 #[test]
 fn test_read_applying_snapshot() {
-    let _guard = crate::setup();
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
@@ -217,7 +215,7 @@ fn test_read_applying_snapshot() {
     let p2 = new_peer(2, 2);
     cluster.pd_client.must_add_peer(r1, p2.clone());
     cluster.must_put(b"k0", b"v0");
-    cluster.pd_client.must_none_pending_peer(p2.clone());
+    cluster.pd_client.must_none_pending_peer(p2);
 
     // Don't apply snapshot to init peer 3
     fail::cfg("region_apply_snap", "pause").unwrap();
@@ -242,7 +240,7 @@ fn test_read_applying_snapshot() {
         vec![new_get_cf_cmd("default", b"k0")],
         false,
     );
-    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_peer(p3);
     request.mut_header().set_replica_read(true);
     let (cb, rx) = make_cb(&request);
     cluster
@@ -253,11 +251,11 @@ fn test_read_applying_snapshot() {
     let resp = match rx.recv_timeout(Duration::from_secs(5)) {
         Ok(r) => r,
         Err(_) => {
-            fail::cfg("region_apply_snap", "off").unwrap();
+            fail::remove("region_apply_snap");
             panic!("cannot receive response");
         }
     };
-    fail::cfg("region_apply_snap", "off").unwrap();
+    fail::remove("region_apply_snap");
     assert!(
         resp.get_header()
             .get_error()
@@ -270,7 +268,6 @@ fn test_read_applying_snapshot() {
 
 #[test]
 fn test_read_after_cleanup_range_for_snap() {
-    let _guard = crate::setup();
     let mut cluster = new_server_cluster(1, 3);
     configure_for_snapshot(&mut cluster);
     configure_for_lease_read(&mut cluster, Some(100), Some(10_000));
@@ -285,7 +282,7 @@ fn test_read_after_cleanup_range_for_snap() {
     let p3 = new_peer(3, 3);
     cluster.pd_client.must_add_peer(r1, p3.clone());
     cluster.must_put(b"k0", b"v0");
-    cluster.pd_client.must_none_pending_peer(p2.clone());
+    cluster.pd_client.must_none_pending_peer(p2);
     cluster.pd_client.must_none_pending_peer(p3.clone());
     let region = cluster.get_region(b"k0");
     assert_eq!(cluster.leader_of_region(region.get_id()).unwrap(), p1);
@@ -320,7 +317,7 @@ fn test_read_after_cleanup_range_for_snap() {
             })),
     );
     cluster.sim.wl().add_recv_filter(3, recv_filter);
-    fail::cfg("send_snapshot", "off").unwrap();
+    fail::remove("send_snapshot");
 
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
     let mut request = new_request(
@@ -329,14 +326,14 @@ fn test_read_after_cleanup_range_for_snap() {
         vec![new_get_cf_cmd("default", b"k0")],
         false,
     );
-    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_peer(p3);
     request.mut_header().set_replica_read(true);
     // Send follower read request to peer 3
     let (cb1, rx1) = make_cb(&request);
     cluster
         .sim
         .rl()
-        .async_command_on_node(3, request.clone(), cb1)
+        .async_command_on_node(3, request, cb1)
         .unwrap();
     let read_index_msg = read_index_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let snap_msg = snap_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -349,12 +346,12 @@ fn test_read_after_cleanup_range_for_snap() {
     cluster.sim.wl().clear_recv_filters(3);
     router.send_raft_message(heartbeat_msg).unwrap();
     router.send_raft_message(snap_msg).unwrap();
-    router.send_raft_message(read_index_msg.clone()).unwrap();
-    fail::cfg("pause_on_peer_collect_message", "off").unwrap();
+    router.send_raft_message(read_index_msg).unwrap();
+    fail::remove("pause_on_peer_collect_message");
     must_get_none(&cluster.get_engine(3), b"k0");
     // Should not receive resp
     rx1.recv_timeout(Duration::from_millis(500)).unwrap_err();
-    fail::cfg("apply_snap_cleanup_range", "off").unwrap();
+    fail::remove("apply_snap_cleanup_range");
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 

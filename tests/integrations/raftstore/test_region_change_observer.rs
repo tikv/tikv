@@ -2,15 +2,15 @@
 
 use kvproto::metapb::Region;
 use raft::StateRole;
+use raftstore::coprocessor::{
+    BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+};
+use raftstore::store::util::{find_peer, new_peer};
 use std::mem;
 use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
 use test_raftstore::{new_node_cluster, Cluster, NodeCluster};
-use tikv::raftstore::coprocessor::{
-    BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
-};
-use tikv::raftstore::store::util::{find_peer, new_peer};
 use tikv_util::HandyRwLock;
 
 #[derive(Clone)]

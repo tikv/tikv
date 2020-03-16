@@ -115,6 +115,7 @@ impl ScalarFunc {
             | ScalarFuncSig::DateFormatSig
             | ScalarFuncSig::Sha2
             | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::TruncateUint
             | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::TruncateReal
@@ -122,6 +123,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Substring2ArgsUtf8
             | ScalarFuncSig::Substring2Args
+            | ScalarFuncSig::Repeat
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDatetimeAndDuration
             | ScalarFuncSig::AddDatetimeAndString
@@ -137,7 +139,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Instr
             | ScalarFuncSig::Locate2ArgsUtf8
             | ScalarFuncSig::InstrUtf8
-            | ScalarFuncSig::Locate2Args => (2, 2),
+            | ScalarFuncSig::Locate2Args
+            | ScalarFuncSig::FindInSet => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -258,6 +261,7 @@ impl ScalarFunc {
             | ScalarFuncSig::ReverseUtf8
             | ScalarFuncSig::Reverse
             | ScalarFuncSig::Quote
+            | ScalarFuncSig::UpperUtf8
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -297,13 +301,15 @@ impl ScalarFunc {
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
+            | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
             | ScalarFuncSig::JsonDepthSig
-            | ScalarFuncSig::RandomBytes => (1, 1),
+            | ScalarFuncSig::RandomBytes
+            | ScalarFuncSig::JsonKeysSig => (1, 1),
 
-            ScalarFuncSig::JsonLengthSig => (1, 2),
+            ScalarFuncSig::JsonKeys2ArgsSig | ScalarFuncSig::JsonLengthSig => (1, 2),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -649,6 +655,7 @@ dispatch_call! {
         WeekOfYear => week_of_year,
         Year => year,
         ToDays => to_days,
+        ToSeconds => to_seconds,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
@@ -688,6 +695,8 @@ dispatch_call! {
         RoundWithFracInt => round_with_frac_int,
 
         TruncateInt => truncate_int,
+        TruncateUint => truncate_uint,
+
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -734,6 +743,7 @@ dispatch_call! {
         Ord => ord,
         InstrUtf8 => instr_utf8,
         JsonDepthSig => json_depth,
+        FindInSet => find_in_set,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -849,6 +859,7 @@ dispatch_call! {
         RightUtf8 => right_utf8,
         Left => left,
         Right => right,
+        UpperUtf8 => upper_utf8,
         Upper => upper,
         Lower => lower,
         DateFormatSig => date_format,
@@ -861,6 +872,7 @@ dispatch_call! {
         LTrim => ltrim,
         RTrim => rtrim,
         ReverseUtf8 => reverse_utf8,
+        Repeat => repeat,
         Reverse => reverse,
         HexIntArg => hex_int_arg,
         HexStrArg => hex_str_arg,
@@ -966,6 +978,9 @@ dispatch_call! {
         IfJson => if_json,
         IfNullJson => if_null_json,
 
+
+        JsonKeysSig => json_keys,
+        JsonKeys2ArgsSig => json_keys,
         JsonExtractSig => json_extract,
         JsonSetSig => json_set,
         JsonInsertSig => json_insert,

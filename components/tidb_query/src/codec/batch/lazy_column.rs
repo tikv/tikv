@@ -7,7 +7,7 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use crate::codec::chunk::{ChunkColumnEncoder, Column};
-use crate::codec::data_type::VectorValue;
+use crate::codec::data_type::{match_template_evaluable, VectorValue};
 use crate::codec::datum_codec::RawDatumDecoder;
 use crate::codec::Result;
 use crate::expr::EvalContext;

@@ -19,7 +19,8 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
-use crate::raftstore::store::PdTask;
+use crate::config::TiKvConfig;
+use raftstore::store::PdTask;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
@@ -125,7 +126,7 @@ impl StatusServer {
                         let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
                         let path = match os_path.into_string() {
                             Ok(path) => path,
-                            Err(path) => return Box::new(err(ProfError::PathError(path))),
+                            Err(path) => return Box::new(err(ProfError::PathEncodingError(path))),
                         };
 
                         if let Err(e) = tikv_alloc::dump_prof(&path) {
@@ -224,13 +225,15 @@ impl StatusServer {
                 )
             };
             match res {
-                Ok(cfg) => match serde_json::to_string(&cfg) {
-                    Ok(json) => Ok(Response::builder()
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(json))
-                        .unwrap()),
-                    Err(_) => Ok(err_resp()),
-                },
+                Ok(cfg) => {
+                    match serde_json::to_string(&toml::from_str::<TiKvConfig>(&cfg).unwrap()) {
+                        Ok(json) => Ok(Response::builder()
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(json))
+                            .unwrap()),
+                        Err(_) => Ok(err_resp()),
+                    }
+                }
                 Err(_) => Ok(err_resp()),
             }
         });
@@ -524,11 +527,11 @@ fn handle_fail_points_request(
 #[cfg(test)]
 mod tests {
     use crate::config::TiKvConfig;
-    use crate::raftstore::store::PdTask;
     use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
     use futures::Stream;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
+    use raftstore::store::PdTask;
     use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
     use tokio_core::reactor::Handle;
 
@@ -564,9 +567,7 @@ mod tests {
         impl FutureRunnable<PdTask> for Runner {
             fn run(&mut self, t: PdTask, _: &Handle) {
                 match t {
-                    PdTask::GetConfig { cfg_sender } => {
-                        cfg_sender.send(TiKvConfig::default()).unwrap()
-                    }
+                    PdTask::GetConfig { cfg_sender } => cfg_sender.send(String::new()).unwrap(),
                     _ => unreachable!(),
                 }
             }

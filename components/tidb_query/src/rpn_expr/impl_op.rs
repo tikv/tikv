@@ -469,7 +469,7 @@ mod tests {
             ),
             (ScalarValue::Json(None), ScalarFuncSig::JsonIsNull, Some(1)),
             (
-                Json::Array(vec![]).into(),
+                Json::from_array(vec![]).unwrap().into(),
                 ScalarFuncSig::JsonIsNull,
                 Some(0),
             ),

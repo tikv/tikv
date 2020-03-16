@@ -476,7 +476,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let s = val.unquote()?;
+        let s = val.as_ref().as_ref().unquote()?;
         Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
@@ -560,7 +560,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let s = val.unquote()?;
+        let s = val.as_ref().as_ref().unquote()?;
         // TODO: tidb would handle truncate here
         let d = Duration::parse(ctx, s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(d))
@@ -574,11 +574,11 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let flag = self.children[0].field_type().as_accessor().flag();
         let j = if flag.contains(FieldTypeFlag::IS_BOOLEAN) {
-            Json::Boolean(val != 0)
+            Json::from_bool(val != 0)?
         } else if flag.contains(FieldTypeFlag::UNSIGNED) {
-            Json::U64(val as u64)
+            Json::from_u64(val as u64)?
         } else {
-            Json::I64(val)
+            Json::from_i64(val)?
         };
         Ok(Some(Cow::Owned(j)))
     }
@@ -589,7 +589,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
-        let j = Json::Double(val);
+        let j = Json::from_f64(val)?;
         Ok(Some(Cow::Owned(j)))
     }
 
@@ -600,7 +600,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Json>>> {
         let val: Cow<Decimal> = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val: f64 = val.convert(ctx)?;
-        let j = Json::Double(val);
+        let j = Json::from_f64(val)?;
         Ok(Some(Cow::Owned(j)))
     }
 
@@ -619,7 +619,7 @@ impl ScalarFunc {
             let j: Json = val.parse()?;
             Ok(Some(Cow::Owned(j)))
         } else {
-            Ok(Some(Cow::Owned(Json::String(val.into_owned()))))
+            Ok(Some(Cow::Owned(Json::from_string(val.into_owned())?)))
         }
     }
 
@@ -634,7 +634,7 @@ impl ScalarFunc {
             val = val.round_frac(ctx, mysql::MAX_FSP)?;
         }
         let s = format!("{}", val);
-        Ok(Some(Cow::Owned(Json::String(s))))
+        Ok(Some(Cow::Owned(Json::from_string(s)?)))
     }
 
     pub fn cast_duration_as_json<'a, 'b: 'a>(
@@ -645,7 +645,7 @@ impl ScalarFunc {
         let mut val = try_opt!(self.children[0].eval_duration(ctx, row));
         val = val.maximize_fsp();
         let s = format!("{}", val);
-        Ok(Some(Cow::Owned(Json::String(s))))
+        Ok(Some(Cow::Owned(Json::from_string(s)?)))
     }
 
     pub fn cast_json_as_json<'a, 'b: 'a>(
@@ -836,14 +836,14 @@ mod tests {
                 ScalarFuncSig::CastJsonAsInt,
                 FieldTypeTp::JSON,
                 None,
-                vec![Datum::Json(Json::I64(-1))],
+                vec![Datum::Json(Json::from_i64(-1).unwrap())],
                 -1,
             ),
             (
                 ScalarFuncSig::CastJsonAsInt,
                 FieldTypeTp::JSON,
                 None,
-                vec![Datum::Json(Json::U64(1))],
+                vec![Datum::Json(Json::from_u64(1).unwrap())],
                 1,
             ),
             (
@@ -989,7 +989,7 @@ mod tests {
             (
                 ScalarFuncSig::CastJsonAsReal,
                 FieldTypeTp::JSON,
-                vec![Datum::Json(Json::I64(1))],
+                vec![Datum::Json(Json::from_i64(1).unwrap())],
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 1f64,
@@ -997,7 +997,7 @@ mod tests {
             (
                 ScalarFuncSig::CastJsonAsReal,
                 FieldTypeTp::JSON,
-                vec![Datum::Json(Json::I64(1))],
+                vec![Datum::Json(Json::from_i64(1).unwrap())],
                 2,
                 1,
                 1.0,
@@ -1133,7 +1133,7 @@ mod tests {
             (
                 ScalarFuncSig::CastJsonAsDecimal,
                 FieldTypeTp::JSON,
-                vec![Datum::Json(Json::I64(1))],
+                vec![Datum::Json(Json::from_i64(1).unwrap())],
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
@@ -1141,7 +1141,7 @@ mod tests {
             (
                 ScalarFuncSig::CastJsonAsDecimal,
                 FieldTypeTp::JSON,
-                vec![Datum::Json(Json::I64(1))],
+                vec![Datum::Json(Json::from_i64(1).unwrap())],
                 2,
                 1,
                 f64_to_decimal(&mut ctx, 1.0).unwrap(),
@@ -1286,7 +1286,7 @@ mod tests {
                 FieldTypeTp::JSON,
                 charset::CHARSET_UTF8,
                 None,
-                vec![Datum::Json(Json::I64(1))],
+                vec![Datum::Json(Json::from_i64(1).unwrap())],
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 b"1".to_vec(),
             ),
@@ -1295,7 +1295,7 @@ mod tests {
                 FieldTypeTp::JSON,
                 charset::CHARSET_UTF8,
                 None,
-                vec![Datum::Json(Json::I64(1234))],
+                vec![Datum::Json(Json::from_i64(1234).unwrap())],
                 2,
                 b"12".to_vec(),
             ),
@@ -1369,7 +1369,7 @@ mod tests {
         let mut dur_to_date = dur_to_time;
         dur_to_date.set_time_type(TimeType::Date).unwrap();
 
-        let json_cols = vec![Datum::Json(Json::String(t_time_str.clone()))];
+        let json_cols = vec![Datum::Json(Json::from_string(t_time_str.clone()).unwrap())];
         let int_cols = vec![Datum::U64(t_int)];
         let str_cols = vec![Datum::Bytes(t_time_str.as_bytes().to_vec())];
         let f64_cols = vec![Datum::F64(t_int as f64)];
@@ -1543,7 +1543,9 @@ mod tests {
         let mut dur_to_date = dur_to_time;
         dur_to_date.set_time_type(TimeType::Date).unwrap();
 
-        let json_cols = vec![Datum::Json(Json::String(String::from(dur_str)))];
+        let json_cols = vec![Datum::Json(
+            Json::from_string(String::from(dur_str)).unwrap(),
+        )];
         let int_cols = vec![Datum::U64(dur_int)];
         let str_cols = vec![Datum::Bytes(dur_str.as_bytes().to_vec())];
         let f64_cols = vec![Datum::F64(dur_int as f64)];
@@ -1698,19 +1700,23 @@ mod tests {
             (
                 Some(FieldTypeFlag::UNSIGNED),
                 vec![Datum::U64(32)],
-                Some(Json::U64(32)),
+                Some(Json::from_u64(32).unwrap()),
             ),
             (
                 Some(FieldTypeFlag::UNSIGNED | FieldTypeFlag::IS_BOOLEAN),
                 vec![Datum::U64(1)],
-                Some(Json::Boolean(true)),
+                Some(Json::from_bool(true).unwrap()),
             ),
             (
                 Some(FieldTypeFlag::UNSIGNED | FieldTypeFlag::IS_BOOLEAN),
                 vec![Datum::I64(0)],
-                Some(Json::Boolean(false)),
+                Some(Json::from_bool(false).unwrap()),
             ),
-            (None, vec![Datum::I64(-1)], Some(Json::I64(-1))),
+            (
+                None,
+                vec![Datum::I64(-1)],
+                Some(Json::from_i64(-1).unwrap()),
+            ),
             (None, vec![Datum::Null], None),
         ];
         for (flag, cols, exp) in cases {
@@ -1733,7 +1739,10 @@ mod tests {
     fn test_cast_real_as_json() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
-            (vec![Datum::F64(32.0001)], Some(Json::Double(32.0001))),
+            (
+                vec![Datum::F64(32.0001)],
+                Some(Json::from_f64(32.0001).unwrap()),
+            ),
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
@@ -1755,7 +1764,7 @@ mod tests {
         let cases = vec![
             (
                 vec![Datum::Dec(f64_to_decimal(&mut ctx, 32.0001).unwrap())],
-                Some(Json::Double(32.0001)),
+                Some(Json::from_f64(32.0001).unwrap()),
             ),
             (vec![Datum::Null], None),
         ];
@@ -1780,12 +1789,19 @@ mod tests {
             (
                 false,
                 vec![Datum::Bytes(b"[1,2,3]".to_vec())],
-                Some(Json::String(String::from("[1,2,3]"))),
+                Some(Json::from_string(String::from("[1,2,3]")).unwrap()),
             ),
             (
                 true,
                 vec![Datum::Bytes(b"[1,2,3]".to_vec())],
-                Some(Json::Array(vec![Json::I64(1), Json::I64(2), Json::I64(3)])),
+                Some(
+                    Json::from_array(vec![
+                        Json::from_i64(1).unwrap(),
+                        Json::from_i64(2).unwrap(),
+                        Json::from_i64(3).unwrap(),
+                    ])
+                    .unwrap(),
+                ),
             ),
             (false, vec![Datum::Null], None),
             (true, vec![Datum::Null], None),
@@ -1829,17 +1845,17 @@ mod tests {
             (
                 FieldTypeTp::DateTime,
                 vec![Datum::Time(time)],
-                Some(Json::String(format!("{}.000000", time_str))),
+                Some(Json::from_string(format!("{}.000000", time_str)).unwrap()),
             ),
             (
                 FieldTypeTp::Timestamp,
                 vec![Datum::Time(time_stamp)],
-                Some(Json::String(format!("{}.000000", time_str))),
+                Some(Json::from_string(format!("{}.000000", time_str)).unwrap()),
             ),
             (
                 FieldTypeTp::Date,
                 vec![Datum::Time(date)],
-                Some(Json::String(String::from(date_str))),
+                Some(Json::from_string(String::from(date_str)).unwrap()),
             ),
             (FieldTypeTp::Unspecified, vec![Datum::Null], None),
         ];
@@ -1867,7 +1883,7 @@ mod tests {
                 vec![Datum::Dur(
                     Duration::parse(&mut ctx, dur_str.as_bytes(), 0).unwrap(),
                 )],
-                Some(Json::String(String::from(dur_str_expect))),
+                Some(Json::from_string(String::from(dur_str_expect)).unwrap()),
             ),
             (vec![Datum::Null], None),
         ];
@@ -1889,8 +1905,8 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
-                vec![Datum::Json(Json::Boolean(true))],
-                Some(Json::Boolean(true)),
+                vec![Datum::Json(Json::from_bool(true).unwrap())],
+                Some(Json::from_bool(true).unwrap()),
             ),
             (vec![Datum::Null], None),
         ];

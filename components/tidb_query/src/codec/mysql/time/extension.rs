@@ -49,6 +49,7 @@ pub trait DateTimeExtension {
     fn year_week(&self, mode: WeekMode) -> (i32, i32);
     fn abbr_day_of_month(&self) -> &'static str;
     fn day_number(&self) -> i32;
+    fn second_number(&self) -> i64;
 }
 
 impl DateTimeExtension for Time {
@@ -144,6 +145,15 @@ impl DateTimeExtension for Time {
     /// returns the days since 0000-00-00
     fn day_number(&self) -> i32 {
         calc_day_number(self.year() as i32, self.month() as i32, self.day() as i32)
+    }
+
+    /// returns the seconds since 0000-00-00 00:00:00
+    fn second_number(&self) -> i64 {
+        let days = self.day_number();
+        days as i64 * 86400
+            + self.hour() as i64 * 3600
+            + self.minute() as i64 * 60
+            + self.second() as i64
     }
 }
 

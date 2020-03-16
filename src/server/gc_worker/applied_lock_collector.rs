@@ -6,16 +6,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use txn_types::Key;
 
-use engine::{CfName, CF_LOCK};
+use engine_traits::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
-use crate::raftstore::coprocessor::{
+use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
+use raftstore::coprocessor::{
     ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Coprocessor,
     CoprocessorHost, ObserverContext, QueryObserver,
 };
-use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
 
 // TODO: Use new error type for GCWorker instead of storage::Error.
 use super::{Error, ErrorInner, Result};
@@ -428,7 +428,7 @@ impl Drop for AppliedLockCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{PutRequest, RaftCmdRequest};

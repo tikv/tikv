@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error as StdError;
-use std::sync::{self, mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
 
@@ -17,14 +17,14 @@ use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
-use engine::CF_DEFAULT;
 use engine_rocks::RocksEngine;
+use engine_traits::CF_DEFAULT;
 use pd_client::PdClient;
+use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
+use raftstore::store::transport::CasualRouter;
+use raftstore::store::*;
+use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
-use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
-use tikv::raftstore::store::transport::CasualRouter;
-use tikv::raftstore::store::*;
-use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
 use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
@@ -48,7 +48,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines,
-        router: RaftRouter,
+        router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
@@ -61,7 +61,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -223,7 +223,14 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
-        self.sim.wl().stop_node(node_id);
+        match self.sim.write() {
+            Ok(mut sim) => sim.stop_node(node_id),
+            Err(_) => {
+                if !thread::panicking() {
+                    panic!("failed to acquire write lock.")
+                }
+            }
+        }
         debug!("node {} stopped", node_id);
     }
 
@@ -522,13 +529,16 @@ impl<T: Simulator> Cluster<T> {
     pub fn shutdown(&mut self) {
         debug!("about to shutdown cluster");
         let keys;
-        match self.sim.try_read() {
+        match self.sim.read() {
             Ok(s) => keys = s.get_node_ids(),
-            Err(sync::TryLockError::Poisoned(e)) => {
-                let s = e.into_inner();
-                keys = s.get_node_ids();
+            Err(_) => {
+                if thread::panicking() {
+                    // Leave the resource to avoid double panic.
+                    return;
+                } else {
+                    panic!("failed to acquire read lock");
+                }
             }
-            Err(sync::TryLockError::WouldBlock) => unreachable!(),
         }
         for id in keys {
             self.stop_node(id);
@@ -786,7 +796,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
         self.get_engine(store_id)
-            .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &keys::apply_state_key(region_id))
+            .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &keys::apply_state_key(region_id))
             .unwrap()
             .unwrap()
             .take_truncated_state()
@@ -1041,8 +1051,8 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
-                let idx = peer.peer.raft_group.get_store().committed_index();
+            CasualMessage::Test(Box::new(move |peer: &mut PeerFsm<RocksEngine>| {
+                let idx = peer.peer.raft_group.store().committed_index();
                 peer.peer.raft_group.request_snapshot(idx).unwrap();
                 debug!("{} request snapshot at {}", idx, peer.peer.tag);
                 request_tx.send(idx).unwrap();
@@ -1055,6 +1065,7 @@ impl<T: Simulator> Cluster<T> {
 
 impl<T: Simulator> Drop for Cluster<T> {
     fn drop(&mut self) {
+        test_util::clear_failpoints();
         self.shutdown();
     }
 }

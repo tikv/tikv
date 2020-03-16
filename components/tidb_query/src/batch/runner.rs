@@ -29,6 +29,8 @@ pub const BATCH_MAX_SIZE: usize = 1024;
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
+/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time a coroutine
+/// can run without being yielded.
 const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
@@ -348,10 +350,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut time_slice_start = Instant::now();
         loop {
-            if time_slice_start.elapsed() > MAX_TIME_SLICE {
+            let time_slice_len = time_slice_start.elapsed();
+            // Check whether we should yield from the execution
+            if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
+
             self.deadline.check()?;
 
             let mut result = self.out_most_executor.next_batch(batch_size);

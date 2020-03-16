@@ -8,7 +8,8 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::{name_to_cf, CfName, IterOption, DATA_KEY_PREFIX_LEN, DB};
+use engine::{IterOption, DATA_KEY_PREFIX_LEN, DB};
+use engine_traits::{name_to_cf, CfName};
 use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
@@ -17,8 +18,8 @@ use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
-use tikv::raftstore::coprocessor::RegionInfoProvider;
-use tikv::raftstore::store::util::find_peer;
+use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, ScanMode, Snapshot};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::Statistics;
@@ -753,13 +754,13 @@ pub mod tests {
     use external_storage::{make_local_backend, make_noop_backend, LocalStorage};
     use futures::{self, Future, Stream};
     use kvproto::metapb;
+    use raftstore::coprocessor::RegionCollector;
+    use raftstore::coprocessor::Result as CopResult;
+    use raftstore::coprocessor::SeekRegionCallback;
+    use raftstore::store::util::new_peer;
     use rand;
     use std::thread;
     use tempfile::TempDir;
-    use tikv::raftstore::coprocessor::RegionCollector;
-    use tikv::raftstore::coprocessor::Result as CopResult;
-    use tikv::raftstore::coprocessor::SeekRegionCallback;
-    use tikv::raftstore::store::util::new_peer;
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::time::Instant;
@@ -814,7 +815,11 @@ pub mod tests {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine::CF_DEFAULT, engine::CF_LOCK, engine::CF_WRITE])
+            .cfs(&[
+                engine_traits::CF_DEFAULT,
+                engine_traits::CF_LOCK,
+                engine_traits::CF_WRITE,
+            ])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
@@ -864,7 +869,7 @@ pub mod tests {
                     end_key,
                     endpoint.region_info.clone(),
                     false,
-                    engine::CF_DEFAULT,
+                    engine_traits::CF_DEFAULT,
                 );
 
                 let mut ranges = Vec::with_capacity(expect.len());
@@ -920,7 +925,7 @@ pub mod tests {
                     concurrency: 4,
                     cancel: Arc::default(),
                     is_raw_kv: false,
-                    cf: engine::CF_DEFAULT,
+                    cf: engine_traits::CF_DEFAULT,
                 };
                 endpoint.handle_backup_task(task);
                 let resps: Vec<_> = rx.collect().wait().unwrap();
