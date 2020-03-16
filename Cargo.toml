@@ -79,7 +79,7 @@ futures-cpupool = "0.1"
 futures-locks = "0.1"
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.5.0-alpha.5", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.3"
 itertools = "0.8"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
@@ -95,7 +95,7 @@ murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 pd_client = { path = "components/pd_client" }
 pin-project = "0.4.8"
-prost = "0.5.0"
+prost = "0.6"
 pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
 quick-error = "1.2.2"
@@ -153,8 +153,6 @@ raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-prost = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
-protobuf-build = { git = "https://github.com/tikv/protobuf-build", rev = "1fe5d77689d9691b7917215f3a1d32968115cc02" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
