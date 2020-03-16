@@ -144,9 +144,10 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             .iter()
             .enumerate()
             .filter(|(_, field_type)| {
-                EvalType::try_from(field_type.as_accessor().tp())
-                    .map(|eval_type| eval_type == EvalType::Bytes)
-                    .unwrap_or(false)
+                // The unwrap is fine because aggregate function parser should never return an
+                // eval type that we cannot process later. If we made a mistake there, then we
+                // should panic.
+                EvalType::try_from(field_type.as_accessor().tp()).unwrap() == EvalType::Bytes
             })
             .map(|(col_index, _)| col_index)
             .collect();
