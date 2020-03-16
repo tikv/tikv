@@ -1861,7 +1861,7 @@ dependencies = [
  "prost",
  "prost-derive",
  "protobuf",
- "protobuf-build 0.10.0",
+ "protobuf-build",
  "raft-proto",
 ]
 
@@ -2813,21 +2813,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "protobuf-build"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46f3ca050cd02aa2ee07f8e227871ebe8c12cf076ff7c6bf82fdd41dc81af874"
-dependencies = [
- "bitflags",
- "prost-build 0.6.1",
- "protobuf",
- "protobuf-codegen",
- "quote 1.0.2",
- "regex",
- "syn 1.0.5",
-]
-
-[[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?rev=b67d432c1b74350b38a5d96ddf885ac6c3ff46f5#b67d432c1b74350b38a5d96ddf885ac6c3ff46f5"
@@ -2891,7 +2876,7 @@ dependencies = [
  "lazy_static",
  "prost",
  "protobuf",
- "protobuf-build 0.10.0",
+ "protobuf-build",
 ]
 
 [[package]]
@@ -4344,7 +4329,7 @@ dependencies = [
  "prost",
  "prost-derive",
  "protobuf",
- "protobuf-build 0.11.1",
+ "protobuf-build",
 ]
 
 [[package]]

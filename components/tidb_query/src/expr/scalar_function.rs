@@ -67,10 +67,6 @@ impl ScalarFunc {
             | ScalarFuncSig::PlusReal
             | ScalarFuncSig::PlusDecimal
             | ScalarFuncSig::PlusInt
-            | ScalarFuncSig::PlusIntUnsignedUnsigned
-            | ScalarFuncSig::PlusIntUnsignedSigned
-            | ScalarFuncSig::PlusIntSignedUnsigned
-            | ScalarFuncSig::PlusIntSignedSigned
             | ScalarFuncSig::MinusReal
             | ScalarFuncSig::MinusDecimal
             | ScalarFuncSig::MinusInt
