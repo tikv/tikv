@@ -5,9 +5,26 @@ use protobuf::ProtobufEnum;
 
 use crate::{Error, Result};
 
-pub const METADATA_KEY_IV: &str = "IV";
-pub const METADATA_KEY_ENCRYPTION_METHOD: &str = "encryption_method";
-pub const METADATA_PLAINTEXT_SHA256: &str = "plaintext_sha256";
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub enum MetadataKey {
+    Iv,
+    EncryptionMethod,
+    PlaintextSha256,
+}
+
+const METADATA_KEY_IV: &str = "IV";
+const METADATA_KEY_ENCRYPTION_METHOD: &str = "encryption_method";
+const METADATA_KEY_PLAINTEXT_SHA256: &str = "plaintext_sha256";
+
+impl MetadataKey {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MetadataKey::Iv => METADATA_KEY_IV,
+            MetadataKey::EncryptionMethod => METADATA_KEY_ENCRYPTION_METHOD,
+            MetadataKey::PlaintextSha256 => METADATA_KEY_PLAINTEXT_SHA256,
+        }
+    }
+}
 
 pub fn encode_ecryption_method(method: EncryptionMethod) -> Result<Vec<u8>> {
     let mut value = Vec::with_capacity(4); // Length of i32.

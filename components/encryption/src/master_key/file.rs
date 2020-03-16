@@ -1,8 +1,8 @@
 use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod};
 
+use super::metadata::*;
 use super::Backend;
 use crate::crypter::*;
-use crate::metadata::*;
 use crate::{AesCtrCrypter, Error, Iv, Result};
 
 pub struct FileBackend {
@@ -30,15 +30,16 @@ impl FileBackend {
         let iv_value = iv.as_slice().to_vec();
         content
             .mut_metadata()
-            .insert(METADATA_KEY_IV.to_owned(), iv_value);
+            .insert(MetadataKey::Iv.as_str().to_owned(), iv_value);
         let method_value = encode_ecryption_method(self.method)?;
-        content
-            .mut_metadata()
-            .insert(METADATA_KEY_ENCRYPTION_METHOD.to_owned(), method_value);
+        content.mut_metadata().insert(
+            MetadataKey::EncryptionMethod.as_str().to_owned(),
+            method_value,
+        );
         let checksum = sha256(plaintext)?;
         content
             .mut_metadata()
-            .insert(METADATA_PLAINTEXT_SHA256.to_owned(), checksum);
+            .insert(MetadataKey::PlaintextSha256.as_str().to_owned(), checksum);
         let key = &self.key;
         let ciphertext = AesCtrCrypter::new(self.method, key, iv).encrypt(plaintext)?;
         content.set_content(ciphertext);
@@ -47,22 +48,29 @@ impl FileBackend {
 
     fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         let key = &self.key;
-        let iv_value = content.get_metadata().get(METADATA_KEY_IV).ok_or_else(|| {
-            Error::Other(format!("metadata {} not found", METADATA_KEY_IV).into())
-        })?;
+        let iv_value = content
+            .get_metadata()
+            .get(MetadataKey::Iv.as_str())
+            .ok_or_else(|| {
+                Error::Other(format!("metadata {} not found", MetadataKey::Iv.as_str()).into())
+            })?;
         let method_value = content
             .get_metadata()
-            .get(METADATA_KEY_ENCRYPTION_METHOD)
+            .get(MetadataKey::EncryptionMethod.as_str())
             .ok_or_else(|| {
                 Error::Other(
-                    format!("metadata {} not found", METADATA_KEY_ENCRYPTION_METHOD).into(),
+                    format!(
+                        "metadata {} not found",
+                        MetadataKey::EncryptionMethod.as_str()
+                    )
+                    .into(),
                 )
             })?;
         let iv = Iv::from(iv_value.as_slice());
         let method = decode_ecryption_method(method_value)?;
         let checksum = content
             .get_metadata()
-            .get(METADATA_PLAINTEXT_SHA256)
+            .get(MetadataKey::PlaintextSha256.as_str())
             .ok_or_else(|| Error::Other("sha256 checksum not found".to_owned().into()))?;
         let ciphertext = content.get_content();
         let plaintext = AesCtrCrypter::new(method, key, iv).decrypt(ciphertext)?;
@@ -134,7 +142,7 @@ mod tests {
         let mut encrypted_content1 = encrypted_content.clone();
         encrypted_content1
             .mut_metadata()
-            .get_mut(METADATA_PLAINTEXT_SHA256)
+            .get_mut(MetadataKey::PlaintextSha256.as_str())
             .unwrap()[0] += 1;
         backend.decrypt_content(&encrypted_content1).unwrap_err();
 
@@ -142,7 +150,7 @@ mod tests {
         let mut encrypted_content2 = encrypted_content;
         encrypted_content2
             .mut_metadata()
-            .remove(METADATA_PLAINTEXT_SHA256);
+            .remove(MetadataKey::PlaintextSha256.as_str());
         backend.decrypt_content(&encrypted_content2).unwrap_err();
     }
 }
