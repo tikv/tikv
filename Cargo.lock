@@ -4245,6 +4245,7 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
+ "openssl",
  "panic_hook",
  "parking_lot 0.10.0",
  "pd_client",
@@ -4280,7 +4281,9 @@ dependencies = [
  "tokio-core",
  "tokio-fs",
  "tokio-io",
+ "tokio-openssl",
  "tokio-sync",
+ "tokio-tcp",
  "tokio-threadpool",
  "tokio-timer",
  "toml",
@@ -4535,6 +4538,17 @@ dependencies = [
  "proc-macro2 1.0.9",
  "quote 1.0.3",
  "syn 1.0.5",
+]
+
+[[package]]
+name = "tokio-openssl"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4646ae1fd623393de3d796ea53af75acd02938dd5579544fbd6d236d041978a6"
+dependencies = [
+ "futures 0.1.29",
+ "openssl",
+ "tokio-io",
 ]
 
 [[package]]
