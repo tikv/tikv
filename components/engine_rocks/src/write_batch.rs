@@ -223,7 +223,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         if let Some(x) = self.save_points.pop() {
             return self.wbs[x].pop_save_point().map_err(Error::Engine);
         }
-        return Err(Error::Engine("no save points".into()));
+        Err(Error::Engine("no save point".into()))
     }
 
     fn rollback_to_save_point(&mut self) -> Result<()> {
@@ -234,7 +234,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
             self.index = x;
             return self.wbs[x].rollback_to_save_point().map_err(Error::Engine);
         }
-        return Err(Error::Engine("no save points".into()));
+        Err(Error::Engine("no save point".into()))
     }
 }
 
