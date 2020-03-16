@@ -374,7 +374,7 @@ dependencies = [
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-traits 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "tikv_alloc 0.1.0",
- "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
+ "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git?branch=release-3.0)",
 ]
 
 [[package]]
@@ -2781,7 +2781,7 @@ dependencies = [
  "test_storage 0.0.1",
  "tikv 3.0.12",
  "tikv_util 0.1.0",
- "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
+ "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git?branch=release-3.0)",
 ]
 
 [[package]]
@@ -2926,7 +2926,7 @@ dependencies = [
  "tikv_alloc 0.1.0",
  "tikv_util 0.1.0",
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
- "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
+ "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git?branch=release-3.0)",
  "tipb_helper 0.0.1",
  "tokio-core 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-executor 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3022,7 +3022,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#833c2ffd2fe7aad5224dd7c2b05fb24bc109e969"
+source = "git+https://github.com/pingcap/tipb.git?branch=release-3.0#1b9900292ab66bd2de3090f8d45d3616bdd1b5e5"
 dependencies = [
  "protobuf 2.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -3033,7 +3033,7 @@ version = "0.0.1"
 dependencies = [
  "codec 0.0.1",
  "cop_datatype 0.0.1",
- "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
+ "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git?branch=release-3.0)",
 ]
 
 [[package]]
@@ -3802,7 +3802,7 @@ dependencies = [
 "checksum thread_local 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)" = "c6b53e329000edc2b34dbe8545fd20e55a333362d0a321909685a19bd28c3f1b"
 "checksum time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)" = "d5d788d3aa77bc0ef3e9621256885555368b47bd495c13dd2e7413c89f845520"
 "checksum tinytemplate 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "7655088894274afb52b807bd3c87072daa1fedd155068b8705cabfd628956115"
-"checksum tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)" = "<none>"
+"checksum tipb 0.0.1 (git+https://github.com/pingcap/tipb.git?branch=release-3.0)" = "<none>"
 "checksum tokio 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)" = "4790d0be6f4ba6ae4f48190efa2ed7780c9e3567796abdb285003cf39840d9c5"
 "checksum tokio-buf 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "8fb220f46c53859a4b7ec083e41dec9778ff0b1851c0942b211edb89e0ccdc46"
 "checksum tokio-codec 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "5c501eceaf96f0e1793cf26beb63da3d11c738c4a943fdf3746d81d64684c39f"
