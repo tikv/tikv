@@ -8,9 +8,9 @@ checksum = "5d2e7343e7fc9de883d1b0341e0b13970f764c14101234857d2ddafa1cb1cac2"
 
 [[package]]
 name = "afl"
-version = "0.4.4"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d2b15f7ed343b7446090d0de7789a640c22b163fb200d81cef958fcb9856692"
+checksum = "59206260f98d163b3ca42fb29fe551dbcda1d43cf70a244066b2a0666a8fb2a9"
 dependencies = [
  "cc",
  "clap",
@@ -53,15 +53,9 @@ checksum = "7825f6833612eb2414095684fcf6c635becf3ce97fe48cf6421321e93bfbd53c"
 
 [[package]]
 name = "arbitrary"
-version = "0.1.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c7d1523aa3a127adf8b27af2404c03c12825b4c4d0698f01648d63fa9df62ee"
-
-[[package]]
-name = "arbitrary"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64cf76cb6e2222ed0ea86b2b0ee2f71c96ec6edd5af42e84d59160e91b836ec4"
+checksum = "16971f2f0ce65c5cf2a1546cc6a0af102ecb11e265ddaa9433fb3e5bfdf676a4"
 
 [[package]]
 name = "arc-swap"
@@ -414,11 +408,10 @@ dependencies = [
 
 [[package]]
 name = "cargo_metadata"
-version = "0.6.4"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5d1b4d380e1bab994591a24c2bdd1b054f64b60bef483a8c598c7c345bc3bbe"
+checksum = "46e3374c604fb39d1a2f35ed5e4a4e30e60d01fab49446e08f1b3e9a90aef202"
 dependencies = [
- "error-chain",
  "semver",
  "serde",
  "serde_derive",
@@ -1091,9 +1084,9 @@ dependencies = [
 
 [[package]]
 name = "failure"
-version = "0.1.5"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "795bd83d3abeb9220f257e597aa0080a508b27533824adf336529648f6abf7e2"
+checksum = "b8529c2421efa3066a5cbd8063d2244603824daccb6936b079010bb2aa89464b"
 dependencies = [
  "backtrace",
  "failure_derive",
@@ -1101,13 +1094,13 @@ dependencies = [
 
 [[package]]
 name = "failure_derive"
-version = "0.1.5"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea1063915fd7ef4309e222a5a07cf9c319fb9c7836b1f89b85458672dbb127e1"
+checksum = "030a733c8287d6213886dd487564ff5c8f6aae10278b3588ed177f9d18f8d231"
 dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.13",
- "syn 0.15.44",
+ "proc-macro2 1.0.9",
+ "quote 1.0.2",
+ "syn 1.0.5",
  "synstructure",
 ]
 
@@ -1334,9 +1327,8 @@ dependencies = [
 name = "fuzz"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "cargo_metadata",
- "clap",
- "failure",
  "lazy_static",
  "regex",
  "structopt",
@@ -1346,8 +1338,8 @@ dependencies = [
 name = "fuzz-targets"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "byteorder",
- "failure",
  "tidb_query",
  "tikv_util",
 ]
@@ -1556,11 +1548,11 @@ dependencies = [
 
 [[package]]
 name = "honggfuzz"
-version = "0.5.45"
+version = "0.5.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24c27b4aa3049d6d10d8e33d52c9d03ca9aec18f8a449b246f8c4a5b0c10fb34"
+checksum = "c3de2c3273ef7735df1c5a72128ca85b1d20105b9aac643cdfd7a6e581311150"
 dependencies = [
- "arbitrary 0.2.0",
+ "arbitrary",
  "lazy_static",
  "memmap",
 ]
@@ -1905,10 +1897,11 @@ dependencies = [
 
 [[package]]
 name = "libfuzzer-sys"
-version = "0.1.0"
-source = "git+https://github.com/rust-fuzz/libfuzzer-sys.git#4594b1f39da0a0ad3b84761be3c200f85cef5eea"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb789afcc589a08928d1e466087445ab740a0f70a2ee23d9349a0e3723d65e1b"
 dependencies = [
- "arbitrary 0.1.1",
+ "arbitrary",
  "cc",
 ]
 
@@ -3902,14 +3895,14 @@ dependencies = [
 
 [[package]]
 name = "synstructure"
-version = "0.10.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02353edf96d6e4dc81aea2d8490a7e9db177bf8acb0e951c24940bf866cb313f"
+checksum = "67656ea1dc1b41b1451851562ea232ec2e5a80242139f7e679ceccfb5d61f545"
 dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.13",
- "syn 0.15.44",
- "unicode-xid 0.1.0",
+ "proc-macro2 1.0.9",
+ "quote 1.0.2",
+ "syn 1.0.5",
+ "unicode-xid 0.2.0",
 ]
 
 [[package]]
