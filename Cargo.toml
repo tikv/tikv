@@ -60,6 +60,7 @@ batch-system = { path = "components/batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
 chrono = "0.4"
+coarsetime = "0.1"
 codec = { path = "components/codec" }
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
@@ -136,7 +137,7 @@ prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+rev = "2518694543eb58f21f491969422d36480261ef8c"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
@@ -155,6 +156,7 @@ protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 prost = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
 protobuf-build = { git = "https://github.com/tikv/protobuf-build", rev = "1fe5d77689d9691b7917215f3a1d32968115cc02" }
+prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "2518694543eb58f21f491969422d36480261ef8c" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
