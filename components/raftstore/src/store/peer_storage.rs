@@ -228,6 +228,7 @@ impl CacheQueryStats {
 }
 
 pub trait HandleRaftReadyContext {
+    /// Return mutable reference of WriteBatch for KvDB and RaftDB in one interface.
     fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch);
     fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch;
     fn raft_wb_mut(&mut self) -> &mut RocksWriteBatch;
