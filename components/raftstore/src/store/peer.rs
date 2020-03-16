@@ -1419,12 +1419,12 @@ impl Peer {
             debug_assert!(self.get_store().is_applying_snapshot());
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
-        }
-        self.raft_group.advance_append(ready);
-        if self.is_applying_snapshot() {
+            self.raft_group.advance_append(ready);
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
+        } else {
+            self.raft_group.advance_append(ready);
         }
         self.proposals.gc();
     }
