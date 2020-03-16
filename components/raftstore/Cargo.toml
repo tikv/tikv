@@ -77,14 +77,10 @@ tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types"}
 uuid = { version = "0.7", features = ["serde", "v4"] }
-
-[dependencies.prometheus]
-version = "0.8"
-features = ["nightly", "push", "process"]
+prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
 
 [dependencies.yatp]
-git = "https://github.com/renkai/yatp.git"
-branch = "master"
+git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }

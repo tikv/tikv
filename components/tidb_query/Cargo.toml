@@ -60,17 +60,14 @@ tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
 static_assertions = { version = "1.0", features = ["nightly"] }
-
-[dependencies.prometheus]
-version = "0.8"
-features = ["nightly", "push", "process"]
+prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
 
 [dependencies.prometheus-static-metric]
-version = "0.2.0"
+git = "https://github.com/tikv/rust-prometheus.git"
+rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
 [dependencies.yatp]
-git = "https://github.com/renkai/yatp.git"
-branch = "master"
+git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
 profiler = { path = "../profiler" }

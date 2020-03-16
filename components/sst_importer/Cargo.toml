@@ -42,10 +42,7 @@ tikv_util = { path = "../tikv_util" }
 tokio-sync = "0.1.7"
 txn_types = { path = "../txn_types" }
 uuid = { version = "0.7", features = ["serde", "v4"] }
-
-[dependencies.prometheus]
-version = "0.8"
-default-features = false
+prometheus = { version = "0.8",default-features = false }
 
 [dev-dependencies]
 tempfile = "3.0"
