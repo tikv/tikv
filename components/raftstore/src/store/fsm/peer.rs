@@ -820,7 +820,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         true
                     );
 
-                    let target_region_id = meta.targets_map.get(&region_id).unwrap().clone();
+                    let target_region_id = *meta.targets_map.get(&region_id).unwrap();
                     let flag = meta
                         .atomic_snap_regions
                         .get_mut(&target_region_id)
@@ -1339,7 +1339,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.ctx
                 .router
                 .force_send(
-                    region_id,
+                    source_region_id,
                     PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target_region_id: self.fsm.region_id(),
                         target: self.fsm.peer.peer.clone(),
@@ -1456,7 +1456,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
             } else {
                 // The order is important! Must be set this flag after clearing region_ranges and regions.
-                let target_region_id = meta.targets_map.get(&region_id).unwrap().clone();
+                let target_region_id = *meta.targets_map.get(&region_id).unwrap();
                 let flag = meta
                     .atomic_snap_regions
                     .get_mut(&target_region_id)
@@ -2117,14 +2117,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.tag, self.fsm.peer.pending_merge_state, target, result_type
             );
         }
-        // If the merge succeed, all source peers is not possible to apply snapshot.
+        // If the merge succeed, all source peers is impossible in apply snapshot state
+        // and must be initialized.
         if self.fsm.peer.is_applying_snapshot() {
             panic!(
-                "{} is applying snapshot, target region id {}, target peer {:?}, merge result {:?}",
+                "{} is applying snapshot on getting merge result, target region id {}, target peer {:?}, merge result type {:?}",
                 self.fsm.peer.tag, target_region_id, target, result_type
             );
         }
-        assert!(self.fsm.peer.is_initialized());
+        if !self.fsm.peer.is_initialized() {
+            panic!(
+                "{} is not initialized on getting merge result, target region id {}, target peer {:?}, merge result type {:?}",
+                self.fsm.peer.tag, target_region_id, target, result_type
+            );
+        }
         match result_type {
             MergeResultType::FromTargetLog => {
                 info!(
@@ -2194,7 +2200,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // The `pending_snapshot_regions` is only used to occupy the key range, so if this
         // peer is added to `region_ranges`, it can be remove from `pending_snapshot_regions`
         meta.pending_snapshot_regions
-            .retain(|r| !(self.fsm.region_id() == r.get_id()));
+            .retain(|r| self.fsm.region_id() != r.get_id());
 
         // Remove its source peers' metadata
         if let Some(ref destroyed_regions) = apply_result.destroyed_regions {

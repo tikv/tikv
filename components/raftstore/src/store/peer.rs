@@ -1098,7 +1098,7 @@ impl Peer {
             self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
         let mut destroy_regions: Option<Vec<metapb::Region>> = None;
-        if let Some(_) = self.get_pending_snapshot() {
+        if self.get_pending_snapshot().is_some() {
             if !self.ready_to_handle_pending_snap() {
                 let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
