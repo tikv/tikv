@@ -1462,9 +1462,10 @@ impl Peer {
             self.post_pending_read_index_on_replica(ctx);
         } else if self.ready_to_handle_read() {
             for (uuid, index) in states {
-                let mut read = self.pending_reads.advance_leader_read_and_pop(uuid, index);
-                propose_time = Some(read.renew_lease_time);
-                self.response_read(&mut read, ctx, false);
+                for mut read in self.pending_reads.advance_leader_read_and_pop(uuid, index) {
+                    self.response_read(&mut read, ctx, false);
+                    propose_time = Some(read.renew_lease_time);
+                }
             }
         } else {
             propose_time = self.pending_reads.advance_leader_reads(states);

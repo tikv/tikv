@@ -164,12 +164,17 @@ impl ReadIndexQueue {
     }
 
     /// A fast path for `advance_leader_reads` then `pop_front`.
-    pub fn advance_leader_read_and_pop(&mut self, uuid: Uuid, index: u64) -> ReadIndexRequest {
-        let mut read = self.reads.pop_front().unwrap();
-        self.handled_cnt += 1;
-        assert_eq!(uuid, read.id);
-        read.read_index = Some(index);
-        read
+    pub fn advance_leader_read_and_pop(&mut self, uuid: Uuid, index: u64) -> Vec<ReadIndexRequest> {
+        let mut poped = Vec::new();
+        while let Some(mut read) = self.reads.pop_front() {
+            read.read_index = Some(index);
+            poped.push(read);
+            if uuid == poped.last().unwrap().id {
+                self.handled_cnt += poped.len();
+                return poped;
+            }
+        }
+        panic!("read {} is ready from raft, but not in pending queue", uuid);
     }
 
     /// update the read index of the requests that before the specified id.
@@ -329,8 +334,9 @@ mod tests {
 
         // After the peer becomes leader, `advance` could be called before
         // `clear_uncommitted_on_role_change`.
-        let mut read = queue.advance_leader_read_and_pop(id, 10);
-        read.cmds.clear();
+        for mut read in queue.advance_leader_read_and_pop(id, 10) {
+            read.cmds.clear();
+        }
 
         queue.clear_uncommitted_on_role_change(10);
 
@@ -350,5 +356,43 @@ mod tests {
 
         // Shouldn't panic when call `advance_replica_reads` with `id` again.
         queue.advance_replica_reads(vec![(id, 10)]);
+    }
+
+    #[test]
+    fn test_retake_leadership() {
+        let mut queue = ReadIndexQueue::default();
+        queue.handled_cnt = 100;
+
+        // Push a pending read comand when the peer is leader.
+        let id = Uuid::new_v4();
+        let req = ReadIndexRequest::with_command(
+            id,
+            RaftCmdRequest::default(),
+            Callback::None,
+            Timespec::new(0, 0),
+        );
+        queue.push_back(req, true);
+
+        // Advance on leader, but the peer is not ready to handle it (e.g. it's in merging).
+        queue.advance_leader_reads(vec![(id, 10)]);
+
+        // The leader steps down to follower, clear uncommitted reads.
+        queue.clear_uncommitted_on_role_change(10);
+
+        // The peer takes leadership and handles one more read.
+        queue.clear_uncommitted_on_role_change(10);
+        let id_1 = Uuid::new_v4();
+        let req = ReadIndexRequest::with_command(
+            id_1,
+            RaftCmdRequest::default(),
+            Callback::None,
+            Timespec::new(0, 0),
+        );
+        queue.push_back(req, true);
+
+        // Advance on leader again, shouldn't panic.
+        for mut read in queue.advance_leader_read_and_pop(id_1, 10) {
+            read.cmds.clear();
+        }
     }
 }
