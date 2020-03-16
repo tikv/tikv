@@ -9,6 +9,12 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
+
+#[cfg(feature = "prost-codec")]
+use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget;
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::diagnosticspb::SearchLogRequestTarget;
+
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
@@ -18,11 +24,16 @@ use crate::server::{Error, Result};
 pub struct Service {
     pool: CpuPool,
     log_file: String,
+    slow_log_file: String,
 }
 
 impl Service {
-    pub fn new(pool: CpuPool, log_file: String) -> Self {
-        Service { pool, log_file }
+    pub fn new(pool: CpuPool, log_file: String, slow_log_file: String) -> Self {
+        Service {
+            pool,
+            log_file,
+            slow_log_file,
+        }
     }
 }
 
@@ -33,7 +44,11 @@ impl Diagnostics for Service {
         req: SearchLogRequest,
         sink: ServerStreamingSink<SearchLogResponse>,
     ) {
-        let log_file = self.log_file.to_owned();
+        let log_file = if req.get_target() == SearchLogRequestTarget::Normal {
+            self.log_file.to_owned()
+        } else {
+            self.slow_log_file.to_owned()
+        };
         let stream = self
             .pool
             .spawn_fn(move || log::search(log_file, req))
