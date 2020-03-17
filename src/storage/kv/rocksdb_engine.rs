@@ -13,7 +13,7 @@ use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine::Engines;
 use engine::IterOption;
 use engine_rocks::{Compat, RocksEngineIterator};
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_GC, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{Iterable, Iterator, Mutable, Peekable, SeekKey, WriteBatchExt};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -203,6 +203,7 @@ impl TestEngineBuilder {
                 CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
+                CF_GC => CFOptions::new(CF_GC, cfg_rocksdb.gccf.build_opt(&cache)),
                 CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
