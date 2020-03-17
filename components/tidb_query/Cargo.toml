@@ -27,7 +27,7 @@ byteorder = "1.2"
 chrono = "0.4"
 chrono-tz = "0.5.1"
 codec = { path = "../codec" }
-derive_more = "0.15.0"
+derive_more = "0.99.3"
 failure = "0.1"
 flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 hex = "0.3"

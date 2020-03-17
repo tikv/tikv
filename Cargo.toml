@@ -65,7 +65,7 @@ configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
-derive_more = "0.15.0"
+derive_more = "0.99.3"
 engine = { path = "components/engine" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
@@ -111,7 +111,7 @@ serde_derive = "1.0"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
-slog_derive = "0.1"
+slog_derive = "0.2"
 parking_lot = "0.10"
 sst_importer = { path = "components/sst_importer" }
 sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
