@@ -27,7 +27,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
-use tikv_util::time::{duration_to_sec, Instant};
+use tikv_util::time::Instant;
 
 quick_error! {
     #[derive(Debug)]
@@ -309,7 +309,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .write
-                        .observe(duration_to_sec(req_timer.elapsed()));
+                        .observe(req_timer.elapsed_secs());
                     fail_point!("raftkv_async_write_finish");
                     cb((cb_ctx, Ok(())))
                 }
@@ -350,7 +350,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
-                        .observe(duration_to_sec(req_timer.elapsed()));
+                        .observe(req_timer.elapsed_secs());
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     cb((cb_ctx, Ok(s)))
                 }
