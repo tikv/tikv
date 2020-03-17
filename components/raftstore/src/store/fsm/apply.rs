@@ -416,12 +416,22 @@ impl ApplyContext {
     }
 
     fn write_vec_opt(&mut self, write_opts: &WriteOptions) {
-        self.engines
-            .kv
-            .multi_batch_write(self.kv_wb().as_inner(), write_opts)
-            .unwrap_or_else(|e| {
-                panic!("failed to write to engine: {:?}", e);
-            });
+        let wb = self.kv_wb();
+        if wb.vec_size() > 1 {
+            self.engines
+                .kv
+                .multi_batch_write(wb.as_inner(), write_opts)
+                .unwrap_or_else(|e| {
+                    panic!("failed to write to engine: {:?}", e);
+                });
+        } else {
+            self.engines
+                .kv
+                .write_opt(wb.as_raw(), write_opts)
+                .unwrap_or_else(|e| {
+                    panic!("failed to write to engine: {:?}", e);
+                });
+        }
         self.sync_log_hint = false;
         let data_size = self.kv_wb().data_size();
         if data_size > APPLY_WB_SHRINK_SIZE {

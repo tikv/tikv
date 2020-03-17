@@ -181,7 +181,11 @@ impl RocksWriteBatchVec {
         self.db.as_ref()
     }
 
-    pub fn check_switch_batch(&mut self) {
+    pub fn vec_size(&self) -> usize {
+        self.wbs.len()
+    }
+
+    fn check_switch_batch(&mut self) {
         if self.batch_size_limit > 0 && self.cur_batch_size >= self.batch_size_limit {
             self.index += 1;
             self.cur_batch_size = 0;
