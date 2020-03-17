@@ -426,11 +426,8 @@ pub fn trim_1_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn trim_2_args(s: &Option<Bytes>, remstr: &Option<Bytes>) -> Result<Option<Bytes>> {
-    // As per MySQL doc `https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_trim`,
-    // `remstr` is optional and, if not specified, spaces are removed.
     let (s, remstr) = match (s, remstr) {
         (Some(v1), Some(v2)) => (v1, v2),
-        (Some(_), None) => return trim_1_arg(s),
         _ => return Ok(None),
     };
 
@@ -1714,7 +1711,7 @@ mod tests {
         let test_cases = vec![
             (None, None, None),
             (None, Some("bar"), None),
-            (Some("   bar   "), None, Some("bar")),
+            (Some("   bar   "), None, None),
             (Some("   bar   "), Some(" "), Some("bar")),
             (Some("   bar   "), Some(""), Some("   bar   ")),
             (Some("xxxbarxxx"), Some("x"), Some("bar")),
