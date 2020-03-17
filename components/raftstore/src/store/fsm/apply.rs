@@ -2519,7 +2519,7 @@ impl ApplyFsm {
             apply.commit_index,
             apply.commit_term,
         );
-        if !(cur_state >= prev_state) {
+        if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 || prev_state.2 > cur_state.2 {
             panic!(
                 "{} commit state jump backward {:?} -> {:?}",
                 self.delegate.tag, prev_state, cur_state
