@@ -416,7 +416,7 @@ mod tests {
     use engine::Engines;
     use engine::*;
     use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{Mutable, Peekable};
+    use engine_traits::{Peekable, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
