@@ -380,7 +380,6 @@ fn init_applied_index_term(
     }
 }
 
-
 fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
     Ok(match engines.raft.get_msg(&state_key)? {
