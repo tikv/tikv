@@ -1386,14 +1386,7 @@ where
     };
     assert_eq!(apply_state, last_applied_state);
 
-    let idx = apply_state.get_applied_index();
-    let term = if idx == apply_state.get_truncated_state().get_index() {
-        apply_state.get_truncated_state().get_term()
-    } else {
-        last_applied_index_term
-    };
-
-    let key = SnapKey::new(region_id, term, idx);
+    let key = SnapKey::new(region_id, last_applied_index_term, apply_state.get_applied_index());
 
     mgr.register(key.clone(), SnapEntry::Generating);
     defer!(mgr.deregister(&key, &SnapEntry::Generating));

@@ -839,7 +839,7 @@ mod tests {
         let shared_block_cache = false;
         let engines = Engines::new(
             Arc::clone(&engine.kv),
-            Arc::clone(&engine.kv),
+            Arc::clone(&engine.raft),
             shared_block_cache,
         );
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
