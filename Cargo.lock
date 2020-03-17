@@ -1861,6 +1861,7 @@ dependencies = [
  "prost",
  "prost-derive",
  "protobuf",
+ "protobuf-build",
  "raft-proto",
 ]
 
