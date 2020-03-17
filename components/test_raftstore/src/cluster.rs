@@ -17,7 +17,7 @@ use tempfile::{Builder, TempDir};
 use engine::rocks;
 use engine::{Engines, Peekable, DB};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Iterable, KvEngine, Mutable, CF_DEFAULT, CF_RAFT};
+use engine_traits::{Iterable, Mutable, WriteBatchExt, CF_DEFAULT, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -899,7 +899,7 @@ impl<T: Simulator> Cluster<T> {
             keys::region_meta_prefix(region_id),
             keys::region_meta_prefix(region_id + 1),
         );
-        let kv_wb = self.engines[&store_id].kv.c().write_batch();
+        let mut kv_wb = self.engines[&store_id].kv.c().write_batch();
         RocksEngine::from_ref(&self.engines[&store_id].kv)
             .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, _| {
                 kv_wb.delete(k).unwrap();
@@ -935,7 +935,7 @@ impl<T: Simulator> Cluster<T> {
             keys::region_raft_prefix(region_id),
             keys::region_raft_prefix(region_id + 1),
         );
-        let raft_wb = self.engines[&store_id].raft.c().write_batch();
+        let mut raft_wb = self.engines[&store_id].raft.c().write_batch();
         RocksEngine::from_ref(&self.engines[&store_id].raft)
             .scan(&raft_start, &raft_end, false, |k, _| {
                 raft_wb.delete(k).unwrap();

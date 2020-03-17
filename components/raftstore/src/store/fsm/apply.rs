@@ -2193,7 +2193,14 @@ pub struct Apply {
 }
 
 impl Apply {
-    pub fn new(region_id: u64, term: u64, entries: Vec<Entry>, last_commit_index: u64, commit_term: u64, commit_index: u64) -> Apply {
+    pub fn new(
+        region_id: u64,
+        term: u64,
+        entries: Vec<Entry>,
+        last_commit_index: u64,
+        commit_term: u64,
+        commit_index: u64,
+    ) -> Apply {
         Apply {
             region_id,
             term,
@@ -3796,7 +3803,10 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry], 6, 3, 7)));
+        router.schedule_task(
+            1,
+            Msg::apply(Apply::new(1, 3, vec![delete_range_entry], 6, 3, 7)),
+        );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
@@ -3809,7 +3819,10 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry], 7, 3, 8)));
+        router.schedule_task(
+            1,
+            Msg::apply(Apply::new(1, 3, vec![delete_range_entry], 7, 3, 8)),
+        );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert!(engines.kv.get(&dk_k1).unwrap().is_none());
@@ -3880,7 +3893,17 @@ mod tests {
                 .build();
             entries.push(put_entry);
         }
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries, 11, 3, WRITE_BATCH_MAX_KEYS as u64 + 11)));
+        router.schedule_task(
+            1,
+            Msg::apply(Apply::new(
+                1,
+                3,
+                entries,
+                11,
+                3,
+                WRITE_BATCH_MAX_KEYS as u64 + 11,
+            )),
+        );
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
@@ -4209,7 +4232,10 @@ mod tests {
                 .epoch(epoch.get_conf_ver(), epoch.get_version())
                 .capture_resp(router, 3, 1, capture_tx.clone())
                 .build();
-            router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![split], index_id - 1, 1, index_id)));
+            router.schedule_task(
+                1,
+                Msg::apply(Apply::new(1, 1, vec![split], index_id - 1, 1, index_id)),
+            );
             index_id += 1;
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap()
         };

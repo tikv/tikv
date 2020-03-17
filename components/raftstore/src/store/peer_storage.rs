@@ -396,7 +396,12 @@ fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyState
     )
 }
 
-fn validate_states(region_id: u64, engines: &Engines, raft_state: &mut RaftLocalState, apply_state: &RaftApplyState) -> Result<()> {
+fn validate_states(
+    region_id: u64,
+    engines: &Engines,
+    raft_state: &mut RaftLocalState,
+    apply_state: &RaftApplyState,
+) -> Result<()> {
     let last_index = raft_state.get_last_index();
     let mut commit_index = raft_state.get_hard_state().get_commit();
     let apply_index = apply_state.get_applied_index();
@@ -433,11 +438,9 @@ fn validate_states(region_id: u64, engines: &Engines, raft_state: &mut RaftLocal
 
     raft_state.mut_hard_state().set_commit(commit_index);
     if raft_state.get_hard_state().get_term() < apply_state.get_commit_term() {
-        return Err(box_err!(
-            "raft state {:?} corrupted", raft_state
-        ));
+        return Err(box_err!("raft state {:?} corrupted", raft_state));
     }
-    
+
     Ok(())
 }
 
@@ -2370,8 +2373,7 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let kv_db =
-            Arc::new(new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
+        let kv_db = Arc::new(new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let raft_path = td.path().join(Path::new("raft"));
         let raft_db =
             Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
@@ -2396,13 +2398,19 @@ mod tests {
         let raft_state_key = keys::raft_state_key(1);
         raft_state.set_last_index(11);
         let log_key = keys::raft_log_key(1, 11);
-        engines.raft.put_msg(&log_key, &new_entry(11, RAFT_INIT_LOG_TERM)).unwrap();
+        engines
+            .raft
+            .put_msg(&log_key, &new_entry(11, RAFT_INIT_LOG_TERM))
+            .unwrap();
         raft_state.mut_hard_state().set_commit(12);
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         assert!(build_storage().is_err());
 
         let log_key = keys::raft_log_key(1, 20);
-        engines.raft.put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM)).unwrap();
+        engines
+            .raft
+            .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
+            .unwrap();
         raft_state.set_last_index(20);
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         s = build_storage().unwrap();
@@ -2412,37 +2420,59 @@ mod tests {
         // Missing last log is invalid.
         engines.raft.del(&log_key).unwrap();
         assert!(build_storage().is_err());
-        engines.raft.put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM)).unwrap();
+        engines
+            .raft
+            .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
+            .unwrap();
 
         // applied_index > commit_index is invalid.
         let mut apply_state = RaftApplyState::default();
         apply_state.set_applied_index(13);
-        apply_state.mut_truncated_state().set_index(RAFT_INIT_LOG_INDEX);
-        apply_state.mut_truncated_state().set_term(RAFT_INIT_LOG_TERM);
+        apply_state
+            .mut_truncated_state()
+            .set_index(RAFT_INIT_LOG_INDEX);
+        apply_state
+            .mut_truncated_state()
+            .set_term(RAFT_INIT_LOG_TERM);
         let apply_state_key = keys::apply_state_key(1);
         let cf_raft = engines.kv.cf_handle(CF_RAFT).unwrap();
-        engines.kv.put_msg_cf(cf_raft, &apply_state_key, &apply_state).unwrap();
+        engines
+            .kv
+            .put_msg_cf(cf_raft, &apply_state_key, &apply_state)
+            .unwrap();
         assert!(build_storage().is_err());
 
         // It should not recover if corresponding log doesn't exist.
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
-        engines.kv.put_msg_cf(cf_raft, &apply_state_key, &apply_state).unwrap();
+        engines
+            .kv
+            .put_msg_cf(cf_raft, &apply_state_key, &apply_state)
+            .unwrap();
         assert!(build_storage().is_err());
-        
+
         let log_key = keys::raft_log_key(1, 14);
-        engines.raft.put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM)).unwrap();
+        engines
+            .raft
+            .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM))
+            .unwrap();
         raft_state.mut_hard_state().set_commit(14);
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
         // log term miss match is invalid.
-        engines.raft.put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM - 1)).unwrap();
+        engines
+            .raft
+            .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM - 1))
+            .unwrap();
         assert!(build_storage().is_err());
 
         // hard state term miss match is invalid.
-        engines.raft.put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM)).unwrap();
+        engines
+            .raft
+            .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM))
+            .unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM - 1);
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         assert!(build_storage().is_err());
@@ -2451,7 +2481,10 @@ mod tests {
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.set_last_index(13);
         let log_key = keys::raft_log_key(1, 13);
-        engines.raft.put_msg(&log_key, &new_entry(13, RAFT_INIT_LOG_TERM)).unwrap();
+        engines
+            .raft
+            .put_msg(&log_key, &new_entry(13, RAFT_INIT_LOG_TERM))
+            .unwrap();
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         assert!(build_storage().is_err());
 
@@ -2460,7 +2493,10 @@ mod tests {
         raft_state.mut_hard_state().set_commit(12);
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         apply_state.set_last_commit_index(13);
-        engines.kv.put_msg_cf(cf_raft, &apply_state_key, &apply_state).unwrap();
+        engines
+            .kv
+            .put_msg_cf(cf_raft, &apply_state_key, &apply_state)
+            .unwrap();
         assert!(build_storage().is_err());
     }
 }
