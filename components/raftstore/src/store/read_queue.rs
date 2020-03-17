@@ -165,7 +165,8 @@ impl ReadIndexQueue {
 
     /// A fast path for `advance_leader_reads` then `pop_front`.
     pub fn advance_leader_read_and_pop(&mut self, uuid: Uuid, index: u64) -> Vec<ReadIndexRequest> {
-        let mut poped = Vec::new();
+        // Some requests can be proposed in old terms, but not be cleared as they are ready.
+        let mut poped = Vec::with_capacity(self.ready_cnt + 1);
         while let Some(mut read) = self.reads.pop_front() {
             read.read_index = Some(index);
             poped.push(read);
@@ -358,8 +359,7 @@ mod tests {
         queue.advance_replica_reads(vec![(id, 10)]);
     }
 
-    #[test]
-    fn test_retake_leadership() {
+    fn test_retake_leadership(ready_to_handle: bool) {
         let mut queue = ReadIndexQueue::default();
         queue.handled_cnt = 100;
 
@@ -391,8 +391,25 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader again, shouldn't panic.
-        for mut read in queue.advance_leader_read_and_pop(id_1, 10) {
-            read.cmds.clear();
+        if ready_to_handle {
+            for mut read in queue.advance_leader_read_and_pop(id_1, 10) {
+                read.cmds.clear();
+            }
+        } else {
+            queue.advance_leader_reads(vec![(id_1, 10)]);
+            while let Some(mut read) = queue.pop_front() {
+                read.cmds.clear();
+            }
         }
+    }
+
+    #[test]
+    fn test_retake_leadership_ready() {
+        test_retake_leadership(true);
+    }
+
+    #[test]
+    fn test_retake_leadership_not_ready() {
+        test_retake_leadership(false);
     }
 }
