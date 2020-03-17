@@ -131,6 +131,8 @@ impl Drop for WriteCompactionFilter {
             self.db
                 .write_opt(self.write_batch.as_inner(), &opts)
                 .unwrap();
+        } else {
+            self.db.flush(true).unwrap();
         }
         info!(
             "WriteCompactionFilter uses {}s", self.start.elapsed_secs();
