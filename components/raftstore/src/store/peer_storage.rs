@@ -1499,7 +1499,7 @@ mod tests {
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine::rocks::util::new_engine;
     use engine::Engines;
-    use engine_rocks::{Compat, RocksEngine, RocksWriteBatch};
+    use engine_rocks::{Compat, RocksWriteBatch};
     use engine_traits::WriteBatchExt;
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;

@@ -3096,11 +3096,7 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine::rocks;
-    use engine::Engines;
-    use engine::Peekable;
-    use engine::DB;
-    use engine_rocks::{Compat, RocksEngine};
+    use engine_rocks::{RocksEngine, util::new_engine};
     use engine_traits::{Peekable as PeekableTrait, WriteBatch};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -3115,23 +3111,15 @@ mod tests {
 
     use super::*;
 
-    pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
+    pub fn create_tmp_engine(path: &str) -> (TempDir, RocksEngine) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db = Arc::new(
-            rocks::util::new_engine(
+        let engine = new_engine(
                 path.path().join("db").to_str().unwrap(),
                 None,
                 ALL_CFS,
                 None,
-            )
-            .unwrap(),
-        );
-        let raft_db = Arc::new(
-            rocks::util::new_engine(path.path().join("raft").to_str().unwrap(), None, &[], None)
-                .unwrap(),
-        );
-        let shared_block_cache = false;
-        (path, Engines::new(db, raft_db, shared_block_cache))
+            ).unwrap();
+        (path, engine)
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
@@ -3152,13 +3140,13 @@ mod tests {
 
     #[test]
     fn test_should_write_to_engine() {
-        let (_path, engines) = create_tmp_engine("test-delegate");
+        let (_path, engine) = create_tmp_engine("test-delegate");
 
         // ComputeHash command
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        let wb = engines.kv.c().write_batch();
+        let wb = engine.write_batch();
         assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // IngestSst command
@@ -3167,12 +3155,12 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        let wb = engines.kv.c().write_batch();
+        let wb = engine.write_batch();
         assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let mut wb = engines.kv.c().write_batch();
+        let mut wb = engine.write_batch();
         for i in 0..WRITE_BATCH_MAX_KEYS {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -3181,7 +3169,7 @@ mod tests {
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let mut wb = engines.kv.c().write_batch();
+        let mut wb = engine.write_batch();
         for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -3244,12 +3232,11 @@ mod tests {
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
-        let (_tmp, engines) = create_tmp_engine("apply-basic");
+        let (_tmp, engine) = create_tmp_engine("apply-basic");
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
-        let engine = RocksEngine::from_db(engines.kv.clone());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3257,7 +3244,7 @@ mod tests {
             importer,
             region_scheduler,
             sender,
-            engine,
+            engine: engine.clone(),
             router: router.clone(),
         };
         system.spawn("test-basic".to_owned(), builder);
@@ -3349,9 +3336,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         let apply_state_key = keys::apply_state_key(2);
-        assert!(engines
-            .kv
-            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
+        assert!(engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .is_none());
         // Make sure Apply and Snapshot are in the same batch.
@@ -3610,7 +3595,7 @@ mod tests {
 
     #[test]
     fn test_handle_raft_committed_entries() {
-        let (_path, engines) = create_tmp_engine("test-delegate");
+        let (_path, engine) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
         let obs = ApplyObserver::default();
         let mut host = CoprocessorHost::default();
@@ -3622,7 +3607,6 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
-        let engine = RocksEngine::from_db(engines.kv.clone());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3630,7 +3614,7 @@ mod tests {
             region_scheduler,
             coprocessor_host: host,
             importer: importer.clone(),
-            engine,
+            engine: engine.clone(),
             router: router.clone(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
@@ -3659,9 +3643,9 @@ mod tests {
         let dk_k1 = keys::data_key(b"k1");
         let dk_k2 = keys::data_key(b"k2");
         let dk_k3 = keys::data_key(b"k3");
-        assert_eq!(engines.kv.get(&dk_k1).unwrap().unwrap(), b"v1");
-        assert_eq!(engines.kv.get(&dk_k2).unwrap().unwrap(), b"v1");
-        assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
+        assert_eq!(engine.get_value(&dk_k1).unwrap().unwrap(), b"v1");
+        assert_eq!(engine.get_value(&dk_k2).unwrap().unwrap(), b"v1");
+        assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
         validate(&router, 1, |delegate| {
             assert_eq!(delegate.applied_index_term, 1);
             assert_eq!(delegate.apply_state.get_applied_index(), 1);
@@ -3682,9 +3666,8 @@ mod tests {
         assert_eq!(apply_res.metrics.written_keys, 2);
         assert_eq!(apply_res.metrics.size_diff_hint, 5);
         assert_eq!(apply_res.metrics.lock_cf_written_bytes, 5);
-        let lock_handle = engines.kv.cf_handle(CF_LOCK).unwrap();
         assert_eq!(
-            engines.kv.get_cf(lock_handle, &dk_k1).unwrap().unwrap(),
+            engine.get_value_cf(CF_LOCK, &dk_k1).unwrap().unwrap(),
             b"v1"
         );
 
@@ -3713,7 +3696,7 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         // a writebatch should be atomic.
-        assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
+        assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
 
         EntryBuilder::new(5, 2)
             .capture_resp(&router, 3, 1, capture_tx.clone())
@@ -3731,7 +3714,7 @@ mod tests {
         assert!(resp.get_header().get_error().has_stale_command());
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert!(engines.kv.get(&dk_k1).unwrap().is_none());
+        assert!(engine.get_value(&dk_k1).unwrap().is_none());
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.metrics.lock_cf_written_bytes, 3);
         assert_eq!(apply_res.metrics.delete_keys_hint, 2);
@@ -3755,7 +3738,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry])));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
-        assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
+        assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
         fetch_apply_res(&rx);
 
         let delete_range_entry = EntryBuilder::new(8, 3)
@@ -3768,9 +3751,9 @@ mod tests {
         router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_range_entry])));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        assert!(engines.kv.get(&dk_k1).unwrap().is_none());
-        assert!(engines.kv.get(&dk_k2).unwrap().is_none());
-        assert!(engines.kv.get(&dk_k3).unwrap().is_none());
+        assert!(engine.get_value(&dk_k1).unwrap().is_none());
+        assert!(engine.get_value(&dk_k2).unwrap().is_none());
+        assert!(engine.get_value(&dk_k3).unwrap().is_none());
         fetch_apply_res(&rx);
 
         // UploadSST
@@ -3816,7 +3799,7 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        check_db_range(&RocksEngine::from_db(engines.kv.clone()), sst_range);
+        check_db_range(&engine, sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);
@@ -3851,7 +3834,7 @@ mod tests {
 
     #[test]
     fn test_cmd_observer() {
-        let (_path, engines) = create_tmp_engine("test-delegate");
+        let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
         let mut host = CoprocessorHost::default();
         let mut obs = ApplyObserver::default();
@@ -3865,7 +3848,6 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
-        let engine = RocksEngine::from_db(engines.kv.clone());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
@@ -4054,7 +4036,7 @@ mod tests {
     }
 
     struct SplitResultChecker<'a> {
-        db: &'a DB,
+        engine: RocksEngine,
         origin_peers: &'a [metapb::Peer],
         epoch: Rc<RefCell<RegionEpoch>>,
     }
@@ -4062,7 +4044,7 @@ mod tests {
     impl<'a> SplitResultChecker<'a> {
         fn check(&self, start: &[u8], end: &[u8], id: u64, children: &[u64], check_initial: bool) {
             let key = keys::region_state_key(id);
-            let state: RegionLocalState = self.db.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
+            let state: RegionLocalState = self.engine.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
             assert_eq!(state.get_state(), PeerState::Normal);
             assert_eq!(state.get_region().get_id(), id);
             assert_eq!(state.get_region().get_start_key(), start);
@@ -4085,7 +4067,7 @@ mod tests {
                 return;
             }
             let key = keys::apply_state_key(id);
-            let initial_state: RaftApplyState = self.db.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
+            let initial_state: RaftApplyState = self.engine.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
             assert_eq!(initial_state.get_applied_index(), RAFT_INIT_LOG_INDEX);
             assert_eq!(
                 initial_state.get_truncated_state().get_index(),
@@ -4104,7 +4086,7 @@ mod tests {
 
     #[test]
     fn test_split() {
-        let (_path, engines) = create_tmp_engine("test-delegate");
+        let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
         let mut reg = Registration::default();
         reg.id = 3;
@@ -4126,7 +4108,6 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
-        let engine = RocksEngine::from_db(engines.kv.clone());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -4134,7 +4115,7 @@ mod tests {
             importer,
             region_scheduler,
             coprocessor_host: host,
-            engine,
+            engine: engine.clone(),
             router: router.clone(),
         };
         system.spawn("test-split".to_owned(), builder);
@@ -4225,7 +4206,7 @@ mod tests {
         // All requests should be checked.
         assert!(error_msg(&resp).contains("id count"), "{:?}", resp);
         let checker = SplitResultChecker {
-            db: &engines.kv,
+            engine: engine.clone(),
             origin_peers: &peers,
             epoch: epoch.clone(),
         };
