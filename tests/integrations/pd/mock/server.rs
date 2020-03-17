@@ -77,7 +77,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         {
             let addrs: Vec<String> = server
                 .bind_addrs()
-                .map(|addr| format!("{}:{}", addr.0, addr.1))
+                .map(|(host, port)| format!("{}:{}", host, port))
                 .collect();
             self.mocker.default_handler.set_endpoints(addrs.clone());
             if let Some(case) = self.mocker.case.as_ref() {
@@ -100,7 +100,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
             .as_ref()
             .unwrap()
             .bind_addrs()
-            .map(|(addr, port)| (addr.clone(), port))
+            .map(|(host, port)| (host.clone(), port))
             .collect()
     }
 }
