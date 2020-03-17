@@ -1460,15 +1460,14 @@ impl Peer {
             // the function.
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
-        } else if self.ready_to_handle_read() {
-            for (uuid, index) in states {
-                for mut read in self.pending_reads.advance_leader_read_and_pop(uuid, index) {
+        } else {
+            self.pending_reads.advance_leader_reads(states);
+            propose_time = Some(self.pending_reads.last_ready().unwrap().renew_lease_time);
+            if self.ready_to_handle_read() {
+                while let Some(mut read) = self.pending_reads.pop_front() {
                     self.response_read(&mut read, ctx, false);
-                    propose_time = Some(read.renew_lease_time);
                 }
             }
-        } else {
-            propose_time = self.pending_reads.advance_leader_reads(states);
         }
 
         // Note that only after handle read_states can we identify what requests are

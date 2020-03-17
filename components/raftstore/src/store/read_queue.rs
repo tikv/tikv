@@ -149,33 +149,22 @@ impl ReadIndexQueue {
         self.reads.back_mut()
     }
 
-    pub fn advance_leader_reads<T>(&mut self, states: T) -> Option<Timespec>
+    pub fn last_ready(&self) -> Option<&ReadIndexRequest> {
+        if self.ready_cnt > 0 {
+            return Some(&self.reads[self.ready_cnt - 1]);
+        }
+        None
+    }
+
+    pub fn advance_leader_reads<T>(&mut self, states: T)
     where
         T: IntoIterator<Item = (Uuid, u64)>,
     {
-        let mut ts = None;
         for (uuid, index) in states {
             assert_eq!(uuid, self.reads[self.ready_cnt].id);
             self.reads[self.ready_cnt].read_index = Some(index);
-            ts = Some(self.reads[self.ready_cnt].renew_lease_time);
             self.ready_cnt += 1;
         }
-        ts
-    }
-
-    /// A fast path for `advance_leader_reads` then `pop_front`.
-    pub fn advance_leader_read_and_pop(&mut self, uuid: Uuid, index: u64) -> Vec<ReadIndexRequest> {
-        // Some requests can be proposed in old terms, but not be cleared as they are ready.
-        let mut poped = Vec::with_capacity(self.ready_cnt + 1);
-        while let Some(mut read) = self.reads.pop_front() {
-            read.read_index = Some(index);
-            poped.push(read);
-            if uuid == poped.last().unwrap().id {
-                self.handled_cnt += poped.len();
-                return poped;
-            }
-        }
-        panic!("read {} is ready from raft, but not in pending queue", uuid);
     }
 
     /// update the read index of the requests that before the specified id.
@@ -335,7 +324,8 @@ mod tests {
 
         // After the peer becomes leader, `advance` could be called before
         // `clear_uncommitted_on_role_change`.
-        for mut read in queue.advance_leader_read_and_pop(id, 10) {
+        queue.advance_leader_reads(vec![(id, 10)]);
+        while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
 
@@ -359,7 +349,8 @@ mod tests {
         queue.advance_replica_reads(vec![(id, 10)]);
     }
 
-    fn test_retake_leadership(ready_to_handle: bool) {
+    #[test]
+    fn test_retake_leadership() {
         let mut queue = ReadIndexQueue::default();
         queue.handled_cnt = 100;
 
@@ -391,25 +382,9 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader again, shouldn't panic.
-        if ready_to_handle {
-            for mut read in queue.advance_leader_read_and_pop(id_1, 10) {
-                read.cmds.clear();
-            }
-        } else {
-            queue.advance_leader_reads(vec![(id_1, 10)]);
-            while let Some(mut read) = queue.pop_front() {
-                read.cmds.clear();
-            }
+        queue.advance_leader_reads(vec![(id_1, 10)]);
+        while let Some(mut read) = queue.pop_front() {
+            read.cmds.clear();
         }
-    }
-
-    #[test]
-    fn test_retake_leadership_ready() {
-        test_retake_leadership(true);
-    }
-
-    #[test]
-    fn test_retake_leadership_not_ready() {
-        test_retake_leadership(false);
     }
 }
