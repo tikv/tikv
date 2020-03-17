@@ -97,6 +97,7 @@ pub struct PeerFsm<E: KvEngine> {
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
+    early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<E>>>,
     pub receiver: Receiver<PeerMsg<E>>,
 }
@@ -154,6 +155,7 @@ impl<E: KvEngine> PeerFsm<E> {
         Ok((
             tx,
             Box::new(PeerFsm {
+                early_apply: cfg.early_apply,
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
@@ -191,6 +193,7 @@ impl<E: KvEngine> PeerFsm<E> {
         Ok((
             tx,
             Box::new(PeerFsm {
+                early_apply: cfg.early_apply,
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
@@ -602,13 +605,35 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
+    #[inline]
+    pub fn handle_raft_ready_apply(&mut self, ready: &mut Ready, invoke_ctx: &InvokeContext) {
+        self.fsm.early_apply = ready
+            .committed_entries
+            .as_ref()
+            .and_then(|e| e.last())
+            .map_or(false, |e| {
+                self.fsm.peer.can_early_apply(e.get_term(), e.get_index())
+            });
+        if !self.fsm.early_apply {
+            return;
+        }
+        self.fsm
+            .peer
+            .handle_raft_ready_apply(self.ctx, ready, invoke_ctx);
+    }
+
     pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
+        if !self.fsm.early_apply {
+            self.fsm
+                .peer
+                .handle_raft_ready_apply(self.ctx, &mut ready, &invoke_ctx);
+        }
         let res = self
             .fsm
             .peer
             .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
-        self.fsm.peer.handle_raft_ready_apply(self.ctx, ready);
+        self.fsm.peer.handle_raft_ready_advance(ready);
         let mut has_snapshot = false;
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
