@@ -242,7 +242,7 @@ enum ReschedulePolicy {
 }
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
-    fn fetch_batch(&mut self, batch: &mut Batch<N, C>) -> bool {
+    fn receive_fsm(&mut self, batch: &mut Batch<N, C>) -> bool {
         if batch.control.is_some() {
             return true;
         }
@@ -257,14 +257,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 return batch.push(fsm);
             }
         }
-        true
-    }
-
-    fn try_fetch_batch(&mut self, batch: &mut Batch<N, C>) -> bool {
-        match self.fsm_receiver.try_recv() {
-            Ok(fsm) => batch.push(fsm),
-            Err(_) => true,
-        }
+        !batch.is_empty()
     }
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
@@ -275,7 +268,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         // Fetch batch after every round is finished. It's helpful to protect regions
         // from becoming hungry if some regions are hot points.
         let mut run = true;
-        while run && self.fetch_batch(&mut batch) {
+        while run && self.receive_fsm(&mut batch) {
             // If there is some region wait to be deal, we must deal with it even if it has overhead
             // max size of batch. It's helpful to protect regions from becoming hungry
             // if some regions are hot points.
@@ -314,12 +307,11 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             let mut fsm_cnt = batch.normals.len();
-            while fsm_cnt < max_batch_size {
-                if !self.try_fetch_batch(&mut batch) {
-                    run = false;
-                    break;
+            while batch.normals.len() < max_batch_size {
+                if let Ok(fsm) = self.fsm_receiver.try_recv() {
+                    run = batch.push(fsm);
                 }
-                if fsm_cnt >= batch.normals.len() {
+                if !run || fsm_cnt >= batch.normals.len() {
                     break;
                 }
                 let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);
@@ -333,7 +325,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
                 fsm_cnt += 1;
             }
-            self.handler.end(&mut batch.normals[0..fsm_cnt]);
+            self.handler.end(&mut batch.normals);
 
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.
