@@ -64,7 +64,7 @@ prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/renkai/rust-prometheus.git"
-rev = "f9557516bcbe864dcb6f0006561cb2d056a5e5a7"
+rev = "7304f464f5dfe371b0e05c37f8aab5b71c186f2d"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"

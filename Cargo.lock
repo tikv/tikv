@@ -2792,7 +2792,7 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/renkai/rust-prometheus.git?rev=f9557516bcbe864dcb6f0006561cb2d056a5e5a7#f9557516bcbe864dcb6f0006561cb2d056a5e5a7"
+source = "git+https://github.com/renkai/rust-prometheus.git?rev=7304f464f5dfe371b0e05c37f8aab5b71c186f2d#7304f464f5dfe371b0e05c37f8aab5b71c186f2d"
 dependencies = [
  "proc-macro-hack",
  "static-metric-proc-macros",
@@ -3791,7 +3791,7 @@ checksum = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 [[package]]
 name = "static-metric-proc-macros"
 version = "0.1.0"
-source = "git+https://github.com/renkai/rust-prometheus.git?rev=f9557516bcbe864dcb6f0006561cb2d056a5e5a7#f9557516bcbe864dcb6f0006561cb2d056a5e5a7"
+source = "git+https://github.com/renkai/rust-prometheus.git?rev=7304f464f5dfe371b0e05c37f8aab5b71c186f2d#7304f464f5dfe371b0e05c37f8aab5b71c186f2d"
 dependencies = [
  "lazy_static",
  "proc-macro-hack",
