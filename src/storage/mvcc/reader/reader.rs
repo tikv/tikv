@@ -3,11 +3,11 @@
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
 use engine::IterOption;
+use engine_rocks::properties::MvccProperties;
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use engine_rocks::properties::MvccProperties;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -453,12 +453,12 @@ mod tests {
     use engine::rocks::DB;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::IterOption;
+    use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::{Compat, RocksEngine};
     use engine_traits::{Mutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use raftstore::store::RegionSnapshot;
     use std::ops::Bound;
     use std::sync::Arc;
@@ -601,7 +601,7 @@ mod tests {
 
         fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
-            let wb = db.c().write_batch();
+            let mut wb = db.c().write_batch();
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {

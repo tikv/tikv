@@ -4,8 +4,8 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{RocksCompactionJobInfo, RocksEngine, RocksWriteBatch};
 use engine_traits::{
-    CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
-    WriteOptions, MiscExt, CompactExt, KvEngines,
+    CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
+    WriteBatch, WriteBatchExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -234,19 +234,13 @@ pub struct PollContext<T, C: 'static> {
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
-    #[inline]
-    fn kv_wb(&self) -> &RocksWriteBatch {
-        &self.kv_wb
+    fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
+        (&mut self.kv_wb, &mut self.raft_wb)
     }
 
     #[inline]
     fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
         &mut self.kv_wb
-    }
-
-    #[inline]
-    fn raft_wb(&self) -> &RocksWriteBatch {
-        &self.raft_wb
     }
 
     #[inline]
@@ -497,6 +491,22 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx.need_flush_trans = false;
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
+        if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
+            let mut batch_pos = 0;
+            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, vec![]);
+            for (ready, invoke_ctx) in &mut ready_res {
+                let region_id = invoke_ctx.region_id;
+                if peers[batch_pos].region_id() == region_id {
+                } else {
+                    while peers[batch_pos].region_id() != region_id {
+                        batch_pos += 1;
+                    }
+                }
+                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
+                    .handle_raft_ready_apply(ready, invoke_ctx);
+            }
+            self.poll_ctx.ready_res = ready_res;
+        }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
@@ -518,6 +528,11 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         }
         fail_point!("raft_between_save");
         if !self.poll_ctx.raft_wb.is_empty() {
+            fail_point!(
+                "raft_before_save_on_store_1",
+                self.poll_ctx.store_id() == 1,
+                |_| {}
+            );
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
             self.poll_ctx
@@ -529,11 +544,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 });
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
-                self.poll_ctx.raft_wb = self
-                    .poll_ctx
-                    .engines
-                    .raft
-                    .write_batch_with_cap(4 * 1024);
+                self.poll_ctx.raft_wb = self.poll_ctx.engines.raft.write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.raft_wb.clear();
             }
@@ -754,62 +765,61 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
-        kv_engine
-            .scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
-                let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
-                if suffix != keys::REGION_STATE_SUFFIX {
-                    return Ok(true);
-                }
+        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
 
-                total_count += 1;
+            total_count += 1;
 
-                let mut local_state = RegionLocalState::default();
-                local_state.merge_from_bytes(value)?;
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(value)?;
 
-                let region = local_state.get_region();
-                if local_state.get_state() == PeerState::Tombstone {
-                    tombstone_count += 1;
-                    debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
-                    self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
-                    return Ok(true);
-                }
-                if local_state.get_state() == PeerState::Applying {
-                    // in case of restart happen when we just write region state to Applying,
-                    // but not write raft_local_state to raft rocksdb in time.
-                    box_try!(peer_storage::recover_from_applying_state(
-                        &self.engines,
-                        &raft_wb,
-                        region_id
-                    ));
-                    applying_count += 1;
-                    applying_regions.push(region.clone());
-                    return Ok(true);
-                }
-
-                let (tx, mut peer) = box_try!(PeerFsm::create(
-                    store_id,
-                    &self.cfg.value(),
-                    self.region_scheduler.clone(),
-                    self.engines.clone(),
-                    region,
+            let region = local_state.get_region();
+            if local_state.get_state() == PeerState::Tombstone {
+                tombstone_count += 1;
+                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
+                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
+                return Ok(true);
+            }
+            if local_state.get_state() == PeerState::Applying {
+                // in case of restart happen when we just write region state to Applying,
+                // but not write raft_local_state to raft rocksdb in time.
+                box_try!(peer_storage::recover_from_applying_state(
+                    &self.engines,
+                    &mut raft_wb,
+                    region_id
                 ));
-                if local_state.get_state() == PeerState::Merging {
-                    info!("region is merging"; "region" => ?region, "store_id" => store_id);
-                    merging_count += 1;
-                    peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
-                }
-                meta.region_ranges.insert(enc_end_key(region), region_id);
-                meta.regions.insert(region_id, region.clone());
-                // No need to check duplicated here, because we use region id as the key
-                // in DB.
-                region_peers.push((tx, peer));
-                self.coprocessor_host.on_region_changed(
-                    region,
-                    RegionChangeEvent::Create,
-                    StateRole::Follower,
-                );
-                Ok(true)
-            })?;
+                applying_count += 1;
+                applying_regions.push(region.clone());
+                return Ok(true);
+            }
+
+            let (tx, mut peer) = box_try!(PeerFsm::create(
+                store_id,
+                &self.cfg.value(),
+                self.region_scheduler.clone(),
+                self.engines.clone(),
+                region,
+            ));
+            if local_state.get_state() == PeerState::Merging {
+                info!("region is merging"; "region" => ?region, "store_id" => store_id);
+                merging_count += 1;
+                peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
+            }
+            meta.region_ranges.insert(enc_end_key(region), region_id);
+            meta.regions.insert(region_id, region.clone());
+            // No need to check duplicated here, because we use region id as the key
+            // in DB.
+            region_peers.push((tx, peer));
+            self.coprocessor_host.on_region_changed(
+                region,
+                RegionChangeEvent::Create,
+                StateRole::Follower,
+            );
+            Ok(true)
+        })?;
 
         if !kv_wb.is_empty() {
             self.engines.kv.write(&kv_wb).unwrap();
@@ -1528,7 +1538,13 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return;
         }
 
-        if self.ctx.engines.kv.auto_compactions_is_disabled().expect("cf") {
+        if self
+            .ctx
+            .engines
+            .kv
+            .auto_compactions_is_disabled()
+            .expect("cf")
+        {
             debug!(
                 "skip compact check when disabled auto compactions";
                 "store_id" => self.fsm.store.id,

@@ -10,7 +10,7 @@ use protobuf::Message;
 use engine::rocks::Writable;
 use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable};
-use engine_traits::{Mutable, CF_RAFT};
+use engine_traits::{SyncMutable, CF_RAFT};
 use test_raftstore::*;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {

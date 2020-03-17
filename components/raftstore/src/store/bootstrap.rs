@@ -5,8 +5,8 @@ use super::peer_storage::{
 };
 use super::util::new_peer;
 use crate::Result;
-use engine_rocks::{RocksEngine};
-use engine_traits::{Iterable, Mutable, WriteBatchExt, KvEngines};
+use engine_rocks::RocksEngine;
+use engine_traits::{Iterable, KvEngines, Mutable, SyncMutable, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
@@ -24,7 +24,12 @@ pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Re
 }
 
 // check no any data in range [start_key, end_key)
-fn is_range_empty(engine: &RocksEngine, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
+fn is_range_empty(
+    engine: &RocksEngine,
+    cf: &str,
+    start_key: &[u8],
+    end_key: &[u8],
+) -> Result<bool> {
     let mut count: u32 = 0;
     engine.scan_cf(cf, start_key, end_key, false, |_, _| {
         count += 1;
@@ -35,7 +40,11 @@ fn is_range_empty(engine: &RocksEngine, cf: &str, start_key: &[u8], end_key: &[u
 }
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
-pub fn bootstrap_store(engines: &KvEngines<RocksEngine, RocksEngine>, cluster_id: u64, store_id: u64) -> Result<()> {
+pub fn bootstrap_store(
+    engines: &KvEngines<RocksEngine, RocksEngine>,
+    cluster_id: u64,
+    store_id: u64,
+) -> Result<()> {
     let mut ident = StoreIdent::default();
 
     if !is_range_empty(&engines.kv, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
@@ -59,30 +68,36 @@ pub fn bootstrap_store(engines: &KvEngines<RocksEngine, RocksEngine>, cluster_id
 /// The first phase of bootstrap cluster
 ///
 /// Write the first region meta and prepare state.
-pub fn prepare_bootstrap_cluster(engines: &KvEngines<RocksEngine, RocksEngine>, region: &metapb::Region) -> Result<()> {
+pub fn prepare_bootstrap_cluster(
+    engines: &KvEngines<RocksEngine, RocksEngine>,
+    region: &metapb::Region,
+) -> Result<()> {
     let mut state = RegionLocalState::default();
     state.set_region(region.clone());
 
-    let wb = engines.kv.write_batch();
+    let mut wb = engines.kv.write_batch();
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
     box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region.get_id()), &state));
-    write_initial_apply_state(&wb, region.get_id())?;
+    write_initial_apply_state(&mut wb, region.get_id())?;
     engines.kv.write(&wb)?;
     engines.sync_kv()?;
 
-    let raft_wb = engines.raft.write_batch();
-    write_initial_raft_state(&raft_wb, region.get_id())?;
+    let mut raft_wb = engines.raft.write_batch();
+    write_initial_raft_state(&mut raft_wb, region.get_id())?;
     engines.raft.write(&raft_wb)?;
     engines.sync_raft()?;
     Ok(())
 }
 
 // Clear first region meta and prepare key.
-pub fn clear_prepare_bootstrap_cluster(engines: &KvEngines<RocksEngine, RocksEngine>, region_id: u64) -> Result<()> {
+pub fn clear_prepare_bootstrap_cluster(
+    engines: &KvEngines<RocksEngine, RocksEngine>,
+    region_id: u64,
+) -> Result<()> {
     box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
     engines.sync_raft()?;
 
-    let wb = engines.kv.write_batch();
+    let mut wb = engines.kv.write_batch();
     box_try!(wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
     // should clear raft initial state too.
     box_try!(wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
@@ -107,7 +122,7 @@ mod tests {
     use super::*;
     use engine::rocks;
     use engine::Engines;
-    use engine_rocks::{Compat, CloneCompat};
+    use engine_rocks::{CloneCompat, Compat};
     use engine_traits::{Peekable, CF_DEFAULT};
 
     #[test]

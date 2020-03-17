@@ -178,8 +178,8 @@ mod tests {
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
-    use engine_rocks::properties::RangePropertiesCollectorFactory;
     use crate::store::{SplitCheckRunner, SplitCheckTask};
+    use engine_rocks::properties::RangePropertiesCollectorFactory;
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
     use tikv_util::worker::Runnable;

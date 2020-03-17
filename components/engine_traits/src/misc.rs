@@ -60,7 +60,7 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
         end_key: &[u8],
         use_delete_range: bool,
     ) -> Result<()> {
-        let wb = self.write_batch();
+        let mut wb = self.write_batch();
         if use_delete_range && cf != CF_LOCK {
             wb.delete_range_cf(cf, start_key, end_key)?;
         } else {

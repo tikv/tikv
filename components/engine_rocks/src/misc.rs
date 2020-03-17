@@ -107,7 +107,7 @@ mod tests {
 
     use super::*;
     use engine_traits::ALL_CFS;
-    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, WriteBatchExt};
+    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt};
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
@@ -137,7 +137,7 @@ mod tests {
         let db = Arc::new(db);
         let db = RocksEngine::from_db(db);
 
-        let wb = db.write_batch();
+        let mut wb = db.write_batch();
         let ts: u8 = 12;
         let keys: Vec<_> = vec![
             b"k1".to_vec(),
@@ -247,7 +247,7 @@ mod tests {
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
         let db = Arc::new(db);
         let db = RocksEngine::from_db(db);
-        let wb = db.write_batch();
+        let mut wb = db.write_batch();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),
             (b"kabcdefg2", b"v2"),

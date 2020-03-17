@@ -11,7 +11,7 @@ use std::u64;
 
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt, KvEngines};
+use engine_traits::{KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -297,11 +297,10 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(self.engines.kv.delete_all_in_range(
-            &start_key,
-            &end_key,
-            self.use_delete_range
-        ));
+        box_try!(self
+            .engines
+            .kv
+            .delete_all_in_range(&start_key, &end_key, self.use_delete_range));
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
@@ -338,7 +337,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let wb = self.engines.kv.write_batch();
+        let mut wb = self.engines.kv.write_batch();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
@@ -511,7 +510,12 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             if plain_file_used(cf) {
                 continue;
             }
-            if self.engines.kv.ingest_maybe_slowdown_writes(cf).expect("cf") {
+            if self
+                .engines
+                .kv
+                .ingest_maybe_slowdown_writes(cf)
+                .expect("cf")
+            {
                 return true;
             }
         }
@@ -686,8 +690,8 @@ mod tests {
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine_rocks::{Compat, CloneCompat, RocksSnapshot};
-    use engine_traits::{Mutable, Peekable, WriteBatchExt, CompactExt};
+    use engine_rocks::{CloneCompat, Compat, RocksSnapshot};
+    use engine_traits::{CompactExt, Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
@@ -864,7 +868,7 @@ mod tests {
             s3.save().unwrap();
 
             // set applying state
-            let wb = engine.kv.c().write_batch();
+            let mut wb = engine.kv.c().write_batch();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
                 .kv
@@ -912,7 +916,11 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        engine.kv.c().compact_files_in_range(None, None, None).unwrap();
+        engine
+            .kv
+            .c()
+            .compact_files_in_range(None, None, None)
+            .unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
@@ -954,7 +962,11 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        engine.kv.c().compact_files_in_range(None, None, None).unwrap();
+        engine
+            .kv
+            .c()
+            .compact_files_in_range(None, None, None)
+            .unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
@@ -971,7 +983,11 @@ mod tests {
         );
 
         // make sure have checked pending applies
-        engine.kv.c().compact_files_in_range(None, None, None).unwrap();
+        engine
+            .kv
+            .c()
+            .compact_files_in_range(None, None, None)
+            .unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0

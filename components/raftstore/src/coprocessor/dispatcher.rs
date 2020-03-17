@@ -149,7 +149,10 @@ impl_box_observer!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
-pub struct Registry<E> where E: KvEngine {
+pub struct Registry<E>
+where
+    E: KvEngine,
+{
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
@@ -160,7 +163,10 @@ pub struct Registry<E> where E: KvEngine {
     // TODO: add endpoint
 }
 
-impl<E> Default for Registry<E> where E: KvEngine {
+impl<E> Default for Registry<E>
+where
+    E: KvEngine,
+{
     fn default() -> Registry<E> {
         Registry {
             admin_observers: Default::default(),
@@ -187,7 +193,10 @@ macro_rules! push {
     };
 }
 
-impl<E> Registry<E> where E: KvEngine {
+impl<E> Registry<E>
+where
+    E: KvEngine,
+{
     pub fn register_admin_observer(&mut self, priority: u32, ao: BoxAdminObserver) {
         push!(priority, ao, self.admin_observers);
     }
@@ -204,11 +213,7 @@ impl<E> Registry<E> where E: KvEngine {
         push!(priority, aso, self.apply_snapshot_observers);
     }
 
-    pub fn register_split_check_observer(
-        &mut self,
-        priority: u32,
-        sco: BoxSplitCheckObserver<E>,
-    ) {
+    pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver<E>) {
         push!(priority, sco, self.split_check_observers);
     }
 

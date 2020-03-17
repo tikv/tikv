@@ -8,11 +8,11 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-use engine_rocks::properties::{get_range_entries_and_versions, RangeProperties};
 use super::super::error::Result;
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use engine_rocks::properties::{get_range_entries_and_versions, RangeProperties};
 
 pub struct Checker {
     max_keys_count: u64,
@@ -212,15 +212,15 @@ pub fn get_region_approximate_keys_cf(
 #[cfg(test)]
 mod tests {
     use super::super::size::tests::must_split_at;
-    use engine_rocks::properties::{
-        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
-    };
     use crate::coprocessor::{Config, CoprocessorHost};
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
+    use engine_rocks::properties::{
+        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+    };
     use engine_rocks::Compat;
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};

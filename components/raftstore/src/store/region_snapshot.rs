@@ -1,6 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot, IterOptions, KvEngines};
+use engine_traits::{
+    IterOptions, KvEngine, KvEngines, Peekable, ReadOptions, Result as EngineResult, Snapshot,
+};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -387,14 +389,14 @@ pub fn new_temp_engine(path: &tempfile::TempDir) -> KvEngines<RocksEngine, Rocks
             engine_traits::ALL_CFS,
             None,
         )
-            .unwrap(),
+        .unwrap(),
         engine_rocks::util::new_engine(
             raft_path.to_str().unwrap(),
             None,
             &[engine_traits::CF_DEFAULT],
             None,
         )
-            .unwrap(),
+        .unwrap(),
         shared_block_cache,
     )
 }
@@ -405,8 +407,8 @@ mod tests {
     use crate::Result;
 
     use engine::*;
-    use engine_rocks::{RocksEngine};
-    use engine_traits::{Mutable, Peekable, CompactExt, KvEngines, MiscExt};
+    use engine_rocks::RocksEngine;
+    use engine_traits::{CompactExt, KvEngines, MiscExt, Peekable, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -421,7 +423,9 @@ mod tests {
         PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
-    fn load_default_dataset(engines: KvEngines<RocksEngine, RocksEngine>) -> (PeerStorage, DataSet) {
+    fn load_default_dataset(
+        engines: KvEngines<RocksEngine, RocksEngine>,
+    ) -> (PeerStorage, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -443,7 +447,9 @@ mod tests {
         (store, base_data)
     }
 
-    fn load_multiple_levels_dataset(engines: KvEngines<RocksEngine, RocksEngine>) -> (PeerStorage, DataSet) {
+    fn load_multiple_levels_dataset(
+        engines: KvEngines<RocksEngine, RocksEngine>,
+    ) -> (PeerStorage, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);

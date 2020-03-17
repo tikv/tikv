@@ -5,9 +5,9 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
-use engine_rocks::{RocksEngine};
-use engine_traits::{KvEngine, CompactExt};
+use engine_rocks::RocksEngine;
 use engine_traits::CF_WRITE;
+use engine_traits::{CompactExt, KvEngine};
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -103,13 +103,9 @@ impl Runner {
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
             .start_coarse_timer();
-        box_try!(self.engine.compact_range(
-            cf_name,
-            start_key,
-            end_key,
-            false,
-            1, /* threads */
-        ));
+        box_try!(self
+            .engine
+            .compact_range(cf_name, start_key, end_key, false, 1 /* threads */,));
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
@@ -260,8 +256,8 @@ mod tests {
     use engine_rocks::get_range_entries_and_versions;
     use engine_rocks::MvccPropertiesCollectorFactory;
     use keys::data_key;
-    use txn_types::{Key, TimeStamp, Write, WriteType};
     use std::sync::Arc;
+    use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
 
@@ -281,7 +277,7 @@ mod tests {
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
 
         // Generate the first SST file.
-        let wb = db.c().write_batch();
+        let mut wb = db.c().write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
@@ -291,7 +287,7 @@ mod tests {
         db.flush_cf(handle, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
-        let wb = db.c().write_batch();
+        let mut wb = db.c().write_batch();
         for i in 0..1000 {
             let k = format!("key_{}", i);
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")

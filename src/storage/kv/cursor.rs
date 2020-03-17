@@ -500,8 +500,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 mod tests {
     use engine::*;
 
-    use engine_rocks::{RocksEngine};
-    use engine_traits::{KvEngines, Mutable};
+    use engine_rocks::RocksEngine;
+    use engine_traits::{KvEngines, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;

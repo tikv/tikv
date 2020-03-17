@@ -19,7 +19,7 @@ pub trait WriteBatch: Mutable + Send {
     fn data_size(&self) -> usize;
     fn count(&self) -> usize;
     fn is_empty(&self) -> bool;
-    fn clear(&self);
+    fn clear(&mut self);
 
     fn set_save_point(&mut self);
     fn pop_save_point(&mut self) -> Result<()>;

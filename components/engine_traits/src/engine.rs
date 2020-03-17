@@ -11,7 +11,7 @@ use crate::*;
 
 pub trait KvEngine:
     Peekable
-    + Mutable
+    + SyncMutable
     + Iterable
     + WriteBatchExt
     + DBOptionsExt

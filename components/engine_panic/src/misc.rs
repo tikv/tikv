@@ -42,5 +42,7 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn sync_wal(&self) -> Result<()> { panic!() }
+    fn sync_wal(&self) -> Result<()> {
+        panic!()
+    }
 }

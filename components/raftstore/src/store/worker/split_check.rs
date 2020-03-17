@@ -167,7 +167,12 @@ pub struct Runner<S> {
 }
 
 impl<S: CasualRouter<RocksEngine>> Runner<S> {
-    pub fn new(engine: RocksEngine, router: S, coprocessor: CoprocessorHost, cfg: Config) -> Runner<S> {
+    pub fn new(
+        engine: RocksEngine,
+        router: S,
+        coprocessor: CoprocessorHost,
+        cfg: Config,
+    ) -> Runner<S> {
         Runner {
             engine,
             router,
@@ -211,8 +216,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                     }
                 }
             }
-            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine)
-            {
+            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine) {
                 Ok(keys) => keys
                     .into_iter()
                     .map(|k| keys::origin_key(&k).to_vec())

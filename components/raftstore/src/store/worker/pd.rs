@@ -12,7 +12,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::MiscExt;
 use fs2;
 use kvproto::metapb;

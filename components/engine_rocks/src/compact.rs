@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CompactExt, Result, CFNamesExt};
 use crate::engine::RocksEngine;
 use crate::util;
+use engine_traits::{CFNamesExt, CompactExt, Result};
 use rocksdb::{CompactOptions, CompactionOptions, DBCompressionType};
 use std::cmp;
 
@@ -10,7 +10,11 @@ impl CompactExt for RocksEngine {
     fn auto_compactions_is_disabled(&self) -> Result<bool> {
         for cf_name in self.cf_names() {
             let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
-            if self.as_inner().get_options_cf(cf).get_disable_auto_compactions() {
+            if self
+                .as_inner()
+                .get_options_cf(cf)
+                .get_disable_auto_compactions()
+            {
                 return Ok(true);
             }
         }
@@ -46,7 +50,7 @@ impl CompactExt for RocksEngine {
             self.compact_files_in_range_cf(cf_name, start, end, output_level)?;
         }
         Ok(())
-    }        
+    }
 
     fn compact_files_in_range_cf(
         &self,
@@ -100,12 +104,12 @@ impl CompactExt for RocksEngine {
 
 #[cfg(test)]
 mod tests {
+    use crate::Compat;
+    use engine::rocks::util::{new_engine, CFOptions};
     use engine_traits::CompactExt;
     use rocksdb::{ColumnFamilyOptions, Writable};
-    use engine::rocks::util::{new_engine, CFOptions};
-    use tempfile::Builder;
-    use crate::Compat;
     use std::sync::Arc;
+    use tempfile::Builder;
 
     #[test]
     fn test_compact_files_in_range() {
@@ -126,7 +130,7 @@ mod tests {
             &["default", "test"],
             Some(cfs_opts),
         )
-            .unwrap();
+        .unwrap();
         let db = Arc::new(db);
 
         for cf_name in db.cf_names() {
@@ -146,7 +150,9 @@ mod tests {
         // # After
         // Level-0: [4-5]
         // Level-1: [0-4]
-        db.c().compact_files_in_range(None, Some(&[4]), Some(1)).unwrap();
+        db.c()
+            .compact_files_in_range(None, Some(&[4]), Some(1))
+            .unwrap();
 
         for cf_name in db.cf_names() {
             let cf = db.cf_handle(cf_name).unwrap();
@@ -168,7 +174,9 @@ mod tests {
         // # After
         // Level-0: [4-5]
         // Level-N: [0-4]
-        db.c().compact_files_in_range(Some(&[2]), Some(&[4]), None).unwrap();
+        db.c()
+            .compact_files_in_range(Some(&[2]), Some(&[4]), None)
+            .unwrap();
 
         for cf_name in db.cf_names() {
             let cf = db.cf_handle(cf_name).unwrap();

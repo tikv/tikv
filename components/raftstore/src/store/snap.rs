@@ -1445,7 +1445,7 @@ pub mod tests {
     use engine::rocks::{DBOptions, Env, DB};
     use engine::Engines;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::{Iterable, Mutable, Peekable};
+    use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{

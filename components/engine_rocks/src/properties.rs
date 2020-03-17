@@ -1,23 +1,21 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{DecodeProperties, IndexHandles};
+use std::cmp;
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
-use std::cmp;
 
+use engine_traits::KvEngine;
+use engine_traits::Range;
+use engine_traits::{IndexHandle, TableProperties, TablePropertiesCollection};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
-use engine_traits::KvEngine;
-use engine_traits::Range;
-use engine_traits::{
-    IndexHandle, TableProperties, TablePropertiesCollection,
-};
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
@@ -400,7 +398,6 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
     }
 }
 
-
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
 const PROP_MAX_TS: &str = "tikv.max_ts";
@@ -615,9 +612,9 @@ mod tests {
     use tempfile::Builder;
     use test::Bencher;
 
+    use crate::compat::Compat;
     use engine::rocks;
     use engine::rocks::util::CFOptions;
-    use crate::compat::Compat;
     use engine_traits::CFHandleExt;
     use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};

@@ -20,12 +20,12 @@ use crate::{Error, Result};
 use rocksdb::load_latest_options;
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::{
-    CColumnFamilyDescriptor, ColumnFamilyOptions,
-    DBCompressionType, DBOptions, Env, SliceTransform, DB,
+    CColumnFamilyDescriptor, ColumnFamilyOptions, DBCompressionType, DBOptions, Env,
+    SliceTransform, DB,
 };
 
 pub use crate::rocks::CFHandle;
-use engine_traits::{CF_DEFAULT};
+use engine_traits::CF_DEFAULT;
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
