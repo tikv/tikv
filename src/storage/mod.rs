@@ -65,6 +65,10 @@ pub enum Mutation {
     Delete(Key),
     Lock(Key),
     Insert((Key, Value)), // has a constraint that key should not exist.
+    /// Check `key` must be not exist.
+    ///
+    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    CheckNotExists(Key),
 }
 
 #[allow(clippy::match_same_arms)]
@@ -75,6 +79,7 @@ impl Mutation {
             Mutation::Delete(ref key) => key,
             Mutation::Lock(ref key) => key,
             Mutation::Insert((ref key, _)) => key,
+            Mutation::CheckNotExists(ref key) => key,
         }
     }
 }
@@ -440,6 +445,7 @@ impl Command {
                         Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
                             bytes += key.as_encoded().len();
                         }
+                        Mutation::CheckNotExists(_) => (),
                     }
                 }
             }

@@ -1400,6 +1400,7 @@ fn future_prewrite<E: Engine, L: LockMgr>(
             Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
             Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
             Op::Insert => Mutation::Insert((Key::from_raw(x.get_key()), x.take_value())),
+            Op::CheckNotExists => Mutation::CheckNotExists(Key::from_raw(x.get_key())),
             _ => panic!("mismatch Op in prewrite mutations"),
         })
         .collect();
