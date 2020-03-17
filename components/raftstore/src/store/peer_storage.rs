@@ -1815,7 +1815,7 @@ mod tests {
         gen_task: GenSnapTask,
         engines: &Engines,
         sched: &Scheduler<RegionTask>,
-    ) {
+    ) -> Result<()> {
         let apply_state: RaftApplyState = engines
             .kv
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(gen_task.region_id))
@@ -1827,14 +1827,12 @@ mod tests {
             .get_msg::<Entry>(&keys::raft_log_key(gen_task.region_id, idx))
             .unwrap()
             .unwrap();
-        gen_task
-            .generate_and_schedule_snapshot(
-                RocksSnapshot::new(engines.kv.clone()),
-                entry.get_term(),
-                apply_state,
-                sched,
-            )
-            .unwrap();
+        gen_task.generate_and_schedule_snapshot(
+            RocksSnapshot::new(engines.kv.clone()),
+            entry.get_term(),
+            apply_state,
+            sched,
+        )
     }
 
     #[test]
@@ -1865,7 +1863,7 @@ mod tests {
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched);
+        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),
             ref s => panic!("unexpected state: {:?}", s),
@@ -1939,7 +1937,7 @@ mod tests {
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched);
+        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         match *s.snap_state.borrow() {
             SnapState::Generating(ref rx) => {
                 rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -1954,14 +1952,14 @@ mod tests {
         // Disconnected channel should trigger another try.
         assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched);
+        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
 
         for cnt in 2..super::MAX_SNAP_TRY_CNT {
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-            generate_and_schedule_snapshot(gen_task, &s.engines, &sched);
+            generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
             assert_eq!(*s.snap_tried_cnt.borrow(), cnt + 1);
         }
 
@@ -2179,7 +2177,7 @@ mod tests {
         worker.start(runner).unwrap();
         assert!(s1.snapshot(0).is_err());
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s1.engines, &sched);
+        generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
 
         let snap1 = match *s1.snap_state.borrow() {
             SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),

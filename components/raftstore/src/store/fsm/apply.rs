@@ -3096,7 +3096,7 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine_rocks::{RocksEngine, util::new_engine};
+    use engine_rocks::{util::new_engine, RocksEngine};
     use engine_traits::{Peekable as PeekableTrait, WriteBatch};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -3114,11 +3114,12 @@ mod tests {
     pub fn create_tmp_engine(path: &str) -> (TempDir, RocksEngine) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let engine = new_engine(
-                path.path().join("db").to_str().unwrap(),
-                None,
-                ALL_CFS,
-                None,
-            ).unwrap();
+            path.path().join("db").to_str().unwrap(),
+            None,
+            ALL_CFS,
+            None,
+        )
+        .unwrap();
         (path, engine)
     }
 
@@ -3336,7 +3337,8 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         let apply_state_key = keys::apply_state_key(2);
-        assert!(engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
+        assert!(engine
+            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .is_none());
         // Make sure Apply and Snapshot are in the same batch.
@@ -4067,7 +4069,8 @@ mod tests {
                 return;
             }
             let key = keys::apply_state_key(id);
-            let initial_state: RaftApplyState = self.engine.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
+            let initial_state: RaftApplyState =
+                self.engine.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
             assert_eq!(initial_state.get_applied_index(), RAFT_INIT_LOG_INDEX);
             assert_eq!(
                 initial_state.get_truncated_state().get_index(),
