@@ -146,8 +146,8 @@ impl ExternalStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use futures::io::AsyncReadExt;
     use super::*;
+    use futures::io::AsyncReadExt;
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::MockRequestDispatcher;
 
