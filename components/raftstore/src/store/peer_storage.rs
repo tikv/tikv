@@ -360,18 +360,22 @@ pub fn recover_from_applying_state(
 pub fn init_applied_index_term(
     engines: &Engines,
     region: &Region,
-    apply_index: u64,
+    apply_state: &RaftApplyState,
 ) -> Result<u64> {
-    if apply_index == RAFT_INIT_LOG_INDEX {
+    if apply_state.applied_index == RAFT_INIT_LOG_INDEX {
         return Ok(RAFT_INIT_LOG_TERM);
     }
-    let state_key = keys::raft_log_key(region.get_id(), apply_index);
+    let truncated_state = apply_state.get_truncated_state();
+    if apply_state.applied_index == truncated_state.get_index() {
+        return Ok(truncated_state.get_term());
+    }
+    let state_key = keys::raft_log_key(region.get_id(), apply_state.applied_index);
     match engines.raft.get_msg::<Entry>(&state_key)? {
         Some(e) => Ok(e.term),
         None => Err(box_err!(
             "[region {}] entry at apply index {} doesn't exist, may lose data.",
             region.get_id(),
-            apply_index
+            apply_state.applied_index
         )),
     }
 }
@@ -520,8 +524,7 @@ impl PeerStorage {
             );
         }
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
-        let applied_index_term =
-            init_applied_index_term(&engines, region, apply_state.applied_index)?;
+        let applied_index_term = init_applied_index_term(&engines, region, &apply_state)?;
 
         Ok(PeerStorage {
             engines,

@@ -4209,7 +4209,7 @@ mod tests {
         // All requests should be checked.
         assert!(error_msg(&resp).contains("id count"), "{:?}", resp);
         let checker = SplitResultChecker {
-            engine: engine.clone(),
+            engine,
             origin_peers: &peers,
             epoch: epoch.clone(),
         };
