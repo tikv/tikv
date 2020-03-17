@@ -2452,9 +2452,7 @@ mod tests {
         // applied_index > commit_index is invalid.
         let mut apply_state = RaftApplyState::default();
         apply_state.set_applied_index(13);
-        apply_state
-            .mut_truncated_state()
-            .set_index(13);
+        apply_state.mut_truncated_state().set_index(13);
         apply_state
             .mut_truncated_state()
             .set_term(RAFT_INIT_LOG_TERM);
