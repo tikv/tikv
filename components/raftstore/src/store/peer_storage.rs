@@ -1386,7 +1386,11 @@ where
     };
     assert_eq!(apply_state, last_applied_state);
 
-    let key = SnapKey::new(region_id, last_applied_index_term, apply_state.get_applied_index());
+    let key = SnapKey::new(
+        region_id,
+        last_applied_index_term,
+        apply_state.get_applied_index(),
+    );
 
     mgr.register(key.clone(), SnapEntry::Generating);
     defer!(mgr.deregister(&key, &SnapEntry::Generating));
