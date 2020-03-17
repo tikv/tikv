@@ -237,19 +237,13 @@ pub struct PollContext<T, C: 'static> {
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
-    #[inline]
-    fn kv_wb(&self) -> &RocksWriteBatch {
-        &self.kv_wb
+    fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
+        (&mut self.kv_wb, &mut self.raft_wb)
     }
 
     #[inline]
     fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
         &mut self.kv_wb
-    }
-
-    #[inline]
-    fn raft_wb(&self) -> &RocksWriteBatch {
-        &self.raft_wb
     }
 
     #[inline]
@@ -804,7 +798,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 // but not write raft_local_state to raft rocksdb in time.
                 box_try!(peer_storage::recover_from_applying_state(
                     &self.engines,
-                    &raft_wb,
+                    &mut raft_wb,
                     region_id
                 ));
                 applying_count += 1;

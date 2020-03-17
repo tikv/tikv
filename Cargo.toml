@@ -79,7 +79,7 @@ futures-cpupool = "0.1"
 futures-locks = "0.1"
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.5.0-alpha.5", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.3"
 itertools = "0.8"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
@@ -95,7 +95,7 @@ murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 pd_client = { path = "components/pd_client" }
 pin-project = "0.4.8"
-prost = "0.5.0"
+prost = "0.6"
 pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
 quick-error = "1.2.2"
@@ -104,7 +104,7 @@ raftstore = { path = "components/raftstore" }
 rand = "0.6.5"
 regex = "1.3"
 rev_lines = "0.2.1"
-serde = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -132,11 +132,7 @@ url = "2"
 uuid = { version = "0.7", features = ["serde", "v4"] }
 vlog = "0.1.4"
 into_other = { path = "components/into_other" }
-
-[dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
-features = ["nightly", "push", "process"]
+prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
@@ -151,15 +147,12 @@ test_sst_importer = { path = "components/test_sst_importer" }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "5.0.1"
 
-[replace]
+[patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-"raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", default-features = false }
-"raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", default-features = false }
-"protobuf:2.8.0" = { git = "https://github.com/pingcap/rust-protobuf", rev="b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-"protobuf-codegen:2.8.0" = { git = "https://github.com/pingcap/rust-protobuf", rev="b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-"prost:0.5.0" = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
-"protobuf-build:0.10.0" = { git = "https://github.com/tikv/protobuf-build", rev="1fe5d77689d9691b7917215f3a1d32968115cc02" }
-"https://github.com/pingcap/kvproto.git#kvproto:0.0.2" = { git = "https://github.com/busyjay/kvproto", branch = "add-commit-term" }
+raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
+raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
+protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
+protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
