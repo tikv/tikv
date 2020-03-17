@@ -571,12 +571,19 @@ fn handle_fail_points_request(
 mod tests {
     use futures::future::{lazy, Future};
     use futures::Stream;
+    use hyper::client::HttpConnector;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
+    use hyper_openssl::HttpsConnector;
+    use openssl::ssl::{SslConnector, SslMethod};
     use tokio_core::reactor::Handle;
+
+    use std::env;
+    use std::path::PathBuf;
 
     use crate::config::TiKvConfig;
     use crate::server::status_server::StatusServer;
     use raftstore::store::PdTask;
+    use test_util::new_security_cfg;
     use tikv_util::security::SecurityConfig;
     use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
 
@@ -587,6 +594,45 @@ mod tests {
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/metrics")
+            .build()
+            .unwrap();
+
+        let handle = status_server.thread_pool.spawn_handle(lazy(move || {
+            client
+                .get(uri)
+                .map(|res| {
+                    assert_eq!(res.status(), StatusCode::OK);
+                })
+                .map_err(|err| {
+                    panic!("response status is not OK: {:?}", err);
+                })
+        }));
+        handle.wait().unwrap();
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_security_status_service() {
+        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
+        let _ = status_server.start("127.0.0.1:0".to_string(), &new_security_cfg());
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        let mut connector = HttpConnector::new(1);
+        connector.enforce_http(false);
+        let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
+        ssl.set_ca_file(format!(
+            "{}",
+            p.join("components/test_util/data/ca.pem").display()
+        ))
+        .unwrap();
+
+        let ssl = HttpsConnector::with_connector(connector, ssl).unwrap();
+        let client = Client::builder().build::<_, Body>(ssl);
+
+        let uri = Uri::builder()
+            .scheme("https")
             .authority(status_server.listening_addr().to_string().as_str())
             .path_and_query("/metrics")
             .build()
