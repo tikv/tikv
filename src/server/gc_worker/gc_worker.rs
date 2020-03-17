@@ -23,7 +23,7 @@ use crate::server::metrics::*;
 use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
 };
-use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
+use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcStrategy, MvccReader, MvccTxn};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
@@ -266,7 +266,8 @@ impl<E: Engine> GcRunner<E> {
                 return true;
             }
         };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, collection)
+        let strategy = GcStrategy::new(self.cfg.ratio_threshold, self.cfg.enable_compaction_filter);
+        check_need_gc(safe_point, strategy, collection)
     }
 
     /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
@@ -288,7 +289,8 @@ impl<E: Engine> GcRunner<E> {
 
         // range start gc with from == None, and this is an optimization to
         // skip gc before scanning all data.
-        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.cfg.ratio_threshold);
+        let strategy = GcStrategy::new(self.cfg.ratio_threshold, self.cfg.enable_compaction_filter);
+        let skip_gc = is_range_start && !reader.need_gc(safe_point, strategy);
         let res = if skip_gc {
             GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
@@ -762,13 +764,7 @@ impl<E: Engine> GcWorker<E> {
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
-        let new_handle = GcManager::new(
-            cfg,
-            safe_point,
-            self.config_manager.clone(),
-            self.worker_scheduler.clone(),
-        )
-        .start()?;
+        let new_handle = GcManager::new(cfg, safe_point, self.worker_scheduler.clone()).start()?;
         *handle = Some(new_handle);
         Ok(())
     }

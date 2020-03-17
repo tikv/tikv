@@ -372,13 +372,65 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(v)
     }
 
-    pub fn need_gc(&self, safe_point: TimeStamp, ratio_threshold: f64) -> bool {
+    pub fn need_gc(&self, safe_point: TimeStamp, strategy: GcStrategy) -> bool {
         let prop = match self.snapshot.get_properties_cf(CF_WRITE) {
             Ok(v) => v,
             Err(_) => return true,
         };
 
-        check_need_gc(safe_point, ratio_threshold, prop)
+        check_need_gc(safe_point, strategy, prop)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum GcStrategy {
+    /// Run traditional GC with a specified ratio threshold.
+    Traditional(f64),
+    /// CompactionFilter is configured, only DELETE mark is considered.
+    CompactionFilter(f64),
+}
+
+impl GcStrategy {
+    pub fn new(ratio: f64, enable_compaction_filter: bool) -> Self {
+        if enable_compaction_filter {
+            GcStrategy::CompactionFilter(ratio)
+        } else {
+            GcStrategy::Traditional(ratio)
+        }
+    }
+
+    fn garbage_ratio(&self) -> f64 {
+        match self {
+            GcStrategy::Traditional(x) => *x,
+            GcStrategy::CompactionFilter(x) => *x,
+        }
+    }
+
+    fn need_gc(&self, safe_point: TimeStamp, props: &MvccProperties) -> bool {
+        if props.min_ts > safe_point {
+            // No data older than safe_point to GC.
+            return false;
+        }
+        // Note: Since the properties are file-based, it can be false positive.
+        // For example, multiple files can have a different version of the same row.
+        match self {
+            GcStrategy::Traditional(ratio) => {
+                // A lot of MVCC versions to GC.
+                if props.num_versions as f64 > props.num_rows as f64 * ratio {
+                    return true;
+                }
+                // A lot of non-effective MVCC versions to GC.
+                if props.num_versions as f64 > props.num_puts as f64 * ratio {
+                    return true;
+                }
+                // A lot of MVCC versions of a single row to GC.
+                props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+            }
+            GcStrategy::CompactionFilter(ratio) => {
+                // Only DELETE marks are treated as garbage.
+                props.num_versions as f64 > props.num_puts as f64 * ratio
+            }
+        }
     }
 }
 
@@ -386,11 +438,11 @@ impl<S: Snapshot> MvccReader<S> {
 // This is for optimization purpose, does not mean to be accurate.
 pub fn check_need_gc(
     safe_point: TimeStamp,
-    ratio_threshold: f64,
+    strategy: GcStrategy,
     write_properties: RocksTablePropertiesCollection,
 ) -> bool {
-    // Always GC.
-    if ratio_threshold < 1.0 {
+    if strategy.garbage_ratio() < 1.0 {
+        // Always GC.
         return true;
     }
 
@@ -398,26 +450,7 @@ pub fn check_need_gc(
         Some(v) => v,
         None => return true,
     };
-
-    // No data older than safe_point to GC.
-    if props.min_ts > safe_point {
-        return false;
-    }
-
-    // Note: Since the properties are file-based, it can be false positive.
-    // For example, multiple files can have a different version of the same row.
-
-    // A lot of MVCC versions to GC.
-    if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
-        return true;
-    }
-    // A lot of non-effective MVCC versions to GC.
-    if props.num_versions as f64 > props.num_puts as f64 * ratio_threshold {
-        return true;
-    }
-
-    // A lot of MVCC versions of a single row to GC.
-    props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+    strategy.need_gc(safe_point, &props)
 }
 
 fn get_mvcc_properties(
@@ -677,7 +710,10 @@ mod tests {
         let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
         let reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let safe_point = safe_point.into();
-        assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
+        assert_eq!(
+            reader.need_gc(safe_point, GcStrategy::Traditional(1.0)),
+            need_gc
+        );
         get_mvcc_properties(
             safe_point,
             reader.snapshot.get_properties_cf(CF_WRITE).unwrap(),
