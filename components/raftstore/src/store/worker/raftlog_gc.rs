@@ -70,7 +70,7 @@ impl Runner {
             info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
-        let raft_wb = raft_engine.write_batch();
+        let mut raft_wb = raft_engine.write_batch();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
@@ -146,7 +146,7 @@ mod tests {
 
         // generate raft logs
         let region_id = 1;
-        let raft_wb = raft_db.write_batch();
+        let mut raft_wb = raft_db.write_batch();
         for i in 0..100 {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();

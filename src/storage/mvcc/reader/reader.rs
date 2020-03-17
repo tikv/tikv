@@ -634,7 +634,7 @@ mod tests {
 
         fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
-            let wb = db.c().write_batch();
+            let mut wb = db.c().write_batch();
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {
