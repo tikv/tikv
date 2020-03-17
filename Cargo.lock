@@ -2736,10 +2736,10 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0575e258dab62268e7236d7307caa38848acbda7ec7ab87bd9093791e999d20"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=2518694543eb58f21f491969422d36480261ef8c#2518694543eb58f21f491969422d36480261ef8c"
 dependencies = [
  "cfg-if",
+ "coarsetime",
  "fnv",
  "lazy_static",
  "libc",
@@ -2748,6 +2748,15 @@ dependencies = [
  "reqwest",
  "spin",
  "thiserror",
+]
+
+[[package]]
+name = "prometheus-static-metric"
+version = "0.3.0"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=2518694543eb58f21f491969422d36480261ef8c#2518694543eb58f21f491969422d36480261ef8c"
+dependencies = [
+ "proc-macro-hack",
+ "static-metric-proc-macros",
 ]
 
 [[package]]
@@ -3752,6 +3761,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 
 [[package]]
+name = "static-metric-proc-macros"
+version = "0.1.0"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=2518694543eb58f21f491969422d36480261ef8c#2518694543eb58f21f491969422d36480261ef8c"
+dependencies = [
+ "lazy_static",
+ "proc-macro-hack",
+ "proc-macro2 1.0.9",
+ "quote 1.0.3",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4156,7 +4177,7 @@ dependencies = [
  "panic_hook",
  "profiler",
  "prometheus",
- "prometheus-static-metric",
+ "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087)",
  "protobuf",
  "quick-error",
  "rand 0.6.5",
@@ -4211,6 +4232,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "chrono",
+ "coarsetime",
  "codec",
  "configuration",
  "crc32fast",
@@ -4252,7 +4274,7 @@ dependencies = [
  "pprof",
  "procinfo",
  "prometheus",
- "prometheus-static-metric",
+ "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=2518694543eb58f21f491969422d36480261ef8c)",
  "prost",
  "protobuf",
  "quick-error",
