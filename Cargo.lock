@@ -389,9 +389,9 @@ dependencies = [
 
 [[package]]
 name = "cache-size"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9c0e5b187b377be086db3ee0de5cbf7bfb4a8c590b639af4d3facbdd07586ae"
+checksum = "81d993443a01668ca909379dac9de6e858121d7fb2bc16de939dc166164cac1c"
 dependencies = [
  "raw-cpuid",
 ]
@@ -3905,7 +3905,7 @@ dependencies = [
 [[package]]
 name = "sysinfo"
 version = "0.9.6"
-source = "git+https://github.com/tikv/sysinfo.git?branch=tikv#aa98faff1c586984857506c8add248ee304a7f81"
+source = "git+https://github.com/tikv/sysinfo.git?branch=tikv#762badf918f1e0b36fce032f9f81274d79fdff7d"
 dependencies = [
  "cache-size",
  "cfg-if",
