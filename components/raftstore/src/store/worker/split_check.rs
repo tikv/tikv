@@ -6,10 +6,9 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 
-use engine::rocks::DBIterator;
-use engine::{IterOption, Iterable, DB};
-use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{CfName, CF_WRITE, LARGE_CFS};
+use engine::DB;
+use engine_rocks::{Compat, RocksEngine, RocksEngineIterator};
+use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -69,28 +68,28 @@ impl Ord for KeyEntry {
     }
 }
 
-struct MergedIterator<'a> {
-    iters: Vec<(CfName, DBIterator<&'a DB>)>,
+struct MergedIterator {
+    iters: Vec<(CfName, RocksEngineIterator)>,
     heap: BinaryHeap<KeyEntry>,
 }
 
-impl<'a> MergedIterator<'a> {
+impl MergedIterator {
     fn new(
-        db: &'a DB,
+        db: &Arc<DB>,
         cfs: &[CfName],
         start_key: &[u8],
         end_key: &[u8],
         fill_cache: bool,
-    ) -> Result<MergedIterator<'a>> {
+    ) -> Result<MergedIterator> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.iter().enumerate() {
-            let iter_opt = IterOption::new(
+            let iter_opt = IterOptions::new(
                 Some(KeyBuilder::from_slice(start_key, 0, 0)),
                 Some(KeyBuilder::from_slice(end_key, 0, 0)),
                 fill_cache,
             );
-            let mut iter = db.new_iterator_cf(cf, iter_opt)?;
+            let mut iter = db.c().iterator_cf_opt(cf, iter_opt)?;
             let found: Result<bool> = iter.seek(start_key.into()).map_err(|e| box_err!(e));
             if found? {
                 heap.push(KeyEntry::new(
@@ -268,7 +267,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::new(self.engine.as_ref(), LARGE_CFS, start_key, end_key, false).map(
+        MergedIterator::new(&self.engine, LARGE_CFS, start_key, end_key, false).map(
             |mut iter| {
                 let mut size = 0;
                 let mut keys = 0;
