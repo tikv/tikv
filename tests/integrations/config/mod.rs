@@ -178,6 +178,7 @@ fn test_serde_custom_tikv_config() {
         store_pool_size: 3,
         future_poll_size: 2,
         hibernate_regions: false,
+        early_apply: false,
         quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
@@ -550,10 +551,44 @@ fn test_serde_custom_tikv_config() {
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
     let load = toml::from_str(&custom).unwrap();
-    assert_eq!(value, load);
+    if value != load {
+        diff_config(&value, &load);
+    }
     let dump = toml::to_string_pretty(&load).unwrap();
     let load_from_dump = toml::from_str(&dump).unwrap();
-    assert_eq!(load, load_from_dump);
+    if load != load_from_dump {
+        diff_config(&load, &load_from_dump);
+    }
+}
+
+fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
+    let lhs_str = format!("{:?}", lhs);
+    let rhs_str = format!("{:?}", rhs);
+
+    fn find_index(l: impl Iterator<Item = (u8, u8)>) -> usize {
+        let mut it = l
+            .enumerate()
+            .take_while(|(_, (l, r))| l == r)
+            .filter(|(_, (l, _))| *l == b' ');
+        let mut last = None;
+        let mut second = None;
+        while let Some(a) = it.next() {
+            second = last;
+            last = Some(a);
+        }
+        second.map_or(0, |(i, _)| i)
+    };
+    let cpl = find_index(lhs_str.bytes().zip(rhs_str.bytes()));
+    let csl = find_index(lhs_str.bytes().rev().zip(rhs_str.bytes().rev()));
+    if cpl + csl > lhs_str.len() || cpl + csl > rhs_str.len() {
+        assert_eq!(lhs, rhs);
+    }
+    let lhs_diff = String::from_utf8_lossy(&lhs_str.as_bytes()[cpl..lhs_str.len() - csl]);
+    let rhs_diff = String::from_utf8_lossy(&rhs_str.as_bytes()[cpl..rhs_str.len() - csl]);
+    panic!(
+        "config not matched:\nlhs: ...{}...,\nrhs: ...{}...",
+        lhs_diff, rhs_diff
+    );
 }
 
 #[test]

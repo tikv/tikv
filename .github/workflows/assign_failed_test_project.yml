@@ -2,7 +2,7 @@ name: Auto Assign Failed Test Issue to Solid Tests Project
 
 on:
   issues:
-    types: [created]
+    types: [labeled]
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
