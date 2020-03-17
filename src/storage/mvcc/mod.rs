@@ -6,6 +6,7 @@ mod metrics;
 mod reader;
 mod txn;
 
+pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;

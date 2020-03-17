@@ -5,14 +5,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::GcWorkerConfigManager;
+use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use engine::rocks::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
     DBCompactionFilter, WriteOptions, DB,
 };
 use engine_rocks::RocksWriteBatch;
-use engine_traits::Mutable;
-use engine_traits::WriteBatch;
-use tikv_util::time::Instant;
+use engine_traits::{Mutable, WriteBatch};
 use txn_types::{Key, WriteRef, WriteType};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
@@ -79,12 +78,7 @@ struct WriteCompactionFilter {
     remove_older: bool,
 
     versions: usize,
-    rows: usize,
-    stale_versions: usize,
     deleted: usize,
-    default_deleted: usize,
-    skipped: usize, // DELETE mark should be kept in compaction filter.
-    start: Instant,
 }
 
 impl WriteCompactionFilter {
@@ -101,16 +95,11 @@ impl WriteCompactionFilter {
             remove_older: false,
 
             versions: 0,
-            rows: 0,
-            stale_versions: 0,
             deleted: 0,
-            default_deleted: 0,
-            skipped: 0,
-            start: Instant::now_coarse(),
         }
     }
 
-    fn delete_default_key(&self, key: &[u8]) {
+    fn delete_default_key(&mut self, key: &[u8]) {
         self.write_batch.delete(key).unwrap();
         if self.write_batch.data_size() > DEFAULT_DELETE_BATCH_SIZE {
             let mut opts = WriteOptions::new();
@@ -119,6 +108,17 @@ impl WriteCompactionFilter {
                 .write_opt(self.write_batch.as_inner(), &opts)
                 .unwrap();
             self.write_batch.clear();
+        }
+    }
+
+    fn reset_statistics(&mut self) {
+        if self.versions != 0 {
+            MVCC_VERSIONS_HISTOGRAM.observe(self.versions as f64);
+            self.versions = 0;
+        }
+        if self.deleted != 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted as f64);
+            self.deleted = 0;
         }
     }
 }
@@ -134,16 +134,6 @@ impl Drop for WriteCompactionFilter {
         } else {
             self.db.flush(true).unwrap();
         }
-        info!(
-            "WriteCompactionFilter uses {}s", self.start.elapsed_secs();
-            "versions" => self.versions,
-            "stale_versions" => self.stale_versions,
-            "rows" => self.rows,
-            "deleted" => self.deleted,
-            "default_deleted" => self.default_deleted,
-            "skipped" => self.skipped,
-        );
-        // GC_DELETED_VERSIONS.inc_by(self.deleted as i64);
     }
 }
 
@@ -163,18 +153,18 @@ impl CompactionFilter for WriteCompactionFilter {
             Err(_) => return false,
         };
 
-        self.versions += 1;
         if self.key_prefix != key_prefix {
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
+            self.reset_statistics();
         }
 
+        self.versions += 1;
         if commit_ts.into_inner() > safe_point {
             return false;
         }
 
-        self.stale_versions += 1;
         let mut filtered = self.remove_older;
         let WriteRef {
             write_type,
@@ -186,13 +176,10 @@ impl CompactionFilter for WriteCompactionFilter {
             match write_type {
                 WriteType::Rollback | WriteType::Lock => filtered = true,
                 WriteType::Delete => {
+                    // Currently `WriteType::Delete` will always be kept.
                     self.remove_older = true;
-                    self.skipped += 1; // Currently `WriteType::Delete` will always be kept.
                 }
-                WriteType::Put => {
-                    self.remove_older = true;
-                    self.rows += 1;
-                }
+                WriteType::Put => self.remove_older = true,
             }
         }
 
@@ -200,7 +187,6 @@ impl CompactionFilter for WriteCompactionFilter {
             if short_value.is_none() {
                 let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
                 self.delete_default_key(key.as_encoded());
-                self.default_deleted += 1;
             }
             self.deleted += 1;
         }

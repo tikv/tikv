@@ -862,7 +862,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
         MVCC_VERSIONS_HISTOGRAM.observe(found_versions as f64);
         if deleted_versions > 0 {
-            // GC_DELETE_VERSIONS_HISTOGRAM.observe(deleted_versions as f64);
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(deleted_versions as f64);
         }
         Ok(GcInfo {
             found_versions,
