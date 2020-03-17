@@ -181,12 +181,6 @@ pub struct Config {
 
     #[config(skip)]
     pub quorum_algorithm: QuorumAlgorithm,
-
-    /// This field will be set by DbConfig.
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[config(skip)]
-    pub enable_multi_batch_write: bool,
 }
 
 impl Default for Config {
@@ -257,7 +251,6 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
 
             quorum_algorithm: QuorumAlgorithm::Majority,
-            enable_multi_batch_write: false,
         }
     }
 }

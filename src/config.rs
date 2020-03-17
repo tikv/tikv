@@ -1934,7 +1934,6 @@ impl TiKvConfig {
         } else {
             config::canonicalize_path(&self.raft_store.raftdb_path)?
         };
-        self.raft_store.enable_multi_batch_write = self.rocksdb.enable_multi_batch_write;
 
         let kv_db_path =
             config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;

@@ -319,6 +319,7 @@ impl ApplyContext {
         notifier: Notifier,
         cfg: &Config,
     ) -> ApplyContext {
+        let opt = engines.kv.get_db_options();
         ApplyContext {
             tag,
             timer: None,
@@ -339,7 +340,7 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-            enable_multi_batch_write: cfg.enable_multi_batch_write,
+            enable_multi_batch_write: opt.is_enable_multi_batch_write(),
         }
     }
 
