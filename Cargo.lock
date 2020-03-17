@@ -46,6 +46,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "antidote"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34fde25430d87a9388dadbe6e34d7f72a462c8b43ac8d309b42b0a8505d7e2a5"
+
+[[package]]
 name = "anyhow"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1665,6 +1671,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-openssl"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f52657b5cdb2a8067efd29a02e011b7cf656b473ec8a5c34e86645e85d763006"
+dependencies = [
+ "antidote",
+ "bytes 0.4.12",
+ "futures 0.1.29",
+ "hyper 0.12.35",
+ "lazy_static",
+ "linked_hash_set",
+ "openssl",
+ "openssl-sys",
+ "tokio-io",
+ "tokio-openssl 0.3.0",
+]
+
+[[package]]
 name = "hyper-tls"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1961,6 +1985,21 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "linked-hash-map"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae91b68aebc4ddb91978b11a1b02ddd8602a05ec19002801c5666000e05e0f83"
+
+[[package]]
+name = "linked_hash_set"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c7c91c4c7bbeb4f2f7c4e5be11e6a05bd6830bc37249c47ce1ad86ad453ff9c"
+dependencies = [
+ "linked-hash-map",
 ]
 
 [[package]]
@@ -4255,6 +4294,7 @@ dependencies = [
  "grpcio",
  "hex 0.3.2",
  "hyper 0.12.35",
+ "hyper-openssl",
  "into_other",
  "itertools",
  "keys",
@@ -4267,6 +4307,7 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
+ "openssl",
  "panic_hook",
  "parking_lot 0.10.0",
  "pd_client",
@@ -4293,6 +4334,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "test_sst_importer",
+ "test_util",
  "tidb_query",
  "tikv_alloc",
  "tikv_util",
@@ -4302,7 +4344,9 @@ dependencies = [
  "tokio-core",
  "tokio-fs",
  "tokio-io",
+ "tokio-openssl 0.2.1",
  "tokio-sync",
+ "tokio-tcp",
  "tokio-threadpool",
  "tokio-timer",
  "toml",
@@ -4557,6 +4601,28 @@ dependencies = [
  "proc-macro2 1.0.9",
  "quote 1.0.3",
  "syn 1.0.5",
+]
+
+[[package]]
+name = "tokio-openssl"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4646ae1fd623393de3d796ea53af75acd02938dd5579544fbd6d236d041978a6"
+dependencies = [
+ "futures 0.1.29",
+ "openssl",
+ "tokio-io",
+]
+
+[[package]]
+name = "tokio-openssl"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "771d6246b170ae108d67d9963c23f31a579016c016d73bd4bd7d6ef0252afda7"
+dependencies = [
+ "futures 0.1.29",
+ "openssl",
+ "tokio-io",
 ]
 
 [[package]]
