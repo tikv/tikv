@@ -425,21 +425,22 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let mut p = Path::new(path).to_path_buf();
+    let mut path = Path::new(path).canonicalize()?;
     if !sub_path.is_empty() {
-        p = p.join(Path::new(sub_path));
+        path = path.join(Path::new(sub_path));
     }
-    if p.exists() && p.is_file() {
-        return Err(format!("{}/{} is not a directory!", path, sub_path).into());
+    if path.exists() && path.is_file() {
+        return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
     }
-    let parent = Path::new(path).canonicalize()?;
-    Ok(format!("{}", parent.join(sub_path).display()))
+    Ok(format!("{}", path.display()))
 }
 
 pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
-    let p = Path::new(path);
-    if !p.exists() {
-        fs::create_dir_all(p)?;
+    if !path.is_empty() {
+        let p = Path::new(path);
+        if !p.exists() {
+            fs::create_dir_all(p)?;
+        }
     }
     Ok(())
 }
