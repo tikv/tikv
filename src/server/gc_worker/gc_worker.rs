@@ -92,16 +92,6 @@ pub enum GcTask {
 }
 
 impl GcTask {
-    pub fn get_label(&self) -> &'static str {
-        match self {
-            GcTask::Gc { .. } => "gc",
-            GcTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
-            GcTask::PhysicalScanLock { .. } => "physical_scan_lock",
-            #[cfg(any(test, feature = "testexport"))]
-            GcTask::Validate(_) => "validate_config",
-        }
-    }
-
     pub fn get_enum_label(&self) -> GcCommandKind {
         match self {
             GcTask::Gc { .. } => GcCommandKind::gc,
@@ -554,7 +544,6 @@ impl<E: Engine> GcRunner<E> {
 impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
     #[inline]
     fn run(&mut self, task: GcTask, _handle: &Handle) {
-        let label = task.get_label();
         let enum_label = task.get_enum_label();
 
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
@@ -562,7 +551,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
         let update_metrics = |is_err| {
             GC_TASK_DURATION_HISTOGRAM_VEC
-                .with_label_values(&[label])
+                .with_label_values(&[enum_label.get_str()])
                 .observe(duration_to_sec(timer.elapsed()));
 
             if is_err {
