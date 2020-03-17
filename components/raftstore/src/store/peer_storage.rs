@@ -2454,7 +2454,7 @@ mod tests {
         apply_state.set_applied_index(13);
         apply_state
             .mut_truncated_state()
-            .set_index(RAFT_INIT_LOG_INDEX);
+            .set_index(13);
         apply_state
             .mut_truncated_state()
             .set_term(RAFT_INIT_LOG_TERM);
