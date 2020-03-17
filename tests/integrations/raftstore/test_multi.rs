@@ -32,6 +32,9 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.must_get(key), Some(value.to_vec()));
 
+    let region_id = cluster.get_region_id(b"");
+    let prev_last_index = cluster.raft_local_state(region_id, 1).get_last_index();
+
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
@@ -50,6 +53,10 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.assert_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
 
+    let last_index = cluster.raft_local_state(region_id, 1).get_last_index();
+    let apply_state = cluster.apply_state(region_id, 1);
+    assert!(apply_state.get_last_commit_index() < last_index);
+    assert!(apply_state.get_last_commit_index() >= prev_last_index);
     // TODO add epoch not match test cases.
 }
 
