@@ -52,6 +52,7 @@ name = "tikv-ctl"
 
 [dependencies]
 backup = { path = "../components/backup", default-features = false }
+cdc = { path = "../components/cdc" }
 chrono = "0.4"
 clap = "2.32"
 engine = { path = "../components/engine" }
@@ -68,6 +69,7 @@ libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 nix = "0.11"
 pd_client = { path = "../components/pd_client" }
+prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../components/raftstore" }
@@ -80,8 +82,6 @@ tikv_util = { path = "../components/tikv_util" }
 toml = "0.4"
 txn_types = { path = "../components/txn_types" }
 vlog = "0.1.4"
-cdc = { path = "../components/cdc" }
-prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
