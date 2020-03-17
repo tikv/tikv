@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
@@ -20,6 +21,7 @@ pub struct SecurityConfig {
     #[serde(skip)]
     pub override_ssl_target: String,
     pub cipher_file: String,
+    pub x509_common_names: HashSet<String>,
 }
 
 impl Default for SecurityConfig {
@@ -30,6 +32,7 @@ impl Default for SecurityConfig {
             key_path: String::new(),
             override_ssl_target: String::new(),
             cipher_file: String::new(),
+            x509_common_names: HashSet::new(),
         }
     }
 }
@@ -88,6 +91,7 @@ pub struct SecurityManager {
     key: Vec<u8>,
     override_ssl_target: String,
     cipher_file: String,
+    x509_common_names: HashSet<String>,
 }
 
 impl Drop for SecurityManager {
@@ -106,6 +110,7 @@ impl SecurityManager {
             key: load_key("private key", &cfg.key_path)?,
             override_ssl_target: cfg.override_ssl_target.clone(),
             cipher_file: cfg.cipher_file.clone(),
+            x509_common_names: cfg.x509_common_names.clone(),
         })
     }
 
@@ -141,6 +146,10 @@ impl SecurityManager {
 
     pub fn cipher_file(&self) -> &str {
         &self.cipher_file
+    }
+
+    pub fn x509_common_names(&self) -> HashSet<String> {
+        self.x509_common_names.clone()
     }
 }
 

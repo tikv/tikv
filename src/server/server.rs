@@ -118,6 +118,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             } else {
                 None
             },
+            security_mgr.x509_common_names(),
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
