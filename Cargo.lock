@@ -268,7 +268,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex",
- "which 3.1.0",
+ "which",
 ]
 
 [[package]]
@@ -967,7 +967,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "prometheus",
- "prost 0.5.0",
+ "prost 0.6.1",
  "protobuf",
  "quick-error",
  "raft",
@@ -1115,12 +1115,6 @@ name = "farmhash"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
-
-[[package]]
-name = "fixedbitset"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86d4de0081402f5e88cdac65c8dcdcc73118c1a7a465e2a05f0da05843a8ea33"
 
 [[package]]
 name = "fixedbitset"
@@ -1442,14 +1436,14 @@ dependencies = [
 
 [[package]]
 name = "grpcio-compiler"
-version = "0.5.0-alpha.5"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42a798606ea0be49963c287984b30b1fda3a1a6c32d0fe59cf9dab0c42ffb22b"
+checksum = "e89d54316f4fdc3181139f2725944de33e9a2fde1bf9128e9e4b88543ad6955e"
 dependencies = [
  "derive-new",
- "prost 0.5.0",
- "prost-build 0.5.0",
- "prost-types 0.5.0",
+ "prost 0.6.1",
+ "prost-build",
+ "prost-types",
  "protobuf",
  "tempfile",
 ]
@@ -1861,14 +1855,13 @@ name = "kvproto"
 version = "0.0.2"
 source = "git+https://github.com/pingcap/kvproto.git#0d46b56d24ad6b0c1349dd0af65c293cb544a145"
 dependencies = [
- "bytes 0.4.12",
  "futures 0.1.29",
  "grpcio",
  "lazy_static",
- "prost 0.5.0",
- "prost-derive 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "prost 0.6.1",
+ "prost-derive 0.6.1",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.11.1",
  "raft-proto",
 ]
 
@@ -2180,12 +2173,6 @@ name = "more-asserts"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf21d96e87e5d48e3b50ab1512142f2fbe06fc48b7b032dead87fbfcb83f9a89"
-
-[[package]]
-name = "multimap"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb04b9f127583ed176e163fb9ec6f3e793b87e21deedd5734a69386a18a0151"
 
 [[package]]
 name = "multimap"
@@ -2547,20 +2534,11 @@ checksum = "d4fd5641d01c8f18a23da7b6fe29298ff4b55afcccdf78973b24cf3175fee32e"
 
 [[package]]
 name = "petgraph"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c3659d1ee90221741f65dd128d9998311b0e40c5d3c23a62445938214abce4f"
-dependencies = [
- "fixedbitset 0.1.9",
-]
-
-[[package]]
-name = "petgraph"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29c127eea4a29ec6c85d153c59dc1213f33ec74cead30fe4730aecc88cc1fd92"
 dependencies = [
- "fixedbitset 0.2.0",
+ "fixedbitset",
  "indexmap",
 ]
 
@@ -2645,7 +2623,7 @@ dependencies = [
  "log",
  "nix 0.16.1",
  "prost 0.6.1",
- "prost-build 0.6.1",
+ "prost-build",
  "prost-derive 0.6.1",
  "rustc-demangle",
  "spin",
@@ -2780,24 +2758,6 @@ dependencies = [
 
 [[package]]
 name = "prost-build"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb788126ea840817128183f8f603dce02cb7aea25c2a0b764359d8e20010702e"
-dependencies = [
- "bytes 0.4.12",
- "heck",
- "itertools",
- "log",
- "multimap 0.4.0",
- "petgraph 0.4.13",
- "prost 0.5.0",
- "prost-types 0.5.0",
- "tempfile",
- "which 2.0.1",
-]
-
-[[package]]
-name = "prost-build"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02b10678c913ecbd69350e8535c3aef91a8676c0773fc1d7b95cdd196d7f2f26"
@@ -2806,12 +2766,12 @@ dependencies = [
  "heck",
  "itertools",
  "log",
- "multimap 0.8.0",
- "petgraph 0.5.0",
+ "multimap",
+ "petgraph",
  "prost 0.6.1",
- "prost-types 0.6.1",
+ "prost-types",
  "tempfile",
- "which 3.1.0",
+ "which",
 ]
 
 [[package]]
@@ -2854,16 +2814,6 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1de482a366941c8d56d19b650fac09ca08508f2a696119ee7513ad590c8bac6f"
-dependencies = [
- "bytes 0.4.12",
- "prost 0.5.0",
-]
-
-[[package]]
-name = "prost-types"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1834f67c0697c001304b75be76f67add9c89742eda3a085ad8ee0bb38c3417aa"
@@ -2887,8 +2837,23 @@ version = "0.10.0"
 source = "git+https://github.com/tikv/protobuf-build?rev=1fe5d77689d9691b7917215f3a1d32968115cc02#1fe5d77689d9691b7917215f3a1d32968115cc02"
 dependencies = [
  "bitflags",
+ "prost-build",
+ "protobuf",
+ "protobuf-codegen",
+ "quote 1.0.2",
+ "regex",
+ "syn 1.0.5",
+]
+
+[[package]]
+name = "protobuf-build"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46f3ca050cd02aa2ee07f8e227871ebe8c12cf076ff7c6bf82fdd41dc81af874"
+dependencies = [
+ "bitflags",
  "grpcio-compiler",
- "prost-build 0.6.1",
+ "prost-build",
  "protobuf",
  "protobuf-codegen",
  "quote 1.0.2",
@@ -2961,7 +2926,7 @@ dependencies = [
  "lazy_static",
  "prost 0.5.0",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.10.0",
 ]
 
 [[package]]
@@ -2992,7 +2957,7 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
- "prost 0.5.0",
+ "prost 0.6.1",
  "protobuf",
  "quick-error",
  "raft",
@@ -3463,7 +3428,7 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c96a7d6722944454c68ff2ba2a252a4e9b0635c03dd510fdf482a2c8981cbf2"
 dependencies = [
- "multimap 0.8.0",
+ "multimap",
 ]
 
 [[package]]
@@ -4278,7 +4243,7 @@ dependencies = [
  "procinfo",
  "prometheus",
  "prometheus-static-metric",
- "prost 0.5.0",
+ "prost 0.6.1",
  "protobuf",
  "quick-error",
  "raft",
@@ -4415,7 +4380,7 @@ dependencies = [
  "prost 0.5.0",
  "prost-derive 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.10.0",
 ]
 
 [[package]]
@@ -5029,16 +4994,6 @@ checksum = "721c6263e2c66fd44501cc5efbfa2b7dfa775d13e4ea38c46299646ed1f9c70a"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "which"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b57acb10231b9493c8472b20cb57317d0679a49e0bdbee44b3b803a6473af164"
-dependencies = [
- "failure",
- "libc",
 ]
 
 [[package]]
