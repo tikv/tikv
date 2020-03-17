@@ -755,7 +755,10 @@ impl TiKVServer {
                 server.pd_sender.clone(),
             ));
             // Start the status server.
-            if let Err(e) = status_server.start(self.config.server.status_addr.clone()) {
+            if let Err(e) = status_server.start(
+                self.config.server.status_addr.clone(),
+                &self.config.security,
+            ) {
                 error!(
                     "failed to bind addr for status service";
                     "err" => %e
