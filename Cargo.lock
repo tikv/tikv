@@ -2792,21 +2792,10 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=2518694543eb58f21f491969422d36480261ef8c#2518694543eb58f21f491969422d36480261ef8c"
+source = "git+https://github.com/renkai/rust-prometheus.git?rev=f9557516bcbe864dcb6f0006561cb2d056a5e5a7#f9557516bcbe864dcb6f0006561cb2d056a5e5a7"
 dependencies = [
  "proc-macro-hack",
  "static-metric-proc-macros",
-]
-
-[[package]]
-name = "prometheus-static-metric"
-version = "0.3.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087#d919ccd35976b9b84b8d03c07138c1cc05a36087"
-dependencies = [
- "lazy_static",
- "proc-macro2 1.0.9",
- "quote 1.0.3",
- "syn 1.0.5",
 ]
 
 [[package]]
@@ -3802,7 +3791,7 @@ checksum = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 [[package]]
 name = "static-metric-proc-macros"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=2518694543eb58f21f491969422d36480261ef8c#2518694543eb58f21f491969422d36480261ef8c"
+source = "git+https://github.com/renkai/rust-prometheus.git?rev=f9557516bcbe864dcb6f0006561cb2d056a5e5a7#f9557516bcbe864dcb6f0006561cb2d056a5e5a7"
 dependencies = [
  "lazy_static",
  "proc-macro-hack",
@@ -4216,7 +4205,7 @@ dependencies = [
  "panic_hook",
  "profiler",
  "prometheus",
- "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087)",
+ "prometheus-static-metric",
  "protobuf",
  "quick-error",
  "rand 0.6.5",
@@ -4315,7 +4304,7 @@ dependencies = [
  "pprof",
  "procinfo",
  "prometheus",
- "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=2518694543eb58f21f491969422d36480261ef8c)",
+ "prometheus-static-metric",
  "prost",
  "protobuf",
  "quick-error",

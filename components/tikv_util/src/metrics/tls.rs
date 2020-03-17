@@ -11,7 +11,7 @@ lazy_static! {
     static ref UPDATER_IS_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 }
 
-fn ensure_updater() {
+pub fn ensure_updater() {
     if !UPDATER_IS_RUNNING.compare_and_swap(false, true, Ordering::SeqCst) {
         Updater::new(200).start().unwrap();
     }

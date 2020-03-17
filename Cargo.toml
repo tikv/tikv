@@ -139,8 +139,8 @@ into_other = { path = "components/into_other" }
 prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
 
 [dependencies.prometheus-static-metric]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "2518694543eb58f21f491969422d36480261ef8c"
+git = "https://github.com/renkai/rust-prometheus.git"
+rev = "f9557516bcbe864dcb6f0006561cb2d056a5e5a7"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"

@@ -56,6 +56,7 @@ use tikv::{
     storage,
 };
 use tikv_util::config::VersionTrack;
+use tikv_util::metrics::ensure_updater;
 use tikv_util::{
     check_environment_variables,
     security::SecurityManager,
@@ -91,6 +92,8 @@ pub fn run_tikv(config: TiKvConfig) {
     let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services(gc_worker);
     tikv.init_metrics_flusher();
+
+    ensure_updater();
 
     tikv.run_server(server_config);
 
