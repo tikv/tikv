@@ -37,10 +37,7 @@ use raftstore::coprocessor::properties::MvccProperties;
 use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
-use raftstore::store::{
-    init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
-    write_peer_state,
-};
+use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
@@ -504,18 +501,6 @@ impl Debugger {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())
                 })?;
 
-            let raft_state = box_try!(init_raft_state(&self.engines, region));
-            let apply_state = box_try!(init_apply_state(&self.engines, region));
-            if raft_state.get_last_index() < apply_state.get_applied_index() {
-                return Err(Error::Other("last index < applied index".into()));
-            }
-            if raft_state.get_hard_state().get_commit() < apply_state.get_applied_index() {
-                return Err(Error::Other("commit index < applied index".into()));
-            }
-            if raft_state.get_last_index() < raft_state.get_hard_state().get_commit() {
-                return Err(Error::Other("last index < commit index".into()));
-            }
-
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::new(
                 self.engines.clone(),
@@ -531,7 +516,6 @@ impl Debugger {
                 heartbeat_tick: 2,
                 max_size_per_msg: ReadableSize::mb(1).0,
                 max_inflight_msgs: 256,
-                applied: apply_state.get_applied_index(),
                 check_quorum: true,
                 skip_bcast_commit: true,
                 ..Default::default()
