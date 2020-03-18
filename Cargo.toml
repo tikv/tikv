@@ -80,7 +80,7 @@ futures-locks = "0.1"
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
-hex = "0.3"
+hex = "0.4"
 itertools = "0.8"
 openssl = "0.10"
 tokio-openssl = "0.2"

@@ -577,7 +577,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.3.2",
+ "hex 0.4.0",
  "keys",
  "kvproto",
  "libc",
@@ -994,7 +994,7 @@ version = "0.0.1"
 dependencies = [
  "configuration",
  "engine_traits",
- "hex 0.3.2",
+ "hex 0.4.0",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -1047,7 +1047,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "hex 0.3.2",
+ "hex 0.4.0",
  "protobuf",
  "quick-error",
  "tikv_alloc",
@@ -1880,7 +1880,7 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex 0.3.2",
+ "hex 0.4.0",
  "kvproto",
  "panic_hook",
  "tikv_alloc",
@@ -2037,7 +2037,7 @@ dependencies = [
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
- "hex 0.3.2",
+ "hex 0.4.0",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2539,7 +2539,7 @@ version = "0.1.0"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
- "hex 0.3.2",
+ "hex 0.4.0",
  "kvproto",
  "lazy_static",
  "log",
@@ -2940,7 +2940,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-executor",
  "futures-util",
- "hex 0.3.2",
+ "hex 0.4.0",
  "into_other",
  "keys",
  "kvproto",
@@ -3293,7 +3293,7 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
- "hex 0.3.2",
+ "hex 0.4.0",
  "tikv_util",
  "txn_types",
 ]
@@ -3769,7 +3769,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "hex 0.3.2",
+ "hex 0.4.0",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4041,7 +4041,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.3.2",
+ "hex 0.4.0",
  "keys",
  "kvproto",
  "pd_client",
@@ -4120,7 +4120,7 @@ dependencies = [
  "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
- "hex 0.3.2",
+ "hex 0.4.0",
  "keys",
  "kvproto",
  "panic_hook",
@@ -4207,7 +4207,7 @@ dependencies = [
  "failure",
  "flate2",
  "futures 0.3.4",
- "hex 0.3.2",
+ "hex 0.4.0",
  "indexmap",
  "kvproto",
  "lazy_static",
@@ -4296,7 +4296,7 @@ dependencies = [
  "futures-locks",
  "futures-util",
  "grpcio",
- "hex 0.3.2",
+ "hex 0.4.0",
  "hyper 0.12.35",
  "hyper-openssl",
  "into_other",
@@ -4396,7 +4396,7 @@ dependencies = [
  "futures-cpupool",
  "fxhash",
  "grpcio",
- "hex 0.3.2",
+ "hex 0.4.0",
  "lazy_static",
  "libc",
  "log",
@@ -4855,7 +4855,7 @@ dependencies = [
  "codec",
  "derive-new",
  "farmhash",
- "hex 0.3.2",
+ "hex 0.4.0",
  "kvproto",
  "quick-error",
  "slog",
