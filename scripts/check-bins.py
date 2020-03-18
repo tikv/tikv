@@ -37,10 +37,10 @@ def check_jemalloc(executable):
         sys.exit(1)
 
 def is_sse_enabled(features):
-    return not features or "sse" in features
+    return "sse" in features
 
 def is_jemalloc_enabled(features):
-    return not features or "jemalloc" in features
+    return "jemalloc" in features
 
 def check_sse(executable):
     p = os.popen("nm -n " + executable)
