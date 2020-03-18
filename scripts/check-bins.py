@@ -36,6 +36,12 @@ def check_jemalloc(executable):
         pr("error: %s does not contain jemalloc\n" % executable)
         sys.exit(1)
 
+def is_sse_enabled(features):
+    return not features or "sse" in features
+
+def is_jemalloc_enabled(features):
+    return not features or "jemalloc" in features
+
 def check_sse(executable):
     p = os.popen("nm -n " + executable)
     lines = p.readlines()
@@ -61,8 +67,12 @@ def check_sse(executable):
             print("fix this by building tikv with ROCKSDB_SYS_SSE=1")
             sys.exit(1)
 
-def check_tests():
-    print("Checking bins for jemalloc")
+def check_tests(features):
+    if not is_jemalloc_enabled(features):
+        print("jemalloc not enabled, skip check!")
+        return
+    else:
+        print("Checking bins for jemalloc")
     start = time.clock()
     for line in sys.stdin.readlines():
         if not line.startswith('{'):
@@ -83,18 +93,29 @@ def check_tests():
     pr("")
     print("Done, takes %.2fs." % (time.clock() - start))
 
-def check_release():
-    print("Checking bins for jemalloc and SSE4.2")
-    for arg in sys.argv[2:]:
+def check_release(enabled_features, args):
+    print("Checking bins for jemalloc and SSE4.2, enabled features: %s" % enabled_features)
+    for arg in args:
         pr("checking binary %s" % arg)
-        check_jemalloc(arg)
-        check_sse(arg)
-        pr("%s jemalloc sse4.2 \033[32menabled\033[0m\n" % arg)
+        enabled = []
+        if is_jemalloc_enabled(enabled_features):
+            check_jemalloc(arg)
+            enabled.append("jemalloc")
+        if is_sse_enabled(enabled_features):
+            check_sse(arg)
+            enabled.append("sse4.2")
+        pr("%s %s \033[32menabled\033[0m\n" % (arg, " ".join(enabled)))
 
 def main():
-    if sys.argv[1] == "--check-tests":
-        check_tests()
-    elif sys.argv[1] == "--check-release":
-        check_release()
+    argv = sys.argv
+    idx = 1
+    enabled_features = []
+    if argv[idx] == "--features":
+        enabled_features = re.split("\s+", argv[idx+1])
+        idx += 2
+    if argv[idx] == "--check-tests":
+        check_tests(enabled_features)
+    elif argv[idx] == "--check-release":
+        check_release(enabled_features, argv[idx+1:])
 
 main()
