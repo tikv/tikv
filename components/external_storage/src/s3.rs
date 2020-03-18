@@ -4,6 +4,7 @@ use std::io::{Error, ErrorKind, Result};
 
 use futures::stream::StreamExt;
 use futures_io::AsyncRead;
+use tokio::runtime::Runtime;
 use tokio_util::{
     codec::{BytesCodec, FramedRead},
     compat::{FuturesAsyncReadCompatExt, Tokio02AsyncReadCompatExt},
@@ -119,7 +120,14 @@ impl ExternalStorage for S3Storage {
             storage_class: get_var(&self.config.storage_class),
             ..Default::default()
         };
-        futures::executor::block_on(self.client.put_object(req))
+        let mut runtime = Runtime::new().map_err(|e| {
+            Error::new(
+                ErrorKind::Other,
+                format!("failed to create tokio runtime {}", e),
+            )
+        })?;
+        runtime
+            .block_on(self.client.put_object(req))
             .map(|_| ())
             .map_err(|e| Error::new(ErrorKind::Other, format!("failed to put object {}", e)))
     }
@@ -132,7 +140,14 @@ impl ExternalStorage for S3Storage {
             bucket: self.config.bucket.clone(),
             ..Default::default()
         };
-        futures::executor::block_on(self.client.get_object(req))
+        let mut runtime = Runtime::new().map_err(|e| {
+            Error::new(
+                ErrorKind::Other,
+                format!("failed to create tokio runtime {}", e),
+            )
+        })?;
+        runtime
+            .block_on(self.client.get_object(req))
             .map(|out| Box::new(out.body.unwrap().into_async_read().compat()) as _)
             .map_err(|e| match e {
                 RusotoError::Service(GetObjectError::NoSuchKey(key)) => Error::new(
