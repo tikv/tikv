@@ -94,20 +94,22 @@ def check_tests(features):
     print("Done, takes %.2fs." % (time.clock() - start))
 
 def check_release(enabled_features, args):
-    if not (is_jemalloc_enabled(enabled_features) or is_sse_enabled(enabled_features)):
-        print("Either jemalloc or SSE4.2 is enabled, skip check")
+    checked_features = []
+    if is_jemalloc_enabled(enabled_features):
+        checked_features.append("jemalloc")
+    if is_sse_enabled(enabled_features):
+        checked_features.append("SSE4.2")
+    if not checked_features:
+        print("Both jemalloc and SSE4.2 are disabled, skip check")
         return
-    print("Checking bins for jemalloc and SSE4.2, enabled features: %s" % enabled_features)
+    print("Enabled features: %s, will checking bins for %s" % (enabled_features, ", ".join(checked_features)))
     for arg in args:
         pr("checking binary %s" % arg)
-        enabled = []
         if is_jemalloc_enabled(enabled_features):
             check_jemalloc(arg)
-            enabled.append("jemalloc")
         if is_sse_enabled(enabled_features):
             check_sse(arg)
-            enabled.append("sse4.2")
-        pr("%s %s \033[32menabled\033[0m\n" % (arg, " ".join(enabled)))
+        pr("%s %s \033[32menabled\033[0m\n" % (arg, " ".join(checked_features)))
 
 def main():
     argv = sys.argv
