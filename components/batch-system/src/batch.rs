@@ -242,7 +242,7 @@ enum ReschedulePolicy {
 }
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
-    fn receive_fsm(&mut self, batch: &mut Batch<N, C>) -> bool {
+    fn fetch_fsm(&mut self, batch: &mut Batch<N, C>) -> bool {
         if batch.control.is_some() {
             return true;
         }
@@ -266,9 +266,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
 
         // Fetch batch after every round is finished. It's helpful to protect regions
-        // from becoming hungry if some regions are hot points.
+        // from becoming hungry if some regions are hot points. Since we fetch new fsm every time
+        // calling `poll`, we do not need to configure a large value for `self.max_batch_size`.
         let mut run = true;
-        while run && self.receive_fsm(&mut batch) {
+        while run && self.fetch_fsm(&mut batch) {
             // If there is some region wait to be deal, we must deal with it even if it has overhead
             // max size of batch. It's helpful to protect regions from becoming hungry
             // if some regions are hot points.
