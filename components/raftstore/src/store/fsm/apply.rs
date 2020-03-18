@@ -58,7 +58,7 @@ use super::super::RegionTask;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
-// const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
+const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
@@ -419,16 +419,16 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
                 });
             self.sync_log_hint = false;
             // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
-            self.kv_wb_mut().clear();
-            //            let data_size = self.kv_wb().data_size();
-            //            if data_size > APPLY_WB_SHRINK_SIZE {
-            //                // Control the memory usage for the WriteBatch.
-            //                let kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
-            //                self.kv_wb = Some(kv_wb);
-            //            } else {
-            //                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
-            //                self.kv_wb_mut().clear();
-            //            }
+            let data_size = self.kv_wb().data_size();
+            if data_size > APPLY_WB_SHRINK_SIZE {
+                // Control the memory usage for the WriteBatch.
+                let kv_wb =
+                    W::write_batch_vec(&self.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+                self.kv_wb = Some(kv_wb);
+            } else {
+                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+                self.kv_wb_mut().clear();
+            }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }

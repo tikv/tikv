@@ -6,6 +6,8 @@ use crate::options::WriteOptions;
 
 pub trait WriteBatchExt {
     type WriteBatch: WriteBatch;
+    /// `WriteBatchVec` is used for `multi_batch_write` of RocksEngine and other Engine could also
+    /// implement another kind of WriteBatch according to their needs.
     type WriteBatchVec: WriteBatch;
 
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()>;

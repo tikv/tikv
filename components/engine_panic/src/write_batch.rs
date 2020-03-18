@@ -15,7 +15,7 @@ impl WriteBatchExt for PanicEngine {
         panic!()
     }
 
-    fn write_vec_opt(&self, wb: &RocksWriteBatchVec, opts: &WriteOptions) -> Result<()> {
+    fn write_vec_opt(&self, wb: &Self::WriteBatchVec, opts: &WriteOptions) -> Result<()> {
         panic!()
     }
 
