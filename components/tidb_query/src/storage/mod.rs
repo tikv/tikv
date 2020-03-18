@@ -32,7 +32,6 @@ pub trait Storage: Send {
     // TODO: Use reference is better.
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>>;
 
-    fn set_check_can_be_cached(&mut self, enabled: bool);
     fn can_be_cached(&mut self) -> bool;
 
     fn collect_statistics(&mut self, dest: &mut Self::Statistics);
@@ -56,10 +55,6 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
 
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {
         (**self).get(is_key_only, range)
-    }
-
-    fn set_check_can_be_cached(&mut self, enabled: bool) {
-        (**self).set_check_can_be_cached(enabled);
     }
 
     fn can_be_cached(&mut self) -> bool {

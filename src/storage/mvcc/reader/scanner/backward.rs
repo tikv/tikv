@@ -34,7 +34,6 @@ pub struct BackwardKvScanner<S: Snapshot> {
     /// Is iteration started
     is_started: bool,
     statistics: Statistics,
-    check_can_be_cached: bool,
     can_be_cached: bool,
 }
 
@@ -44,6 +43,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         lock_cursor: Cursor<S::Iter>,
         write_cursor: Cursor<S::Iter>,
     ) -> BackwardKvScanner<S> {
+        let can_be_cached = cfg.check_can_be_cached;
         BackwardKvScanner {
             cfg,
             lock_cursor,
@@ -51,18 +51,13 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
-            check_can_be_cached: false,
-            can_be_cached: true,
+            can_be_cached,
         }
     }
 
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::replace(&mut self.statistics, Statistics::default())
-    }
-
-    pub fn set_check_can_be_cached(&mut self, enabled: bool) {
-        self.check_can_be_cached = enabled;
     }
 
     pub fn can_be_cached(&mut self) -> bool {
@@ -245,7 +240,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
         // Check newer data if needed
         // TODO: use near_seek later
-        if self.check_can_be_cached && self.can_be_cached {
+        if self.cfg.check_can_be_cached && self.can_be_cached {
             let seek_key = user_key.clone().append_ts(TimeStamp::max());
             self.write_cursor
                 .internal_seek(&seek_key, &mut self.statistics.write)?;

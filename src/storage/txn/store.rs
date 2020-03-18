@@ -72,7 +72,7 @@ pub trait Scanner: Send {
         Ok(results)
     }
 
-    fn set_check_can_be_cached(&mut self, enabled: bool);
+    /// Return: is all the scanned data can be cached
     fn can_be_cached(&mut self) -> bool;
 
     /// Take statistics.
@@ -193,6 +193,8 @@ pub struct SnapshotStore<S: Snapshot> {
     bypass_locks: TsSet,
 
     point_getter_cache: Option<PointGetter<S>>,
+
+    check_can_be_cached: bool,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -289,6 +291,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
+            .set_check_can_be_cached(self.check_can_be_cached)
             .build()?;
 
         Ok(scanner)
@@ -328,6 +331,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         isolation_level: IsolationLevel,
         fill_cache: bool,
         bypass_locks: TsSet,
+        check_can_be_cached: bool,
     ) -> Self {
         SnapshotStore {
             snapshot,
@@ -335,8 +339,8 @@ impl<S: Snapshot> SnapshotStore<S> {
             isolation_level,
             fill_cache,
             bypass_locks,
-
             point_getter_cache: None,
+            check_can_be_cached,
         }
     }
 
@@ -521,8 +525,6 @@ impl Scanner for FixtureStoreScanner {
             Some((_k, Err(e))) => Err(e),
         }
     }
-
-    fn set_check_can_be_cached(&mut self, _: bool) {}
 
     fn can_be_cached(&mut self) -> bool {
         true

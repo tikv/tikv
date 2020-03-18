@@ -24,7 +24,6 @@ pub struct ExecutorsRunner<SS> {
     collect_exec_summary: bool,
     context: EvalContext,
     exec_stats: ExecuteStats,
-    // storage: Storage,
 }
 
 /// Builds a normal executor pipeline.
@@ -199,7 +198,6 @@ impl<SS: 'static> ExecutorsRunner<SS> {
             collect_exec_summary,
             context,
             exec_stats,
-            // storage,
         })
     }
 

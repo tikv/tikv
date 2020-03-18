@@ -55,9 +55,6 @@ impl<S: Store> Storage for TiKVStorage<S> {
             // There is no transform from storage error to QE's StorageError,
             // so an intermediate error is needed.
         );
-        if self.check_can_be_cached && self.can_be_cached {
-            self.scanner.as_mut().unwrap().set_check_can_be_cached(true);
-        }
         Ok(())
     }
 
@@ -71,10 +68,6 @@ impl<S: Store> Storage for TiKVStorage<S> {
             self.can_be_cached = false;
         }
         Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
-    }
-
-    fn set_check_can_be_cached(&mut self, enabled: bool) {
-        self.check_can_be_cached = enabled;
     }
 
     fn can_be_cached(&mut self) -> bool {

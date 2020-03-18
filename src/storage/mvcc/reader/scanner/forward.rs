@@ -115,7 +115,6 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     is_started: bool,
     statistics: Statistics,
     scan_policy: P,
-    check_can_be_cached: bool,
     can_be_cached: bool,
 }
 
@@ -132,24 +131,20 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             write: write_cursor,
             default: default_cursor,
         };
+        let can_be_cached = cfg.check_can_be_cached;
         ForwardScanner {
             cfg,
             cursors,
             statistics: Statistics::default(),
             is_started: false,
             scan_policy,
-            check_can_be_cached: false,
-            can_be_cached: true,
+            can_be_cached,
         }
     }
 
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::replace(&mut self.statistics, Statistics::default())
-    }
-
-    pub fn set_check_can_be_cached(&mut self, enabled: bool) {
-        self.check_can_be_cached = enabled;
     }
 
     pub fn can_be_cached(&mut self) -> bool {
@@ -251,7 +246,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             };
 
             if has_lock {
-                if self.check_can_be_cached && self.can_be_cached {
+                if self.cfg.check_can_be_cached && self.can_be_cached {
                     let lock_value = self.cursors.lock.value(&mut self.statistics.lock);
                     let lock = Lock::parse(lock_value)?;
                     if lock.ts > self.cfg.ts {
@@ -315,7 +310,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
-                } else if self.check_can_be_cached {
+                } else if self.cfg.check_can_be_cached {
                     self.can_be_cached = false;
                 }
             }
@@ -324,7 +319,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
-            let seek_ts = if self.check_can_be_cached && self.can_be_cached {
+            let seek_ts = if self.cfg.check_can_be_cached && self.can_be_cached {
                 // TODO: use "write.seek(ts) + write.prev()" to check newer data maybe faster?
                 TimeStamp::max()
             } else {

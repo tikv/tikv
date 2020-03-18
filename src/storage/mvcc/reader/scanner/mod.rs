@@ -97,6 +97,15 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    /// If this is true, can_be_cached() can be call when reading data
+    ///
+    /// Default is false.
+    #[inline]
+    pub fn set_check_can_be_cached(mut self, enabled: bool) -> Self {
+        self.0.check_can_be_cached = enabled;
+        self
+    }
+
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
@@ -174,12 +183,6 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
             Scanner::Backward(scanner) => scanner.take_statistics(),
         }
     }
-    fn set_check_can_be_cached(&mut self, enabled: bool) {
-        match self {
-            Scanner::Forward(scanner) => scanner.set_check_can_be_cached(enabled),
-            Scanner::Backward(scanner) => scanner.set_check_can_be_cached(enabled),
-        };
-    }
     fn can_be_cached(&mut self) -> bool {
         match self {
             Scanner::Forward(scanner) => scanner.can_be_cached(),
@@ -208,6 +211,8 @@ pub struct ScannerConfig<S: Snapshot> {
     desc: bool,
 
     bypass_locks: TsSet,
+
+    check_can_be_cached: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -224,6 +229,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             ts,
             desc,
             bypass_locks: Default::default(),
+            check_can_be_cached: false,
         }
     }
 

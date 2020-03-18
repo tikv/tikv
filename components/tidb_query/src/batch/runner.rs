@@ -58,7 +58,6 @@ pub struct BatchExecutorsRunner<SS> {
     /// 1. default: result is encoded row by row using datum format.
     /// 2. chunk: result is encoded column by column using chunk format.
     encode_type: EncodeType,
-    // storage: Storage,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -340,7 +339,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             collect_exec_summary,
             exec_stats,
             encode_type,
-            // storage,
         })
     }
 
