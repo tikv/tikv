@@ -118,7 +118,7 @@ macro_rules! impl_box_observer_g {
             }
 
             fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
-                Box::new(WrappedSplitCheckObserver {
+                Box::new($wrapper {
                     inner: self.inner.clone(),
                     _phantom: PhantomData,
                 })
