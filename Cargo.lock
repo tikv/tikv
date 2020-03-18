@@ -3371,7 +3371,7 @@ dependencies = [
  "serde_json",
  "shlex",
  "tokio 0.2.13",
- "zeroize 1.1.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -3478,9 +3478,9 @@ version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3bba175698996010c4f6dce5e7f173b6eb781fce25d2cfc45e27091ce0b79f6"
 dependencies = [
- "proc-macro2 1.0.9",
- "quote 1.0.3",
- "syn 1.0.5",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3826,11 +3826,11 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c87a60a40fccc84bef0652345bbbbbe20a605bf5d0ce81719fc476f5c03b50ef"
 dependencies = [
- "proc-macro2 1.0.9",
- "quote 1.0.3",
+ "proc-macro2",
+ "quote",
  "serde",
  "serde_derive",
- "syn 1.0.5",
+ "syn",
 ]
 
 [[package]]
@@ -3840,13 +3840,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58fa5ff6ad0d98d1ffa8cb115892b6e69d67799f6763e162a1c9db421dc22e11"
 dependencies = [
  "base-x",
- "proc-macro2 1.0.9",
- "quote 1.0.3",
+ "proc-macro2",
+ "quote",
  "serde",
  "serde_derive",
  "serde_json",
  "sha1",
- "syn 1.0.5",
+ "syn",
 ]
 
 [[package]]
@@ -4426,7 +4426,7 @@ dependencies = [
  "toml",
  "url",
  "utime",
- "zeroize 0.10.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -4472,9 +4472,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e987cfe0537f575b5fc99909de6185f6c19c3ad8889e2275e686a873d0869ba1"
 dependencies = [
  "proc-macro-hack",
- "proc-macro2 1.0.9",
- "quote 1.0.3",
- "syn 1.0.5",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -5217,12 +5217,6 @@ dependencies = [
  "prometheus",
  "rand 0.7.3",
 ]
-
-[[package]]
-name = "zeroize"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cbac2ed2ba24cc90f5e06485ac8c7c1e5449fe8911aef4d8877218af021a5b8"
 
 [[package]]
 name = "zeroize"
