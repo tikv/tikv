@@ -117,8 +117,6 @@ fn test_ingest_sst() {
 
 #[test]
 fn test_download_sst() {
-    use grpcio::{Error, RpcStatus};
-
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
     let temp_dir = Builder::new()
         .prefix("test_download_sst")
