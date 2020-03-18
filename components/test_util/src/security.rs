@@ -10,6 +10,7 @@ pub fn new_security_cfg() -> SecurityConfig {
         ca_path: format!("{}", p.join("data/ca.pem").display()),
         cert_path: format!("{}", p.join("data/server.pem").display()),
         key_path: format!("{}", p.join("data/key.pem").display()),
+        reload_mode: false,
         override_ssl_target: "".to_owned(),
         cipher_file: "".to_owned(),
     }

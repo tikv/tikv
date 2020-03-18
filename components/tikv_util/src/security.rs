@@ -1,12 +1,16 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error;
+use std::fs;
 use std::fs::File;
 use std::io::Read;
+use std::sync::Arc;
+use std::sync::RwLock;
+use std::time::SystemTime;
 
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
-    ServerCredentialsBuilder,
+    ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -16,6 +20,7 @@ pub struct SecurityConfig {
     pub ca_path: String,
     pub cert_path: String,
     pub key_path: String,
+    pub reload_mode: bool,
     // Test purpose only.
     #[serde(skip)]
     pub override_ssl_target: String,
@@ -28,6 +33,7 @@ impl Default for SecurityConfig {
             ca_path: String::new(),
             cert_path: String::new(),
             key_path: String::new(),
+            reload_mode: false,
             override_ssl_target: String::new(),
             cipher_file: String::new(),
         }
@@ -81,11 +87,26 @@ impl SecurityConfig {
     }
 }
 
+struct Certs {
+    pub ca: Vec<u8>,
+    pub cert: Vec<u8>,
+    pub key: Vec<u8>,
+}
+
+impl Default for Certs {
+    fn default() -> Self {
+        Certs {
+            ca: vec![],
+            cert: vec![],
+            key: vec![],
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SecurityManager {
-    ca: Vec<u8>,
-    cert: Vec<u8>,
-    key: Vec<u8>,
+    certs: Arc<RwLock<Certs>>,
+    reload_cfg: Option<Arc<SecurityConfig>>,
     override_ssl_target: String,
     cipher_file: String,
 }
@@ -93,47 +114,68 @@ pub struct SecurityManager {
 impl Drop for SecurityManager {
     fn drop(&mut self) {
         use zeroize::Zeroize;
-
-        self.key.zeroize();
+        let mut certs = self.certs.write().unwrap();
+        certs.key.zeroize();
     }
 }
 
 impl SecurityManager {
     pub fn new(cfg: &SecurityConfig) -> Result<SecurityManager, Box<dyn Error>> {
         Ok(SecurityManager {
-            ca: load_key("CA", &cfg.ca_path)?,
-            cert: load_key("certificate", &cfg.cert_path)?,
-            key: load_key("private key", &cfg.key_path)?,
+            certs: Arc::new(RwLock::new(Certs {
+                ca: load_key("CA", &cfg.ca_path)?,
+                cert: load_key("certificate", &cfg.cert_path)?,
+                key: load_key("private key", &cfg.key_path)?,
+            })),
+            reload_cfg: if cfg.reload_mode {
+                Some(Arc::new(cfg.clone()))
+            } else {
+                None
+            },
             override_ssl_target: cfg.override_ssl_target.clone(),
             cipher_file: cfg.cipher_file.clone(),
         })
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
-        if self.ca.is_empty() {
+        let certs = self.certs.read().unwrap();
+        if certs.ca.is_empty() {
             cb.connect(addr)
         } else {
             if !self.override_ssl_target.is_empty() {
                 cb = cb.override_ssl_target(self.override_ssl_target.clone());
             }
             let cred = ChannelCredentialsBuilder::new()
-                .root_cert(self.ca.clone())
-                .cert(self.cert.clone(), self.key.clone())
+                .root_cert(certs.ca.clone())
+                .cert(certs.cert.clone(), certs.key.clone())
                 .build();
             cb.secure_connect(addr, cred)
         }
     }
 
     pub fn bind(&self, sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
-        if self.ca.is_empty() {
+        let certs = self.certs.read().unwrap();
+        if certs.ca.is_empty() {
             sb.bind(addr, port)
+        } else if self.reload_cfg.is_some() {
+            let fetcher = Box::new(Fetcher {
+                certs: self.certs.clone(),
+                last_modified: Arc::new(RwLock::new(SystemTime::now())),
+                cfg: self.reload_cfg.clone().unwrap(),
+            });
+            sb.bind_with_fetcher(
+                addr,
+                port,
+                fetcher,
+                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
+            )
         } else {
             let cred = ServerCredentialsBuilder::new()
                 .root_cert(
-                    self.ca.clone(),
+                    certs.ca.clone(),
                     CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
                 )
-                .add_cert(self.cert.clone(), self.key.clone())
+                .add_cert(certs.cert.clone(), certs.key.clone())
                 .build();
             sb.bind_with_cred(addr, port, cred)
         }
@@ -141,6 +183,42 @@ impl SecurityManager {
 
     pub fn cipher_file(&self) -> &str {
         &self.cipher_file
+    }
+}
+
+struct Fetcher {
+    certs: Arc<RwLock<Certs>>,
+    last_modified: Arc<RwLock<SystemTime>>,
+    cfg: Arc<SecurityConfig>,
+}
+
+impl ServerCredentialsFetcher for Fetcher {
+    fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
+        let cert_modified_time = fs::metadata(&self.cfg.cert_path)?.modified()?;
+        let last = self.last_modified.read().unwrap();
+        if *last == cert_modified_time {
+            Ok(None)
+        } else {
+            drop(last);
+            *self.last_modified.write().unwrap() = cert_modified_time;
+            let ca = load_key("CA", &self.cfg.ca_path)?;
+            let cert = load_key("certificate", &self.cfg.cert_path)?;
+            let key = load_key("private key", &self.cfg.key_path)?;
+            if ca.is_empty() || cert.is_empty() || key.is_empty() {
+                return Err("ca, cert and private key should be all configured.".into());
+            }
+            let new_cred = ServerCredentialsBuilder::new()
+                .add_cert(cert.clone(), key.clone())
+                .root_cert(
+                    ca.clone(),
+                    CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
+                );
+            let mut certs = self.certs.write().unwrap();
+            certs.ca = ca;
+            certs.cert = cert;
+            certs.key = key;
+            Ok(Some(new_cred))
+        }
     }
 }
 
