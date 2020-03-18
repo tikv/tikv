@@ -1152,12 +1152,6 @@ impl Peer {
             return None;
         }
 
-        debug!(
-            "handle raft ready";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
-
         let before_handle_raft_ready_1003 = || {
             fail_point!(
                 "before_handle_raft_ready_1003",
@@ -1166,6 +1160,18 @@ impl Peer {
             );
         };
         before_handle_raft_ready_1003();
+
+        fail_point!(
+            "before_handle_snapshot_ready_3",
+            self.peer.get_id() == 3 && self.get_pending_snapshot().is_some(),
+            |_| None
+        );
+
+        debug!(
+            "handle raft ready";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
 
         let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
