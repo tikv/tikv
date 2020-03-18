@@ -15,8 +15,8 @@ pub trait WriteBatchExt {
         self.write_opt(wb, &WriteOptions::default())
     }
     fn write_batch(&self) -> Self::WriteBatch;
-    fn write_batch_vec(&self, limit: usize, cap: usize) -> Self::WriteBatchVec;
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
+    fn write_batch_vec(&self, vec_size: usize, cap: usize) -> Self::WriteBatchVec;
 }
 
 pub trait WriteBatch: Mutable + Send {
@@ -26,7 +26,6 @@ pub trait WriteBatch: Mutable + Send {
     fn should_write_to_engine(&self) -> bool;
 
     fn clear(&mut self);
-    fn write_to_engine(&mut self, opts: &WriteOptions) -> Result<()>;
     fn set_save_point(&mut self);
     fn pop_save_point(&mut self) -> Result<()>;
     fn rollback_to_save_point(&mut self) -> Result<()>;

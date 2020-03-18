@@ -10,19 +10,22 @@ impl WriteBatchExt for PanicEngine {
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
         panic!()
     }
-    fn write_vec_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        panic!()
-    }
+
     fn support_write_batch_vec(&self) -> bool {
         panic!()
     }
+
+    fn write_vec_opt(&self, wb: &RocksWriteBatchVec, opts: &WriteOptions) -> Result<()> {
+        panic!()
+    }
+
     fn write_batch(&self) -> Self::WriteBatch {
         panic!()
     }
-    fn write_batch_vec(&self, limit: usize, cap: usize) -> Self::WriteBatchVec {
+    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         panic!()
     }
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
+    fn write_batch_vec(&self, vec_size: usize, cap: usize) -> Self::WriteBatchVec {
         panic!()
     }
 }
@@ -44,9 +47,6 @@ impl WriteBatch for PanicWriteBatch {
     }
 
     fn clear(&mut self) {
-        panic!()
-    }
-    fn write_to_engine(&mut self, opts: &WriteOptions) -> Result<()> {
         panic!()
     }
     fn set_save_point(&mut self) {

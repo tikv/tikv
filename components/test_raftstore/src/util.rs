@@ -19,8 +19,9 @@ use raft::eraftpb::ConfChangeType;
 use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::DB;
 use engine::*;
-use engine_rocks::RocksEngine;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::{Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -37,7 +38,7 @@ pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
-        let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+        let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
         if let (Some(value), Some(res)) = (value, res.as_ref()) {
             assert_eq!(value, &res[..]);
             return;
@@ -48,7 +49,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         thread::sleep(Duration::from_millis(20));
     }
     debug!("last try to get {}", hex::encode_upper(key));
-    let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+    let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {
@@ -80,13 +81,19 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
 pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
-    let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine
+        .kv
+        .c()
+        .get_msg_cf(CF_RAFT, &state_key)
+        .unwrap()
+        .unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
     let start_key = keys::data_key(region.get_start_key());
     let end_key = keys::data_key(region.get_end_key());
     for cf in ALL_CFS {
         engine
             .kv
+            .c()
             .scan_cf(cf, &start_key, &end_key, false, |k, v| {
                 panic!(
                     "[region {}] unexpected ({:?}, {:?}) in cf {:?}",
@@ -99,12 +106,13 @@ pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
     let log_max_key = keys::raft_log_key(id, u64::MAX);
     engine
         .raft
+        .c()
         .scan(&log_min_key, &log_max_key, false, |k, v| {
             panic!("[region {}] unexpected log ({:?}, {:?})", id, k, v);
         })
         .unwrap();
     let state_key = keys::raft_state_key(id);
-    let state: Option<RaftLocalState> = engine.raft.get_msg(&state_key).unwrap();
+    let state: Option<RaftLocalState> = engine.raft.c().get_msg(&state_key).unwrap();
     assert!(
         state.is_none(),
         "[region {}] raft state key should be removed: {:?}",

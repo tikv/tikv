@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::engine::RocksEngine;
 use crate::options::RocksWriteOptions;
 use crate::util::get_cf_handle;
-use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
+use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteBatchVecExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 pub const WRITE_BATCH_MAX_KEYS: usize = 256;
@@ -27,16 +27,17 @@ impl WriteBatchExt for RocksEngine {
             .map_err(Error::Engine)
     }
 
-    fn write_vec_opt(&self, wb: &Self::WriteBatchVec, opts: &WriteOptions) -> Result<()> {
-        debug_assert_eq!(
-            wb.get_db().path(),
-            self.as_inner().path(),
-            "mismatched db path"
-        );
+    fn write_vec_opt(&self, wb: &RocksWriteBatchVec, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
-        self.as_inner()
-            .multi_batch_write(wb.as_inner(), &opt.into_raw())
-            .map_err(Error::Engine)
+        if wb.index > 0 {
+            self.as_inner()
+                .multi_batch_write(wb.as_inner(), &opt.into_raw())
+                .map_err(Error::Engine)
+        } else {
+            self.as_inner()
+                .write_opt(&wb.wbs[0], &opt.into_raw())
+                .map_err(Error::Engine)
+        }
     }
 
     fn support_write_batch_vec(&self) -> bool {
@@ -48,12 +49,12 @@ impl WriteBatchExt for RocksEngine {
         Self::WriteBatch::new(Arc::clone(&self.as_inner()))
     }
 
-    fn write_batch_vec(&self, limit: usize, cap: usize) -> Self::WriteBatchVec {
-        Self::WriteBatchVec::new(Arc::clone(&self.as_inner()), limit, cap)
-    }
-
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         Self::WriteBatch::with_capacity(Arc::clone(&self.as_inner()), cap)
+    }
+
+    fn write_batch_vec(&self, vec_size: usize, cap: usize) -> Self::WriteBatchVec {
+        RocksWriteBatchVec::new(Arc::clone(&self.as_inner()), vec_size, cap)
     }
 }
 
@@ -111,13 +112,6 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
 
     fn clear(&mut self) {
         self.wb.clear();
-    }
-
-    fn write_to_engine(&mut self, opts: &WriteOptions) -> Result<()> {
-        let opt: RocksWriteOptions = opts.into();
-        self.db
-            .write_opt(&self.wb, &opt.into_raw())
-            .map_err(Error::Engine)
     }
 
     fn set_save_point(&mut self) {
@@ -237,19 +231,6 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         self.cur_batch_size = 0;
     }
 
-    fn write_to_engine(&mut self, opts: &WriteOptions) -> Result<()> {
-        let opt: RocksWriteOptions = opts.into();
-        if self.index > 0 {
-            self.db
-                .multi_batch_write(&self.wbs[0..=self.index], &opt.into_raw())
-                .map_err(Error::Engine)
-        } else {
-            self.db
-                .write_opt(&self.wbs[0], &opt.into_raw())
-                .map_err(Error::Engine)
-        }
-    }
-
     fn set_save_point(&mut self) {
         self.wbs[self.index].set_save_point();
         self.save_points.push(self.index);
@@ -307,5 +288,26 @@ impl Mutable for RocksWriteBatchVec {
         self.wbs[self.index]
             .delete_range_cf(handle, begin_key, end_key)
             .map_err(Error::Engine)
+    }
+}
+impl WriteBatchVecExt<RocksEngine> for RocksWriteBatch {
+    // type WriteBatchVec = RocksWriteBatch;
+    fn write_batch_vec(e: &RocksEngine, _vec_size: usize, cap: usize) -> RocksWriteBatch {
+        e.write_batch_with_cap(cap)
+    }
+
+    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
+        e.write_opt(self, opts)
+    }
+}
+
+impl WriteBatchVecExt<RocksEngine> for RocksWriteBatchVec {
+    // type WriteBatchVec = RocksWriteBatchVec;
+    fn write_batch_vec(e: &RocksEngine, vec_size: usize, cap: usize) -> RocksWriteBatchVec {
+        e.write_batch_vec(vec_size, cap)
+    }
+
+    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
+        e.write_vec_opt(self, opts)
     }
 }
