@@ -885,12 +885,12 @@ fn test_merge_cascade_merge_with_apply_yield() {
 
 /// In previous implementation, destroying its source peer(s) and applying snapshot is not **atomic**.
 /// It may break the rule of our merging process.
-/// 
-/// A tikv crash after its source peers have destroyed but this target peer does not become to 
+///
+/// A tikv crash after its source peers have destroyed but this target peer does not become to
 /// `Applying` state which means it will not apply snapshot after this tikv restarts.
 /// After this tikv restarts, a new leader may send logs to this target peer, then the panic may happen
 /// because it can not find its source peers when applying `CommitMerge` log.
-/// 
+///
 /// This test is to reproduce this situation.
 #[test]
 fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
@@ -947,7 +947,7 @@ fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
             .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
                 if !condition.load(Ordering::Acquire)
                     && msg.get_message().get_msg_type() == MessageType::MsgAppend
-                    && msg.get_message().get_entries().len() > 0
+                    && !msg.get_message().get_entries().is_empty()
                 {
                     condition.store(true, Ordering::Release);
                 }
@@ -1027,7 +1027,7 @@ fn test_node_merge_crash_when_snapshot() {
 
     let mut region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
-    
+
     region = pd_client.get_region(b"k2").unwrap();
     cluster.must_split(&region, b"k3");
 
@@ -1042,7 +1042,7 @@ fn test_node_merge_crash_when_snapshot() {
     cluster.transfer_leader(r1.get_id(), r1_on_store1);
     let r2 = pd_client.get_region(b"k2").unwrap();
     let r2_on_store1 = find_peer(&r2, 1).unwrap().to_owned();
-    cluster.transfer_leader(r2.get_id(), r2_on_store1); 
+    cluster.transfer_leader(r2.get_id(), r2_on_store1);
     let r3 = pd_client.get_region(b"k3").unwrap();
     let r3_on_store1 = find_peer(&r3, 1).unwrap().to_owned();
     cluster.transfer_leader(r3.get_id(), r3_on_store1);
@@ -1113,7 +1113,11 @@ fn test_node_merge_crash_when_snapshot() {
 
     for i in 1..5 {
         for j in 1..20 {
-            must_get_equal(&cluster.get_engine(3), format!("k{}{}", i, j).as_bytes(), b"vvv");
+            must_get_equal(
+                &cluster.get_engine(3),
+                format!("k{}{}", i, j).as_bytes(),
+                b"vvv",
+            );
         }
     }
 }
