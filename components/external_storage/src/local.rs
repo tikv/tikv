@@ -58,7 +58,7 @@ impl ExternalStorage for LocalStorage {
     fn write(
         &self,
         name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin + 'static>,
+        reader: Box<dyn AsyncRead + Sync + Send + Unpin + 'static>,
         _content_length: u64,
     ) -> io::Result<()> {
         // Storage does not support dir,
