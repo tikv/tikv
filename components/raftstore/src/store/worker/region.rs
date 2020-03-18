@@ -863,13 +863,15 @@ mod tests {
             // construct snapshot
             let (tx, rx) = mpsc::sync_channel(1);
             let apply_state: RaftApplyState = engines
-                .kv.c()
+                .kv
+                .c()
                 .get_msg_cf(CF_RAFT, &keys::apply_state_key(id))
                 .unwrap()
                 .unwrap();
             let idx = apply_state.get_applied_index();
             let entry = engines
-                .raft.c()
+                .raft
+                .c()
                 .get_msg::<Entry>(&keys::raft_log_key(id, idx))
                 .unwrap()
                 .unwrap();

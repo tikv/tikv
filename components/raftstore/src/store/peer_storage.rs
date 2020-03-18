@@ -1872,13 +1872,15 @@ mod tests {
         sched: &Scheduler<RegionTask>,
     ) -> Result<()> {
         let apply_state: RaftApplyState = engines
-            .kv.c()
+            .kv
+            .c()
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(gen_task.region_id))
             .unwrap()
             .unwrap();
         let idx = apply_state.get_applied_index();
         let entry = engines
-            .raft.c()
+            .raft
+            .c()
             .get_msg::<Entry>(&keys::raft_log_key(gen_task.region_id, idx))
             .unwrap()
             .unwrap();
