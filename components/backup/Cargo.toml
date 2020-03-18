@@ -53,7 +53,7 @@ external_storage = { path = "../external_storage" }
 failure = "0.1"
 futures = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
-grpcio = { version = "0.5.0-alpha.5", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.3"
 keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
@@ -71,12 +71,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 txn_types = { path = "../txn_types" }
-
-[dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
-default-features = false
-features = ["nightly", "push", "process"]
+prometheus = { version = "0.8",default-features = false,features = ["nightly", "push", "process"] }
 
 [dev-dependencies]
 futures-executor = "0.3"
