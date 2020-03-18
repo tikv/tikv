@@ -39,10 +39,16 @@ impl WriteBatch for PanicWriteBatch {
     fn is_empty(&self) -> bool {
         panic!()
     }
-    fn clear(&mut self) {
+    fn should_write_to_engine(&self) -> bool {
         panic!()
     }
 
+    fn clear(&mut self) {
+        panic!()
+    }
+    fn write_to_engine(&mut self, opts: &WriteOptions) -> Result<()> {
+        panic!()
+    }
     fn set_save_point(&mut self) {
         panic!()
     }

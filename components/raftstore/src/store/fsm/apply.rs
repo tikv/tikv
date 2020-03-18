@@ -15,7 +15,6 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
-use engine::rocks::WriteOptions;
 use engine::Engines;
 use engine::Peekable;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatchVec};
@@ -56,10 +55,9 @@ use super::metrics::*;
 
 use super::super::RegionTask;
 
-const WRITE_BATCH_MAX_KEYS: usize = 256;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
-const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
+// const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
@@ -319,7 +317,7 @@ impl ApplyContext {
         notifier: Notifier,
         cfg: &Config,
     ) -> ApplyContext {
-        let opt = engines.kv.get_db_options();
+        let enable_multi_batch_write = engines.kv.c().support_write_batch_vec();
         ApplyContext {
             tag,
             timer: None,
@@ -329,6 +327,7 @@ impl ApplyContext {
             engines,
             router,
             notifier,
+            enable_multi_batch_write,
             kv_wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
             apply_res: vec![],
@@ -340,7 +339,6 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-            enable_multi_batch_write: opt.is_enable_multi_batch_write(),
         }
     }
 
@@ -415,74 +413,21 @@ impl ApplyContext {
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
     }
 
-    fn write_vec_opt(&mut self, write_opts: &WriteOptions) {
-        let wb = self.kv_wb();
-        if wb.vec_size() > 1 {
-            self.engines
-                .kv
-                .multi_batch_write(wb.as_inner(), write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("failed to write to engine: {:?}", e);
-                });
-        } else {
-            self.engines
-                .kv
-                .write_opt(wb.as_raw(), write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("failed to write to engine: {:?}", e);
-                });
-        }
-        self.sync_log_hint = false;
-        let data_size = self.kv_wb().data_size();
-        if data_size > APPLY_WB_SHRINK_SIZE {
-            // Control the memory usage for the WriteBatch.
-            let kv_wb = self
-                .engines
-                .kv
-                .c()
-                .write_batch_vec(WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
-            self.kv_wb = Some(kv_wb);
-        } else {
-            // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
-            self.kv_wb_mut().clear();
-        }
-    }
-
-    fn write_opt(&mut self, write_opts: &WriteOptions) {
-        self.engines
-            .kv
-            .write_opt(self.kv_wb().as_raw(), write_opts)
-            .unwrap_or_else(|e| {
-                panic!("failed to write to engine: {:?}", e);
-            });
-        self.sync_log_hint = false;
-        let data_size = self.kv_wb().data_size();
-        if data_size > APPLY_WB_SHRINK_SIZE {
-            // Control the memory usage for the WriteBatch.
-            let kv_wb = self
-                .engines
-                .kv
-                .c()
-                .write_batch_vec(0, DEFAULT_APPLY_WB_SIZE);
-            self.kv_wb = Some(kv_wb);
-        } else {
-            // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
-            self.kv_wb_mut().clear();
-        }
-    }
-
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
-            let mut write_opts = WriteOptions::new();
+            let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            if self.enable_multi_batch_write {
-                self.write_vec_opt(&write_opts);
-            } else {
-                self.write_opt(&write_opts);
-            }
+            self.kv_wb_mut()
+                .write_to_engine(&write_opts)
+                .unwrap_or_else(|e| {
+                    panic!("failed to write to engine: {:?}", e);
+                });
+            self.sync_log_hint = false;
+            // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+            self.kv_wb_mut().clear();
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
@@ -604,7 +549,7 @@ pub fn notify_stale_req(term: u64, cb: Callback<RocksEngine>) {
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
+fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -614,12 +559,6 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
             AdminCmdType::RollbackMerge => return true,
             _ => {}
         }
-    }
-
-    // When write batch contains more than `recommended` keys, write the batch
-    // to engine.
-    if kv_wb_keys >= WRITE_BATCH_MAX_KEYS {
-        return true;
     }
 
     // Some commands may modify keys covered by the current write batch, so we
@@ -891,7 +830,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
+            if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
                 if self.written {
                     return ApplyResult::Yield;
@@ -3171,8 +3110,8 @@ mod tests {
     use crate::store::util::{new_learner_peer, new_peer};
     use engine::Peekable;
     use engine::DB;
-    use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{Mutable, Peekable as PeekableTrait, WriteBatch};
+    use engine_rocks::{Compat, RocksEngine, WRITE_BATCH_MAX_KEYS};
+    use engine_traits::Peekable as PeekableTrait;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -3223,14 +3162,11 @@ mod tests {
 
     #[test]
     fn test_should_write_to_engine() {
-        let (_path, engines) = create_tmp_engine("test-delegate");
-
         // ComputeHash command
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        let wb = engines.kv.c().write_batch();
-        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine(&req), true);
 
         // IngestSst command
         let mut req = Request::default();
@@ -3238,26 +3174,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        let wb = engines.kv.c().write_batch();
-        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
-
-        // Write batch keys reach WRITE_BATCH_MAX_KEYS
-        let req = RaftCmdRequest::default();
-        let mut wb = engines.kv.c().write_batch();
-        for i in 0..WRITE_BATCH_MAX_KEYS {
-            let key = format!("key_{}", i);
-            wb.put(key.as_bytes(), b"value").unwrap();
-        }
-        assert_eq!(should_write_to_engine(&req, wb.count()), true);
-
-        // Write batch keys not reach WRITE_BATCH_MAX_KEYS
-        let req = RaftCmdRequest::default();
-        let mut wb = engines.kv.c().write_batch();
-        for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
-            let key = format!("key_{}", i);
-            wb.put(key.as_bytes(), b"value").unwrap();
-        }
-        assert_eq!(should_write_to_engine(&req, wb.count()), false);
+        assert_eq!(should_write_to_engine(&cmd), true);
     }
 
     fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)

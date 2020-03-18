@@ -23,7 +23,8 @@ time = "0.1"
 prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/Little-Wallace/rust-rocksdb.git"
+branch = "fix_multi_batch"
 package = "rocksdb"
 
 [dev-dependencies]

@@ -4,10 +4,12 @@ use std::sync::Arc;
 
 use crate::engine::RocksEngine;
 use crate::options::RocksWriteOptions;
+use crate::util::get_cf_handle;
 use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
-use crate::util::get_cf_handle;
+pub const WRITE_BATCH_MAX_KEYS: usize = 256;
+pub const WRITE_BATCH_MAX_BATCH: usize = 16;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
@@ -103,8 +105,19 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
         self.wb.is_empty()
     }
 
+    fn should_write_to_engine(&self) -> bool {
+        self.wb.count() > WRITE_BATCH_MAX_KEYS
+    }
+
     fn clear(&mut self) {
         self.wb.clear();
+    }
+
+    fn write_to_engine(&mut self, opts: &WriteOptions) -> Result<()> {
+        let opt: RocksWriteOptions = opts.into();
+        self.db
+            .write_opt(&self.wb, &opt.into_raw())
+            .map_err(Error::Engine)
     }
 
     fn set_save_point(&mut self) {
@@ -147,6 +160,12 @@ impl Mutable for RocksWriteBatch {
     }
 }
 
+/// `RocksWriteBatchVec` is for method `multi_batch_write` of RocksDB, which splits a large WriteBatch
+/// into many smaller ones and then any thread could help to deal with these small WriteBatch when it
+/// is calling `AwaitState` and wait to become leader of WriteGroup. `multi_batch_write` will perform
+/// much better than traditional `pipelined_write` when TiKV writes very large data into RocksDB. We
+/// will remove this feature when `unordered_write` of RocksDB becomes more stable and becomes compatible
+/// with Titan.
 pub struct RocksWriteBatchVec {
     db: Arc<DB>,
     wbs: Vec<RawWriteBatch>,
@@ -181,10 +200,6 @@ impl RocksWriteBatchVec {
         self.db.as_ref()
     }
 
-    pub fn vec_size(&self) -> usize {
-        self.wbs.len()
-    }
-
     fn check_switch_batch(&mut self) {
         if self.batch_size_limit > 0 && self.cur_batch_size >= self.batch_size_limit {
             self.index += 1;
@@ -210,12 +225,29 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         self.wbs[0].is_empty()
     }
 
+    fn should_write_to_engine(&self) -> bool {
+        self.wbs.len() > WRITE_BATCH_MAX_BATCH
+    }
+
     fn clear(&mut self) {
         for i in 0..=self.index {
             self.wbs[i].clear();
         }
         self.index = 0;
         self.cur_batch_size = 0;
+    }
+
+    fn write_to_engine(&mut self, opts: &WriteOptions) -> Result<()> {
+        let opt: RocksWriteOptions = opts.into();
+        if self.index > 0 {
+            self.db
+                .multi_batch_write(&self.wbs[0..=self.index], &opt.into_raw())
+                .map_err(Error::Engine)
+        } else {
+            self.db
+                .write_opt(&self.wbs[0], &opt.into_raw())
+                .map_err(Error::Engine)
+        }
     }
 
     fn set_save_point(&mut self) {
