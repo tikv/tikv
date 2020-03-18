@@ -203,7 +203,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "hex 0.3.2",
+ "hex 0.4.0",
  "keys",
  "kvproto",
  "lazy_static",
