@@ -1481,28 +1481,26 @@ impl Peer {
 
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         let mut propose_time = None;
-        if !ready.read_states().is_empty() {
-            let states = ready.read_states().iter().map(|state| {
-                let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
-                (uuid, state.index)
-            });
-            // The follower may lost `ReadIndexResp`, so the pending_reads does not
-            // guarantee the orders are consistent with read_states. `advance` will
-            // update the `read_index` of read request that before this successful
-            // `ready`.
-            if !self.is_leader() {
-                // NOTE: there could still be some pending reads proposed by the peer when it was
-                // leader. They will be cleared in `clear_uncommitted_on_role_change` later in
-                // the function.
-                self.pending_reads.advance_replica_reads(states);
-                self.post_pending_read_index_on_replica(ctx);
-            } else {
-                self.pending_reads.advance_leader_reads(states);
-                propose_time = Some(self.pending_reads.last_ready().unwrap().renew_lease_time);
-                if self.ready_to_handle_read() {
-                    while let Some(mut read) = self.pending_reads.pop_front() {
-                        self.response_read(&mut read, ctx, false);
-                    }
+        let states = ready.read_states().iter().map(|state| {
+            let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
+            (uuid, state.index)
+        });
+        // The follower may lost `ReadIndexResp`, so the pending_reads does not
+        // guarantee the orders are consistent with read_states. `advance` will
+        // update the `read_index` of read request that before this successful
+        // `ready`.
+        if !self.is_leader() {
+            // NOTE: there could still be some pending reads proposed by the peer when it was
+            // leader. They will be cleared in `clear_uncommitted_on_role_change` later in
+            // the function.
+            self.pending_reads.advance_replica_reads(states);
+            self.post_pending_read_index_on_replica(ctx);
+        } else {
+            self.pending_reads.advance_leader_reads(states);
+            propose_time = self.pending_reads.last_ready().map(|r| r.renew_lease_time);
+            if self.ready_to_handle_read() {
+                while let Some(mut read) = self.pending_reads.pop_front() {
+                    self.response_read(&mut read, ctx, false);
                 }
             }
         }
