@@ -224,7 +224,11 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .build()?,
             );
         }
-        Ok(self.point_getter_cache.as_mut().unwrap().get(key, can_be_cached)?)
+        Ok(self
+            .point_getter_cache
+            .as_mut()
+            .unwrap()
+            .get(key, can_be_cached)?)
     }
 
     fn incremental_get_take_statistics(&mut self) -> Statistics {
@@ -263,7 +267,9 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         }
         let mut can_be_cached = true;
         for (original_order, key) in order_and_keys {
-            let value = point_getter.get(key, &mut can_be_cached).map_err(Error::from);
+            let value = point_getter
+                .get(key, &mut can_be_cached)
+                .map_err(Error::from);
             unsafe {
                 values[original_order].as_mut_ptr().write(value);
             }

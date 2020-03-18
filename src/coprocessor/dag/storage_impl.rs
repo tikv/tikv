@@ -61,22 +61,17 @@ impl<S: Store> Storage for TiKVStorage<S> {
     fn scan_next(&mut self) -> QEResult<Option<OwnedKvPair>> {
         // Unwrap is fine because we must have called `reset_range` before calling `scan_next`.
         let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
-        if self.check_can_be_cached
-            && self.can_be_cached
-            && !self.scanner.as_mut().unwrap().can_be_cached()
-        {
-            self.can_be_cached = false;
-        }
         Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
     }
 
     fn can_be_cached(&mut self) -> bool {
-        self.can_be_cached
+        self.check_can_be_cached
+            && self.scanner.as_mut().unwrap().can_be_cached()
+            && self.can_be_cached
     }
 
     fn get(&mut self, _is_key_only: bool, range: PointRange) -> QEResult<Option<OwnedKvPair>> {
         // TODO: Default CF does not need to be accessed if KeyOnly.
-        // TODO: let key = &Key::from_raw(&range.0)
         let key = range.0;
         let value = self
             .store
