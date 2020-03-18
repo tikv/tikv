@@ -102,7 +102,7 @@ def check_release(enabled_features, args):
     if not checked_features:
         print("Both jemalloc and SSE4.2 are disabled, skip check")
         return
-    print("Enabled features: %s, will checking bins for %s" % (enabled_features, ", ".join(checked_features)))
+    print("Enabled features: %s, will check bins for %s" % (enabled_features, ", ".join(checked_features)))
     for arg in args:
         pr("checking binary %s" % arg)
         if is_jemalloc_enabled(enabled_features):
