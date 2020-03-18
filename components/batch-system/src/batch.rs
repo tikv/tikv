@@ -312,6 +312,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
+                // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
+                // may change state of the handler, we shall deal with it immediately after
+                // calling `begin` of `Handler`.
                 if !run || fsm_cnt >= batch.normals.len() {
                     break;
                 }
