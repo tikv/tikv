@@ -137,13 +137,15 @@ fn test_download_sst() {
     download.set_storage_backend(external_storage::make_local_backend(temp_dir.path()));
     download.set_name("missing.sst".to_owned());
 
-    let result = import.download(&download);
-    match &result {
-        Err(Error::RpcFailure(RpcStatus {
-            details: Some(msg), ..
-        })) if msg.contains("CannotReadExternalStorage") => {}
-        _ => panic!("unexpected download reply: {:?}", result),
-    }
+    let result = import.download(&download).unwrap();
+    assert!(
+        result
+            .get_error()
+            .get_message()
+            .contains("CannotReadExternalStorage"),
+        "unexpected download reply: {:?}",
+        result
+    );
 
     // Checks that downloading an empty SST returns OK (but cannot be ingested)
     download.set_name("test.sst".to_owned());
