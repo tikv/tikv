@@ -5279,7 +5279,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/sticnarf/yatp.git?branch=adaptive#d3e8d8fe2a598195b75a28e48b1335681da5c9cf"
+source = "git+https://github.com/sticnarf/yatp.git?branch=no-yield#c6dc1646b3c1b5e2c2563c145d688edd0157a7d2"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
