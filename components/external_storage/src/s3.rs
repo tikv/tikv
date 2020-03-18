@@ -2,11 +2,13 @@
 
 use std::io::{Error, ErrorKind, Result};
 
-use futures01::stream::Stream;
+use futures::stream::StreamExt;
 use futures_io::AsyncRead;
-use futures_util::compat::AsyncRead01CompatExt;
-use futures_util::io::AsyncReadExt;
-use tokio::codec::{BytesCodec, FramedRead};
+use tokio::runtime::Runtime;
+use tokio_util::{
+    codec::{BytesCodec, FramedRead},
+    compat::{FuturesAsyncReadCompatExt, Tokio02AsyncReadCompatExt},
+};
 
 use rusoto_core::region;
 use rusoto_core::request::DispatchSignedRequest;
@@ -41,7 +43,6 @@ impl S3Storage {
     fn with_request_dispatcher<D>(config: &Config, dispatcher: D) -> Result<S3Storage>
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
-        D::Future: Send,
     {
         if config.bucket.is_empty() {
             return Err(Error::new(ErrorKind::InvalidInput, "missing bucket name"));
@@ -94,7 +95,7 @@ impl ExternalStorage for S3Storage {
     fn write(
         &self,
         name: &str,
-        reader: Box<dyn AsyncRead + Unpin + Send>,
+        reader: Box<dyn AsyncRead + Sync + Send + Unpin>,
         content_length: u64,
     ) -> Result<()> {
         let key = self.maybe_prefix_key(name);
@@ -110,7 +111,8 @@ impl ExternalStorage for S3Storage {
             key,
             bucket: self.config.bucket.clone(),
             body: Some(ByteStream::new(
-                FramedRead::new(reader.compat(), BytesCodec::new()).map(|bytes| bytes.freeze()),
+                FramedRead::new(reader.compat(), BytesCodec::new())
+                    .map(|bytes| Ok(bytes?.freeze())),
             )),
             content_length: Some(content_length as i64),
             acl: get_var(&self.config.acl),
@@ -118,9 +120,14 @@ impl ExternalStorage for S3Storage {
             storage_class: get_var(&self.config.storage_class),
             ..Default::default()
         };
-        self.client
-            .put_object(req)
-            .sync()
+        let mut runtime = Runtime::new().map_err(|e| {
+            Error::new(
+                ErrorKind::Other,
+                format!("failed to create tokio runtime {}", e),
+            )
+        })?;
+        runtime
+            .block_on(self.client.put_object(req))
             .map(|_| ())
             .map_err(|e| Error::new(ErrorKind::Other, format!("failed to put object {}", e)))
     }
@@ -133,14 +140,19 @@ impl ExternalStorage for S3Storage {
             bucket: self.config.bucket.clone(),
             ..Default::default()
         };
-        self.client
-            .get_object(req)
-            .sync()
+        let mut runtime = Runtime::new().map_err(|e| {
+            Error::new(
+                ErrorKind::Other,
+                format!("failed to create tokio runtime {}", e),
+            )
+        })?;
+        runtime
+            .block_on(self.client.get_object(req))
             .map(|out| Box::new(out.body.unwrap().into_async_read().compat()) as _)
             .map_err(|e| match e {
                 RusotoError::Service(GetObjectError::NoSuchKey(key)) => Error::new(
                     ErrorKind::NotFound,
-                    format!("not key {} not at bucket {}", key, self.config.bucket),
+                    format!("no key {} at bucket {}", key, self.config.bucket),
                 ),
                 e => Error::new(ErrorKind::Other, format!("failed to get object {}", e)),
             })
@@ -150,6 +162,7 @@ impl ExternalStorage for S3Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::io::AsyncReadExt;
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::MockRequestDispatcher;
 
