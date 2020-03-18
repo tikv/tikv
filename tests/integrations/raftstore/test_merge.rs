@@ -9,7 +9,8 @@ use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
-use engine::Peekable;
+use engine_rocks::Compat;
+use engine_traits::Peekable;
 use engine_traits::{CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
 use raftstore::store::*;
@@ -89,6 +90,7 @@ fn test_node_base_merge() {
         for _ in 0..3 {
             state = cluster
                 .get_engine(i)
+                .c()
                 .get_msg_cf(CF_RAFT, &state_key)
                 .unwrap()
                 .unwrap();
@@ -546,6 +548,7 @@ fn test_node_merge_brain_split() {
     let state_key = keys::region_state_key(left.get_id());
     let state: RegionLocalState = cluster
         .get_engine(3)
+        .c()
         .get_msg_cf(CF_RAFT, &state_key)
         .unwrap()
         .unwrap();

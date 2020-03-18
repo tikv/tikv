@@ -6,7 +6,7 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use engine::rocks::{
+use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
