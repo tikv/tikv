@@ -1,9 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
-use std::path::Path;
 
 use rand::RngCore;
 use tempfile::{Builder, TempDir};
