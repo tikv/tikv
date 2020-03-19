@@ -152,8 +152,6 @@ impl<S: Snapshot> PointGetter<S> {
         }
 
         let mut can_be_cached_by_lock = true;
-        let mut can_be_cached_by_data = true;
-
         match self.isolation_level {
             IsolationLevel::Si => {
                 // Check for locks that signal concurrent writes in Si.
@@ -162,11 +160,16 @@ impl<S: Snapshot> PointGetter<S> {
             IsolationLevel::Rc => {}
         }
 
-        let result = self.load_data(user_key, Some(&mut can_be_cached_by_data));
         if let Some(can_be_cached) = can_be_cached {
-            *can_be_cached = can_be_cached_by_lock && can_be_cached_by_data;
+            self.write_cursor.seek(
+                &user_key.clone().append_ts(TimeStamp::max()),
+                &mut self.statistics.write,
+            )?;
+            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            *can_be_cached = can_be_cached_by_lock && Key::decode_ts_from(current_key)? <= self.ts;
         }
-        result
+
+        self.load_data(user_key)
     }
 
     /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
@@ -182,8 +185,8 @@ impl<S: Snapshot> PointGetter<S> {
         if let Some(ref lock_value) = lock_value {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
-            if lock.ts > self.ts {
-                if let Some(can_be_cached) = can_be_cached {
+            if let Some(can_be_cached) = can_be_cached {
+                if lock.ts > self.ts {
                     *can_be_cached = false;
                 }
             }
@@ -198,7 +201,7 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
     /// from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key, can_be_cached: Option<&mut bool>) -> Result<Option<Value>> {
+    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
         if !self.write_cursor.seek(
             &user_key.clone().append_ts(self.ts),
             &mut self.statistics.write,
@@ -225,18 +228,10 @@ impl<S: Snapshot> PointGetter<S> {
                     }
                     match write.short_value {
                         Some(value) => {
-                            if let Some(can_be_cached) = can_be_cached {
-                                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                                *can_be_cached = Key::decode_ts_from(current_key)? <= self.ts;
-                            }
                             // Value is carried in `write`.
                             return Ok(Some(value.to_vec()));
                         }
                         None => {
-                            if let Some(can_be_cached) = can_be_cached {
-                                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                                *can_be_cached = Key::decode_ts_from(current_key)? <= self.ts;
-                            }
                             let start_ts = write.start_ts;
                             return Ok(Some(self.load_data_from_default_cf(start_ts, user_key)?));
                         }
