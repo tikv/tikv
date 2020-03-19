@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::codec::data_type::*;
+use tidb_query_datatype::codec::data_type::*;
 
 #[derive(Copy, Clone)]
 struct IntWithSign(u64, bool);

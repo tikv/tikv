@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::range::*;
 use super::Result;
 
-type ErrorBuilder = Box<dyn Send + Sync + Fn() -> crate::error::StorageError>;
+type ErrorBuilder = Box<dyn Send + Sync + Fn() -> tidb_query_datatype::error::StorageError>;
 
 type FixtureValue = std::result::Result<Vec<u8>, ErrorBuilder>;
 

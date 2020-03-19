@@ -502,7 +502,6 @@ mod tests {
     use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
-    use crate::util::generate_index_data;
     use tikv_util::collections::{HashMap, HashSet};
     use tikv_util::map;
 
@@ -510,6 +509,33 @@ mod tests {
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
+
+    pub fn generate_index_data(
+        table_id: i64,
+        index_id: i64,
+        handle: i64,
+        col_val: &Datum,
+        unique: bool,
+    ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
+        let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
+        let mut expect_row = HashMap::default();
+        let mut v: Vec<_> = indice
+            .iter()
+            .map(|&(ref cid, ref value)| {
+                expect_row.insert(
+                    *cid,
+                    datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
+                );
+                value.clone()
+            })
+            .collect();
+        if !unique {
+            v.push(Datum::I64(handle));
+        }
+        let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
+        let idx_key = encode_index_seek_key(table_id, index_id, &encoded);
+        (expect_row, idx_key)
+    }
 
     #[test]
     fn test_row_key_codec() {

@@ -3,10 +3,10 @@
 use regex::{bytes::Regex as BytesRegex, Regex};
 
 use crate::ScalarFunc;
+use tidb_query_common::expr_util;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::expr::{EvalContext, Result};
-use tidb_query_datatype::expr_util;
 use tidb_query_datatype::{Collation, FieldTypeAccessor};
 
 impl ScalarFunc {

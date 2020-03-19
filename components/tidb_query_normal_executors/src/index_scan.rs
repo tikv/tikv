@@ -7,9 +7,9 @@ use tipb::ColumnInfo;
 use tipb::IndexScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
+use tidb_query_common::storage::Storage;
 use tidb_query_datatype::codec::table::{self, check_index_key};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::storage::Storage;
 use tidb_query_datatype::Result;
 
 pub struct IndexInnerExecutor {
@@ -129,10 +129,10 @@ pub mod tests {
     use super::super::tests::*;
     use super::super::Executor;
     use super::*;
-    use tidb_query_datatype::execute_stats::ExecuteStats;
+    use tidb_query_common::execute_stats::ExecuteStats;
 
+    use tidb_query_common::storage::test_fixture::FixtureStorage;
     use tidb_query_datatype::codec::datum::{self, Datum};
-    use tidb_query_datatype::storage::test_fixture::FixtureStorage;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;

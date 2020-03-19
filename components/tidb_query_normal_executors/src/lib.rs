@@ -66,12 +66,12 @@ use tikv_util::collections::HashSet;
 use tipb::ColumnInfo;
 use tipb::{Expr, ExprType};
 
+use tidb_query_common::execute_stats::*;
+use tidb_query_common::storage::IntervalRange;
+use tidb_query_common::util;
 use tidb_query_datatype::codec::datum::{self, Datum, DatumEncoder};
 use tidb_query_datatype::codec::table::{self, RowColsDict};
-use tidb_query_datatype::execute_stats::*;
 use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
-use tidb_query_datatype::storage::IntervalRange;
-use tidb_query_datatype::util;
 use tidb_query_datatype::Result;
 
 /// An expression tree visitor that extracts all column offsets in the tree.
@@ -391,9 +391,9 @@ pub mod tests {
     use super::{Executor, TableScanExecutor};
     use codec::prelude::NumberEncoder;
     use kvproto::coprocessor::KeyRange;
+    use tidb_query_common::storage::test_fixture::FixtureStorage;
     use tidb_query_datatype::codec::{datum, table, Datum};
     use tidb_query_datatype::expr::EvalContext;
-    use tidb_query_datatype::storage::test_fixture::FixtureStorage;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tikv_util::collections::HashMap;
     use tikv_util::map;
@@ -440,7 +440,7 @@ pub mod tests {
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
         let start_key = table::encode_row_key(table_id, handle);
         let mut end = start_key.clone();
-        tidb_query_datatype::util::convert_to_prefix_next(&mut end);
+        tidb_query_common::util::convert_to_prefix_next(&mut end);
         let mut key_range = KeyRange::default();
         key_range.set_start(start_key);
         key_range.set_end(end);

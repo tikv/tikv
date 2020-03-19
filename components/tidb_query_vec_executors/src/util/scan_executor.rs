@@ -5,10 +5,10 @@ use tipb::ColumnInfo;
 use tipb::FieldType;
 
 use crate::interface::*;
+use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query_common::storage::{IntervalRange, Range, Storage};
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_datatype::storage::{IntervalRange, Range, Storage};
 use tidb_query_datatype::Result;
 
 /// Common interfaces for table scan and index scan implementations.

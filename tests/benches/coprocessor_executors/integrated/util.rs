@@ -10,7 +10,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::Executor as PbExecutor;
 
 use test_coprocessor::*;
-use tidb_query_datatype::execute_stats::ExecSummaryCollectorDisabled;
+use tidb_query_common::execute_stats::ExecSummaryCollectorDisabled;
 use tidb_query_datatype::expr::EvalConfig;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::{RocksEngine, Store as TxnStore};

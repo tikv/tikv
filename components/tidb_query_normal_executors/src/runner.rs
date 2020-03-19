@@ -10,10 +10,10 @@ use tipb::{Chunk, DagRequest, SelectResponse, StreamResponse};
 use tikv_util::deadline::Deadline;
 
 use super::Executor;
-use tidb_query_datatype::execute_stats::*;
+use tidb_query_common::execute_stats::*;
+use tidb_query_common::metrics::*;
+use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::metrics::*;
-use tidb_query_datatype::storage::{IntervalRange, Storage};
 use tidb_query_datatype::Result;
 
 pub struct ExecutorsRunner<SS> {

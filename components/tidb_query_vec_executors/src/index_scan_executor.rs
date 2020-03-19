@@ -11,11 +11,11 @@ use tipb::IndexScan;
 use super::util::scan_executor::*;
 use crate::interface::*;
 use codec::prelude::NumberDecoder;
+use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN};
 use tidb_query_datatype::codec::{datum, table};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::storage::{IntervalRange, Storage};
 use tidb_query_datatype::Result;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
@@ -297,11 +297,11 @@ mod tests {
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tipb::ColumnInfo;
 
+    use tidb_query_common::storage::test_fixture::FixtureStorage;
+    use tidb_query_common::util::convert_to_prefix_next;
     use tidb_query_datatype::codec::data_type::*;
     use tidb_query_datatype::codec::{datum, table, Datum};
     use tidb_query_datatype::expr::EvalConfig;
-    use tidb_query_datatype::storage::test_fixture::FixtureStorage;
-    use tidb_query_datatype::util::convert_to_prefix_next;
 
     #[test]
     fn test_basic() {

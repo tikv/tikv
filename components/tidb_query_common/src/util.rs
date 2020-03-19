@@ -3,9 +3,7 @@
 use kvproto::coprocessor as coppb;
 use tipb::ColumnInfo;
 
-use crate::codec::{datum, table, Datum};
-use crate::expr::EvalContext;
-use tikv_util::collections::HashMap;
+use tidb_query_datatype::codec::Datum;
 
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
@@ -33,33 +31,6 @@ pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
         }
         i -= 1;
     }
-}
-
-pub fn generate_index_data(
-    table_id: i64,
-    index_id: i64,
-    handle: i64,
-    col_val: &Datum,
-    unique: bool,
-) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
-    let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
-    let mut expect_row = HashMap::default();
-    let mut v: Vec<_> = indice
-        .iter()
-        .map(|&(ref cid, ref value)| {
-            expect_row.insert(
-                *cid,
-                datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
-            );
-            value.clone()
-        })
-        .collect();
-    if !unique {
-        v.push(Datum::I64(handle));
-    }
-    let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
-    let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
-    (expect_row, idx_key)
 }
 
 /// Check if `key`'s prefix next equals to `next`.
@@ -122,7 +93,7 @@ pub fn is_point(range: &coppb::KeyRange) -> bool {
 
 #[inline]
 pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
-    use crate::{FieldTypeAccessor, FieldTypeFlag};
+    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag};
 
     if col.as_accessor().flag().contains(FieldTypeFlag::UNSIGNED) {
         // PK column is unsigned

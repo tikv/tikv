@@ -3,7 +3,7 @@
 use tipb::FieldType;
 
 use crate::interface::*;
-use tidb_query_datatype::storage::IntervalRange;
+use tidb_query_common::storage::IntervalRange;
 
 /// A simple mock executor that will return batch data according to a fixture without any
 /// modification.

@@ -8,10 +8,10 @@ use num::traits::Pow;
 use tikv_util::file::calc_crc32_bytes;
 
 use crate::ScalarFunc;
+use tidb_query_common::expr_util::rand::MySQLRng;
 use tidb_query_datatype::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::expr::{Error, EvalContext, Result};
-use tidb_query_datatype::expr_util::rand::MySQLRng;
 
 const I64_TEN_POWS: [i64; 19] = [
     1,
@@ -494,7 +494,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        use tidb_query_datatype::expr_util::conv::conv as conv_impl;
+        use tidb_query_common::expr_util::conv::conv as conv_impl;
         let n = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let from_base = try_opt!(self.children[1].eval_int(ctx, row));
         let to_base = try_opt!(self.children[2].eval_int(ctx, row));

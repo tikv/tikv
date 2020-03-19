@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use tidb_query_codegen::rpn_fn;
 
+use tidb_query_common::expr_util;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr_util;
 use tidb_query_datatype::Result;
 
 const IPV4_LENGTH: usize = 4;

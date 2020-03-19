@@ -5,9 +5,9 @@ use std::sync::Arc;
 use tipb::Selection;
 
 use super::{Executor, ExprColumnRefVisitor, Row};
-use tidb_query_datatype::execute_stats::ExecuteStats;
+use tidb_query_common::execute_stats::ExecuteStats;
+use tidb_query_common::storage::IntervalRange;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
-use tidb_query_datatype::storage::IntervalRange;
 use tidb_query_datatype::Result;
 use tidb_query_normal_expr::Expression;
 

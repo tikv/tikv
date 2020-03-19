@@ -225,7 +225,7 @@ dependencies = [
  "tempfile",
  "test_raftstore",
  "test_util",
- "tidb_query_datatype",
+ "tidb_query_common",
  "tikv",
  "tikv_alloc",
  "tikv_util",
@@ -4095,6 +4095,7 @@ dependencies = [
  "kvproto",
  "protobuf",
  "test_storage",
+ "tidb_query_common",
  "tidb_query_datatype",
  "tikv",
  "tikv_util",
@@ -4212,6 +4213,7 @@ dependencies = [
  "test_sst_importer",
  "test_storage",
  "test_util",
+ "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_normal_executors",
  "tidb_query_normal_expr",
@@ -4278,17 +4280,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "tidb_query_common"
+version = "0.0.1"
+dependencies = [
+ "byteorder",
+ "derive_more 0.15.0",
+ "hex 0.3.2",
+ "kvproto",
+ "lazy_static",
+ "prometheus",
+ "prometheus-static-metric",
+ "rand 0.6.5",
+ "tidb_query_datatype",
+ "tikv_util",
+ "time 0.1.42",
+ "tipb",
+]
+
+[[package]]
 name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
  "bitfield",
  "bitflags",
  "boolinator",
- "byteorder",
  "chrono",
  "chrono-tz",
  "codec",
- "derive_more 0.15.0",
  "failure",
  "hex 0.3.2",
  "kvproto",
@@ -4299,11 +4317,8 @@ dependencies = [
  "num-derive",
  "num-traits",
  "ordered-float",
- "prometheus",
- "prometheus-static-metric",
  "protobuf",
  "quick-error",
- "rand 0.6.5",
  "regex",
  "serde",
  "serde_json",
@@ -4313,7 +4328,6 @@ dependencies = [
  "static_assertions",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.42",
  "tipb",
 ]
 
@@ -4327,6 +4341,7 @@ dependencies = [
  "indexmap",
  "kvproto",
  "protobuf",
+ "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_normal_expr",
  "tikv_util",
@@ -4353,6 +4368,7 @@ dependencies = [
  "safemem",
  "slog",
  "slog-global",
+ "tidb_query_common",
  "tidb_query_datatype",
  "tikv_util",
  "tipb",
@@ -4388,6 +4404,7 @@ dependencies = [
  "slog-global",
  "smallvec 0.6.10",
  "tidb_query_codegen",
+ "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_vec_aggr",
  "tidb_query_vec_expr",
@@ -4416,6 +4433,7 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "tidb_query_codegen",
+ "tidb_query_common",
  "tidb_query_datatype",
  "tikv_util",
  "tipb",
@@ -4499,6 +4517,7 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "test_util",
+ "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_normal_executors",
  "tidb_query_normal_expr",

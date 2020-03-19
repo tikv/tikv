@@ -17,6 +17,7 @@ openssl = { version = "0.10" }
 protobuf = "2"
 tidb_query_codegen = { path = "../tidb_query_codegen" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }
+tidb_query_common = { path = "../tidb_query_common" }
 tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 twoway = "0.2.0"

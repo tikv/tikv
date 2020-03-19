@@ -7,9 +7,9 @@ use tipb::FieldType;
 use tipb::Selection;
 
 use crate::interface::*;
+use tidb_query_common::storage::IntervalRange;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::storage::IntervalRange;
 use tidb_query_datatype::Result;
 use tidb_query_vec_expr::RpnStackNode;
 use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};

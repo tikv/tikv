@@ -3,7 +3,7 @@
 use tipb::FieldType;
 
 use crate::interface::*;
-use tidb_query_datatype::storage::IntervalRange;
+use tidb_query_common::storage::IntervalRange;
 use tidb_query_datatype::Result;
 
 /// Executor that retrieves rows from the source executor

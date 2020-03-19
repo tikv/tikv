@@ -1,11 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::ScalarFunc;
+use tidb_query_common::expr_util;
 use tidb_query_datatype::codec::data_type::Duration;
 use tidb_query_datatype::codec::mysql::{Decimal, Json, Time};
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::expr::{EvalContext, Result};
-use tidb_query_datatype::expr_util;
 
 use std::borrow::Cow;
 use std::convert::TryFrom;

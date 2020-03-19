@@ -4,16 +4,16 @@
 
 //! Batch executor common structures.
 
-pub use tidb_query_datatype::execute_stats::{
+pub use tidb_query_common::execute_stats::{
     ExecSummaryCollector, ExecuteStats, WithSummaryCollector,
 };
 
 use tipb::FieldType;
 
+use tidb_query_common::execute_stats::ExecSummaryCollectorEnabled;
+use tidb_query_common::storage::IntervalRange;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::execute_stats::ExecSummaryCollectorEnabled;
 use tidb_query_datatype::expr::EvalWarnings;
-use tidb_query_datatype::storage::IntervalRange;
 use tidb_query_datatype::Result;
 
 /// The interface for pull-based executors. It is similar to the Volcano Iterator model, but

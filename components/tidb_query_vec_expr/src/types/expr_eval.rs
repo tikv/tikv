@@ -277,7 +277,6 @@ impl RpnExpression {
     }
 }
 
-//#[cfg(test)]
 #[cfg(test)]
 mod tests {
     #![allow(clippy::float_cmp)]

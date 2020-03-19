@@ -10,10 +10,10 @@ use tipb::TopN;
 
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExprColumnRefVisitor, Row};
+use tidb_query_common::execute_stats::ExecuteStats;
+use tidb_query_common::storage::IntervalRange;
 use tidb_query_datatype::codec::datum::Datum;
-use tidb_query_datatype::execute_stats::ExecuteStats;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
-use tidb_query_datatype::storage::IntervalRange;
 use tidb_query_datatype::Result;
 use tidb_query_normal_expr::Expression;
 
@@ -149,7 +149,6 @@ impl<Src: Executor> Executor for TopNExecutor<Src> {
     }
 }
 
-//#[cfg(test)]
 #[cfg(test)]
 pub mod tests {
     use std::cell::RefCell;

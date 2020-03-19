@@ -3,9 +3,9 @@
 use tipb::Limit;
 
 use crate::{Executor, Row};
-use tidb_query_datatype::execute_stats::ExecuteStats;
+use tidb_query_common::execute_stats::ExecuteStats;
+use tidb_query_common::storage::IntervalRange;
 use tidb_query_datatype::expr::EvalWarnings;
-use tidb_query_datatype::storage::IntervalRange;
 use tidb_query_datatype::Result;
 
 /// Retrieves rows from the source executor and only produces part of the rows.

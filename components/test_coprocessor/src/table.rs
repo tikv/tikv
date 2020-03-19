@@ -93,7 +93,7 @@ impl Table {
     pub fn get_record_range_one(&self, handle_id: i64) -> KeyRange {
         let start_key = table::encode_row_key(self.id, handle_id);
         let mut end_key = start_key.clone();
-        tidb_query_datatype::util::convert_to_prefix_next(&mut end_key);
+        tidb_query_common::util::convert_to_prefix_next(&mut end_key);
         let mut range = KeyRange::default();
         range.set_start(start_key);
         range.set_end(end_key);

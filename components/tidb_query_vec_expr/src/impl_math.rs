@@ -3,11 +3,11 @@ use std::cell::RefCell;
 use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
 
+use tidb_query_common::expr_util::rand::MySQLRng;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::{RoundMode, DEFAULT_FSP};
 use tidb_query_datatype::codec::{self, Error};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::expr_util::rand::MySQLRng;
 use tidb_query_datatype::Result;
 
 #[rpn_fn]
@@ -424,7 +424,7 @@ pub fn conv(
     from_base: &Option<Int>,
     to_base: &Option<Int>,
 ) -> Result<Option<Bytes>> {
-    use tidb_query_datatype::expr_util::conv::conv as conv_impl;
+    use tidb_query_common::expr_util::conv::conv as conv_impl;
     if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
         let s = String::from_utf8_lossy(n);
         Ok(conv_impl(s.as_ref(), *from_base, *to_base))

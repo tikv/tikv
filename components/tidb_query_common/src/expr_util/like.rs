@@ -10,8 +10,8 @@
 //! 2. It should support non-binary mode (and binary mode) and do case insensitive comparing
 //!    in non-binary mode.
 
-use crate::codec::collation::{Charset, Collator};
-use crate::expr::Result;
+use tidb_query_datatype::codec::collation::{Charset, Collator};
+use tidb_query_datatype::expr::Result;
 
 pub fn like<C: Collator>(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
     // current search positions in pattern and target.

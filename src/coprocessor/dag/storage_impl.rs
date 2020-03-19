@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_query_datatype::storage::{
+use tidb_query_common::storage::{
     IntervalRange, OwnedKvPair, PointRange, Result as QEResult, Storage,
 };
 

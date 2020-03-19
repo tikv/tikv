@@ -441,7 +441,6 @@ pub fn char_length_utf8(bs: &Option<Bytes>) -> Result<Option<Int>> {
     }
 }
 
-//#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::*;
