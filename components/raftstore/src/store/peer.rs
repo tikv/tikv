@@ -459,11 +459,11 @@ impl Peer {
         );
 
         // Set Tombstone state explicitly
-        let kv_wb = ctx.engines.kv.c().write_batch();
-        let raft_wb = ctx.engines.raft.c().write_batch();
-        self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
+        let mut kv_wb = ctx.engines.kv.c().write_batch();
+        let mut raft_wb = ctx.engines.raft.c().write_batch();
+        self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
         write_peer_state(
-            &kv_wb,
+            &mut kv_wb,
             &region,
             PeerState::Tombstone,
             self.pending_merge_state.clone(),
@@ -1064,6 +1064,23 @@ impl Peer {
         false
     }
 
+    /// Whether a log can be applied before writing raft batch.
+    ///
+    /// If TiKV crashes, it's possible apply index > commit index. If logs are still
+    /// available in other nodes, it's possible to be recovered. But for singleton, logs are
+    /// only available on single node, logs are gone forever.
+    ///
+    /// Note we can't just check singleton. Because conf change takes effect on apply, so even
+    /// there are two nodes, previous logs can still be committed by leader alone. Those logs
+    /// can't be applied early. After introducing joint consensus, the node number can be
+    /// undetermined. So here check whether log is persisted on disk instead.
+    ///
+    /// Only apply existing logs has another benefit that we don't need to deal with snapshots
+    /// that are older than apply index as apply index <= last index <= index of snapshot.
+    pub fn can_early_apply(&self, term: u64, index: u64) -> bool {
+        self.get_store().last_index() >= index && self.get_store().last_term() >= term
+    }
+
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
         if self.apply_proposals.is_empty() {
             return None;
@@ -1279,7 +1296,12 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply<T, C>(&mut self, ctx: &mut PollContext<T, C>, mut ready: Ready) {
+    pub fn handle_raft_ready_apply<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        ready: &mut Ready,
+        invoke_ctx: &InvokeContext,
+    ) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -1287,10 +1309,8 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if self.is_applying_snapshot() {
-            // Snapshot's metadata has been applied.
-            self.last_applying_idx = self.get_store().truncated_index();
-        } else {
+        if raft::is_empty_snap(ready.snapshot()) {
+            debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
@@ -1367,7 +1387,16 @@ impl Peer {
                     self.raft_group.skip_bcast_commit(true);
                     self.last_urgent_proposal_idx = u64::MAX;
                 }
-                let apply = Apply::new(self.region_id, self.term(), committed_entries);
+                let committed_index = self.raft_group.raft.raft_log.committed;
+                let term = self.raft_group.raft.raft_log.term(committed_index).unwrap();
+                let apply = Apply::new(
+                    self.region_id,
+                    self.term(),
+                    committed_entries,
+                    self.get_store().committed_index(),
+                    term,
+                    committed_index,
+                );
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
@@ -1384,13 +1413,20 @@ impl Peer {
             }
         }
 
-        self.apply_reads(ctx, &ready);
+        self.apply_reads(ctx, ready);
+    }
 
-        self.raft_group.advance_append(ready);
-        if self.is_applying_snapshot() {
+    pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
+        if !raft::is_empty_snap(ready.snapshot()) {
+            debug_assert!(self.get_store().is_applying_snapshot());
+            // Snapshot's metadata has been applied.
+            self.last_applying_idx = self.get_store().truncated_index();
+            self.raft_group.advance_append(ready);
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);
+        } else {
+            self.raft_group.advance_append(ready);
         }
         self.proposals.gc();
     }
@@ -1451,7 +1487,6 @@ impl Peer {
             let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
             (uuid, state.index)
         });
-
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
@@ -1462,14 +1497,14 @@ impl Peer {
             // the function.
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
-        } else if self.ready_to_handle_read() {
-            for (uuid, index) in states {
-                let mut read = self.pending_reads.advance_leader_read_and_pop(uuid, index);
-                propose_time = Some(read.renew_lease_time);
-                self.response_read(&mut read, ctx, false);
-            }
         } else {
-            propose_time = self.pending_reads.advance_leader_reads(states);
+            self.pending_reads.advance_leader_reads(states);
+            propose_time = self.pending_reads.last_ready().map(|r| r.renew_lease_time);
+            if self.ready_to_handle_read() {
+                while let Some(mut read) = self.pending_reads.pop_front() {
+                    self.response_read(&mut read, ctx, false);
+                }
+            }
         }
 
         // Note that only after handle read_states can we identify what requests are

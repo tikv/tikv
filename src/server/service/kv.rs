@@ -953,7 +953,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         Commit, future_commit(storage), kv_commit;
         Cleanup, future_cleanup(storage), kv_cleanup;
         BatchGet, future_batch_get(storage), kv_batch_get;
-        BatchRollback, future_batch_rollback(storage), kv_batch_get;
+        BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
         TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
         CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
         ScanLock, future_scan_lock(storage), kv_scan_lock;

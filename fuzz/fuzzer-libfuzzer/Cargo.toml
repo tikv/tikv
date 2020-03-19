@@ -10,4 +10,4 @@ prost-codec = ["fuzz-targets/prost-codec"]
 
 [dependencies]
 fuzz-targets = { path = "../targets", default-features = false }
-libfuzzer-sys = { git = "https://github.com/rust-fuzz/libfuzzer-sys.git" }
+libfuzzer-sys = "0.3.1"
