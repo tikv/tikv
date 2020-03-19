@@ -232,13 +232,13 @@ mod tests {
 
     #[test]
     fn test_security() {
-        let mut cfg = SecurityConfig::default();
+        let cfg = SecurityConfig::default();
         // default is disable secure connection.
         cfg.validate().unwrap();
         let mut mgr = SecurityManager::new(&cfg).unwrap();
-        assert!(mgr.ca.is_empty());
-        assert!(mgr.cert.is_empty());
-        assert!(mgr.key.is_empty());
+        assert!(mgr.certs.read().unwrap().ca.is_empty());
+        assert!(mgr.certs.read().unwrap().cert.is_empty());
+        assert!(mgr.certs.read().unwrap().key.is_empty());
 
         let assert_cfg = |c: fn(&mut SecurityConfig), valid: bool| {
             let mut invalid_cfg = cfg.clone();
@@ -276,8 +276,8 @@ mod tests {
         c.ca_path = format!("{}", example_ca.display());
         c.validate().unwrap();
         mgr = SecurityManager::new(&c).unwrap();
-        assert_eq!(mgr.ca, vec![0]);
-        assert_eq!(mgr.cert, vec![1]);
-        assert_eq!(mgr.key, vec![2]);
+        assert_eq!(mgr.certs.read().unwrap().ca, vec![0]);
+        assert_eq!(mgr.certs.read().unwrap().cert, vec![1]);
+        assert_eq!(mgr.certs.read().unwrap().key, vec![2]);
     }
 }
