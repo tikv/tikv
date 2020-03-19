@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
@@ -26,8 +27,7 @@ use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
 use tikv::config::*;
-use tikv::server::{lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig};
-use tikv::storage::config::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::config::*;
 use tikv_util::{escape, HandyRwLock};
 
@@ -121,95 +121,12 @@ pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
     );
 }
 
-pub fn new_store_cfg() -> Config {
-    Config {
-        sync_log: false,
-        raft_base_tick_interval: ReadableDuration::millis(10),
-        raft_heartbeat_ticks: 2,
-        raft_election_timeout_ticks: 25,
-        raft_log_gc_tick_interval: ReadableDuration::millis(100),
-        raft_log_gc_threshold: 1,
-        // Use a value of 3 seconds as max_leader_missing_duration just for test.
-        // In production environment, the value of max_leader_missing_duration
-        // should be configured far beyond the election timeout.
-        max_leader_missing_duration: ReadableDuration::secs(2),
-        // To make a valid config, use a value of 2 seconds as
-        // abnormal_leader_missing_duration and set
-        // peer_stale_state_check_interval to 1 second.
-        abnormal_leader_missing_duration: ReadableDuration::millis(1500),
-        peer_stale_state_check_interval: ReadableDuration::secs(1),
-        pd_heartbeat_tick_interval: ReadableDuration::millis(20),
-        region_split_check_diff: ReadableSize(10000),
-        report_region_flow_interval: ReadableDuration::millis(100),
-        raft_store_max_leader_lease: ReadableDuration::millis(250),
-        raft_reject_transfer_leader_duration: ReadableDuration::secs(0),
-        clean_stale_peer_delay: ReadableDuration::secs(0),
-        allow_remove_leader: true,
-        merge_check_tick_interval: ReadableDuration::millis(100),
-        ..Config::default()
-    }
-}
-
-pub fn new_server_config(cluster_id: u64) -> ServerConfig {
-    ServerConfig {
-        cluster_id,
-        addr: "127.0.0.1:0".to_owned(),
-        grpc_concurrency: 1,
-        // Considering connection selection algo is involved, maybe
-        // use 2 or larger value here?
-        grpc_raft_conn_num: 1,
-        // Disable stats concurrency. procinfo performs too bad without optimization,
-        // disable it to save CPU for real tests.
-        stats_concurrency: 0,
-        ..ServerConfig::default()
-    }
-}
-
-pub fn new_readpool_cfg() -> ReadPoolConfig {
-    ReadPoolConfig {
-        unify_read_pool: Some(false),
-        unified: UnifiedReadPoolConfig {
-            min_thread_count: 1,
-            max_thread_count: 1,
-            ..UnifiedReadPoolConfig::default()
-        },
-        storage: StorageReadPoolConfig {
-            high_concurrency: 1,
-            normal_concurrency: 1,
-            low_concurrency: 1,
-            ..StorageReadPoolConfig::default()
-        },
-        coprocessor: CoprReadPoolConfig {
-            high_concurrency: 1,
-            normal_concurrency: 1,
-            low_concurrency: 1,
-            ..CoprReadPoolConfig::default()
-        },
-    }
-}
-
-pub fn new_pessimistic_txn_cfg() -> PessimisticTxnConfig {
-    PessimisticTxnConfig {
-        // Use a large value here since tests run slowly in CI.
-        wait_for_lock_timeout: 3000,
-        wake_up_delay_duration: 100,
-        ..PessimisticTxnConfig::default()
-    }
-}
-
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
-    TiKvConfig {
-        storage: StorageConfig {
-            scheduler_worker_pool_size: 1,
-            scheduler_concurrency: 10,
-            ..StorageConfig::default()
-        },
-        server: new_server_config(cluster_id),
-        raft_store: new_store_cfg(),
-        readpool: new_readpool_cfg(),
-        pessimistic_txn: new_pessimistic_txn_cfg(),
-        ..TiKvConfig::default()
-    }
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let common_test_cfg = manifest_dir.join("src/common-test.toml");
+    let mut cfg = TiKvConfig::from_file(common_test_cfg);
+    cfg.server.cluster_id = cluster_id;
+    cfg
 }
 
 // Create a base request.
