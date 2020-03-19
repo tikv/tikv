@@ -1,10 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::DB;
+use engine_rocks::RocksEngine;
 use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use std::marker::PhantomData;
 
 use std::mem;
 use std::ops::Deref;
@@ -77,6 +78,55 @@ macro_rules! impl_box_observer {
     };
 }
 
+// This is the same as impl_box_observer_g except $ob has a typaram
+macro_rules! impl_box_observer_g {
+    ($name:ident, $ob: ident, $wrapper: ident) => {
+        pub struct $name<E>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
+        impl<E: 'static + Send> $name<E> {
+            pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
+                $name(Box::new($wrapper {
+                    inner: observer,
+                    _phantom: PhantomData,
+                }))
+            }
+        }
+        impl<E: 'static> Clone for $name<E> {
+            fn clone(&self) -> $name<E> {
+                $name((**self).box_clone())
+            }
+        }
+        impl<E> Deref for $name<E> {
+            type Target = Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>;
+
+            fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send> {
+                &self.0
+            }
+        }
+
+        struct $wrapper<E, T: $ob<E> + Clone> {
+            inner: T,
+            _phantom: PhantomData<E>,
+        }
+        impl<E: 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver for $wrapper<E, T> {
+            type Ob = dyn $ob<E>;
+            fn inner(&self) -> &Self::Ob {
+                &self.inner as _
+            }
+
+            fn inner_mut(&mut self) -> &mut Self::Ob {
+                &mut self.inner as _
+            }
+
+            fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
+                Box::new($wrapper {
+                    inner: self.inner.clone(),
+                    _phantom: PhantomData,
+                })
+            }
+        }
+    };
+}
+
 impl_box_observer!(BoxAdminObserver, AdminObserver, WrappedAdminObserver);
 impl_box_observer!(BoxQueryObserver, QueryObserver, WrappedQueryObserver);
 impl_box_observer!(
@@ -84,7 +134,7 @@ impl_box_observer!(
     ApplySnapshotObserver,
     WrappedApplySnapshotObserver
 );
-impl_box_observer!(
+impl_box_observer_g!(
     BoxSplitCheckObserver,
     SplitCheckObserver,
     WrappedSplitCheckObserver
@@ -103,7 +153,7 @@ pub struct Registry {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
-    split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
+    split_check_observers: Vec<Entry<BoxSplitCheckObserver<RocksEngine>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver>>,
@@ -140,7 +190,11 @@ impl Registry {
         push!(priority, aso, self.apply_snapshot_observers);
     }
 
-    pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver) {
+    pub fn register_split_check_observer(
+        &mut self,
+        priority: u32,
+        sco: BoxSplitCheckObserver<RocksEngine>,
+    ) {
         push!(priority, sco, self.split_check_observers);
     }
 
@@ -208,7 +262,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: CasualRouter + Clone + Send + 'static>(ch: C) -> CoprocessorHost {
+    pub fn new<C: CasualRouter<RocksEngine> + Clone + Send + 'static>(ch: C) -> CoprocessorHost {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -323,10 +377,10 @@ impl CoprocessorHost {
         &self,
         cfg: &'a Config,
         region: &Region,
-        engine: &Arc<DB>,
+        engine: &RocksEngine,
         auto_split: bool,
         policy: CheckPolicy,
-    ) -> SplitCheckerHost<'a> {
+    ) -> SplitCheckerHost<'a, RocksEngine> {
         let mut host = SplitCheckerHost::new(auto_split, cfg);
         loop_ob!(
             region,
@@ -404,6 +458,7 @@ impl CoprocessorHost {
 mod tests {
     use crate::coprocessor::*;
     use std::sync::atomic::*;
+    use std::sync::Arc;
 
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{

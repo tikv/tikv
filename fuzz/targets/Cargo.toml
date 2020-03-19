@@ -13,7 +13,7 @@ prost-codec = ["tidb_query/prost-codec"]
 path = "mod.rs"
 
 [dependencies]
+anyhow = "1.0"
 byteorder = "1"
-failure = "0.1"
 tidb_query = { path = "../../components/tidb_query" }
 tikv_util = { path = "../../components/tikv_util" }

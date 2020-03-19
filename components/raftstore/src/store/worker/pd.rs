@@ -14,7 +14,7 @@ use tokio_timer::Delay;
 
 use engine::rocks::util::*;
 use engine::rocks::DB;
-use engine_rocks::RocksEngine;
+use engine_rocks::{Compat, RocksEngine};
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -329,7 +329,7 @@ pub struct Runner<T: PdClient + ConfigClient> {
     store_id: u64,
     pd_client: Arc<T>,
     config_handler: Box<dyn DynamicConfig>,
-    router: RaftRouter,
+    router: RaftRouter<RocksEngine>,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -351,7 +351,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         store_id: u64,
         pd_client: Arc<T>,
         config_handler: Box<dyn DynamicConfig>,
-        router: RaftRouter,
+        router: RaftRouter<RocksEngine>,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
@@ -408,7 +408,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                     send_admin_request(&router, region_id, epoch, peer, req, callback)
                 }
                 Err(e) => {
-                    debug!("failed to ask split";
+                    warn!("failed to ask split";
                     "region_id" => region.get_id(),
                     "err" => ?e);
                 }
@@ -484,7 +484,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                         }
                     }
                     Err(e) => {
-                        debug!(
+                        warn!(
                             "ask batch split failed";
                             "region_id" => region.get_id(),
                             "err" => ?e,
@@ -611,7 +611,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
 
     fn handle_report_batch_split(&self, handle: &Handle, regions: Vec<metapb::Region>) {
         let f = self.pd_client.report_batch_split(regions).map_err(|e| {
-            debug!("report split failed"; "err" => ?e);
+            warn!("report split failed"; "err" => ?e);
         });
         handle.spawn(f);
     }
@@ -881,10 +881,10 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 approximate_keys,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
-                    get_region_approximate_size(&self.db, &region).unwrap_or_default()
+                    get_region_approximate_size(self.db.c(), &region).unwrap_or_default()
                 });
                 let approximate_keys = approximate_keys.unwrap_or_else(|| {
-                    get_region_approximate_keys(&self.db, &region).unwrap_or_default()
+                    get_region_approximate_keys(self.db.c(), &region).unwrap_or_default()
                 });
                 let (
                     read_bytes_delta,
@@ -1021,7 +1021,7 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
 }
 
 fn send_admin_request(
-    router: &RaftRouter,
+    router: &RaftRouter<RocksEngine>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -1046,7 +1046,7 @@ fn send_admin_request(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::Peer) {
+fn send_merge_fail(router: &RaftRouter<RocksEngine>, source_region_id: u64, target: metapb::Peer) {
     let target_id = target.get_id();
     if let Err(e) = router.force_send(
         source_region_id,
@@ -1064,7 +1064,7 @@ fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::P
 
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
-    router: &RaftRouter,
+    router: &RaftRouter<RocksEngine>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,

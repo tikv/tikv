@@ -15,7 +15,7 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
-use super::time::SlowTimer;
+use super::time::Instant;
 use crate::slow_log;
 use configuration::ConfigValue;
 
@@ -425,15 +425,24 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let parent = Path::new(path);
-    let p = parent.join(Path::new(sub_path));
-    if p.exists() && p.is_file() {
-        return Err(format!("{}/{} is not a directory!", path, sub_path).into());
+    let mut path = Path::new(path).canonicalize()?;
+    if !sub_path.is_empty() {
+        path = path.join(Path::new(sub_path));
     }
-    if !p.exists() {
-        fs::create_dir_all(p.as_path())?;
+    if path.exists() && path.is_file() {
+        return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
     }
-    Ok(format!("{}", p.canonicalize()?.display()))
+    Ok(format!("{}", path.display()))
+}
+
+pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
+    if !path.is_empty() {
+        let p = Path::new(path);
+        if !p.exists() {
+            fs::create_dir_all(p)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -937,9 +946,9 @@ impl<T> Tracker<T> {
             match self.inner.value.try_read() {
                 Ok(value) => Some(value),
                 Err(_) => {
-                    let t = SlowTimer::new();
+                    let t = Instant::now_coarse();
                     let value = self.inner.value.read().unwrap();
-                    slow_log!(t, "{} tracker get updated value", self.tag);
+                    slow_log!(t.elapsed(), "{} tracker get updated value", self.tag);
                     Some(value)
                 }
             }
@@ -1120,25 +1129,29 @@ mod tests {
 
     #[test]
     fn test_canonicalize_path() {
-        let tmp_dir = Builder::new()
+        let tmp = Builder::new()
             .prefix("test-canonicalize")
             .tempdir()
             .unwrap();
-        let path1 = format!(
-            "{}",
-            tmp_dir.path().to_path_buf().join("test1.dump").display()
-        );
-        let res_path1 = canonicalize_path(&path1).unwrap();
-        assert!(Path::new(&path1).exists());
+        let tmp_dir = tmp.path();
+
+        let res_path1 = canonicalize_sub_path(tmp_dir.to_str().unwrap(), "test1.dump").unwrap();
+        assert!(!Path::new(&res_path1).exists());
         assert_eq!(
             Path::new(&res_path1),
-            Path::new(&path1).canonicalize().unwrap()
+            tmp_dir.canonicalize().unwrap().join("test1.dump")
         );
 
-        let path2 = format!(
-            "{}",
-            tmp_dir.path().to_path_buf().join("test2.dump").display()
+        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
+        assert!(canonicalize_path(&path2).is_err());
+        ensure_dir_exist(&path2).unwrap();
+        let res_path2 = canonicalize_path(&path2).unwrap();
+        assert_eq!(
+            Path::new(&res_path2),
+            Path::new(&path2).canonicalize().unwrap()
         );
+
+        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2.dump").display());
         {
             File::create(&path2).unwrap();
         }

@@ -23,6 +23,8 @@ extern crate slog_global;
 
 mod cf_handle;
 pub use crate::cf_handle::*;
+mod cf_names;
+pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
 mod db_options;
@@ -33,6 +35,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
+mod misc;
+pub use crate::misc::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod sst;

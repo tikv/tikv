@@ -11,8 +11,8 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
-use engine::*;
-use engine_traits::CF_RAFT;
+use engine_rocks::Compat;
+use engine_traits::{Peekable, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
@@ -22,7 +22,6 @@ use tikv_util::HandyRwLock;
 /// Test if merge is rollback as expected.
 #[test]
 fn test_node_merge_rollback() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -71,6 +70,7 @@ fn test_node_merge_rollback() {
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
+            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -98,6 +98,7 @@ fn test_node_merge_rollback() {
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
+            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -109,7 +110,6 @@ fn test_node_merge_rollback() {
 /// Test if merge is still working when restart a cluster during merge.
 #[test]
 fn test_node_merge_restart() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.run();
@@ -132,10 +132,10 @@ fn test_node_merge_restart() {
     cluster.shutdown();
     let engine = cluster.get_engine(leader.get_store_id());
     let state_key = keys::region_state_key(left.get_id());
-    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine.c().get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Merging, "{:?}", state);
     let state_key = keys::region_state_key(right.get_id());
-    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine.c().get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
     fail::remove(schedule_merge_fp);
     cluster.start().unwrap();
@@ -150,6 +150,7 @@ fn test_node_merge_restart() {
         let state_key = keys::region_state_key(left.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
+            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -157,6 +158,7 @@ fn test_node_merge_restart() {
         let state_key = keys::region_state_key(right.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
+            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -194,7 +196,6 @@ fn test_node_merge_restart() {
 /// Test if merge is still working when restart a cluster during catching up logs for merge.
 #[test]
 fn test_node_merge_catch_up_logs_restart() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.run();
@@ -236,7 +237,6 @@ fn test_node_merge_catch_up_logs_restart() {
 /// Test if leader election is working properly when catching up logs for merge.
 #[test]
 fn test_node_merge_catch_up_logs_leader_election() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
@@ -297,7 +297,6 @@ fn test_node_merge_catch_up_logs_leader_election() {
 // also there may be a propose of compact log after prepare merge is proposed.
 #[test]
 fn test_node_merge_catch_up_logs_no_need() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
@@ -367,7 +366,6 @@ fn test_node_merge_catch_up_logs_no_need() {
 /// Test if merging state will be removed after accepting a snapshot.
 #[test]
 fn test_node_merge_recover_snapshot() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
@@ -424,7 +422,6 @@ fn test_node_merge_multiple_snapshots_not_together() {
 }
 
 fn test_node_merge_multiple_snapshots(together: bool) {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -552,7 +549,6 @@ fn prepare_request_snapshot_cluster() -> (Cluster<NodeCluster>, Region, Region) 
 // Test if request snapshot is rejected during merging.
 #[test]
 fn test_node_merge_reject_request_snapshot() {
-    let _guard = crate::setup();
     let (mut cluster, region, target_region) = prepare_request_snapshot_cluster();
 
     let apply_prepare_merge_fp = "apply_before_prepare_merge";
@@ -590,7 +586,6 @@ fn test_node_merge_reject_request_snapshot() {
 // Test if merge is rejected during requesting snapshot.
 #[test]
 fn test_node_request_snapshot_reject_merge() {
-    let _guard = crate::setup();
     let (cluster, region, target_region) = prepare_request_snapshot_cluster();
 
     // Pause generating snapshot.
@@ -633,7 +628,6 @@ fn test_node_request_snapshot_reject_merge() {
 // I.e. is_merging flag should be set after restart
 #[test]
 fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.merge_max_log_gap = 10;
@@ -713,7 +707,6 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
 /// Tests whether stale merge is rollback properly if it merge to the same target region again later.
 #[test]
 fn test_node_failed_merge_before_succeed_merge() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.merge_max_log_gap = 30;
@@ -801,7 +794,6 @@ fn test_node_failed_merge_before_succeed_merge() {
 /// If source peer becomes leader at the same time, it will panic due to corrupted meta.
 #[test]
 fn test_node_merge_transfer_leader() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.store_max_batch_size = 1;
@@ -855,7 +847,6 @@ fn test_node_merge_transfer_leader() {
 
 #[test]
 fn test_merge_cascade_merge_with_apply_yield() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);

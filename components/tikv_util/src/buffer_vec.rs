@@ -14,8 +14,6 @@ pub struct BufferVec {
 
 impl std::fmt::Debug for BufferVec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use hex::ToHex;
-
         write!(f, "[")?;
         for (i, item) in self.iter().enumerate() {
             if i != 0 {
@@ -24,7 +22,7 @@ impl std::fmt::Debug for BufferVec {
             if item.is_empty() {
                 write!(f, "null")?;
             } else {
-                item.write_hex_upper(f)?;
+                write!(f, "{}", hex::encode_upper(item))?;
             }
         }
         write!(f, "]")

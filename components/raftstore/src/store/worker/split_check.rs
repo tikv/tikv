@@ -6,9 +6,9 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 
-use engine::rocks::DBIterator;
-use engine::{IterOption, Iterable, DB};
-use engine_traits::{CfName, CF_WRITE, LARGE_CFS};
+use engine::DB;
+use engine_rocks::{Compat, RocksEngine, RocksEngineIterator};
+use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -68,28 +68,28 @@ impl Ord for KeyEntry {
     }
 }
 
-struct MergedIterator<'a> {
-    iters: Vec<(CfName, DBIterator<&'a DB>)>,
+struct MergedIterator {
+    iters: Vec<(CfName, RocksEngineIterator)>,
     heap: BinaryHeap<KeyEntry>,
 }
 
-impl<'a> MergedIterator<'a> {
+impl MergedIterator {
     fn new(
-        db: &'a DB,
+        db: &Arc<DB>,
         cfs: &[CfName],
         start_key: &[u8],
         end_key: &[u8],
         fill_cache: bool,
-    ) -> Result<MergedIterator<'a>> {
+    ) -> Result<MergedIterator> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.iter().enumerate() {
-            let iter_opt = IterOption::new(
+            let iter_opt = IterOptions::new(
                 Some(KeyBuilder::from_slice(start_key, 0, 0)),
                 Some(KeyBuilder::from_slice(end_key, 0, 0)),
                 fill_cache,
             );
-            let mut iter = db.new_iterator_cf(cf, iter_opt)?;
+            let mut iter = db.c().iterator_cf_opt(cf, iter_opt)?;
             let found: Result<bool> = iter.seek(start_key.into()).map_err(|e| box_err!(e));
             if found? {
                 heap.push(KeyEntry::new(
@@ -168,7 +168,7 @@ pub struct Runner<S> {
     cfg: Config,
 }
 
-impl<S: CasualRouter> Runner<S> {
+impl<S: CasualRouter<RocksEngine>> Runner<S> {
     pub fn new(engine: Arc<DB>, router: S, coprocessor: CoprocessorHost, cfg: Config) -> Runner<S> {
         Runner {
             engine,
@@ -194,7 +194,7 @@ impl<S: CasualRouter> Runner<S> {
         let mut host = self.coprocessor.new_split_checker_host(
             &self.cfg,
             region,
-            &self.engine,
+            &self.engine.c(),
             auto_split,
             policy,
         );
@@ -213,7 +213,8 @@ impl<S: CasualRouter> Runner<S> {
                     }
                 }
             }
-            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine) {
+            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine.c())
+            {
                 Ok(keys) => keys
                     .into_iter()
                     .map(|k| keys::origin_key(&k).to_vec())
@@ -260,13 +261,13 @@ impl<S: CasualRouter> Runner<S> {
     /// Gets the split keys by scanning the range.
     fn scan_split_keys(
         &self,
-        host: &mut SplitCheckerHost<'_>,
+        host: &mut SplitCheckerHost<'_, RocksEngine>,
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::new(self.engine.as_ref(), LARGE_CFS, start_key, end_key, false).map(
+        MergedIterator::new(&self.engine, LARGE_CFS, start_key, end_key, false).map(
             |mut iter| {
                 let mut size = 0;
                 let mut keys = 0;
@@ -309,7 +310,7 @@ impl<S: CasualRouter> Runner<S> {
     }
 }
 
-impl<S: CasualRouter> Runnable<Task> for Runner<S> {
+impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
     fn run(&mut self, task: Task) {
         match task {
             Task::SplitCheckTask {
@@ -324,7 +325,10 @@ impl<S: CasualRouter> Runnable<Task> for Runner<S> {
     }
 }
 
-fn new_split_region(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage {
+fn new_split_region(
+    region_epoch: RegionEpoch,
+    split_keys: Vec<Vec<u8>>,
+) -> CasualMessage<RocksEngine> {
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

@@ -13,6 +13,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
+use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use futures_executor::block_on;
@@ -1034,7 +1035,7 @@ struct SnapManagerCore {
     snap_size: Arc<AtomicU64>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter>) {
+fn notify_stats(ch: Option<&RaftRouter<RocksEngine>>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
             error!(
@@ -1050,13 +1051,13 @@ fn notify_stats(ch: Option<&RaftRouter>) {
 pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
-    router: Option<RaftRouter>,
+    router: Option<RaftRouter<RocksEngine>>,
     limiter: Limiter,
     max_total_size: u64,
 }
 
 impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter>) -> Self {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<RocksEngine>>) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 
@@ -1401,7 +1402,11 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter>) -> SnapManager {
+    pub fn build<T: Into<String>>(
+        &self,
+        path: T,
+        router: Option<RaftRouter<RocksEngine>>,
+    ) -> SnapManager {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
         } else {
@@ -1438,9 +1443,9 @@ pub mod tests {
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
-    use engine::{Engines, Mutable, Peekable};
+    use engine::Engines;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::Iterable;
+    use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1501,16 +1506,16 @@ pub mod tests {
     ) -> Result<Arc<DB>> {
         let p = path.to_str().unwrap();
         let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
+        let db = Arc::new(db);
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
-            let handle = rocks::util::get_cf_handle(&db, cf)?;
             let mut p = Peer::default();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
-            db.put_msg_cf(handle, &key[..], &p)?;
+            db.c().put_msg_cf(cf, &key[..], &p)?;
         }
-        Ok(Arc::new(db))
+        Ok(db)
     }
 
     pub fn get_test_db_for_regions(
@@ -1533,15 +1538,15 @@ pub mod tests {
             let mut apply_state = RaftApplyState::default();
             apply_state.set_applied_index(10);
             apply_state.mut_truncated_state().set_index(10);
-            let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
-            kv.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
+            kv.c()
+                .put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
             let mut region_state = RegionLocalState::default();
             region_state.set_region(region);
-            let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
-            kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+            kv.c()
+                .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
         let shared_block_cache = false;
         Ok(Engines {
@@ -1583,12 +1588,12 @@ pub mod tests {
         region
     }
 
-    pub fn assert_eq_db(expected_db: &DB, db: &DB) {
+    pub fn assert_eq_db(expected_db: &Arc<DB>, db: &Arc<DB>) {
         let key = keys::data_key(TEST_KEY);
         for cf in SNAPSHOT_CFS {
-            let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
+            let p1: Option<Peer> = expected_db.c().get_msg_cf(cf, &key[..]).unwrap();
             if let Some(p1) = p1 {
-                let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
+                let p2: Option<Peer> = db.c().get_msg_cf(cf, &key[..]).unwrap();
                 if let Some(p2) = p2 {
                     if p2 != p1 {
                         panic!(
@@ -1802,7 +1807,7 @@ pub mod tests {
         assert_eq!(size_track.load(Ordering::SeqCst), 0);
 
         // Verify the data is correct after applying snapshot.
-        assert_eq_db(&db, dst_db.as_ref());
+        assert_eq_db(&db, &dst_db);
     }
 
     #[test]

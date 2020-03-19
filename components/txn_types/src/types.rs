@@ -1,6 +1,5 @@
 use super::timestamp::TimeStamp;
 use byteorder::{ByteOrder, NativeEndian};
-use hex::ToHex;
 use kvproto::kvrpcpb;
 use std::fmt::{self, Debug, Display, Formatter};
 use tikv_util::codec;
@@ -216,13 +215,13 @@ impl Clone for Key {
 
 impl Debug for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.write_hex_upper(f)
+        f.write_str(&hex::encode_upper(&self.0))
     }
 }
 
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.write_hex_upper(f)
+        f.write_str(&hex::encode_upper(&self.0))
     }
 }
 
@@ -239,6 +238,10 @@ pub enum Mutation {
     ///
     /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
     Insert((Key, Value)),
+    /// Check `key` must be not exist.
+    ///
+    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    CheckNotExists(Key),
 }
 
 impl Mutation {
@@ -248,6 +251,7 @@ impl Mutation {
             Mutation::Delete(ref key) => key,
             Mutation::Lock(ref key) => key,
             Mutation::Insert((ref key, _)) => key,
+            Mutation::CheckNotExists(ref key) => key,
         }
     }
 
@@ -257,12 +261,20 @@ impl Mutation {
             Mutation::Delete(key) => (key, None),
             Mutation::Lock(key) => (key, None),
             Mutation::Insert((key, value)) => (key, Some(value)),
+            Mutation::CheckNotExists(key) => (key, None),
         }
     }
 
-    pub fn is_insert(&self) -> bool {
+    pub fn should_not_exists(&self) -> bool {
         match self {
-            Mutation::Insert(_) => true,
+            Mutation::Insert(_) | Mutation::CheckNotExists(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn should_not_write(&self) -> bool {
+        match self {
+            Mutation::CheckNotExists(_) => true,
             _ => false,
         }
     }
@@ -275,6 +287,7 @@ impl From<kvrpcpb::Mutation> for Mutation {
             kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key())),
             kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key())),
             kvrpcpb::Op::Insert => Mutation::Insert((Key::from_raw(m.get_key()), m.take_value())),
+            kvrpcpb::Op::CheckNotExists => Mutation::CheckNotExists(Key::from_raw(m.get_key())),
             _ => panic!("mismatch Op in prewrite mutations"),
         }
     }

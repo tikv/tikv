@@ -6,12 +6,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
+    Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::db_vector::RocksDBVector;
-use crate::options::{RocksReadOptions, RocksWriteOptions};
+use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::{RocksEngineIterator, RocksSnapshot};
 
@@ -51,25 +51,6 @@ impl RocksEngine {
 
 impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
-    type WriteBatch = crate::WriteBatch;
-
-    fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()> {
-        if wb.get_db().path() != self.0.path() {
-            return Err(Error::Engine("mismatched db path".to_owned()));
-        }
-        let opt: RocksWriteOptions = opts.into();
-        self.0
-            .write_opt(wb.as_ref(), &opt.into_raw())
-            .map_err(Error::Engine)
-    }
-
-    fn write_batch(&self) -> Self::WriteBatch {
-        Self::WriteBatch::new(Arc::clone(&self.0))
-    }
-
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        Self::WriteBatch::with_capacity(Arc::clone(&self.0), cap)
-    }
 
     fn snapshot(&self) -> RocksSnapshot {
         RocksSnapshot::new(self.0.clone())
@@ -77,10 +58,6 @@ impl KvEngine for RocksEngine {
 
     fn sync(&self) -> Result<()> {
         self.0.sync_wal().map_err(Error::Engine)
-    }
-
-    fn cf_names(&self) -> Vec<&str> {
-        self.0.cf_names()
     }
 
     fn bad_downcast<T: 'static>(&self) -> &T {
@@ -133,30 +110,37 @@ impl Peekable for RocksEngine {
     }
 }
 
-impl Mutable for RocksEngine {
-    fn put_opt(&self, _: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
+impl SyncMutable for RocksEngine {
+    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.0.put(key, value).map_err(Error::Engine)
     }
 
-    fn put_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.0, cf)?;
         self.0.put_cf(handle, key, value).map_err(Error::Engine)
     }
 
-    fn delete_opt(&self, _: &WriteOptions, key: &[u8]) -> Result<()> {
+    fn delete(&self, key: &[u8]) -> Result<()> {
         self.0.delete(key).map_err(Error::Engine)
     }
 
-    fn delete_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.0, cf)?;
         self.0.delete_cf(handle, key).map_err(Error::Engine)
+    }
+
+    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let handle = get_cf_handle(&self.0, cf)?;
+        self.0
+            .delete_range_cf(handle, begin_key, end_key)
+            .map_err(Error::Engine)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use engine::rocks::util;
-    use engine_traits::{Iterable, KvEngine, Mutable, Peekable};
+    use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempfile::Builder;

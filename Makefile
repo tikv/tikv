@@ -157,7 +157,9 @@ dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
-	bash scripts/check-sse4_2.sh
+ifeq ($(shell uname),Linux) # Macs binary isn't elf format
+	@python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
+endif
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
@@ -215,7 +217,8 @@ docker-tag-with-git-tag:
 # Run tests under a variety of conditions. This should pass before
 # submitting pull requests. Note though that the CI system tests TiKV
 # through its own scripts and does not use this rule.
-test:
+.PHONY: run-test
+run-test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
 	# The special linux case below is testing the mem-profiling
@@ -227,31 +230,18 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude \
-		cdc --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cd tests && cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && cd .. && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" -p cdc ${EXTRA_CARGO_ARGS} -- --nocapture && cd ../.. && \
-	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && cd ../.. && \
+	cargo test --workspace --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored; \
 	fi
-	bash scripts/check-bins-for-jemalloc.sh
-	bash scripts/check-udeps.sh
 
-# This is used for CI test
-ci_test: ci_doc_test
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc \
-		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--all-targets --no-run --message-format=json
-	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
-	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
-
-ci_doc_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc \
-		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer --doc
+.PHONY: test
+test: run-test
+	@if [[ "`uname`" = "Linux" ]]; then \
+		env EXTRA_CARGO_ARGS="--message-format=json-render-diagnostics -q --no-run" make run-test |\
+                python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-tests; \
+	fi
 
 ## Static analysis
 ## ---------------
@@ -280,6 +270,7 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 	-A clippy::identity_conversion -A clippy::new_ret_no_self
 
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
+ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))
 clippy: pre-clippy
 	@cargo clippy --all --exclude cdc --exclude backup --exclude tests --exclude cmd \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
@@ -289,13 +280,17 @@ clippy: pre-clippy
 		cd $$pkg && \
 		cargo clippy --all-targets --no-default-features \
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-		cd - ;\
+		cd - >/dev/null;\
 	done
 	@for pkg in "fuzz" "fuzz/fuzzer-afl" "fuzz/fuzzer-honggfuzz" "fuzz/fuzzer-libfuzzer"; do \
 		cd $$pkg && \
 		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null; \
 	done
+else
+clippy: pre-clippy
+	@cargo clippy --workspace --features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
+endif
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
@@ -307,6 +302,10 @@ pre-audit:
 # Check for security vulnerabilities
 audit: pre-audit
 	cargo audit
+
+.PHONY: check-udeps
+check-udeps:
+	which cargo-udeps &>/dev/null || cargo install cargo-udeps && cargo udeps
 
 FUZZER ?= Honggfuzz
 

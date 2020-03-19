@@ -2,42 +2,65 @@
 
 use std::sync::Arc;
 
-use engine_traits::{self, Error, Mutable, Result, WriteOptions};
+use crate::engine::RocksEngine;
+use crate::options::RocksWriteOptions;
+use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::util::get_cf_handle;
 
-pub struct WriteBatch {
+impl WriteBatchExt for RocksEngine {
+    type WriteBatch = RocksWriteBatch;
+
+    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
+        debug_assert_eq!(
+            wb.get_db().path(),
+            self.as_inner().path(),
+            "mismatched db path"
+        );
+        let opt: RocksWriteOptions = opts.into();
+        self.as_inner()
+            .write_opt(wb.as_inner(), &opt.into_raw())
+            .map_err(Error::Engine)
+    }
+
+    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
+        Self::WriteBatch::with_capacity(Arc::clone(&self.as_inner()), cap)
+    }
+
+    fn write_batch(&self) -> Self::WriteBatch {
+        Self::WriteBatch::new(Arc::clone(&self.as_inner()))
+    }
+}
+
+pub struct RocksWriteBatch {
     db: Arc<DB>,
     wb: RawWriteBatch,
 }
 
-// TODO: Remove this cast method after the engine traits is completed
-impl AsRef<RawWriteBatch> for WriteBatch {
-    fn as_ref(&self) -> &RawWriteBatch {
-        &self.wb
-    }
-}
-
-impl WriteBatch {
-    pub fn new(db: Arc<DB>) -> WriteBatch {
-        WriteBatch {
+impl RocksWriteBatch {
+    pub fn new(db: Arc<DB>) -> RocksWriteBatch {
+        RocksWriteBatch {
             db,
             wb: RawWriteBatch::default(),
         }
     }
 
-    pub fn with_capacity(db: Arc<DB>, cap: usize) -> WriteBatch {
+    pub fn as_inner(&self) -> &RawWriteBatch {
+        &self.wb
+    }
+
+    pub fn with_capacity(db: Arc<DB>, cap: usize) -> RocksWriteBatch {
         let wb = if cap == 0 {
             RawWriteBatch::default()
         } else {
             RawWriteBatch::with_capacity(cap)
         };
-        WriteBatch { db, wb }
+        RocksWriteBatch { db, wb }
     }
 
-    pub fn from_raw(db: Arc<DB>, wb: RawWriteBatch) -> WriteBatch {
-        WriteBatch { db, wb }
+    pub fn from_raw(db: Arc<DB>, wb: RawWriteBatch) -> RocksWriteBatch {
+        RocksWriteBatch { db, wb }
     }
 
     pub fn get_db(&self) -> &DB {
@@ -45,7 +68,7 @@ impl WriteBatch {
     }
 }
 
-impl engine_traits::WriteBatch for WriteBatch {
+impl engine_traits::WriteBatch for RocksWriteBatch {
     fn data_size(&self) -> usize {
         self.wb.data_size()
     }
@@ -58,7 +81,7 @@ impl engine_traits::WriteBatch for WriteBatch {
         self.wb.is_empty()
     }
 
-    fn clear(&self) {
+    fn clear(&mut self) {
         self.wb.clear();
     }
 
@@ -75,22 +98,29 @@ impl engine_traits::WriteBatch for WriteBatch {
     }
 }
 
-impl Mutable for WriteBatch {
-    fn put_opt(&self, _: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
+impl Mutable for RocksWriteBatch {
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.wb.put(key, value).map_err(Error::Engine)
     }
 
-    fn put_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.put_cf(handle, key, value).map_err(Error::Engine)
     }
 
-    fn delete_opt(&self, _: &WriteOptions, key: &[u8]) -> Result<()> {
+    fn delete(&mut self, key: &[u8]) -> Result<()> {
         self.wb.delete(key).map_err(Error::Engine)
     }
 
-    fn delete_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.delete_cf(handle, key).map_err(Error::Engine)
+    }
+
+    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let handle = get_cf_handle(self.db.as_ref(), cf)?;
+        self.wb
+            .delete_range_cf(handle, begin_key, end_key)
+            .map_err(Error::Engine)
     }
 }

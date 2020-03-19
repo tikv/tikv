@@ -209,6 +209,8 @@ extern crate tikv_alloc;
 
 mod cf_handle;
 pub use crate::cf_handle::*;
+mod cf_names;
+pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
 mod db_options;
@@ -219,6 +221,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use import::*;
+mod misc;
+pub use misc::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
@@ -229,6 +233,8 @@ mod write_batch;
 pub use crate::write_batch::*;
 mod encryption;
 pub use crate::encryption::*;
+mod properties;
+pub use crate::properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -256,5 +262,7 @@ pub use crate::range::*;
 pub mod metrics_flusher;
 pub mod util;
 pub use crate::metrics_flusher::*;
+pub mod compact;
+pub use compact::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
