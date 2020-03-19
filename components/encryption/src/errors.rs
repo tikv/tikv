@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
 use std::io::{Error as IoError, ErrorKind};
