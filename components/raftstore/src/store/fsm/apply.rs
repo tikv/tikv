@@ -540,7 +540,7 @@ pub fn notify_stale_req(term: u64, cb: Callback<RocksEngine>) {
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
+fn should_write_to_engine_before(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -564,6 +564,24 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
         if req.has_delete_range() {
             return true;
         }
+        if req.has_ingest_sst() {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Checks if a write is needed to be issued after handling the command.
+fn should_write_to_engine_after(cmd: &RaftCmdRequest) -> bool {
+    if cmd.has_admin_request() {
+        return true;
+    }
+
+    for req in cmd.get_requests() {
+        // After ingest sst, sst files are deleted quickly. As a result,
+        // ingest sst command can not be handled again and must be synced.
+        // See more in Cleanup worker.
         if req.has_ingest_sst() {
             return true;
         }
@@ -827,7 +845,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
+            if should_write_to_engine_before(&cmd, apply_ctx.kv_wb().count()) {
                 apply_ctx.commit(self);
                 if self.written {
                     return ApplyResult::Yield;
@@ -941,7 +959,7 @@ impl ApplyDelegate {
             );
         }
 
-        if cmd.has_admin_request() {
+        if should_write_to_engine_after(&cmd) {
             apply_ctx.sync_log_hint = true;
         }
 
@@ -3209,7 +3227,8 @@ mod tests {
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
         let wb = engines.kv.c().write_batch();
-        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine_before(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine_after(&req), true);
 
         // IngestSst command
         let mut req = Request::default();
@@ -3218,7 +3237,8 @@ mod tests {
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
         let wb = engines.kv.c().write_batch();
-        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
+        assert_eq!(should_write_to_engine_before(&cmd, wb.count()), true);
+        assert_eq!(should_write_to_engine_after(&cmd), true);
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
@@ -3227,7 +3247,8 @@ mod tests {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
         }
-        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine_before(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine_after(&req), false);
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
@@ -3236,7 +3257,7 @@ mod tests {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
         }
-        assert_eq!(should_write_to_engine(&req, wb.count()), false);
+        assert_eq!(should_write_to_engine_before(&req, wb.count()), false);
     }
 
     fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
