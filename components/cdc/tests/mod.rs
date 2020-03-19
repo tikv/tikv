@@ -100,12 +100,16 @@ impl TestSuite {
             let mut sim = cluster.sim.wl();
 
             // Register cdc service to gRPC server.
+            let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
             let scheduler = worker.scheduler();
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone()))
+                    create_change_data(cdc::Service::new(
+                        scheduler.clone(),
+                        security_mgr.clone(),
+                    ))
                 }));
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());

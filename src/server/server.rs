@@ -118,7 +118,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             } else {
                 None
             },
-            security_mgr.cert_allowed_cn().to_owned(),
+            security_mgr.clone(),
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
