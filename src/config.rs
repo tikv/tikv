@@ -1929,11 +1929,13 @@ impl TiKvConfig {
         self.storage.validate()?;
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
-        self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
-            config::canonicalize_sub_path(&self.storage.data_dir, "raft")?
-        } else {
-            config::canonicalize_path(&self.raft_store.raftdb_path)?
-        };
+
+        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
+        if self.raft_store.raftdb_path.is_empty() {
+            self.raft_store.raftdb_path = default_raftdb_path;
+        } else if self.raft_store.raftdb_path != default_raftdb_path {
+            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
+        }
 
         let kv_db_path =
             config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
@@ -2350,14 +2352,16 @@ pub struct ConfigController {
     current: TiKvConfig,
     config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
     start_version: Option<configpb::Version>,
+    persist_update: bool,
 }
 
 impl ConfigController {
-    pub fn new(current: TiKvConfig, version: configpb::Version) -> Self {
+    pub fn new(current: TiKvConfig, version: configpb::Version, persist_update: bool) -> Self {
         ConfigController {
             current,
             config_mgrs: HashMap::new(),
             start_version: Some(version),
+            persist_update,
         }
     }
 
@@ -2407,10 +2411,12 @@ impl ConfigController {
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
         self.current.update(to_update);
-        match persist_config(&incoming) {
-            Err(e) => Err(e.into()),
-            Ok(_) => Ok(Either::Right(true)),
+        if self.persist_update {
+            if let Err(e) = persist_config(&incoming) {
+                return Err(e.into());
+            }
         }
+        Ok(Either::Right(true))
     }
 
     pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
@@ -2809,7 +2815,7 @@ mod tests {
             .unwrap(),
         );
 
-        let mut cfg_controller = ConfigController::new(cfg, Default::default());
+        let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
         cfg_controller.register(
             Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
