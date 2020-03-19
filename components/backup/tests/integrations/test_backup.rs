@@ -253,6 +253,7 @@ impl TestSuite {
             IsolationLevel::Si,
             false,
             Default::default(),
+            false,
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKVStorage::from(snap_store),
