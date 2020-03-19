@@ -20,11 +20,7 @@ openssl = "0.10"
 byteorder = "1.2"
 protobuf = "2.8"
 crc32fast = "1.2"
-
-# TODO need to be abstracted
-[dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
-package = "rocksdb"
+engine_traits = { path = "../engine_traits" }
 
 [dev-dependencies]
 tempfile = "3.1"

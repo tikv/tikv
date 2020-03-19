@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
-use rocksdb::{EncryptionKeyManager, FileEncryptionInfo};
 
 use crate::crypter::*;
 use crate::encrypted_file::EncryptedFile;
@@ -330,8 +330,8 @@ impl EncryptionKeyManager for DataKeyManager {
 mod tests {
     use super::*;
 
+    use engine_traits::EncryptionMethod as DBEncryptionMethod;
     use hex::FromHex;
-    use rocksdb::DBEncryptionMethod;
     use std::thread::sleep;
 
     fn new_tmp_key_manager(

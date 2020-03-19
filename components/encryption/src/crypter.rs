@@ -1,6 +1,6 @@
+use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
-use rocksdb::DBEncryptionMethod;
 
 use crate::Result;
 

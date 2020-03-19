@@ -17,7 +17,7 @@ const METADATA_KEY_ENCRYPTION_METHOD: &str = "encryption_method";
 const METADATA_KEY_PLAINTEXT_SHA256: &str = "plaintext_sha256";
 
 impl MetadataKey {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             MetadataKey::Iv => METADATA_KEY_IV,
             MetadataKey::EncryptionMethod => METADATA_KEY_ENCRYPTION_METHOD,

@@ -94,7 +94,8 @@ mod tests {
     fn test_open_write() {
         let tmp = tempfile::TempDir::new().unwrap();
         let file = EncryptedFile::new(tmp.path(), "encrypted");
-        assert_eq!(&file.read(&PlainTextBackend::default()).unwrap(), &[]);
+        let empty: Vec<u8> = vec![];
+        assert_eq!(file.read(&PlainTextBackend::default()).unwrap(), empty);
         assert_eq!(file.base, tmp.path());
         assert_eq!(file.name, "encrypted");
 
