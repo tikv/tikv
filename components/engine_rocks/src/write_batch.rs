@@ -314,12 +314,10 @@ impl WriteBatchVecExt<RocksEngine> for RocksWriteBatchVec {
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
-
     use super::super::util::new_default_engine;
     use super::*;
     use engine_traits::WriteBatch;
-    use tempfile::{Builder, TempDir};
+    use tempfile::Builder;
 
     #[test]
     fn test_should_write_to_engine() {
