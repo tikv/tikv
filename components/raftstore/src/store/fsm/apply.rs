@@ -368,13 +368,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
     /// `RocksWriteBatchVec` not exceed `WRITE_BATCH_LIMIT`.
     pub fn prepare_write_batch(&mut self) {
         if self.kv_wb.is_none() {
-            //            let kb_wb = {
-            //                if self.enable_multi_batch_write {
-            //                    self.engine.write_batch_vec(WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE)
-            //                } else {
-            //                    self.engine.write_batch_vec(0, DEFAULT_APPLY_WB_SIZE)
-            //                }
-            //            };
             let kv_wb = W::write_batch_vec(&self.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
             self.kv_wb = Some(kv_wb);
             self.kv_wb_last_bytes = 0;
@@ -418,7 +411,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
                     panic!("failed to write to engine: {:?}", e);
                 });
             self.sync_log_hint = false;
-            // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
@@ -1182,9 +1174,11 @@ impl ApplyDelegate {
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
-                    self.handle_delete_range(ctx, req, &mut ranges, ctx.use_delete_range)
+                    self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
-                CmdType::IngestSst => self.handle_ingest_sst(ctx, req, &mut ssts),
+                CmdType::IngestSst => {
+                    self.handle_ingest_sst(&ctx.importer, &ctx.engine, req, &mut ssts)
+                }
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1230,11 +1224,7 @@ impl ApplyDelegate {
 
 // Write commands related.
 impl ApplyDelegate {
-    fn handle_put<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
-        &mut self,
-        wb: &mut W,
-        req: &Request,
-    ) -> Result<Response> {
+    fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1275,11 +1265,7 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_delete<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
-        &mut self,
-        wb: &mut W,
-        req: &Request,
-    ) -> Result<Response> {
+    fn handle_delete<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1321,9 +1307,9 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_delete_range<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_delete_range(
         &mut self,
-        ctx: &ApplyContext<W>,
+        engine: &RocksEngine,
         req: &Request,
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
@@ -1359,7 +1345,7 @@ impl ApplyDelegate {
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
-            ctx.engine
+            engine
                 .delete_files_in_range_cf(cf, &start_key, &end_key, /* include_end */ false)
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1372,7 +1358,7 @@ impl ApplyDelegate {
                 });
 
             // Delete all remaining keys.
-            ctx.engine
+            engine
                 .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1392,9 +1378,10 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_ingest_sst<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_ingest_sst(
         &mut self,
-        ctx: &ApplyContext<W>,
+        importer: &Arc<SSTImporter>,
+        engine: &RocksEngine,
         req: &Request,
         ssts: &mut Vec<SstMeta>,
     ) -> Result<Response> {
@@ -1410,11 +1397,11 @@ impl ApplyDelegate {
                  "err" => ?e
             );
             // This file is not valid, we can delete it here.
-            let _ = ctx.importer.delete(sst);
+            let _ = importer.delete(sst);
             return Err(e);
         }
 
-        ctx.importer.ingest(sst, &ctx.engine).unwrap_or_else(|e| {
+        importer.ingest(sst, engine).unwrap_or_else(|e| {
             // If this failed, it means that the file is corrupted or something
             // is wrong with the engine, but we can do nothing about that.
             panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
