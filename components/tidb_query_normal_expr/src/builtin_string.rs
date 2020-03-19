@@ -21,6 +21,7 @@ use tikv_util::try_opt_or;
 use crate::ScalarFunc;
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::{EvalContext, Result};
+use tidb_query_common::string::{trim, TrimDirection};
 
 const SPACE: u8 = 0o40u8;
 
@@ -480,7 +481,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        trim(&s, " ", TrimDirection::Both)
+        Ok(Some(Cow::Owned(trim(&s, " ", TrimDirection::Both))))
     }
 
     #[inline]
@@ -491,7 +492,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        trim(&s, &pat, TrimDirection::Both)
+        Ok(Some(Cow::Owned(trim(&s, &pat, TrimDirection::Both))))
     }
 
     #[inline]
@@ -504,7 +505,7 @@ impl ScalarFunc {
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let direction = try_opt!(self.children[2].eval_int(ctx, row));
         match TrimDirection::from_i64(direction) {
-            Some(d) => trim(&s, &pat, d),
+            Some(d) => Ok(Some(Cow::Owned(trim(&s, &pat, d)))),
             _ => Err(box_err!("invalid direction value: {}", direction)),
         }
     }
@@ -1060,16 +1061,6 @@ fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
         positions.push_back(bg);
     }
     s[positions[0]..].to_string()
-}
-
-#[inline]
-fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
-    let r = match direction {
-        TrimDirection::Leading => s.trim_start_matches(pat),
-        TrimDirection::Trailing => s.trim_end_matches(pat),
-        _ => s.trim_start_matches(pat).trim_end_matches(pat),
-    };
-    Ok(Some(Cow::Owned(r.to_string().into_bytes())))
 }
 
 #[cfg(test)]
