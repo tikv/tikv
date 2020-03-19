@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use tikv_util::security::SecurityConfig;
@@ -13,6 +12,6 @@ pub fn new_security_cfg() -> SecurityConfig {
         key_path: format!("{}", p.join("data/key.pem").display()),
         override_ssl_target: "".to_owned(),
         cipher_file: "".to_owned(),
-        x509_common_names: HashSet::new(),
+        cert_allowed_cn: String::new(),
     }
 }

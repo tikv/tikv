@@ -1,13 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
 
 use grpcio::{
-    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
-    ServerCredentialsBuilder,
+    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, RpcContext,
+    ServerBuilder, ServerCredentialsBuilder,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -21,7 +20,7 @@ pub struct SecurityConfig {
     #[serde(skip)]
     pub override_ssl_target: String,
     pub cipher_file: String,
-    pub x509_common_names: HashSet<String>,
+    pub cert_allowed_cn: String,
 }
 
 impl Default for SecurityConfig {
@@ -32,7 +31,7 @@ impl Default for SecurityConfig {
             key_path: String::new(),
             override_ssl_target: String::new(),
             cipher_file: String::new(),
-            x509_common_names: HashSet::new(),
+            cert_allowed_cn: String::new(),
         }
     }
 }
@@ -91,7 +90,7 @@ pub struct SecurityManager {
     key: Vec<u8>,
     override_ssl_target: String,
     cipher_file: String,
-    x509_common_names: HashSet<String>,
+    cert_allowed_cn: String,
 }
 
 impl Drop for SecurityManager {
@@ -110,7 +109,7 @@ impl SecurityManager {
             key: load_key("private key", &cfg.key_path)?,
             override_ssl_target: cfg.override_ssl_target.clone(),
             cipher_file: cfg.cipher_file.clone(),
-            x509_common_names: cfg.x509_common_names.clone(),
+            cert_allowed_cn: cfg.cert_allowed_cn.clone(),
         })
     }
 
@@ -148,9 +147,57 @@ impl SecurityManager {
         &self.cipher_file
     }
 
-    pub fn x509_common_names(&self) -> HashSet<String> {
-        self.x509_common_names.clone()
+    pub fn cert_allowed_cn(&self) -> &str {
+        &self.cert_allowed_cn
     }
+}
+
+/// Check peer CN with cert-allowed-cn field.
+/// Return true when the match is successful (support wildcard pattern).
+/// Skip the check when cert-allowed-cn is not set or the secure channel is not used.
+pub fn check_common_name(cert_allowed_cn: &str, ctx: &RpcContext) -> bool {
+    if cert_allowed_cn.is_empty() || ctx.auth_context().is_none() {
+        return true;
+    } else if let Some(auth_property) = ctx
+        .auth_context()
+        .unwrap()
+        .into_iter()
+        .find(|x| x.name() == "x509_common_name")
+    {
+        let peer_cn = auth_property.value_str().unwrap();
+        return match_peer_name(cert_allowed_cn, peer_cn);
+    }
+    false
+}
+
+fn match_peer_name(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.trim();
+    let name = name.trim();
+
+    if pattern.is_empty() {
+        return false;
+    }
+    if pattern == name {
+        return true;
+    }
+
+    let mut pat_iter = pattern.bytes();
+    if pat_iter.len() < 3 || pat_iter.next().unwrap() != b'*' || pat_iter.next().unwrap() != b'.' {
+        return false;
+    }
+    let mut name_iter = name.chars();
+    loop {
+        if let Some(next) = name_iter.next() {
+            if next == '.' {
+                break;
+            }
+        } else {
+            return false;
+        }
+    }
+    let sub_name = name_iter.as_str().as_bytes();
+    let sub_pattern: Vec<u8> = pat_iter.collect();
+    sub_name == sub_pattern.as_slice()
 }
 
 #[cfg(test)]
@@ -210,5 +257,17 @@ mod tests {
         assert_eq!(mgr.ca, vec![0]);
         assert_eq!(mgr.cert, vec![1]);
         assert_eq!(mgr.key, vec![2]);
+    }
+
+    #[test]
+    fn test_match_peer_name() {
+        // supported wildcard usage
+        assert!(match_peer_name("aa.bb.cc", "aa.bb.cc"));
+        assert!(match_peer_name("  aa.bb.cc  ", "aa.bb.cc"));
+        assert!(match_peer_name("*.bb.cc ", "aa.bb.cc"));
+        // Unsupported wildcard usage
+        assert!(!match_peer_name("*bb.cc ", "aa.bb.cc"));
+        assert!(!match_peer_name("a*.bb.cc ", "aa.bb.cc"));
+        assert!(!match_peer_name("*.cc ", "aa.bb.cc"));
     }
 }

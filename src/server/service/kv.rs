@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,6 +36,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
+use tikv_util::security;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -69,7 +69,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
 
     readpool_normal_thread_load: Arc<ThreadLoad>,
 
-    x509_common_names: HashSet<String>,
+    cert_allowed_cn: String,
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
@@ -84,7 +84,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
         readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         req_batch_wait_duration: Option<Duration>,
-        x509_common_names: HashSet<String>,
+        cert_allowed_cn: String,
     ) -> Self {
         let timer_pool = Arc::new(Mutex::new(
             ThreadPoolBuilder::new()
@@ -103,7 +103,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
             timer_pool,
             enable_req_batch,
             req_batch_wait_duration,
-            x509_common_names,
+            cert_allowed_cn,
         }
     }
 
@@ -117,29 +117,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
         let status = RpcStatus::new(code, Some(format!("{}", err)));
         ctx.spawn(sink.fail(status).map_err(|_| ()));
     }
-
-    fn check_common_names(&self, ctx: &RpcContext) -> bool {
-        if self.x509_common_names.is_empty() {
-            return true;
-        } else if let Some(auth_context) = ctx.auth_context() {
-            if let Some(auth_property) = auth_context
-                .into_iter()
-                .find(|x| x.name() == "x509_common_name")
-            {
-                let peer_cn = auth_property.value_str().unwrap();
-                if self.x509_common_names.contains(peer_cn) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
 }
 
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
-            if !self.check_common_names(&ctx) {
+            if security::check_common_name(&self.cert_allowed_cn, &ctx) {
                 return;
             }
             let timer = GRPC_MSG_HISTOGRAM_VEC.$fn_name.start_coarse_timer();
@@ -281,7 +264,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
@@ -300,7 +283,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
@@ -324,7 +307,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RegisterLockObserverRequest,
         sink: UnarySink<RegisterLockObserverResponse>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC
@@ -360,7 +343,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: CheckLockObserverRequest,
         sink: UnarySink<CheckLockObserverResponse>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC
@@ -402,7 +385,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RemoveLockObserverRequest,
         sink: UnarySink<RemoveLockObserverResponse>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC
@@ -438,7 +421,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: PhysicalScanLockRequest,
         sink: UnarySink<PhysicalScanLockResponse>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC
@@ -481,7 +464,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC
@@ -528,7 +511,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: Request,
         sink: ServerStreamingSink<Response>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC
@@ -565,7 +548,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<RaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let ch = self.ch.clone();
@@ -597,7 +580,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         info!("batch_raft RPC is called, new gRPC stream established");
@@ -638,7 +621,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let task = SnapTask::Recv { stream, sink };
@@ -659,7 +642,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
@@ -734,7 +717,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let timer = GRPC_MSG_HISTOGRAM_VEC.read_index.start_coarse_timer();
@@ -806,7 +789,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<BatchCommandsRequest>,
         sink: DuplexSink<BatchCommandsResponse>,
     ) {
-        if !self.check_common_names(&ctx) {
+        if security::check_common_name(&self.cert_allowed_cn, &ctx) {
             return;
         }
         let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
