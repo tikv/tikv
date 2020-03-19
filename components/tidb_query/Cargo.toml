@@ -57,15 +57,10 @@ tidb_query_datatype = { path = "../tidb_query_datatype" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-tokio = { version = "0.2", features = ["sync"] }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
 static_assertions = { version = "1.0", features = ["nightly"] }
-
-[dependencies.prometheus]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
-features = ["nightly", "push", "process"]
+prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"

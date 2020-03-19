@@ -38,17 +38,17 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
-    db_exist, get_cf_handle, CFOptions, EventListener, FixedPrefixSliceTransform,
-    FixedSuffixSliceTransform, NoopSliceTransform,
+    db_exist, get_cf_handle, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+    NoopSliceTransform,
 };
 use engine::DB;
 use engine_rocks::{
-    RangePropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    RangePropertiesCollectorFactory, RocksEventListener, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
-use pd_client::{Config as PdConfig, ConfigClient};
+use pd_client::{Config as PdConfig, ConfigClient, Error as PdError};
 use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
@@ -869,7 +869,7 @@ impl DbConfig {
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.enable_unordered_write(self.enable_unordered_write);
-        opts.add_event_listener(EventListener::new("kv"));
+        opts.add_event_listener(RocksEventListener::new("kv"));
 
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
@@ -1114,7 +1114,7 @@ impl RaftDbConfig {
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
-        opts.add_event_listener(EventListener::new("raft"));
+        opts.add_event_listener(RocksEventListener::new("raft"));
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         // TODO maybe create a new env for raft engine
@@ -1636,36 +1636,31 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
-    pub unify_read_pool: bool,
+    pub unify_read_pool: Option<bool>,
     pub unified: UnifiedReadPoolConfig,
     pub storage: StorageReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
+    pub fn is_unified(&self) -> bool {
+        self.unify_read_pool.unwrap_or_else(|| {
+            self.storage == Default::default() && self.coprocessor == Default::default()
+        })
+    }
+
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.unify_read_pool {
+        if self.is_unified() {
             self.unified.validate()?;
         } else {
             self.storage.validate()?;
             self.coprocessor.validate()?;
         }
         Ok(())
-    }
-}
-
-impl Default for ReadPoolConfig {
-    fn default() -> ReadPoolConfig {
-        ReadPoolConfig {
-            unify_read_pool: true,
-            unified: Default::default(),
-            storage: Default::default(),
-            coprocessor: Default::default(),
-        }
     }
 }
 
@@ -1688,7 +1683,7 @@ mod readpool_tests {
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
         let cfg = ReadPoolConfig {
-            unify_read_pool: false,
+            unify_read_pool: Some(false),
             unified,
             storage,
             coprocessor,
@@ -1705,7 +1700,7 @@ mod readpool_tests {
         assert!(storage.validate().is_err());
         let coprocessor = CoprReadPoolConfig::default();
         let invalid_cfg = ReadPoolConfig {
-            unify_read_pool: false,
+            unify_read_pool: Some(false),
             unified,
             storage,
             coprocessor,
@@ -1729,7 +1724,7 @@ mod readpool_tests {
         };
         assert!(coprocessor.validate().is_err());
         let cfg = ReadPoolConfig {
-            unify_read_pool: true,
+            unify_read_pool: Some(true),
             unified,
             storage,
             coprocessor,
@@ -1748,12 +1743,50 @@ mod readpool_tests {
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
         let cfg = ReadPoolConfig {
-            unify_read_pool: true,
+            unify_read_pool: Some(true),
             unified,
             storage,
             coprocessor,
         };
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_is_unified() {
+        // Read pools are unified by default.
+        let cfg = ReadPoolConfig::default();
+        assert!(cfg.is_unified());
+
+        // If there is any customized configs in storage or coprocessor read pool,
+        // we don't enable the unified read pool.
+        let cfg = ReadPoolConfig {
+            storage: StorageReadPoolConfig {
+                high_concurrency: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cfg.is_unified());
+
+        let cfg = ReadPoolConfig {
+            coprocessor: CoprReadPoolConfig {
+                high_concurrency: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cfg.is_unified());
+
+        // `unify-read-pool` config is the most preferred.
+        let cfg = ReadPoolConfig {
+            unify_read_pool: Some(true),
+            storage: StorageReadPoolConfig {
+                high_concurrency: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(cfg.is_unified());
     }
 }
 
@@ -1762,7 +1795,7 @@ mod readpool_tests {
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[config(skip)]
-    pub dynamic_config: bool,
+    pub enable_dynamic_config: bool,
 
     #[config(skip)]
     #[serde(with = "log_level_serde")]
@@ -1770,6 +1803,12 @@ pub struct TiKvConfig {
 
     #[config(skip)]
     pub log_file: String,
+
+    #[config(skip)]
+    pub slow_log_file: String,
+
+    #[config(skip)]
+    pub slow_log_threshold: ReadableDuration,
 
     #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
@@ -1826,9 +1865,11 @@ pub struct TiKvConfig {
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
-            dynamic_config: false,
+            enable_dynamic_config: true,
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            slow_log_file: "".to_owned(),
+            slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
@@ -2392,7 +2433,7 @@ impl ConfigHandler {
         mut controller: ConfigController,
         scheduler: FutureScheduler<PdTask>,
     ) -> CfgResult<Self> {
-        if controller.get_current().dynamic_config {
+        if controller.get_current().enable_dynamic_config {
             if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
                 return Err(format!("failed to schedule refresh config task: {:?}", e).into());
             }
@@ -2418,6 +2459,14 @@ impl ConfigHandler {
     }
 }
 
+#[derive(Debug)]
+pub enum CfgError {
+    Pd(PdError),
+    TomlDe(toml::de::Error),
+    TomlSer(toml::ser::Error),
+    Other(Box<dyn std::error::Error + Sync + Send>),
+}
+
 impl ConfigHandler {
     /// Register the local config to pd and get the latest
     /// version and config
@@ -2425,13 +2474,16 @@ impl ConfigHandler {
         id: String,
         cfg_client: Arc<impl ConfigClient>,
         local_config: TiKvConfig,
-    ) -> CfgResult<(configpb::Version, TiKvConfig)> {
-        let cfg = toml::to_string(&local_config.get_encoder())?;
+    ) -> Result<(configpb::Version, TiKvConfig), CfgError> {
+        let cfg = toml::to_string(&local_config.get_encoder()).map_err(CfgError::TomlSer)?;
         let version = configpb::Version::default();
-        let mut resp = cfg_client.register_config(id, version, cfg)?;
+        let mut resp = cfg_client
+            .register_config(id, version, cfg)
+            .map_err(CfgError::Pd)?;
         match resp.get_status().get_code() {
             StatusCode::Ok | StatusCode::WrongVersion => {
-                let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
+                let mut incoming: TiKvConfig =
+                    toml::from_str(resp.get_config()).map_err(CfgError::TomlDe)?;
                 let mut version = resp.take_version();
                 incoming.compatible_adjust();
                 if let Err(e) = incoming.validate() {
@@ -2447,7 +2499,9 @@ impl ConfigHandler {
                 info!("register config success"; "version" => ?version);
                 Ok((version, incoming))
             }
-            _ => Err(format!("failed to register config, response: {:?}", resp).into()),
+            _ => Err(CfgError::Other(
+                format!("failed to register config, response: {:?}", resp).into(),
+            )),
         }
     }
 

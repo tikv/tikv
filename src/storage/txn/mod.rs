@@ -11,7 +11,7 @@ mod process;
 mod store;
 
 use crate::storage::{
-    types::{MvccInfo, TxnStatus},
+    types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
 use kvproto::kvrpcpb::LockInfo;
@@ -30,13 +30,41 @@ pub use self::store::{Scanner, SnapshotStore, Store};
 /// Process result of a command.
 pub enum ProcessResult {
     Res,
-    MultiRes { results: Vec<StorageResult<()>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Locks { locks: Vec<LockInfo> },
-    TxnStatus { txn_status: TxnStatus },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
+    MultiRes {
+        results: Vec<StorageResult<()>>,
+    },
+    MvccKey {
+        mvcc: MvccInfo,
+    },
+    MvccStartTs {
+        mvcc: Option<(Key, MvccInfo)>,
+    },
+    Locks {
+        locks: Vec<LockInfo>,
+    },
+    TxnStatus {
+        txn_status: TxnStatus,
+    },
+    NextCommand {
+        cmd: Command,
+    },
+    Failed {
+        err: StorageError,
+    },
+    PessimisticLockRes {
+        res: StorageResult<PessimisticLockRes>,
+    },
+}
+
+impl ProcessResult {
+    pub fn maybe_clone(&self) -> Option<ProcessResult> {
+        match self {
+            ProcessResult::PessimisticLockRes { res: Ok(r) } => {
+                Some(ProcessResult::PessimisticLockRes { res: Ok(r.clone()) })
+            }
+            _ => None,
+        }
+    }
 }
 
 quick_error! {

@@ -14,8 +14,9 @@ use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
 use engine::rocks::Writable;
-use engine::*;
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::Compat;
+use engine_traits::Peekable;
+use engine_traits::{SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::SnapManager;
@@ -680,9 +681,9 @@ fn test_debug_raft_log() {
     entry.set_index(1);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42]);
-    engine.put_msg(&key, &entry).unwrap();
+    engine.c().put_msg(&key, &entry).unwrap();
     assert_eq!(
-        engine.get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
+        engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
         entry
     );
 
@@ -710,15 +711,18 @@ fn test_debug_region_info() {
 
     let raft_engine = cluster.get_raft_engine(store_id);
     let kv_engine = cluster.get_engine(store_id);
-    let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
 
     let region_id = 100;
     let raft_state_key = keys::raft_state_key(region_id);
     let mut raft_state = raft_serverpb::RaftLocalState::default();
     raft_state.set_last_index(42);
-    raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+    raft_engine
+        .c()
+        .put_msg(&raft_state_key, &raft_state)
+        .unwrap();
     assert_eq!(
         raft_engine
+            .c()
             .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
             .unwrap()
             .unwrap(),
@@ -729,10 +733,12 @@ fn test_debug_region_info() {
     let mut apply_state = raft_serverpb::RaftApplyState::default();
     apply_state.set_applied_index(42);
     kv_engine
-        .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
+        .c()
+        .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
         .unwrap();
     assert_eq!(
         kv_engine
+            .c()
             .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .unwrap(),
@@ -743,10 +749,12 @@ fn test_debug_region_info() {
     let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     kv_engine
-        .put_msg_cf(raft_cf, &region_state_key, &region_state)
+        .c()
+        .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
         .unwrap();
     assert_eq!(
         kv_engine
+            .c()
             .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .unwrap(),
@@ -784,9 +792,9 @@ fn test_debug_region_size() {
     region.set_end_key(b"z".to_vec());
     let mut state = RegionLocalState::default();
     state.set_region(region);
-    let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
     engine
-        .put_msg_cf(cf_raft, &region_state_key, &state)
+        .c()
+        .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
 
     let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
@@ -935,4 +943,96 @@ fn test_double_run_node() {
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
     drop(sim);
     cluster.shutdown();
+}
+
+fn kv_pessimistic_lock(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    ts: u64,
+    for_update_ts: u64,
+    return_values: bool,
+) -> PessimisticLockResponse {
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx);
+    let primary = keys[0].clone();
+    let mut mutations = vec![];
+    for key in keys {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::PessimisticLock);
+        mutation.set_key(key);
+        mutations.push(mutation);
+    }
+    req.set_mutations(mutations.into());
+    req.primary_lock = primary;
+    req.start_version = ts;
+    req.for_update_ts = for_update_ts;
+    req.lock_ttl = 20;
+    req.is_first_lock = false;
+    req.return_values = return_values;
+    client.kv_pessimistic_lock(&req).unwrap()
+}
+
+fn must_kv_pessimistic_rollback(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let mut req = PessimisticRollbackRequest::default();
+    req.set_context(ctx);
+    req.set_keys(vec![key].into_iter().collect());
+    req.start_version = ts;
+    req.for_update_ts = ts;
+    let resp = client.kv_pessimistic_rollback(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+}
+
+#[test]
+fn test_pessimistic_lock() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+
+    // Prewrite
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
+
+    // KeyIsLocked
+    for &return_values in &[false, true] {
+        let resp =
+            kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], 20, 20, return_values);
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert_eq!(resp.errors.len(), 1);
+        assert!(resp.errors[0].has_locked());
+        assert!(resp.values.is_empty());
+    }
+
+    must_kv_commit(&client, ctx.clone(), vec![k.clone()], 10, 30, 30);
+
+    // WriteConflict
+    for &return_values in &[false, true] {
+        let resp =
+            kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], 20, 20, return_values);
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert_eq!(resp.errors.len(), 1);
+        assert!(resp.errors[0].has_conflict());
+        assert!(resp.values.is_empty());
+    }
+
+    // Return multiple values
+    for &return_values in &[false, true] {
+        let resp = kv_pessimistic_lock(
+            &client,
+            ctx.clone(),
+            vec![k.clone(), b"nonexsit".to_vec()],
+            40,
+            40,
+            true,
+        );
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.errors.is_empty());
+        if return_values {
+            assert_eq!(resp.get_values().to_vec(), vec![v.clone(), vec![]]);
+        }
+        must_kv_pessimistic_rollback(&client, ctx.clone(), k.clone(), 40);
+    }
 }

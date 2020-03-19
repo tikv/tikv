@@ -2,7 +2,6 @@
 
 pub mod config;
 pub mod engine_metrics;
-mod event_listener;
 pub mod security;
 pub mod stats;
 
@@ -18,15 +17,14 @@ use self::engine_metrics::{
     ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE,
     ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
-use crate::rocks::load_latest_options;
-use crate::rocks::supported_compression;
-use crate::rocks::{
+use crate::{Error, Result};
+use rocksdb::load_latest_options;
+use rocksdb::rocksdb::supported_compression;
+use rocksdb::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-use crate::{Error, Result};
 
-pub use self::event_listener::EventListener;
 pub use crate::rocks::CFHandle;
 use engine_traits::{ALL_CFS, CF_DEFAULT};
 

@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::errors::Result;
+use crate::properties::DecodeProperties;
 use crate::range::Range;
 use crate::CFHandleExt;
 use std::ops::Deref;
@@ -74,7 +75,7 @@ where
     fn user_collected_properties(&self) -> UCP;
 }
 
-pub trait UserCollectedProperties {
+pub trait UserCollectedProperties: DecodeProperties {
     fn get(&self, index: &[u8]) -> Option<&[u8]>;
 
     fn len(&self) -> usize;
