@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use futures::future::{loop_fn, Loop};
+use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures::{future, Future, Sink, Stream};
@@ -62,17 +62,27 @@ impl RpcClient {
 
                     // spawn a background future to update PD information periodically
                     let duration = Duration::from_secs(cfg.update_interval);
-                    let update_loop = loop_fn(rpc_client.leader_client.clone(), move |client| {
-                        GLOBAL_TIMER_HANDLE
-                            .delay(Instant::now() + duration)
-                            .then(|_| {
-                                if client.reconnect().is_err() {
-                                    warn!("update PD information failed");
-                                    // will update later anyway
-                                }
-                                Ok(Loop::Continue(client))
-                            })
-                    });
+                    let update_loop =
+                        loop_fn(Arc::downgrade(&rpc_client.leader_client), move |client| {
+                            GLOBAL_TIMER_HANDLE
+                                .delay(Instant::now() + duration)
+                                .then(|_| {
+                                    match client.upgrade() {
+                                        Some(cli) => {
+                                            let req = cli.reconnect();
+                                            future::Either::A(req.then(|r| {
+                                                if r.is_err() {
+                                                    warn!("update PD information failed");
+                                                    // will update later anyway
+                                                }
+                                                Ok(Loop::Continue(client))
+                                            }))
+                                        }
+                                        // if the client has been dropped, we can stop
+                                        None => future::Either::B(ok(Loop::Break(()))),
+                                    }
+                                })
+                        });
                     rpc_client
                         .leader_client
                         .inner
