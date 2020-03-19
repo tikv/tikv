@@ -8,7 +8,7 @@
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
-use crossbeam::channel::{self, SendError, TryRecvError};
+use crossbeam::channel::{self, SendError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
@@ -85,10 +85,6 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
-    pub fn normals_mut(&mut self) -> &mut [Box<N>] {
-        &mut self.normals
-    }
-
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
             FsmTypes::Normal(n) => {
@@ -102,11 +98,6 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             FsmTypes::Empty => return false,
         }
         true
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.normals.len() + self.control.is_some() as usize
     }
 
     fn is_empty(&self) -> bool {
@@ -251,39 +242,22 @@ enum ReschedulePolicy {
 }
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
-    fn fetch_batch(&mut self, batch: &mut Batch<N, C>, max_size: usize) {
-        let curr_batch_len = batch.len();
-        if batch.control.is_some() || curr_batch_len >= max_size {
-            // Do nothing if there's a pending control fsm or the batch is already full.
-            return;
+    fn fetch_fsm(&mut self, batch: &mut Batch<N, C>) -> bool {
+        if batch.control.is_some() {
+            return true;
         }
 
-        let mut pushed = if curr_batch_len == 0 {
-            match self.fsm_receiver.try_recv().or_else(|_| {
-                self.handler.pause();
-                // Block if the batch is empty.
-                self.fsm_receiver.recv()
-            }) {
-                Ok(fsm) => batch.push(fsm),
-                Err(_) => return,
-            }
-        } else {
-            true
-        };
+        if let Ok(fsm) = self.fsm_receiver.try_recv() {
+            return batch.push(fsm);
+        }
 
-        while pushed {
-            if batch.len() < max_size {
-                let fsm = match self.fsm_receiver.try_recv() {
-                    Ok(fsm) => fsm,
-                    Err(TryRecvError::Empty) => return,
-                    Err(TryRecvError::Disconnected) => unreachable!(),
-                };
-                pushed = batch.push(fsm);
-            } else {
-                return;
+        if batch.is_empty() {
+            self.handler.pause();
+            if let Ok(fsm) = self.fsm_receiver.recv() {
+                return batch.push(fsm);
             }
         }
-        batch.clear();
+        !batch.is_empty()
     }
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
@@ -291,10 +265,17 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let mut batch = Batch::with_capacity(self.max_batch_size);
         let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
 
-        self.fetch_batch(&mut batch, self.max_batch_size);
-        while !batch.is_empty() {
-            let mut hot_fsm_count = 0;
-            self.handler.begin(batch.len());
+        // Fetch batch after every round is finished. It's helpful to protect regions
+        // from becoming hungry if some regions are hot points. Since we fetch new fsm every time
+        // calling `poll`, we do not need to configure a large value for `self.max_batch_size`.
+        let mut run = true;
+        while run && self.fetch_fsm(&mut batch) {
+            // If there is some region wait to be deal, we must deal with it even if it has overhead
+            // max size of batch. It's helpful to protect regions from becoming hungry
+            // if some regions are hot points.
+            let max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
+            self.handler.begin(max_batch_size);
+
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
                 if batch.control.as_ref().unwrap().is_stopped() {
@@ -303,30 +284,53 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.release_control(&self.router.control_box, len);
                 }
             }
-            if !batch.normals.is_empty() {
-                for (i, p) in batch.normals.iter_mut().enumerate() {
-                    let len = self.handler.handle_normal(p);
-                    batch.counters[i] += 1;
-                    if p.is_stopped() {
-                        reschedule_fsms.push((i, ReschedulePolicy::Remove));
-                    } else {
-                        if batch.counters[i] > 3 {
-                            hot_fsm_count += 1;
-                            // We should only reschedule a half of the hot regions, otherwise,
-                            // it's possible all the hot regions are fetched in a batch the
-                            // next time.
-                            if hot_fsm_count % 2 == 0 {
-                                reschedule_fsms.push((i, ReschedulePolicy::Schedule));
-                                continue;
-                            }
+
+            let mut hot_fsm_count = 0;
+            for (i, p) in batch.normals.iter_mut().enumerate() {
+                let len = self.handler.handle_normal(p);
+                batch.counters[i] += 1;
+                if p.is_stopped() {
+                    reschedule_fsms.push((i, ReschedulePolicy::Remove));
+                } else {
+                    if batch.counters[i] > 3 {
+                        hot_fsm_count += 1;
+                        // We should only reschedule a half of the hot regions, otherwise,
+                        // it's possible all the hot regions are fetched in a batch the
+                        // next time.
+                        if hot_fsm_count % 2 == 0 {
+                            reschedule_fsms.push((i, ReschedulePolicy::Schedule));
+                            continue;
                         }
-                        if let Some(l) = len {
-                            reschedule_fsms.push((i, ReschedulePolicy::Release(l)));
-                        }
+                    }
+                    if let Some(l) = len {
+                        reschedule_fsms.push((i, ReschedulePolicy::Release(l)));
                     }
                 }
             }
-            self.handler.end(batch.normals_mut());
+            let mut fsm_cnt = batch.normals.len();
+            while batch.normals.len() < max_batch_size {
+                if let Ok(fsm) = self.fsm_receiver.try_recv() {
+                    run = batch.push(fsm);
+                }
+                // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
+                // may change state of the handler, we shall deal with it immediately after
+                // calling `begin` of `Handler`.
+                if !run || fsm_cnt >= batch.normals.len() {
+                    break;
+                }
+                let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);
+                batch.counters[fsm_cnt] += 1;
+                if batch.normals[fsm_cnt].is_stopped() {
+                    reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Remove));
+                } else {
+                    if let Some(l) = len {
+                        reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Release(l)));
+                    }
+                }
+                fsm_cnt += 1;
+            }
+            self.handler.end(&mut batch.normals);
+
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.
             while let Some((r, mark)) = reschedule_fsms.pop() {
@@ -336,10 +340,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     ReschedulePolicy::Schedule => batch.reschedule(&self.router, r),
                 }
             }
-            // Fetch batch after every round is finished. It's helpful to protect regions
-            // from becoming hungry if some regions are hot points.
-            self.fetch_batch(&mut batch, self.max_batch_size);
         }
+        batch.clear();
     }
 }
 
