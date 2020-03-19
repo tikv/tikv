@@ -2754,10 +2754,10 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0575e258dab62268e7236d7307caa38848acbda7ec7ab87bd9093791e999d20"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=2518694543eb58f21f491969422d36480261ef8c#2518694543eb58f21f491969422d36480261ef8c"
 dependencies = [
  "cfg-if",
+ "coarsetime",
  "fnv",
  "lazy_static",
  "libc",
@@ -2771,12 +2771,10 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087#d919ccd35976b9b84b8d03c07138c1cc05a36087"
+source = "git+https://github.com/renkai/rust-prometheus.git?rev=7304f464f5dfe371b0e05c37f8aab5b71c186f2d#7304f464f5dfe371b0e05c37f8aab5b71c186f2d"
 dependencies = [
- "lazy_static",
- "proc-macro2",
- "quote",
- "syn",
+ "proc-macro-hack",
+ "static-metric-proc-macros",
 ]
 
 [[package]]
@@ -3792,6 +3790,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4edf667ea8f60afc06d6aeec079d20d5800351109addec1faea678a8663da4e1"
 
 [[package]]
+name = "static-metric-proc-macros"
+version = "0.1.0"
+source = "git+https://github.com/renkai/rust-prometheus.git?rev=7304f464f5dfe371b0e05c37f8aab5b71c186f2d#7304f464f5dfe371b0e05c37f8aab5b71c186f2d"
+dependencies = [
+ "lazy_static",
+ "proc-macro-hack",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4267,6 +4277,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "chrono",
+ "coarsetime",
  "codec",
  "configuration",
  "crc32fast",
