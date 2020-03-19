@@ -141,7 +141,11 @@ impl<S: Snapshot> PointGetter<S> {
     /// Get the value of a user key.
     ///
     /// If `multi == false`, this function must be called only once. Future calls return nothing.
-    pub fn get(&mut self, user_key: &Key, can_be_cached: Option<&mut bool>) -> Result<Option<Value>> {
+    pub fn get(
+        &mut self,
+        user_key: &Key,
+        can_be_cached: Option<&mut bool>,
+    ) -> Result<Option<Value>> {
         if !self.multi {
             // Protect from calling `get()` multiple times when `multi == false`.
             if self.drained {
@@ -178,7 +182,11 @@ impl<S: Snapshot> PointGetter<S> {
     /// In common cases we expect to get nothing in lock cf. Using a `get_cf` instead of `seek`
     /// is fast in such cases due to no need for RocksDB to continue move and skip deleted entries
     /// until find a user key.
-    fn load_and_check_lock(&mut self, user_key: &Key, can_be_cached: Option<&mut bool>) -> Result<()> {
+    fn load_and_check_lock(
+        &mut self,
+        user_key: &Key,
+        can_be_cached: Option<&mut bool>,
+    ) -> Result<()> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
 
@@ -309,20 +317,29 @@ mod tests {
     }
 
     fn must_get_key<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter.get(&Key::from_raw(key)).unwrap().is_some());
+        assert!(point_getter
+            .get(&Key::from_raw(key), None)
+            .unwrap()
+            .is_some());
     }
 
     fn must_get_value<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8], prefix: &[u8]) {
-        let val = point_getter.get(&Key::from_raw(key)).unwrap().unwrap();
+        let val = point_getter
+            .get(&Key::from_raw(key), None)
+            .unwrap()
+            .unwrap();
         assert!(val.starts_with(prefix));
     }
 
     fn must_get_none<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter.get(&Key::from_raw(key)).unwrap().is_none());
+        assert!(point_getter
+            .get(&Key::from_raw(key), None)
+            .unwrap()
+            .is_none());
     }
 
     fn must_get_err<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter.get(&Key::from_raw(key)).is_err());
+        assert!(point_getter.get(&Key::from_raw(key), None).is_err());
     }
 
     fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {
