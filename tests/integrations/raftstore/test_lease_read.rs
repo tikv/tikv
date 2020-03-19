@@ -394,6 +394,7 @@ fn test_read_index_when_transfer_leader_1() {
         RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
             .direction(Direction::Recv)
             .skip(MessageType::MsgTransferLeader)
+            .skip(MessageType::MsgAppendResponse)
             .when(Arc::new(AtomicBool::new(true)))
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
