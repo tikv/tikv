@@ -151,4 +151,5 @@ pub const ENGINE_HIST_TYPES: &[HistType] = &[
     HistType::BlobDbBlobFileReadMicros,
     HistType::BlobDbBlobFileSyncMicros,
     HistType::BlobDbGcMicros,
+    HistType::DbWriteWalTime,
 ];

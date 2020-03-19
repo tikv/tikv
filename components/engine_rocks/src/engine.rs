@@ -6,19 +6,18 @@ use std::path::Path;
 use std::sync::Arc;
 
 use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
+    Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::db_vector::RocksDBVector;
-use crate::options::{RocksReadOptions, RocksWriteOptions};
+use crate::options::RocksReadOptions;
 use crate::rocks_metrics::{
     flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
     flush_engine_ticker_metrics,
 };
 use crate::rocks_metrics_defs::{ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES};
 use crate::util::get_cf_handle;
-use crate::write_batch::RocksWriteBatch;
 use crate::{RocksEngineIterator, RocksSnapshot};
 
 #[derive(Clone, Debug)]
@@ -57,23 +56,6 @@ impl RocksEngine {
 
 impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
-    type WriteBatch = RocksWriteBatch;
-
-    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        debug_assert_eq!(wb.get_db().path(), self.0.path(), "mismatched db path");
-        let opt: RocksWriteOptions = opts.into();
-        self.0
-            .write_opt(wb.as_inner(), &opt.into_raw())
-            .map_err(Error::Engine)
-    }
-
-    fn write_batch(&self) -> Self::WriteBatch {
-        Self::WriteBatch::new(Arc::clone(&self.0))
-    }
-
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        Self::WriteBatch::with_capacity(Arc::clone(&self.0), cap)
-    }
 
     fn snapshot(&self) -> RocksSnapshot {
         RocksSnapshot::new(self.0.clone())
@@ -81,10 +63,6 @@ impl KvEngine for RocksEngine {
 
     fn sync(&self) -> Result<()> {
         self.0.sync_wal().map_err(Error::Engine)
-    }
-
-    fn cf_names(&self) -> Vec<&str> {
-        self.0.cf_names()
     }
 
     fn flush_metrics(&self, instance: &str, shared_block_cache: bool) {
@@ -155,7 +133,7 @@ impl Peekable for RocksEngine {
     }
 }
 
-impl Mutable for RocksEngine {
+impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.0.put(key, value).map_err(Error::Engine)
     }
@@ -185,7 +163,7 @@ impl Mutable for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine::rocks::util;
-    use engine_traits::{Iterable, KvEngine, Mutable, Peekable};
+    use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempfile::Builder;

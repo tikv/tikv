@@ -11,7 +11,6 @@ use tikv_util::config::*;
 
 #[test]
 fn test_pending_peers() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
 
@@ -43,7 +42,6 @@ fn test_pending_peers() {
 // dirty write.
 #[test]
 fn test_pending_snapshot() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     let election_timeout = configure_for_lease_read(&mut cluster, None, Some(15));
