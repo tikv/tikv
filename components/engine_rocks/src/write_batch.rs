@@ -311,3 +311,36 @@ impl WriteBatchVecExt<RocksEngine> for RocksWriteBatchVec {
         e.write_vec_opt(self, opts)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rand::Rng;
+
+    use super::super::util::new_default_engine;
+    use super::*;
+    use engine_traits::WriteBatch;
+    use tempfile::{Builder, TempDir};
+
+    #[test]
+    fn test_should_write_to_engine() {
+        let path = Builder::new()
+            .prefix("test-should-write-to-engine")
+            .tempdir()
+            .unwrap();
+        let engine = new_default_engine(path.path().join("db").to_str().unwrap()).unwrap();
+        let mut wb = engine.write_batch();
+        for i in 0..WRITE_BATCH_MAX_KEYS {
+            wb.put(b"aaa", b"bbb");
+        }
+        assert!(!wb.should_write_to_engine());
+        wb.put(b"aaa", b"bbb");
+        assert!(wb.should_write_to_engine());
+        let mut wb = engine.write_batch_vec(4, 1024);
+        for i in 0..WRITE_BATCH_MAX_BATCH * 4 {
+            wb.put(b"aaa", b"bbb");
+        }
+        assert!(!wb.should_write_to_engine());
+        wb.put(b"aaa", b"bbb");
+        assert!(wb.should_write_to_engine());
+    }
+}
