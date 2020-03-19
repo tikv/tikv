@@ -26,8 +26,9 @@ struct Dicts {
 impl Dicts {
     fn open(path: &str, rotation_period: Duration, master_key: &dyn Backend) -> Result<Dicts> {
         let base = Path::new(path);
+        // File dict is saved in plaintext.
         let file_file = EncryptedFile::new(base, FILE_DICT_NAME);
-        let file_bytes = file_file.read(master_key)?;
+        let file_bytes = file_file.read(&PlainTextBackend::default())?;
         let mut file_dict = FileDictionary::default();
         file_dict.merge_from_bytes(&file_bytes)?;
 
@@ -59,7 +60,7 @@ impl Dicts {
     fn save_file_dict(&self) -> Result<()> {
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = self.file_dict.write_to_bytes()?;
-        // File dict can be saved in plaintext.
+        // File dict is saved in plaintext.
         file.write(&file_bytes, &PlainTextBackend::default())?;
         Ok(())
     }
@@ -98,15 +99,7 @@ impl Dicts {
         file.iv = Iv::new().as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
         file.method = method.into();
-        match self.file_dict.files.entry(fname.to_owned()) {
-            Entry::Vacant(e) => e.insert(file),
-            Entry::Occupied(_) => {
-                return Err(Error::Io(IoError::new(
-                    ErrorKind::AlreadyExists,
-                    format!("file already exists {}", fname),
-                )))
-            }
-        };
+        self.file_dict.files.insert(fname.to_owned(), file);
         self.save_file_dict()?;
         Ok(self.file_dict.files.get(fname).unwrap())
     }
@@ -359,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_create_get_delete() {
-        let (_tmp, manager) = new_tmp_key_manager(None, None);
+        let (_tmp, mut manager) = new_tmp_key_manager(None, None);
 
         let new_file = manager.new_file("foo").unwrap();
         let get_file = manager.get_file("foo").unwrap();
@@ -371,6 +364,10 @@ mod tests {
         // Must be plaintext if file not found.
         let file = manager.get_file("foo").unwrap();
         assert_eq!(file.method, DBEncryptionMethod::Plaintext);
+
+        manager.method = EncryptionMethod::Aes192Ctr;
+        let file1 = manager.new_file("foo").unwrap();
+        assert_ne!(file, file1);
 
         // Must fail if key is specified but not found.
         let mut file = FileInfo::default();
