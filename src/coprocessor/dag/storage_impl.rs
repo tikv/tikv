@@ -75,7 +75,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
         let key = range.0;
         let value = self
             .store
-            .incremental_get(&Key::from_raw(&key), &mut self.can_be_cached)
+            .incremental_get(&Key::from_raw(&key), Some(&mut self.can_be_cached))
             .map_err(Error::from)?;
         Ok(value.map(move |v| (key, v)))
     }
