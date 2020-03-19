@@ -49,11 +49,10 @@ pub struct IntervalRange {
 
 impl std::fmt::Debug for IntervalRange {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use hex::ToHex;
         write!(f, "[")?;
-        self.lower_inclusive.as_slice().write_hex_upper(f)?;
+        write!(f, "{}", hex::encode_upper(self.lower_inclusive.as_slice()))?;
         write!(f, ", ")?;
-        self.upper_exclusive.as_slice().write_hex_upper(f)?;
+        write!(f, "{}", hex::encode_upper(self.upper_exclusive.as_slice()))?;
         write!(f, ")")
     }
 }
@@ -85,8 +84,7 @@ pub struct PointRange(pub Vec<u8>);
 
 impl std::fmt::Debug for PointRange {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use hex::ToHex;
-        self.0.as_slice().write_hex_upper(f)
+        write!(f, "{}", hex::encode_upper(self.0.as_slice()))
     }
 }
 
