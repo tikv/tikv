@@ -27,6 +27,7 @@ use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
+use tikv_util::security::*;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -106,10 +107,7 @@ impl TestSuite {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(
-                        scheduler.clone(),
-                        security_mgr.clone(),
-                    ))
+                    create_change_data(cdc::Service::new(scheduler.clone(), security_mgr.clone()))
                 }));
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
