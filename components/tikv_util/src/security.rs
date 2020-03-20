@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::Read;
 
+use crate::collections::HashSet;
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, RpcContext,
     ServerBuilder, ServerCredentialsBuilder,
@@ -20,7 +21,7 @@ pub struct SecurityConfig {
     #[serde(skip)]
     pub override_ssl_target: String,
     pub cipher_file: String,
-    pub cert_allowed_cn: String,
+    pub cert_allowed_cn: HashSet<String>,
 }
 
 impl Default for SecurityConfig {
@@ -31,7 +32,7 @@ impl Default for SecurityConfig {
             key_path: String::new(),
             override_ssl_target: String::new(),
             cipher_file: String::new(),
-            cert_allowed_cn: String::new(),
+            cert_allowed_cn: HashSet::default(),
         }
     }
 }
@@ -90,7 +91,7 @@ pub struct SecurityManager {
     key: Vec<u8>,
     override_ssl_target: String,
     cipher_file: String,
-    cert_allowed_cn: String,
+    cert_allowed_cn: HashSet<String>,
 }
 
 impl Drop for SecurityManager {
@@ -147,7 +148,7 @@ impl SecurityManager {
         &self.cipher_file
     }
 
-    pub fn cert_allowed_cn(&self) -> &str {
+    pub fn cert_allowed_cn(&self) -> &HashSet<String> {
         &self.cert_allowed_cn
     }
 }
@@ -155,7 +156,7 @@ impl SecurityManager {
 /// Check peer CN with cert-allowed-cn field.
 /// Return true when the match is successful (support wildcard pattern).
 /// Skip the check when cert-allowed-cn is not set or the secure channel is not used.
-pub fn check_common_name(cert_allowed_cn: &str, ctx: &RpcContext) -> bool {
+pub fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> bool {
     if cert_allowed_cn.is_empty() || ctx.auth_context().is_none() {
         return true;
     } else if let Some(auth_property) = ctx
@@ -165,12 +166,21 @@ pub fn check_common_name(cert_allowed_cn: &str, ctx: &RpcContext) -> bool {
         .find(|x| x.name() == "x509_common_name")
     {
         let peer_cn = auth_property.value_str().unwrap();
-        return match_peer_name(cert_allowed_cn, peer_cn);
+        return match_peer_names(cert_allowed_cn, peer_cn);
     }
     false
 }
 
-fn match_peer_name(pattern: &str, name: &str) -> bool {
+fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
+    for cn in allowed_cn {
+        if do_match_name(cn, name) {
+            return true;
+        }
+    }
+    false
+}
+
+fn do_match_name(pattern: &str, name: &str) -> bool {
     let pattern = pattern.trim();
     let name = name.trim();
 
@@ -260,14 +270,16 @@ mod tests {
     }
 
     #[test]
-    fn test_match_peer_name() {
+    fn test_do_match_name() {
         // supported wildcard usage
-        assert!(match_peer_name("aa.bb.cc", "aa.bb.cc"));
-        assert!(match_peer_name("  aa.bb.cc  ", "aa.bb.cc"));
-        assert!(match_peer_name("*.bb.cc ", "aa.bb.cc"));
+        assert!(do_match_name("aa.bb.cc", "aa.bb.cc"));
+        assert!(do_match_name("  aa.bb.cc  ", "aa.bb.cc"));
+        assert!(do_match_name("*.bb.cc ", "aa.bb.cc"));
         // Unsupported wildcard usage
-        assert!(!match_peer_name("*bb.cc ", "aa.bb.cc"));
-        assert!(!match_peer_name("a*.bb.cc ", "aa.bb.cc"));
-        assert!(!match_peer_name("*.cc ", "aa.bb.cc"));
+        let mut cn = HashSet::default();
+        cn.insert(String::from("*bb.cc"));
+        cn.insert(String::from("a*.bb.cc"));
+        cn.insert(String::from("*.cc"));
+        assert!(!match_peer_names(&cn, "aa.bb.cc"));
     }
 }

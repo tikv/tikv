@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityConfig;
 
 pub fn new_security_cfg() -> SecurityConfig {
@@ -12,6 +13,6 @@ pub fn new_security_cfg() -> SecurityConfig {
         key_path: format!("{}", p.join("data/key.pem").display()),
         override_ssl_target: "".to_owned(),
         cipher_file: "".to_owned(),
-        cert_allowed_cn: String::new(),
+        cert_allowed_cn: HashSet::default(),
     }
 }

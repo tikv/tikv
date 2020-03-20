@@ -19,6 +19,7 @@ use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
+use tikv_util::collections::HashSet;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
@@ -537,7 +538,7 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cipher_file: "invalid path".to_owned(),
-        cert_allowed_cn: String::new(),
+        cert_allowed_cn: HashSet::default(),
     };
     value.import = ImportConfig {
         num_threads: 123,
