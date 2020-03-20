@@ -5197,7 +5197,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/sticnarf/yatp.git?branch=no-yield#269feffe1b784f181bdffbe6ae8495eadf8a7c10"
+source = "git+https://github.com/sticnarf/yatp.git?branch=steal-others-only-before-sleep#61ed4a8e795cd643adab043de460e6b99b065d72"
 dependencies = [
  "crossbeam-deque",
  "dashmap",

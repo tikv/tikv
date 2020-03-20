@@ -160,7 +160,7 @@ protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 
 [patch.'https://github.com/tikv/yatp.git']
-yatp = { git = "https://github.com/sticnarf/yatp.git", branch = "no-yield" }
+yatp = { git = "https://github.com/sticnarf/yatp.git", branch = "steal-others-only-before-sleep" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
