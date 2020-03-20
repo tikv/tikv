@@ -285,7 +285,7 @@ mod tests {
 
         // Reopen kms backup.
         let dispatcher = MockRequestDispatcher::with_status(200).with_json_body(DecryptResponse {
-            plaintext: Some(plaintext_key.clone().into()),
+            plaintext: Some(plaintext_key.into()),
             key_id: Some("test_key_id".to_string()),
             encryption_algorithm: None,
         });
