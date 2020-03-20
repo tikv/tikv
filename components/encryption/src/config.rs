@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]

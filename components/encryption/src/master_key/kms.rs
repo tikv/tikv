@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::fs::create_dir_all;
 use std::future::Future;
 use std::path::Path;
