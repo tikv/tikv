@@ -11,6 +11,7 @@ use crate::errors::Result;
 use crate::iterable::{Iterable, Iterator};
 use crate::mutable::Mutable;
 use crate::options::IterOptions;
+use crate::range::Range;
 use crate::write_batch::{WriteBatch, WriteBatchExt};
 
 use tikv_util::keybuilder::KeyBuilder;
@@ -101,4 +102,7 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
 
         Ok(())
     }
+
+    /// Return the approximate number of records and size in the range of memtables of the cf.
+    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;
 }

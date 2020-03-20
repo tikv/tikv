@@ -5,7 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-hex = "0.3"
+hex = "0.4"
 slog = "2.3"
 slog-term = "2.4"
 tikv_alloc = { path = "../tikv_alloc" }
