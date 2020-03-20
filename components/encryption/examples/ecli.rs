@@ -2,79 +2,73 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::sync::Arc;
 
-use clap::{App, ArgMatches};
 use encryption::{Backend, Error, KmsBackend, KmsConfig, Result};
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
+use structopt::clap::arg_enum;
+use structopt::StructOpt;
 
-static CMD: &str = r#"
-name: encryptioncli
-version: "0.1"
-about: an example using encryption crate to encrypt and decrypt file
+arg_enum! {
+    #[derive(Debug)]
+    enum Operation {
+        Encrypt,
+        Decrypt,
+    }
+}
 
-settings:
-    - ArgRequiredElseHelp
-    - SubcommandRequiredElseHelp
+#[derive(StructOpt)]
+#[structopt(rename_all = "kebab-case", name = "scli", version = "0.1")]
+/// An example using encryption crate to encrypt and decrypt file.
+pub struct Opt {
+    /// encrypt or decrypt.
+    #[structopt(short = "p", long, possible_values = &Operation::variants(), case_insensitive = true)]
+    operation: Operation,
+    /// File to encrypt or decrypt.
+    #[structopt(short, long)]
+    file: String,
+    /// Path to save plaintext or ciphertext.
+    #[structopt(short, long)]
+    output: String,
+    /// Credential file path. For KMS, use ~/.aws/credentials.
+    #[structopt(short, long)]
+    credential_file: Option<String>,
+    /// Encryption base dir where master key is saved.
+    #[structopt(short = "d", long)]
+    key_dir: String,
 
-args:
-    - operation:
-        help: encrypt or decrypt
-        short: p
-        long: operation
-        takes_value: true
-        case_insensitive: true
-        possible_values: ["encrypt", "decrypt"]
-        required: true
-    - file:
-        help: file to encrypt or decrypt
-        short: f
-        long: file
-        takes_value: true
-        required: true
-    - output:
-        help: path to save plaintext or ciphertext
-        short: o
-        long: output
-        takes_value: true
-        required: true
-    - credential_file:
-        help: credential file path. For KMS, use ~/.aws/credentials
-        short: c
-        long: credential_file
-        takes_value: true
-    - key_dir:
-        help: Encryption base dir where master key is saved.
-        short: d
-        long: key_dir
-        takes_value: true
-        required: true
+    #[structopt(subcommand)]
+    command: Command,
+}
 
-subcommands:
-    - kms:
-        about: KMS backend
-        args:
-            - key_id:
-                help: KMS key id of backend
-                long: key_id
-                takes_value: true
-                required: false
-            - region:
-                help: remote region
-                long: region
-                takes_value: true
-            - endpoint:
-                help: remote endpoint
-                long: endpoint
-                takes_value: true
-"#;
+#[derive(StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+enum Command {
+    Kms(KmsCommand),
+}
+
+#[derive(StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+/// KMS backend.
+struct KmsCommand {
+    /// KMS key id of backend.
+    #[structopt(long)]
+    key_id: String,
+    /// Remote endpoint
+    #[structopt(long)]
+    endpoint: Option<String>,
+    /// Remote region.
+    #[structopt(long)]
+    region: Option<String>,
+}
 
 fn create_kms_backend(
-    matches: &ArgMatches,
-    credential_file: Option<&str>,
+    cmd: &KmsCommand,
+    credential_file: Option<&String>,
     key_dir: &str,
 ) -> Result<Arc<dyn Backend>> {
     let mut config = KmsConfig::default();
+
     if let Some(credential_file) = credential_file {
         let ini = Ini::load_from_file(credential_file).map_err(|e| {
             Error::Other(format!("Failed to parse credential file as ini: {}", e).into())
@@ -91,49 +85,47 @@ fn create_kms_backend(
             .ok_or_else(|| Error::Other("fail to parse credential".to_owned().into()))?
             .clone();
     }
-    if let Some(region) = matches.value_of("region") {
+    if let Some(ref region) = cmd.region {
         config.region = region.to_string();
     }
-    config.key_id = matches.value_of("key_id").unwrap().to_owned();
+    if let Some(ref endpoint) = cmd.endpoint {
+        config.endpoint = endpoint.to_string();
+    }
+    config.key_id = cmd.key_id.to_owned();
     Ok(Arc::new(KmsBackend::new(config, key_dir)?))
 }
 
+#[allow(irrefutable_let_patterns)]
 fn process() -> Result<()> {
-    let yaml = &clap::YamlLoader::load_from_str(CMD).unwrap()[0];
-    let app = App::from_yaml(yaml);
-    let matches = app.get_matches();
+    let opt: Opt = Opt::from_args();
 
-    let file_path = matches.value_of("file").unwrap();
-    let mut file = File::open(file_path)?;
+    let mut file = File::open(&opt.file)?;
     let mut content = Vec::new();
     file.read_to_end(&mut content)?;
 
-    let base_dir = matches.value_of("key_dir").unwrap().to_owned();
-    let credential_file = matches.value_of("credential_file");
-    let backend = if let Some(matches) = matches.subcommand_matches("kms") {
-        create_kms_backend(matches, credential_file, &base_dir)?
+    let credential_file = opt.credential_file.as_ref();
+    let backend = if let Command::Kms(ref cmd) = opt.command {
+        create_kms_backend(cmd, credential_file, &opt.key_dir)?
     } else {
-        return Err(Error::Other("subcommand unrecognized".to_owned().into()));
+        unreachable!()
     };
 
-    let output = match matches.value_of("operation") {
-        Some("encrypt") => {
+    let output = match opt.operation {
+        Operation::Encrypt => {
             let ciphertext = backend.encrypt(&content)?;
             ciphertext.write_to_bytes()?
         }
-        Some("decrypt") => {
+        Operation::Decrypt => {
             let mut encrypted_content = EncryptedContent::default();
             encrypted_content.merge_from_bytes(&content)?;
             backend.decrypt(&encrypted_content)?
         }
-        _ => return Err(Error::Other("subcommand unrecognized".to_owned().into())),
     };
 
-    let output_path = matches.value_of("output").unwrap();
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
-        .open(output_path)?;
+        .open(&opt.output)?;
     file.write_all(&output)?;
     Ok(())
 }

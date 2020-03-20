@@ -36,4 +36,4 @@ tempfile = "3.1"
 hex =  "0.3"
 rusoto_mock = "0.43.0"
 rust-ini = "0.14.0"
-clap = { version = "2.32", features = ["yaml"] }
+structopt = "0.3"
