@@ -239,7 +239,6 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         assert!(ts > last_checked_commit_ts);
 
         // Check newer data if needed
-        // TODO: use near_seek later
         if self.cfg.check_can_be_cached && self.can_be_cached {
             let seek_key = user_key.clone().append_ts(TimeStamp::max());
             self.write_cursor

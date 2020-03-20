@@ -40,6 +40,7 @@ pub trait Store: Send {
         &self,
         desc: bool,
         key_only: bool,
+        check_can_be_cached: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner>;
@@ -197,8 +198,6 @@ pub struct SnapshotStore<S: Snapshot> {
     bypass_locks: TsSet,
 
     point_getter_cache: Option<PointGetter<S>>,
-
-    check_can_be_cached: bool,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -290,6 +289,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         &self,
         desc: bool,
         key_only: bool,
+        check_can_be_cached: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<MvccScanner<S>> {
@@ -301,7 +301,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
-            .set_check_can_be_cached(self.check_can_be_cached)
+            .set_check_can_be_cached(check_can_be_cached)
             .build()?;
 
         Ok(scanner)
@@ -341,7 +341,6 @@ impl<S: Snapshot> SnapshotStore<S> {
         isolation_level: IsolationLevel,
         fill_cache: bool,
         bypass_locks: TsSet,
-        check_can_be_cached: bool,
     ) -> Self {
         SnapshotStore {
             snapshot,
@@ -350,7 +349,6 @@ impl<S: Snapshot> SnapshotStore<S> {
             fill_cache,
             bypass_locks,
             point_getter_cache: None,
-            check_can_be_cached,
         }
     }
 
@@ -475,6 +473,7 @@ impl Store for FixtureStore {
         &self,
         desc: bool,
         key_only: bool,
+        _: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<FixtureStoreScanner> {
@@ -770,7 +769,7 @@ mod tests {
         let key = format!("{}{}", KEY_PREFIX, START_ID);
         let start_key = Key::from_raw(key.as_bytes());
         let mut scanner = snapshot_store
-            .scanner(false, false, Some(start_key), None)
+            .scanner(false, false, false, Some(start_key), None)
             .unwrap();
 
         let half = (key_num / 2) as usize;
@@ -795,7 +794,7 @@ mod tests {
         let start_key = Key::from_raw(key.as_bytes());
         let expect = &store.keys[0..half - 1];
         let mut scanner = snapshot_store
-            .scanner(true, false, None, Some(start_key))
+            .scanner(true, false, false, None, Some(start_key))
             .unwrap();
 
         let result = scanner.scan(half).unwrap();
@@ -827,6 +826,7 @@ mod tests {
             .scanner(
                 false,
                 false,
+                false,
                 Some(lower_bound.clone()),
                 Some(upper_bound.clone()),
             )
@@ -840,7 +840,7 @@ mod tests {
         assert_eq!(result, expected);
 
         let mut scanner = snapshot_store
-            .scanner(true, false, Some(lower_bound), Some(upper_bound))
+            .scanner(true, false, false, Some(lower_bound), Some(upper_bound))
             .unwrap();
 
         // Collect all scanned keys
@@ -867,18 +867,36 @@ mod tests {
         let bound_b = Key::from_encoded(b"b".to_vec());
         let bound_c = Key::from_encoded(b"c".to_vec());
         let bound_d = Key::from_encoded(b"d".to_vec());
-        assert!(store.scanner(false, false, None, None).is_ok());
+        assert!(store.scanner(false, false, false, None, None).is_ok());
         assert!(store
-            .scanner(false, false, Some(bound_b.clone()), Some(bound_c.clone()))
+            .scanner(
+                false,
+                false,
+                false,
+                Some(bound_b.clone()),
+                Some(bound_c.clone())
+            )
             .is_ok());
         assert!(store
-            .scanner(false, false, Some(bound_a.clone()), Some(bound_c.clone()))
+            .scanner(
+                false,
+                false,
+                false,
+                Some(bound_a.clone()),
+                Some(bound_c.clone())
+            )
             .is_err());
         assert!(store
-            .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
+            .scanner(
+                false,
+                false,
+                false,
+                Some(bound_b.clone()),
+                Some(bound_d.clone())
+            )
             .is_err());
         assert!(store
-            .scanner(false, false, Some(bound_a.clone()), Some(bound_d))
+            .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
             .is_err());
 
         // Store with whole range
@@ -891,14 +909,16 @@ mod tests {
             Default::default(),
             false,
         );
-        assert!(store2.scanner(false, false, None, None).is_ok());
+        assert!(store2.scanner(false, false, false, None, None).is_ok());
         assert!(store2
-            .scanner(false, false, Some(bound_a.clone()), None)
+            .scanner(false, false, false, Some(bound_a.clone()), None)
             .is_ok());
         assert!(store2
-            .scanner(false, false, Some(bound_a), Some(bound_b))
+            .scanner(false, false, false, Some(bound_a), Some(bound_b))
             .is_ok());
-        assert!(store2.scanner(false, false, None, Some(bound_c)).is_ok());
+        assert!(store2
+            .scanner(false, false, false, None, Some(bound_c))
+            .is_ok());
     }
 
     fn gen_fixture_store() -> FixtureStore {
@@ -996,7 +1016,7 @@ mod tests {
     fn test_fixture_scanner() {
         let store = gen_fixture_store();
 
-        let mut scanner = store.scanner(false, false, None, None).unwrap();
+        let mut scanner = store.scanner(false, false, false, None, None).unwrap();
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ab"), b"bar".to_vec()))
@@ -1030,7 +1050,7 @@ mod tests {
         // note: mvcc impl does not guarantee to work any more after meeting a non lock error
         assert_eq!(scanner.next().unwrap(), None);
 
-        let mut scanner = store.scanner(true, false, None, None).unwrap();
+        let mut scanner = store.scanner(true, false, false, None, None).unwrap();
         assert!(scanner.next().is_err());
         // note: mvcc impl does not guarantee to work any more after meeting a non lock error
         assert_eq!(
@@ -1064,7 +1084,7 @@ mod tests {
         );
         assert_eq!(scanner.next().unwrap(), None);
 
-        let mut scanner = store.scanner(false, true, None, None).unwrap();
+        let mut scanner = store.scanner(false, true, false, None, None).unwrap();
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ab"), vec![]))
@@ -1096,6 +1116,7 @@ mod tests {
             .scanner(
                 false,
                 true,
+                false,
                 Some(Key::from_raw(b"abc")),
                 Some(Key::from_raw(b"abcd")),
             )
@@ -1110,6 +1131,7 @@ mod tests {
             .scanner(
                 false,
                 true,
+                false,
                 Some(Key::from_raw(b"abc")),
                 Some(Key::from_raw(b"bba")),
             )
@@ -1133,6 +1155,7 @@ mod tests {
             .scanner(
                 false,
                 true,
+                false,
                 Some(Key::from_raw(b"b")),
                 Some(Key::from_raw(b"c")),
             )
@@ -1149,6 +1172,7 @@ mod tests {
             .scanner(
                 false,
                 true,
+                false,
                 Some(Key::from_raw(b"b")),
                 Some(Key::from_raw(b"b")),
             )
@@ -1159,6 +1183,7 @@ mod tests {
             .scanner(
                 true,
                 true,
+                false,
                 Some(Key::from_raw(b"abc")),
                 Some(Key::from_raw(b"abcd")),
             )
@@ -1173,6 +1198,7 @@ mod tests {
             .scanner(
                 true,
                 true,
+                false,
                 Some(Key::from_raw(b"abc")),
                 Some(Key::from_raw(b"bba")),
             )
@@ -1260,6 +1286,7 @@ mod benches {
                 .scanner(
                     test::black_box(true),
                     test::black_box(false),
+                    test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
                 )
@@ -1281,6 +1308,7 @@ mod benches {
             let mut scanner = store
                 .scanner(
                     test::black_box(true),
+                    test::black_box(false),
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
@@ -1306,6 +1334,7 @@ mod benches {
             let mut scanner = store
                 .scanner(
                     test::black_box(true),
+                    test::black_box(false),
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),

@@ -50,7 +50,13 @@ impl<S: Store> Storage for TiKVStorage<S> {
         let upper = Some(Key::from_raw(&range.upper_exclusive));
         self.scanner = Some(
             self.store
-                .scanner(is_backward_scan, is_key_only, lower, upper)
+                .scanner(
+                    is_backward_scan,
+                    is_key_only,
+                    self.check_can_be_cached,
+                    lower,
+                    upper,
+                )
                 .map_err(Error::from)?,
             // There is no transform from storage error to QE's StorageError,
             // so an intermediate error is needed.

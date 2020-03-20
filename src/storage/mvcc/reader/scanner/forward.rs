@@ -340,6 +340,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             }
             // Do the real seek if the previous seek was for checking newer data
             if seek_ts == TimeStamp::max() && Key::decode_ts_from(current_key)? > self.cfg.ts {
+                self.can_be_cached = false;
                 self.cursors.write.near_seek(
                     &user_key.clone().append_ts(self.cfg.ts),
                     &mut self.statistics.write,
@@ -352,7 +353,6 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Meet another key.
                     return Ok(false);
                 }
-                self.can_be_cached = false;
             }
         }
         Ok(true)
