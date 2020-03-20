@@ -28,7 +28,7 @@ const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
 const PROP_ROWS_INDEX: &str = "tikv.rows_index";
 const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct MvccProperties {
     pub min_ts: TimeStamp,     // The minimal timestamp.
     pub max_ts: TimeStamp,     // The maximal timestamp.
@@ -80,8 +80,11 @@ impl MvccProperties {
         res.max_ts = props.decode_u64(PROP_MAX_TS)?.into();
         res.num_rows = props.decode_u64(PROP_NUM_ROWS)?;
         res.num_puts = props.decode_u64(PROP_NUM_PUTS)?;
-        res.num_deletes = props.decode_u64(PROP_NUM_DELETES)?;
         res.num_versions = props.decode_u64(PROP_NUM_VERSIONS)?;
+        // To be compatible with old versions.
+        res.num_deletes = props
+            .decode_u64(PROP_NUM_DELETES)
+            .unwrap_or_else(|_| res.num_versions - res.num_puts);
         res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
         Ok(res)
     }
