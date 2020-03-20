@@ -3,6 +3,7 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
+use std::sync::Arc;
 
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
@@ -64,6 +65,8 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(key)
 }
 
+type CertResult = Result<(Vec<u8>, Vec<u8>, Vec<u8>), Box<dyn Error>>;
+
 impl SecurityConfig {
     /// Validates ca, cert and private key.
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
@@ -79,38 +82,41 @@ impl SecurityConfig {
 
         Ok(())
     }
+
+    /// Load certificates from the given file path.
+    /// Return ca, cert, key after successful read.
+    fn load_certs(&self) -> CertResult {
+        let ca = load_key("CA", &self.ca_path)?;
+        let cert = load_key("certificate", &self.cert_path)?;
+        let key = load_key("private key", &self.key_path)?;
+        if ca.is_empty() || cert.is_empty() || key.is_empty() {
+            return Err("ca, cert and private key should be all configured.".into());
+        }
+        Ok((ca, cert, key))
+    }
 }
 
 #[derive(Default)]
 pub struct SecurityManager {
-    ca_path: String,
-    cert_path: String,
-    key_path: String,
-    override_ssl_target: String,
-    cipher_file: String,
+    cfg: Arc<SecurityConfig>,
 }
 
 impl SecurityManager {
     pub fn new(cfg: &SecurityConfig) -> Result<SecurityManager, Box<dyn Error>> {
         Ok(SecurityManager {
-            ca_path: cfg.ca_path.clone(),
-            cert_path: cfg.cert_path.clone(),
-            key_path: cfg.key_path.clone(),
-            override_ssl_target: cfg.override_ssl_target.clone(),
-            cipher_file: cfg.cipher_file.clone(),
+            cfg: Arc::new(cfg.clone()),
         })
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
-        if self.ca_path.is_empty() {
+        if self.cfg.ca_path.is_empty() {
             cb.connect(addr)
         } else {
-            if !self.override_ssl_target.is_empty() {
-                cb = cb.override_ssl_target(self.override_ssl_target.clone());
+            if !self.cfg.override_ssl_target.is_empty() {
+                cb = cb.override_ssl_target(self.cfg.override_ssl_target.clone());
             }
             // Fill in empty certificate information if read fails.
-            let (ca, cert, key) =
-                load_certs(&self.ca_path, &self.cert_path, &self.key_path).unwrap_or_default();
+            let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
 
             let cred = ChannelCredentialsBuilder::new()
                 .root_cert(ca)
@@ -121,13 +127,11 @@ impl SecurityManager {
     }
 
     pub fn bind(&self, sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
-        if self.ca_path.is_empty() {
+        if self.cfg.ca_path.is_empty() {
             sb.bind(addr, port)
         } else {
             let fetcher = Box::new(Fetcher {
-                ca_path: self.ca_path.clone(),
-                cert_path: self.cert_path.clone(),
-                key_path: self.key_path.clone(),
+                cfg: self.cfg.clone(),
             });
             sb.bind_with_fetcher(
                 addr,
@@ -139,19 +143,17 @@ impl SecurityManager {
     }
 
     pub fn cipher_file(&self) -> &str {
-        &self.cipher_file
+        &self.cfg.cipher_file
     }
 }
 
 struct Fetcher {
-    ca_path: String,
-    cert_path: String,
-    key_path: String,
+    cfg: Arc<SecurityConfig>,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
-        let (ca, cert, key) = load_certs(&self.ca_path, &self.cert_path, &self.key_path)?;
+        let (ca, cert, key) = self.cfg.load_certs()?;
         let new_cred = ServerCredentialsBuilder::new()
             .add_cert(cert, key)
             .root_cert(
@@ -160,20 +162,6 @@ impl ServerCredentialsFetcher for Fetcher {
             );
         Ok(Some(new_cred))
     }
-}
-
-fn load_certs(
-    ca_path: &str,
-    cert_path: &str,
-    key_path: &str,
-) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Box<dyn Error>> {
-    let ca = load_key("CA", ca_path)?;
-    let cert = load_key("certificate", cert_path)?;
-    let key = load_key("private key", key_path)?;
-    if ca.is_empty() || cert.is_empty() || key.is_empty() {
-        return Err("ca, cert and private key should be all configured.".into());
-    }
-    Ok((ca, cert, key))
 }
 
 #[cfg(test)]
@@ -190,9 +178,9 @@ mod tests {
         // default is disable secure connection.
         cfg.validate().unwrap();
         let mgr = SecurityManager::new(&cfg).unwrap();
-        assert!(mgr.ca_path.is_empty());
-        assert!(mgr.cert_path.is_empty());
-        assert!(mgr.key_path.is_empty());
+        assert!(mgr.cfg.ca_path.is_empty());
+        assert!(mgr.cfg.cert_path.is_empty());
+        assert!(mgr.cfg.key_path.is_empty());
 
         let assert_cfg = |c: fn(&mut SecurityConfig), valid: bool| {
             let mut invalid_cfg = cfg.clone();
@@ -221,13 +209,17 @@ mod tests {
             fs::write(f, &[id as u8]).unwrap();
         }
 
-        let (ca, cert, key) = load_certs(
-            &format!("{}", example_ca.display()),
-            &format!("{}", example_cert.display()),
-            &format!("{}", example_key.display()),
-        )
-        .unwrap_or_default();
+        let mut c = cfg.clone();
+        c.cert_path = format!("{}", example_cert.display());
+        c.key_path = format!("{}", example_key.display());
+        // incomplete configuration.
+        c.validate().unwrap_err();
 
+        // data should be loaded from file after validating.
+        c.ca_path = format!("{}", example_ca.display());
+        c.validate().unwrap();
+
+        let (ca, cert, key) = c.load_certs().unwrap_or_default();
         assert_eq!(ca, vec![0]);
         assert_eq!(cert, vec![1]);
         assert_eq!(key, vec![2]);
