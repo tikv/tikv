@@ -140,21 +140,23 @@ impl SecurityManager {
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
-        // update certs when reload is enabled
-        if let Some(cfg) = &self.reload_cfg {
-            // This is to trigger updated_certs and the result doesn't care
-            let _ = updated_certs(&self.certs, cfg);
-        }
-        let certs = self.certs.read().unwrap();
-        if certs.ca.is_empty() {
+        if self.certs.read().unwrap().ca.is_empty() {
             cb.connect(addr)
         } else {
+            if let Some(cfg) = &self.reload_cfg {
+                // This is to trigger updated_certs and the result doesn't care
+                let _ = updated_certs(&self.certs, cfg);
+            }
             if !self.override_ssl_target.is_empty() {
                 cb = cb.override_ssl_target(self.override_ssl_target.clone());
             }
+            let cert_read = self.certs.read().unwrap();
+            let ca = cert_read.ca.clone();
+            let cert = cert_read.cert.clone();
+            let key = cert_read.key.clone();
             let cred = ChannelCredentialsBuilder::new()
-                .root_cert(certs.ca.clone())
-                .cert(certs.cert.clone(), certs.key.clone())
+                .root_cert(ca)
+                .cert(cert, key)
                 .build();
             cb.secure_connect(addr, cred)
         }
