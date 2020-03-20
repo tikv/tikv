@@ -294,7 +294,6 @@ impl Mutable for RocksWriteBatchVec {
     }
 }
 impl WriteBatchVecExt<RocksEngine> for RocksWriteBatch {
-    // type WriteBatchVec = RocksWriteBatch;
     fn write_batch_vec(e: &RocksEngine, _vec_size: usize, cap: usize) -> RocksWriteBatch {
         e.write_batch_with_cap(cap)
     }
@@ -305,7 +304,6 @@ impl WriteBatchVecExt<RocksEngine> for RocksWriteBatch {
 }
 
 impl WriteBatchVecExt<RocksEngine> for RocksWriteBatchVec {
-    // type WriteBatchVec = RocksWriteBatchVec;
     fn write_batch_vec(e: &RocksEngine, vec_size: usize, cap: usize) -> RocksWriteBatchVec {
         e.write_batch_vec(vec_size, cap)
     }
