@@ -2,13 +2,20 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.0-beta.2] - 2020-03-18
++ New Features
+  + Support the configuration of persistent dynamic update [#6684](https://github.com/tikv/tikv/pull/6684)
++ Bugfixes
+  + Fix the panic issue caused by empty short values during backup [#6718](https://github.com/tikv/tikv/pull/6718)
+  + Fix the issue that Hibernate Regions might not be woken up correctly [#6772](https://github.com/tikv/tikv/pull/6672) [#6648](https://github.com/tikv/tikv/pull/6648) [#6376](https://github.com/tikv/tikv/pull/6736)
+
 ## [4.0.0-beta.1] - 2020-02-28
 + Compatibility Changes
   + Add the `readpool.unify-read-pool` configuration item (`True` by default) to control whether point queries use the same threads with Coprocessor [#6375](https://github.com/tikv/tikv/pull/6375) [#6401](https://github.com/tikv/tikv/pull/6401) [#6534](https://github.com/tikv/tikv/pull/6534) [#6582](https://github.com/tikv/tikv/pull/6582) [#6585](https://github.com/tikv/tikv/pull/6585) [#6593](https://github.com/tikv/tikv/pull/6593) [#6597](https://github.com/tikv/tikv/pull/6597) [#6677](https://github.com/tikv/tikv/pull/6677)
 + New Features
   + Support fetching configuration items from the status port via HTTP API [#6480](https://github.com/tikv/tikv/pull/6480)
   + Optimize the performance of `Chunk Encoder` in Coprocessor [#6341](https://github.com/tikv/tikv/pull/6341)
-+ Bugfix
++ Bugfixes
   + Fix the inconsistent behaviors of the `CAST` function in TiDB and TiKV [#6463](https://github.com/tikv/tikv/pull/6463) [#6461](https://github.com/tikv/tikv/pull/6461) [#6459](https://github.com/tikv/tikv/pull/6459) [#6474](https://github.com/tikv/tikv/pull/6474) [#6492](https://github.com/tikv/tikv/pull/6492) [#6569](https://github.com/tikv/tikv/pull/6569)
 
 ## [4.0.0-beta] - 2020-01-17

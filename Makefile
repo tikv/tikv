@@ -215,7 +215,8 @@ docker-tag-with-git-tag:
 # Run tests under a variety of conditions. This should pass before
 # submitting pull requests. Note though that the CI system tests TiKV
 # through its own scripts and does not use this rule.
-test:
+.PHONY: run-test
+run-test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
 	# The special linux case below is testing the mem-profiling
@@ -227,31 +228,15 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude \
-		cdc --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cd tests && cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && cd .. && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" -p cdc ${EXTRA_CARGO_ARGS} -- --nocapture && cd ../.. && \
-	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && cd ../.. && \
+	cargo test --workspace --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored; \
 	fi
+
+.PHONY: test
+test: run-test
 	bash scripts/check-bins-for-jemalloc.sh
-	bash scripts/check-udeps.sh
-
-# This is used for CI test
-ci_test: ci_doc_test
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc \
-		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--all-targets --no-run --message-format=json
-	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
-	cd components/cdc && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
-
-ci_doc_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --exclude cdc \
-		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer --doc
 
 ## Static analysis
 ## ---------------
@@ -307,6 +292,10 @@ pre-audit:
 # Check for security vulnerabilities
 audit: pre-audit
 	cargo audit
+
+.PHONY: check-udeps
+check-udeps:
+	bash scripts/check-udeps.sh
 
 FUZZER ?= Honggfuzz
 

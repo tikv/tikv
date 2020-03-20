@@ -46,24 +46,18 @@ fn test_bootstrap_half_way_failure(fp: &str) {
 
 #[test]
 fn test_bootstrap_half_way_failure_after_bootstrap_store() {
-    let _guard = crate::setup();
-
     let fp = "node_after_bootstrap_store";
     test_bootstrap_half_way_failure(fp);
 }
 
 #[test]
 fn test_bootstrap_half_way_failure_after_prepare_bootstrap_cluster() {
-    let _guard = crate::setup();
-
     let fp = "node_after_prepare_bootstrap_cluster";
     test_bootstrap_half_way_failure(fp);
 }
 
 #[test]
 fn test_bootstrap_half_way_failure_after_bootstrap_cluster() {
-    let _guard = crate::setup();
-
     let fp = "node_after_bootstrap_cluster";
     test_bootstrap_half_way_failure(fp);
 }

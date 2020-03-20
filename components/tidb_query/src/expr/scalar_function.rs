@@ -119,6 +119,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Substring2ArgsUtf8
             | ScalarFuncSig::Substring2Args
+            | ScalarFuncSig::Repeat
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDatetimeAndDuration
             | ScalarFuncSig::AddDatetimeAndString
@@ -301,9 +302,10 @@ impl ScalarFunc {
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
             | ScalarFuncSig::JsonDepthSig
-            | ScalarFuncSig::RandomBytes => (1, 1),
+            | ScalarFuncSig::RandomBytes
+            | ScalarFuncSig::JsonKeysSig => (1, 1),
 
-            ScalarFuncSig::JsonLengthSig => (1, 2),
+            ScalarFuncSig::JsonKeys2ArgsSig | ScalarFuncSig::JsonLengthSig => (1, 2),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -468,7 +470,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Password
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::ReleaseLock
-            | ScalarFuncSig::Repeat
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
             | ScalarFuncSig::SecToTime
@@ -532,10 +533,8 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonQuoteSig
             | ScalarFuncSig::JsonSearchSig
             | ScalarFuncSig::JsonStorageSizeSig
-            | ScalarFuncSig::JsonKeysSig
             | ScalarFuncSig::JsonValidJsonSig
             | ScalarFuncSig::JsonContainsSig
-            | ScalarFuncSig::JsonKeys2ArgsSig
             | ScalarFuncSig::JsonValidStringSig
             | ScalarFuncSig::JsonValidOthersSig => return Err(Error::UnknownSignature(sig)),
 
@@ -1006,6 +1005,7 @@ dispatch_call! {
         LTrim => ltrim,
         RTrim => rtrim,
         ReverseUtf8 => reverse_utf8,
+        Repeat => repeat,
         Reverse => reverse,
         HexIntArg => hex_int_arg,
         HexStrArg => hex_str_arg,
@@ -1111,6 +1111,9 @@ dispatch_call! {
         IfJson => if_json,
         IfNullJson => if_null_json,
 
+
+        JsonKeysSig => json_keys,
+        JsonKeys2ArgsSig => json_keys,
         JsonExtractSig => json_extract,
         JsonSetSig => json_set,
         JsonInsertSig => json_insert,
@@ -1625,7 +1628,6 @@ mod tests {
             ScalarFuncSig::Password,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::ReleaseLock,
-            ScalarFuncSig::Repeat,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
             ScalarFuncSig::SecToTime,
