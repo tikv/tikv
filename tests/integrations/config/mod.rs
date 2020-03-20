@@ -535,7 +535,6 @@ fn test_serde_custom_tikv_config() {
         ca_path: "invalid path".to_owned(),
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
-        reload_mode: false,
         override_ssl_target: "".to_owned(),
         cipher_file: "invalid path".to_owned(),
     };

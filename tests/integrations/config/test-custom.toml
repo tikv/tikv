@@ -463,7 +463,6 @@ blob-run-mode = "fallback"
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
-reload-mode = false
 cipher-file = "invalid path"
 
 [import]

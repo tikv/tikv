@@ -19,7 +19,6 @@ pub struct SecurityConfig {
     pub ca_path: String,
     pub cert_path: String,
     pub key_path: String,
-    pub reload_mode: bool,
     // Test purpose only.
     #[serde(skip)]
     pub override_ssl_target: String,
@@ -32,7 +31,6 @@ impl Default for SecurityConfig {
             ca_path: String::new(),
             cert_path: String::new(),
             key_path: String::new(),
-            reload_mode: false,
             override_ssl_target: String::new(),
             cipher_file: String::new(),
         }
@@ -107,7 +105,7 @@ impl Default for Certs {
 #[derive(Default)]
 pub struct SecurityManager {
     certs: Arc<Mutex<Certs>>,
-    reload_cfg: Option<Arc<SecurityConfig>>,
+    config: Arc<SecurityConfig>,
     override_ssl_target: String,
     cipher_file: String,
 }
@@ -129,11 +127,7 @@ impl SecurityManager {
                 key: load_key("private key", &cfg.key_path)?,
                 last_modified: SystemTime::now(),
             })),
-            reload_cfg: if cfg.reload_mode {
-                Some(Arc::new(cfg.clone()))
-            } else {
-                None
-            },
+            config: Arc::new(cfg.clone()),
             override_ssl_target: cfg.override_ssl_target.clone(),
             cipher_file: cfg.cipher_file.clone(),
         })
@@ -144,10 +138,9 @@ impl SecurityManager {
         if certs.ca.is_empty() {
             cb.connect(addr)
         } else {
-            if let Some(cfg) = &self.reload_cfg {
-                // This is to trigger updated_certs and the result doesn't care
-                let _ = updated_certs(&mut certs, cfg);
-            }
+            // This is to trigger updated_certs and the result doesn't care
+            let _ = updated_certs(&mut certs, &self.config);
+
             if !self.override_ssl_target.is_empty() {
                 cb = cb.override_ssl_target(self.override_ssl_target.clone());
             }
@@ -166,10 +159,10 @@ impl SecurityManager {
         let certs = self.certs.lock().unwrap();
         if certs.ca.is_empty() {
             sb.bind(addr, port)
-        } else if self.reload_cfg.is_some() {
+        } else {
             let fetcher = Box::new(Fetcher {
                 certs: self.certs.clone(),
-                cfg: self.reload_cfg.clone().unwrap(),
+                cfg: self.config.clone(),
             });
             sb.bind_with_fetcher(
                 addr,
@@ -177,15 +170,6 @@ impl SecurityManager {
                 fetcher,
                 CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
             )
-        } else {
-            let cred = ServerCredentialsBuilder::new()
-                .root_cert(
-                    certs.ca.clone(),
-                    CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
-                )
-                .add_cert(certs.cert.clone(), certs.key.clone())
-                .build();
-            sb.bind_with_cred(addr, port, cred)
         }
     }
 
