@@ -1096,7 +1096,7 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
         }
         GRPC_MSG_HISTOGRAM_STATIC
             .kv_batch_get_command
-            .observe(duration_to_sec(timer.elapsed()));
+            .observe(timer.elapsed_secs());
         Ok(())
     })
 }
