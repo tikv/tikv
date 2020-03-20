@@ -105,6 +105,7 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
         Ok(())
     }
 
+    /// Return the approximate number of records and size in the range of memtables of the cf.
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;
 
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;

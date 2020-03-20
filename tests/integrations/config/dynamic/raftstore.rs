@@ -78,7 +78,7 @@ fn start_raftstore(
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-    let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default());
+    let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
     cfg_controller.register(
         Module::Raftstore,
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
@@ -86,7 +86,7 @@ fn start_raftstore(
     let pd_worker = FutureWorker::new("store-config");
     let config_client = ConfigHandler::start(
         String::new(),
-        ConfigController::new(cfg, Default::default()),
+        ConfigController::new(cfg, Default::default(), false),
         pd_worker.scheduler(),
     )
     .unwrap();

@@ -40,7 +40,7 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
     let mut worker: Worker<Task> = Worker::new("split-check-config");
     worker.start(runner).unwrap();
 
-    let mut cfg_controller = ConfigController::new(cfg, Default::default());
+    let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
     cfg_controller.register(
         Module::Coprocessor,
         Box::new(SplitCheckConfigManager(worker.scheduler())),

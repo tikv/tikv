@@ -563,6 +563,24 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
     false
 }
 
+/// Checks if a write is needed to be issued after handling the command.
+fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
+    if cmd.has_admin_request() {
+        return true;
+    }
+
+    for req in cmd.get_requests() {
+        // After ingest sst, sst files are deleted quickly. As a result,
+        // ingest sst command can not be handled again and must be synced.
+        // See more in Cleanup worker.
+        if req.has_ingest_sst() {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// A struct that stores the state related to Merge.
 ///
 /// When executing a `CommitMerge`, the source peer may have not applied
@@ -932,9 +950,8 @@ impl ApplyDelegate {
             );
         }
 
-        if cmd.has_admin_request() {
-            apply_ctx.sync_log_hint = true;
-        }
+        // Set sync log hint if the cmd requires so.
+        apply_ctx.sync_log_hint |= should_sync_log(&cmd);
 
         let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         apply_ctx.host.pre_apply(&self.region, &cmd);
@@ -3186,6 +3203,31 @@ mod tests {
             e.set_data(r.write_to_bytes().unwrap())
         }
         e
+    }
+
+    #[test]
+    fn test_should_sync_log() {
+        let (_path, engines) = create_tmp_engine("test-delegate");
+
+        // Admin command
+        let mut req = RaftCmdRequest::default();
+        req.mut_admin_request()
+            .set_cmd_type(AdminCmdType::ComputeHash);
+        assert_eq!(should_sync_log(&req), true);
+
+        // IngestSst command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::IngestSst);
+        req.set_ingest_sst(IngestSstRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        let wb = engines.kv.write_batch();
+        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
+        assert_eq!(should_sync_log(&cmd), true);
+
+        // Normal command
+        let req = RaftCmdRequest::default();
+        assert_eq!(should_sync_log(&req), false);
     }
 
     #[test]
