@@ -49,6 +49,6 @@ impl BatchExecutor for MockExecutor {
     }
 
     fn can_be_cached(&mut self) -> bool {
-        return false;
+        false
     }
 }
