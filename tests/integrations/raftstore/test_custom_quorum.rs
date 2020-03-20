@@ -71,6 +71,7 @@ fn test_integration_on_half_fail_quorum_fn() {
 fn test_check_conf_change() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.quorum_algorithm = QuorumAlgorithm::IntegrationOnHalfFail;
+    cluster.pd_client.disable_default_operator();
     let rid = cluster.run_conf_change();
 
     cluster.pd_client.must_add_peer(rid, new_peer(2, 2));
