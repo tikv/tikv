@@ -17,6 +17,7 @@ use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
+use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
@@ -89,7 +90,7 @@ fn test_serde_custom_tikv_config() {
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
-        unify_read_pool: true,
+        unify_read_pool: Some(true),
         unified: UnifiedReadPoolConfig {
             min_thread_count: 5,
             max_thread_count: 10,
@@ -178,6 +179,7 @@ fn test_serde_custom_tikv_config() {
         store_pool_size: 3,
         future_poll_size: 2,
         hibernate_regions: false,
+        early_apply: false,
         quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
@@ -547,13 +549,53 @@ fn test_serde_custom_tikv_config() {
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
     };
+    value.pessimistic_txn = PessimisticTxnConfig {
+        enabled: false,
+        wait_for_lock_timeout: 10,
+        wake_up_delay_duration: 100,
+        pipelined: true,
+    };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
     let load = toml::from_str(&custom).unwrap();
-    assert_eq!(value, load);
+    if value != load {
+        diff_config(&value, &load);
+    }
     let dump = toml::to_string_pretty(&load).unwrap();
     let load_from_dump = toml::from_str(&dump).unwrap();
-    assert_eq!(load, load_from_dump);
+    if load != load_from_dump {
+        diff_config(&load, &load_from_dump);
+    }
+}
+
+fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
+    let lhs_str = format!("{:?}", lhs);
+    let rhs_str = format!("{:?}", rhs);
+
+    fn find_index(l: impl Iterator<Item = (u8, u8)>) -> usize {
+        let mut it = l
+            .enumerate()
+            .take_while(|(_, (l, r))| l == r)
+            .filter(|(_, (l, _))| *l == b' ');
+        let mut last = None;
+        let mut second = None;
+        while let Some(a) = it.next() {
+            second = last;
+            last = Some(a);
+        }
+        second.map_or(0, |(i, _)| i)
+    };
+    let cpl = find_index(lhs_str.bytes().zip(rhs_str.bytes()));
+    let csl = find_index(lhs_str.bytes().rev().zip(rhs_str.bytes().rev()));
+    if cpl + csl > lhs_str.len() || cpl + csl > rhs_str.len() {
+        assert_eq!(lhs, rhs);
+    }
+    let lhs_diff = String::from_utf8_lossy(&lhs_str.as_bytes()[cpl..lhs_str.len() - csl]);
+    let rhs_diff = String::from_utf8_lossy(&rhs_str.as_bytes()[cpl..rhs_str.len() - csl]);
+    panic!(
+        "config not matched:\nlhs: ...{}...,\nrhs: ...{}...",
+        lhs_diff, rhs_diff
+    );
 }
 
 #[test]
@@ -569,13 +611,23 @@ fn test_serde_default_config() {
 #[test]
 fn test_readpool_default_config() {
     let content = r#"
-        [readpool.storage]
-        high-concurrency = 1
+        [readpool.unified]
+        max-thread-count = 1
     "#;
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
     let mut expected = TiKvConfig::default();
-    expected.readpool.storage.high_concurrency = 1;
+    expected.readpool.unified.max_thread_count = 1;
     assert_eq!(cfg, expected);
+}
+
+#[test]
+fn test_do_not_unify_readpool_with_legacy_config() {
+    let content = r#"
+        [readpool.storage]
+        normal-concurrency = 1
+    "#;
+    let cfg: TiKvConfig = toml::from_str(content).unwrap();
+    assert!(!cfg.readpool.is_unified());
 }
 
 #[test]

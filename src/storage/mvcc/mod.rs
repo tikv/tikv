@@ -400,6 +400,7 @@ pub mod tests {
             TimeStamp::default(),
             0,
             TimeStamp::default(),
+            false,
         )?;
         Ok(())
     }
@@ -432,6 +433,7 @@ pub mod tests {
                 for_update_ts,
                 txn_size,
                 min_commit_ts,
+                false,
             )
             .unwrap();
         }
@@ -559,6 +561,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap_err()
         }
@@ -619,6 +622,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap();
         }
@@ -670,6 +674,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap();
         }

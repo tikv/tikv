@@ -18,7 +18,7 @@ impl ExternalStorage for NoopStorage {
     fn write(
         &self,
         _name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
+        reader: Box<dyn AsyncRead + Sync + Send + Unpin>,
         _content_length: u64,
     ) -> io::Result<()> {
         // we must still process the entire reader to run the SHA-256 hasher.
