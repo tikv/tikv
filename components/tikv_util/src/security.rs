@@ -143,7 +143,7 @@ impl SecurityManager {
         // update certs when reload is enabled
         if let Some(cfg) = &self.reload_cfg {
             // This is to trigger updated_certs and the result doesn't care
-            updated_certs(&self.certs, cfg).is_ok();
+            let _ = updated_certs(&self.certs, cfg).unwrap_or(false);
         }
         let certs = self.certs.read().unwrap();
         if certs.ca.is_empty() {
