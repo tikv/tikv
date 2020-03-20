@@ -32,7 +32,6 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use prometheus::HistogramTimer;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use tikv_util::future::{paired_future_callback, AndThenWith};
@@ -894,7 +893,8 @@ fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
     tx: Sender<(u64, batch_commands_response::Response)>,
-    timer: HistogramTimer,
+    timer: Instant,
+    label_enum: GrpcTypeKind,
 ) where
     F: Future<Item = batch_commands_response::Response, Error = ()> + Send + 'static,
 {
@@ -903,7 +903,9 @@ fn response_batch_commands_request<F>(
             error!("KvService response batch commands fail");
             return Err(());
         }
-        timer.observe_duration();
+        GRPC_MSG_HISTOGRAM_STATIC
+            .get(label_enum)
+            .observe(timer.elapsed_secs());
         Ok(())
     });
     poll_future_notify(f);
@@ -961,17 +963,16 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             match req.cmd {
                 None => {
                     // For some invalid requests.
-                    let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["invalid"]).start_coarse_timer();
+                    let timer = Instant::now();
                     let resp = future::ok(batch_commands_response::Response::default());
-                    response_batch_commands_request(id, resp, tx, timer);
+                    response_batch_commands_request(id, resp, tx, timer, GrpcTypeKind::invalid);
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
-                    // let timer = GRPC_MSG_HISTOGRAM_VEC.$metric_name.start_coarse_timer();
-                    let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[stringify!($metric_name)]).start_coarse_timer();
+                    let timer = Instant::now();
                     let resp = $future_fn($($arg,)* req)
                         .map(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
-                    response_batch_commands_request(id, resp, tx, timer);
+                    response_batch_commands_request(id, resp, tx, timer, GrpcTypeKind::$metric_name);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
             }
