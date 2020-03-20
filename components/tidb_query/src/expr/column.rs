@@ -135,7 +135,7 @@ mod tests {
     fn test_column_eval() {
         let dec = "1.1".parse::<Decimal>().unwrap();
         let s = "你好".as_bytes().to_owned();
-        let dur = Duration::parse(b"01:00:00", 0).unwrap();
+        let dur = Duration::parse(&mut EvalContext::default(), b"01:00:00", 0).unwrap();
 
         let row = vec![
             Datum::Null,

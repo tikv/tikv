@@ -15,6 +15,7 @@ macro_rules! invalid_type {
 
 pub mod batch;
 pub mod chunk;
+pub mod collation;
 pub mod convert;
 pub mod data_type;
 pub mod datum;

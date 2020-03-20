@@ -5,19 +5,20 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
-use engine::{name_to_cf, CF_DEFAULT};
+use engine_traits::{name_to_cf, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
+use kvproto::errorpb;
 use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::Callback;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::Callback;
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
@@ -183,14 +184,19 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
             future::result(res)
                 .map_err(Error::from)
-                .map(|range| {
+                .then(|res| {
                     let mut resp = DownloadResponse::default();
-                    if let Some(r) = range {
-                        resp.set_range(r);
-                    } else {
-                        resp.set_is_empty(true);
+                    match res {
+                        Ok(range) => {
+                            if let Some(r) = range {
+                                resp.set_range(r);
+                            } else {
+                                resp.set_is_empty(true);
+                            }
+                        }
+                        Err(e) => resp.set_error(e.into()),
                     }
-                    resp
+                    Ok(resp)
                 })
                 .then(move |res| send_rpc_response!(res, sink, label, timer))
         }));
@@ -213,11 +219,18 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
             && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
         {
-            return send_rpc_error(
-                ctx,
-                sink,
-                Error::Engine(box_err!("too many sst files are ingesting.")),
-            );
+            let err = "too many sst files are ingesting";
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(err.to_string());
+            let mut errorpb = errorpb::Error::default();
+            errorpb.set_message(err.to_string());
+            errorpb.set_server_is_busy(server_is_busy_err);
+            let mut resp = IngestResponse::default();
+            resp.set_error(errorpb);
+            ctx.spawn(sink.success(resp).map_err(|e| {
+                warn!("send rpc failed"; "err" => %e);
+            }));
+            return;
         }
         // Make ingest command.
         let mut ingest = Request::default();
@@ -234,7 +247,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
         let (cb, future) = paired_future_callback();
         if let Err(e) = self.router.send_command(cmd, Callback::Write(cb)) {
-            return send_rpc_error(ctx, sink, e);
+            let mut resp = IngestResponse::default();
+            resp.set_error(e.into());
+            ctx.spawn(sink.success(resp).map_err(|e| {
+                warn!("send rpc failed"; "err" => %e);
+            }));
+            return;
         }
 
         ctx.spawn(

@@ -20,7 +20,7 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use spin::Mutex;
+use parking_lot::Mutex;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -28,8 +28,8 @@ use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
-use tikv_util::{collections::HashMap, time::SlowTimer};
-use txn_types::{Key, TimeStamp};
+use tikv_util::{collections::HashMap, time::Instant};
+use txn_types::TimeStamp;
 
 use crate::storage::kv::{with_tls_engine, Engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
@@ -39,18 +39,15 @@ use crate::storage::metrics::{
     SCHED_WRITING_BYTES_GAUGE,
 };
 use crate::storage::txn::{
-    commands::{
-        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, CommandKind, Commit, Pause,
-        PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock, ResolveLockLite, Rollback,
-        TxnHeartBeat,
-    },
+    commands::Command,
     latch::{Latches, Lock},
     process::{Executor, MsgScheduler, Task},
     sched_pool::SchedPool,
     Error, ProcessResult,
 };
 use crate::storage::{
-    types::StorageCallback, Error as StorageError, ErrorInner as StorageErrorInner,
+    get_priority_tag, types::StorageCallback, Error as StorageError,
+    ErrorInner as StorageErrorInner,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -70,6 +67,7 @@ pub enum Msg {
         cid: u64,
         pr: ProcessResult,
         result: EngineResult<()>,
+        pipelined: bool,
         tag: metrics::CommandKind,
     },
     FinishedWithErr {
@@ -84,6 +82,11 @@ pub enum Msg {
         lock: lock_manager::Lock,
         is_first_lock: bool,
         wait_timeout: Option<WaitTimeout>,
+    },
+    PipelinedWrite {
+        cid: u64,
+        pr: ProcessResult,
+        tag: metrics::CommandKind,
     },
 }
 
@@ -103,6 +106,7 @@ impl Display for Msg {
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
             Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
             Msg::WaitForLock { cid, .. } => write!(f, "WaitForLock [cid={}]", cid),
+            Msg::PipelinedWrite { cid, .. } => write!(f, "PipelinedWrite [cid={}]", cid),
         }
     }
 }
@@ -112,7 +116,7 @@ struct TaskContext {
     task: Option<Task>,
 
     lock: Lock,
-    cb: StorageCallback,
+    cb: Option<StorageCallback>,
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
@@ -124,7 +128,7 @@ struct TaskContext {
 impl TaskContext {
     fn new(task: Task, latches: &Latches, cb: StorageCallback) -> TaskContext {
         let tag = task.cmd().tag();
-        let lock = gen_command_lock(latches, task.cmd());
+        let lock = task.cmd().gen_lock(latches);
         // Write command should acquire write lock.
         if !task.cmd().readonly() && !lock.is_write_lock() {
             panic!("write lock is expected for command {}", task.cmd());
@@ -138,7 +142,7 @@ impl TaskContext {
         TaskContext {
             task: Some(task),
             lock,
-            cb,
+            cb: Some(cb),
             write_bytes,
             tag,
             latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.get(tag).start_coarse_timer()),
@@ -173,6 +177,8 @@ struct SchedulerInner<L: LockManager> {
     running_write_bytes: AtomicUsize,
 
     lock_mgr: Option<L>,
+
+    pipelined_pessimistic_lock: bool,
 }
 
 #[inline]
@@ -226,6 +232,13 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
+    fn take_task_cb(&self, cid: u64) -> Option<StorageCallback> {
+        self.task_contexts[id_index(cid)]
+            .lock()
+            .get_mut(&cid)
+            .map(|tctx| tctx.cb.take().unwrap())
+    }
+
     fn too_busy(&self) -> bool {
         fail_point!("txn_scheduler_busy", |_| true);
         self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
@@ -263,10 +276,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
+        pipelined_pessimistic_lock: bool,
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
-        let t = SlowTimer::new();
+        let t = Instant::now_coarse();
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
             task_contexts.push(Mutex::new(Default::default()));
@@ -285,9 +299,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 "sched-high-pri-pool",
             ),
             lock_mgr,
+            pipelined_pessimistic_lock,
         });
 
-        slow_log!(t, "initialized the transaction scheduler");
+        slow_log!(t.elapsed(), "initialized the transaction scheduler");
         Scheduler {
             engine: Some(engine),
             inner,
@@ -310,7 +325,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             engine: None,
             inner: Arc::clone(&self.inner),
         };
-        Executor::new(scheduler, pool, self.inner.lock_mgr.clone())
+        Executor::new(
+            scheduler,
+            pool,
+            self.inner.lock_mgr.clone(),
+            self.inner.pipelined_pessimistic_lock,
+        )
     }
 
     /// Releases all the latches held by a command.
@@ -326,7 +346,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
         let tag = cmd.tag();
-        let priority_tag = cmd.priority_tag();
+        let priority_tag = get_priority_tag(cmd.priority());
         let task = Task::new(cid, cmd);
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);
@@ -399,7 +419,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
-        tctx.cb.execute(pr);
+        tctx.cb.unwrap().execute(pr);
 
         self.release_lock(&tctx.lock, cid);
     }
@@ -415,9 +435,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb);
+            self.schedule_command(cmd, tctx.cb.unwrap());
         } else {
-            tctx.cb.execute(pr);
+            tctx.cb.unwrap().execute(pr);
         }
 
         self.release_lock(&tctx.lock, cid);
@@ -429,23 +449,37 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cid: u64,
         pr: ProcessResult,
         result: EngineResult<()>,
+        pipelined: bool,
         tag: metrics::CommandKind,
     ) {
-        SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
-
-        debug!("write command finished"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
-        let pr = match result {
-            Ok(()) => pr,
-            Err(e) => ProcessResult::Failed {
-                err: StorageError::from(e),
-            },
-        };
-        if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb);
+        if !pipelined {
+            SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         } else {
-            tctx.cb.execute(pr);
+            SCHED_STAGE_COUNTER_VEC
+                .get(tag)
+                .pipelined_write_finish
+                .inc();
+        }
+
+        debug!("write command finished"; "cid" => cid, "pipelined" => pipelined);
+        let tctx = self.inner.dequeue_task_context(cid);
+
+        // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
+        if let Some(cb) = tctx.cb {
+            let pr = match result {
+                Ok(()) => pr,
+                Err(e) => ProcessResult::Failed {
+                    err: StorageError::from(e),
+                },
+            };
+            if let ProcessResult::NextCommand { cmd } = pr {
+                SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+                self.schedule_command(cmd, cb);
+            } else {
+                cb.execute(pr);
+            }
+        } else {
+            assert!(pipelined);
         }
 
         self.release_lock(&tctx.lock, cid);
@@ -466,13 +500,24 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
         self.inner.lock_mgr.as_ref().unwrap().wait_for(
             start_ts,
-            tctx.cb,
+            tctx.cb.unwrap(),
             pr,
             lock,
             is_first_lock,
             wait_timeout,
         );
         self.release_lock(&tctx.lock, cid);
+    }
+
+    fn on_pipelined_write(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
+        debug!("pipelined write"; "cid" => cid);
+        SCHED_STAGE_COUNTER_VEC.get(tag).pipelined_write.inc();
+        // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
+        // The task ctx has been dequeued.
+        if let Some(cb) = self.inner.take_task_cb(cid) {
+            cb.execute(pr);
+        }
+        // It won't release locks here until write finished.
     }
 }
 
@@ -484,8 +529,9 @@ impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
                 cid,
                 tag,
                 pr,
+                pipelined,
                 result,
-            } => self.on_write_finished(cid, pr, result, tag),
+            } => self.on_write_finished(cid, pr, result, pipelined, tag),
             Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
             Msg::WaitForLock {
                 cid,
@@ -495,51 +541,9 @@ impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
                 is_first_lock,
                 wait_timeout,
             } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock, wait_timeout),
+            Msg::PipelinedWrite { cid, pr, tag } => self.on_pipelined_write(cid, pr, tag),
             _ => unreachable!(),
         }
-    }
-}
-
-fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
-    match cmd.kind {
-        CommandKind::Prewrite(Prewrite { ref mutations, .. }) => {
-            let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
-            latches.gen_lock(&keys)
-        }
-        CommandKind::PrewritePessimistic(PrewritePessimistic { ref mutations, .. }) => {
-            let keys: Vec<&Key> = mutations.iter().map(|(x, _)| x.key()).collect();
-            latches.gen_lock(&keys)
-        }
-        CommandKind::ResolveLock(ResolveLock { ref key_locks, .. }) => {
-            let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
-            latches.gen_lock(&keys)
-        }
-        CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { ref keys, .. }) => {
-            let keys: Vec<&Key> = keys.iter().map(|x| &x.0).collect();
-            latches.gen_lock(&keys)
-        }
-        CommandKind::ResolveLockLite(ResolveLockLite {
-            ref resolve_keys, ..
-        }) => latches.gen_lock(resolve_keys),
-        CommandKind::Commit(Commit { ref keys, .. })
-        | CommandKind::Rollback(Rollback { ref keys, .. })
-        | CommandKind::PessimisticRollback(PessimisticRollback { ref keys, .. }) => {
-            latches.gen_lock(keys)
-        }
-        CommandKind::Cleanup(Cleanup { ref key, .. }) => latches.gen_lock(&[key]),
-        CommandKind::Pause(Pause { ref keys, .. }) => latches.gen_lock(keys),
-        CommandKind::TxnHeartBeat(TxnHeartBeat {
-            ref primary_key, ..
-        }) => latches.gen_lock(&[primary_key]),
-        CommandKind::CheckTxnStatus(CheckTxnStatus {
-            ref primary_key, ..
-        }) => latches.gen_lock(&[primary_key]),
-
-        // Avoid using wildcard _ here to avoid forgetting add new commands here.
-        CommandKind::ScanLock(_)
-        | CommandKind::DeleteRange(_)
-        | CommandKind::MvccByKey(_)
-        | CommandKind::MvccByStartTs(_) => Lock::new(vec![]),
     }
 }
 
@@ -547,34 +551,28 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 mod tests {
     use super::*;
     use crate::storage::mvcc::{self, Mutation};
-    use crate::storage::txn::{
-        commands::{MvccByKey, MvccByStartTs, ScanLock},
-        latch::*,
-    };
+    use crate::storage::txn::{commands, latch::*};
     use kvproto::kvrpcpb::Context;
+    use txn_types::Key;
 
     #[test]
     fn test_command_latches() {
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
-        let readonly_cmds = vec![
-            ScanLock::new(5.into(), None, 0, Context::default()),
-            ResolveLock::new(temp_map.clone(), None, vec![], Context::default()),
-            MvccByKey::new(Key::from_raw(b"k"), Context::default()),
-            MvccByStartTs::new(25.into(), Context::default()),
+        let readonly_cmds: Vec<Command> = vec![
+            commands::ScanLock::new(5.into(), None, 0, Context::default()).into(),
+            commands::ResolveLock::new(temp_map.clone(), None, vec![], Context::default()).into(),
+            commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()).into(),
+            commands::MvccByStartTs::new(25.into(), Context::default()).into(),
         ];
-        let write_cmds = vec![
-            Prewrite::new(
+        let write_cmds: Vec<Command> = vec![
+            commands::Prewrite::with_defaults(
                 vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 b"k".to_vec(),
                 10.into(),
-                0,
-                false,
-                0,
-                TimeStamp::default(),
-                Context::default(),
-            ),
-            AcquirePessimisticLock::new(
+            )
+            .into(),
+            commands::AcquirePessimisticLock::new(
                 vec![(Key::from_raw(b"k"), false)],
                 b"k".to_vec(),
                 10.into(),
@@ -582,28 +580,34 @@ mod tests {
                 false,
                 TimeStamp::default(),
                 Some(WaitTimeout::Default),
+                false,
                 Context::default(),
-            ),
-            Commit::new(
+            )
+            .into(),
+            commands::Commit::new(
                 vec![Key::from_raw(b"k")],
                 10.into(),
                 20.into(),
                 Context::default(),
-            ),
-            Cleanup::new(
+            )
+            .into(),
+            commands::Cleanup::new(
                 Key::from_raw(b"k"),
                 10.into(),
                 20.into(),
                 Context::default(),
-            ),
-            Rollback::new(vec![Key::from_raw(b"k")], 10.into(), Context::default()),
-            PessimisticRollback::new(
+            )
+            .into(),
+            commands::Rollback::new(vec![Key::from_raw(b"k")], 10.into(), Context::default())
+                .into(),
+            commands::PessimisticRollback::new(
                 vec![Key::from_raw(b"k")],
                 10.into(),
                 20.into(),
                 Context::default(),
-            ),
-            ResolveLock::new(
+            )
+            .into(),
+            commands::ResolveLock::new(
                 temp_map,
                 None,
                 vec![(
@@ -620,14 +624,17 @@ mod tests {
                     ),
                 )],
                 Context::default(),
-            ),
-            ResolveLockLite::new(
+            )
+            .into(),
+            commands::ResolveLockLite::new(
                 10.into(),
                 TimeStamp::zero(),
                 vec![Key::from_raw(b"k")],
                 Context::default(),
-            ),
-            TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, Context::default()),
+            )
+            .into(),
+            commands::TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, Context::default())
+                .into(),
         ];
 
         let latches = Latches::new(1024);
@@ -635,14 +642,14 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(id, cmd)| {
-                let mut lock = gen_command_lock(&latches, &cmd);
+                let mut lock = cmd.gen_lock(&latches);
                 assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
                 lock
             })
             .collect();
 
         for (id, cmd) in readonly_cmds.iter().enumerate() {
-            let mut lock = gen_command_lock(&latches, cmd);
+            let mut lock = cmd.gen_lock(&latches);
             assert!(latches.acquire(&mut lock, id as u64));
         }
 

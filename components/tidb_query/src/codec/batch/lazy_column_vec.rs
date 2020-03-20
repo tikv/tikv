@@ -3,7 +3,6 @@
 use tipb::FieldType;
 
 use super::LazyBatchColumn;
-use crate::codec::chunk::{Chunk, ChunkEncoder};
 use crate::codec::data_type::VectorValue;
 use crate::codec::Result;
 use crate::expr::EvalContext;
@@ -99,47 +98,39 @@ impl LazyBatchColumnVec {
 
     /// Returns maximum encoded size.
     // TODO: Move to other place.
-    pub fn maximum_encoded_size(
-        &self,
-        logical_rows: impl AsRef<[usize]>,
-        output_offsets: impl AsRef<[u32]>,
-    ) -> Result<usize> {
-        let logical_rows = logical_rows.as_ref();
+    pub fn maximum_encoded_size(&self, logical_rows: &[usize], output_offsets: &[u32]) -> usize {
         let mut size = 0;
-        for offset in output_offsets.as_ref() {
-            size += self.columns[(*offset) as usize].maximum_encoded_size(logical_rows)?;
+        for offset in output_offsets {
+            size += self.columns[(*offset) as usize].maximum_encoded_size(logical_rows);
         }
-        Ok(size)
+        size
     }
 
     /// Returns maximum encoded size in chunk format.
     // TODO: Move to other place.
     pub fn maximum_encoded_size_chunk(
         &self,
-        logical_rows: impl AsRef<[usize]>,
-        output_offsets: impl AsRef<[u32]>,
-    ) -> Result<usize> {
-        let logical_rows = logical_rows.as_ref();
+        logical_rows: &[usize],
+        output_offsets: &[u32],
+    ) -> usize {
         let mut size = 0;
-        for offset in output_offsets.as_ref() {
-            size += self.columns[(*offset) as usize].maximum_encoded_size_chunk(logical_rows)?;
+        for offset in output_offsets {
+            size += self.columns[(*offset) as usize].maximum_encoded_size_chunk(logical_rows);
         }
-        Ok(size)
+        size
     }
 
     /// Encodes into binary format.
     // TODO: Move to other place.
     pub fn encode(
         &self,
-        logical_rows: impl AsRef<[usize]>,
-        output_offsets: impl AsRef<[u32]>,
-        schema: impl AsRef<[FieldType]>,
+        logical_rows: &[usize],
+        output_offsets: &[u32],
+        schema: &[FieldType],
         output: &mut Vec<u8>,
         ctx: &mut EvalContext,
     ) -> Result<()> {
-        let schema = schema.as_ref();
-        let output_offsets = output_offsets.as_ref();
-        for idx in logical_rows.as_ref() {
+        for idx in logical_rows {
             for offset in output_offsets {
                 let offset = *offset as usize;
                 let col = &self.columns[offset];
@@ -150,45 +141,20 @@ impl LazyBatchColumnVec {
     }
 
     /// Encode into chunk format.
+    // TODO: Move to other place.
     pub fn encode_chunk(
         &mut self,
-        logical_rows: impl AsRef<[usize]>,
-        output_offsets: impl AsRef<[u32]>,
-        schema: impl AsRef<[FieldType]>,
+        logical_rows: &[usize],
+        output_offsets: &[u32],
+        schema: &[FieldType],
         output: &mut Vec<u8>,
         ctx: &mut EvalContext,
     ) -> Result<()> {
-        // Step 1 : Decode all data.
-        let schema = schema.as_ref();
-        let output_offsets = output_offsets.as_ref();
         for offset in output_offsets {
             let offset = *offset as usize;
-            let col = &mut self.columns[offset];
-            col.ensure_decoded(ctx, &schema[offset], logical_rows.as_ref())?;
-        }
-
-        // Step 2 : Make the chunk and append data.
-        let mut fields: Vec<FieldType> = Vec::new();
-        for offset in output_offsets {
-            let offset = *offset as usize;
-            let field_type = &schema[offset];
-            fields.push(field_type.clone());
-        }
-        let mut chunk = Chunk::new(&fields, logical_rows.as_ref().len());
-
-        for column_idx in 0..output_offsets.len() {
-            let offset = output_offsets[column_idx] as usize;
             let col = &self.columns[offset];
-            chunk.append_vec(
-                logical_rows.as_ref(),
-                &schema[offset],
-                col.decoded(),
-                column_idx,
-            )?;
+            col.encode_chunk(ctx, logical_rows, &schema[offset], output)?;
         }
-
-        // Step 3 : Encode chunk to output.
-        output.encode_chunk(&chunk).unwrap();
         Ok(())
     }
 

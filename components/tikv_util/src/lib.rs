@@ -31,7 +31,6 @@ use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
-use protobuf::Message;
 use rand;
 use rand::rngs::ThreadRng;
 
@@ -120,28 +119,6 @@ pub trait AssertCopy: Copy {}
 pub trait AssertSend: Send {}
 
 pub trait AssertSync: Sync {}
-
-pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
-    if max == NO_LIMIT || entries.len() <= 1 {
-        return;
-    }
-
-    let mut size = 0;
-    let limit = entries
-        .iter()
-        .take_while(|&e| {
-            if size == 0 {
-                size += u64::from(Message::compute_size(e));
-                true
-            } else {
-                size += u64::from(Message::compute_size(e));
-                size <= max
-            }
-        })
-        .count();
-
-    entries.truncate(limit);
-}
 
 /// Take slices in the range.
 ///
@@ -520,6 +497,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 false, // Use sync logger to avoid an unnecessary log thread.
                 false, // It is initialized already.
                 vec![],
+                0,
             );
         }
 
@@ -574,8 +552,6 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 mod tests {
     use super::*;
 
-    use fs2;
-    use raft::eraftpb::Entry;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
@@ -653,31 +629,6 @@ mod tests {
 
         fn foo(a: &Option<usize>) -> Option<usize> {
             *a
-        }
-    }
-
-    #[test]
-    fn test_limit_size() {
-        let mut e = Entry::default();
-        e.set_data(b"0123456789".to_vec());
-        let size = u64::from(e.compute_size());
-
-        let tbls = vec![
-            (vec![], NO_LIMIT, 0),
-            (vec![], size, 0),
-            (vec![e.clone(); 10], 0, 1),
-            (vec![e.clone(); 10], NO_LIMIT, 10),
-            (vec![e.clone(); 10], size, 1),
-            (vec![e.clone(); 10], size + 1, 1),
-            (vec![e.clone(); 10], 2 * size, 2),
-            (vec![e.clone(); 10], 10 * size - 1, 9),
-            (vec![e.clone(); 10], 10 * size, 10),
-            (vec![e; 10], 10 * size + 1, 10),
-        ];
-
-        for (mut entries, max, len) in tbls {
-            limit_size(&mut entries, max);
-            assert_eq!(entries.len(), len);
         }
     }
 
@@ -774,16 +725,15 @@ mod tests {
             .tempdir()
             .unwrap();
         let data_path = tmp_dir.path();
-        let disk_stats_before = fs2::statvfs(data_path).unwrap();
-        let cap1 = disk_stats_before.available_space();
-        let reserve_size = 64 * 1024;
+        let file_path = data_path.join(SPACE_PLACEHOLDER_FILE);
+        let file = file_path.as_path();
+        let reserve_size = 4096 * 4;
+        assert!(!file.exists());
         reserve_space_for_recover(data_path, reserve_size).unwrap();
-        let disk_stats_after = fs2::statvfs(data_path).unwrap();
-        let cap2 = disk_stats_after.available_space();
-        assert_eq!(cap1 - cap2, reserve_size);
+        assert!(file.exists());
+        let meta = file.metadata().unwrap();
+        assert_eq!(meta.len(), reserve_size);
         reserve_space_for_recover(data_path, 0).unwrap();
-        let disk_stats = fs2::statvfs(data_path).unwrap();
-        let cap3 = disk_stats.available_space();
-        assert_eq!(cap1, cap3);
+        assert!(!file.exists());
     }
 }

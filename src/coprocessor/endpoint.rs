@@ -19,21 +19,27 @@ use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
 
-use crate::read_pool::ReadPool;
+use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
+use crate::coprocessor::interceptors::limit_concurrency;
+use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 
+/// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
+/// which means they don't need a permit from the semaphore before execution.
+const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
+
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
-    read_pool: ReadPool,
+    read_pool: ReadPoolHandle,
 
     /// The concurrency limiter of the coprocessor.
     semaphore: Option<Arc<Semaphore>>,
@@ -67,12 +73,14 @@ impl<E: Engine> Clone for Endpoint<E> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    pub fn new(cfg: &Config, read_pool: ReadPool) -> Self {
+    pub fn new(cfg: &Config, read_pool: ReadPoolHandle) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
         // will still be blocked. This needs to be improved.
         let semaphore = match &read_pool {
-            ReadPool::Yatp(_) => Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency))),
+            ReadPoolHandle::Yatp { .. } => {
+                Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency)))
+            }
             _ => None,
         };
         Self {
@@ -197,17 +205,17 @@ impl<E: Engine> Endpoint<E> {
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
                     );
-                    dag::build_handler(
+                    dag::DagHandlerBuilder::new(
                         dag,
                         ranges,
-                        start_ts,
                         store,
-                        data_version,
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
-                        enable_batch_if_possible,
                     )
+                    .data_version(data_version)
+                    .enable_batch_if_possible(enable_batch_if_possible)
+                    .build()
                 });
             }
             REQ_TYPE_ANALYZE => {
@@ -303,12 +311,6 @@ impl<E: Engine> Endpoint<E> {
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
-        let _permit = if let Some(semaphore) = semaphore.as_ref() {
-            Some(semaphore.acquire().await)
-        } else {
-            None
-        };
-
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.req_ctx.deadline.check()?;
@@ -332,15 +334,19 @@ impl<E: Engine> Endpoint<E> {
         };
 
         tracker.on_begin_all_items();
-        tracker.on_begin_item();
+
+        let handle_request_future = track(handler.handle_request(), &mut tracker);
+        let result = if let Some(semaphore) = &semaphore {
+            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
+        } else {
+            handle_request_future.await
+        };
+
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
-        let result = handler.handle_request().await;
-
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
-
-        tracker.on_finish_item(Some(storage_stats));
+        tracker.collect_storage_statistics(storage_stats);
         let exec_details = tracker.get_item_exec_details();
 
         tracker.on_finish_all_items();
@@ -542,8 +548,8 @@ fn make_error_response(e: Error) -> coppb::Response {
             tag = "meet_lock";
             resp.set_locked(info);
         }
-        Error::MaxExecuteTimeExceeded => {
-            tag = "max_execute_time_exceeded";
+        Error::DeadlineExceeded => {
+            tag = "deadline_exceeded";
             resp.set_other_error(e.to_string());
         }
         Error::MaxPendingTasksExceeded => {
@@ -579,6 +585,7 @@ mod tests {
 
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::readpool_impl::build_read_pool_for_test;
+    use crate::read_pool::ReadPool;
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use protobuf::Message;
@@ -705,8 +712,11 @@ mod tests {
     #[test]
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         // a normal request
         let handler_builder =
@@ -739,8 +749,11 @@ mod tests {
     #[test]
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
         cop.recursion_limit = 100;
 
         let req = {
@@ -772,8 +785,11 @@ mod tests {
     #[test]
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let mut req = coppb::Request::default();
         req.set_tp(9999);
@@ -788,8 +804,11 @@ mod tests {
     #[test]
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
@@ -806,29 +825,31 @@ mod tests {
     fn test_full() {
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
         use std::sync::Mutex;
-        use tikv_util::future_pool::{Builder, FuturePool};
+        use tikv_util::future_pool::Builder;
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        let read_pool: Vec<FuturePool> = CoprReadPoolConfig {
-            normal_concurrency: 1,
-            max_tasks_per_worker_normal: 2,
-            ..CoprReadPoolConfig::default_for_test()
-        }
-        .to_future_pool_configs()
-        .into_iter()
-        .map(|config| {
-            let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
-                .name_prefix("coprocessor_endpoint_test_full")
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                // Safety: we call `set_` and `destroy_` with the same engine type.
-                .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
-                .build()
-        })
-        .collect();
+        let read_pool = ReadPool::from(
+            CoprReadPoolConfig {
+                normal_concurrency: 1,
+                max_tasks_per_worker_normal: 2,
+                ..CoprReadPoolConfig::default_for_test()
+            }
+            .to_future_pool_configs()
+            .into_iter()
+            .map(|config| {
+                let engine = Arc::new(Mutex::new(engine.clone()));
+                Builder::from_config(config)
+                    .name_prefix("coprocessor_endpoint_test_full")
+                    .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                    // Safety: we call `set_` and `destroy_` with the same engine type.
+                    .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
+                    .build()
+            })
+            .collect::<Vec<_>>(),
+        );
 
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let (tx, rx) = mpsc::channel();
 
@@ -865,8 +886,11 @@ mod tests {
     #[test]
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
@@ -881,8 +905,11 @@ mod tests {
     #[test]
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         // Fail immediately
         let handler_builder =
@@ -924,8 +951,11 @@ mod tests {
     #[test]
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = block_on_stream(
@@ -942,8 +972,11 @@ mod tests {
     #[test]
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1028,13 +1061,16 @@ mod tests {
     #[test]
     fn test_channel_size() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
         let cop = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_stream_channel_size: 3,
                 ..Config::default()
             },
-            read_pool.into(),
+            read_pool.handle(),
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1079,7 +1115,7 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        let read_pool = build_read_pool_for_test(
+        let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig {
                 low_concurrency: 1,
                 normal_concurrency: 1,
@@ -1087,13 +1123,13 @@ mod tests {
                 ..CoprReadPoolConfig::default_for_test()
             },
             engine,
-        );
+        ));
 
         let mut config = Config::default();
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.into());
+        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.handle());
 
         let (tx, rx) = std::sync::mpsc::channel();
 

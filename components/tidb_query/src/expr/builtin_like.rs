@@ -3,21 +3,21 @@
 use regex::{bytes::Regex as BytesRegex, Regex};
 
 use super::{EvalContext, Result, ScalarFunc};
+use crate::codec::collation::*;
 use crate::codec::Datum;
 use crate::expr_util;
+use tidb_query_datatype::{Collation, FieldTypeAccessor};
 
 impl ScalarFunc {
-    /// NOTE: LIKE compare target with pattern as bytes, even if they have different
-    /// charsets. This behaviour is for keeping compatible with TiDB. But MySQL
-    /// compare them as bytes only if any charset of pattern or target is binary,
-    /// otherwise MySQL will compare decoded string.
     pub fn like(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = try_opt!(self.children[0].eval_string(ctx, row));
         let pattern = try_opt!(self.children[1].eval_string(ctx, row));
         let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
-        Ok(Some(
-            expr_util::like::like(&target, &pattern, escape)? as i64
-        ))
+        Ok(Some(match_template_collator! {
+            TT, match self.field_type.collation()? {
+                Collation::TT => expr_util::like::like::<TT>(&target, &pattern, escape)?
+            }
+        } as i64))
     }
 
     pub fn regexp_utf8(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {

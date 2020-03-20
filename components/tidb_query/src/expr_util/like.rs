@@ -10,39 +10,49 @@
 //! 2. It should support non-binary mode (and binary mode) and do case insensitive comparing
 //!    in non-binary mode.
 
+use crate::codec::collation::{Charset, Collator};
 use crate::expr::Result;
 
-pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
+pub fn like<C: Collator>(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
     // current search positions in pattern and target.
     let (mut px, mut tx) = (0, 0);
     // positions for backtrace.
     let (mut next_px, mut next_tx) = (0, 0);
     while px < pattern.len() || tx < target.len() {
-        if px < pattern.len() {
-            let c = pattern[px];
-            match c {
-                b'_' => {
-                    if tx < target.len() {
-                        px += 1;
-                        tx += 1;
-                        continue;
-                    }
-                }
-                b'%' => {
-                    // update the backtrace point.
-                    next_px = px;
-                    next_tx = tx + 1;
-                    px += 1;
+        if let Some((c, mut poff)) = C::Charset::decode_one(&pattern[px..]) {
+            let code: u32 = c.into();
+            if code == '_' as u32 {
+                if let Some((_, toff)) = C::Charset::decode_one(&target[tx..]) {
+                    px += poff;
+                    tx += toff;
                     continue;
                 }
-                mut pc => {
-                    if u32::from(pc) == escape && px + 1 < pattern.len() {
-                        px += 1;
-                        pc = pattern[px];
+            } else if code == '%' as u32 {
+                // update the backtrace point.
+                next_px = px;
+                px += poff;
+                next_tx = tx;
+                next_tx += if let Some((_, toff)) = C::Charset::decode_one(&target[tx..]) {
+                    toff
+                } else {
+                    1
+                };
+                continue;
+            } else {
+                if code == escape && px + poff < pattern.len() {
+                    px += poff;
+                    poff = if let Some((_, off)) = C::Charset::decode_one(&pattern[px..]) {
+                        off
+                    } else {
+                        break;
                     }
-                    if tx < target.len() && target[tx] == pc {
-                        tx += 1;
-                        px += 1;
+                }
+                if let Some((_, toff)) = C::Charset::decode_one(&target[tx..]) {
+                    if let Ok(std::cmp::Ordering::Equal) =
+                        C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff])
+                    {
+                        tx += toff;
+                        px += poff;
                         continue;
                     }
                 }

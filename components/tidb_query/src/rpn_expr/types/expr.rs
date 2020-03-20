@@ -132,6 +132,15 @@ impl RpnExpression {
     pub fn into_inner(self) -> Vec<RpnExpressionNode> {
         self.0
     }
+
+    /// Returns true if the last element of expression is a `Constant` variant.
+    pub fn is_last_constant(&self) -> bool {
+        assert!(!self.0.is_empty());
+        match self.0.last().unwrap() {
+            RpnExpressionNode::Constant { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 // For `RpnExpression::eval`, see `expr_eval` file.

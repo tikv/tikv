@@ -11,13 +11,13 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
-use engine::Iterable;
-use engine::CF_WRITE;
+use engine_rocks::Compat;
+use engine_traits::{Iterable, CF_WRITE};
 use keys::data_key;
 use pd_client::PdClient;
+use raftstore::store::{Callback, WriteResponse};
+use raftstore::Result;
 use test_raftstore::*;
-use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::raftstore::Result;
 use tikv_util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
@@ -200,6 +200,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut size = 0;
     cluster.engines[&store_id]
         .kv
+        .c()
         .scan(&data_key(b""), &data_key(middle_key), false, |k, v| {
             size += k.len() as u64;
             size += v.len() as u64;

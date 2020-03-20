@@ -280,7 +280,7 @@ impl SampleCollector {
         self.count += 1;
         self.fm_sketch.insert(&data);
         if let Some(c) = self.cm_sketch.as_mut() {
-            c.insert(&data)
+            c.insert(&data);
         }
         self.total_size += data.len() as u64;
         if self.samples.len() < self.max_sample_size {

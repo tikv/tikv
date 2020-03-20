@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::*;
+use batch_system::test_runner::*;
 use batch_system::*;
 use crossbeam::channel::*;
 use std::sync::atomic::*;
@@ -10,22 +10,22 @@ use tikv_util::mpsc;
 
 fn counter_closure(counter: &Arc<AtomicUsize>) -> Message {
     let c = counter.clone();
-    Some(Box::new(move |_: &mut Runner| {
+    Message::Callback(Box::new(move |_: &mut Runner| {
         c.fetch_add(1, Ordering::SeqCst);
     }))
 }
 
 fn noop() -> Message {
-    None
+    Message::Callback(Box::new(|_| ()))
 }
 
 fn unreachable() -> Message {
-    Some(Box::new(|_: &mut Runner| unreachable!()))
+    Message::Callback(Box::new(|_: &mut Runner| unreachable!()))
 }
 
 #[test]
 fn test_basic() {
-    let (control_tx, mut control_fsm) = new_runner(10);
+    let (control_tx, mut control_fsm) = Runner::new(10);
     let (control_drop_tx, control_drop_rx) = mpsc::unbounded();
     control_fsm.sender = Some(control_drop_tx);
     let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
@@ -47,8 +47,8 @@ fn test_basic() {
     let router_ = router.clone();
     // Control mailbox should be connected.
     router
-        .send_control(Some(Box::new(move |_: &mut Runner| {
-            let (sender, mut runner) = new_runner(10);
+        .send_control(Message::Callback(Box::new(move |_: &mut Runner| {
+            let (sender, mut runner) = Runner::new(10);
             let (tx1, rx1) = mpsc::unbounded();
             runner.sender = Some(tx1);
             let mailbox = BasicMailbox::new(sender, runner);
@@ -67,7 +67,7 @@ fn test_basic() {
     router
         .send(
             1,
-            Some(Box::new(move |_: &mut Runner| {
+            Message::Callback(Box::new(move |_: &mut Runner| {
                 rx.recv_timeout(Duration::from_secs(100)).unwrap();
             })),
         )
@@ -88,7 +88,7 @@ fn test_basic() {
     router
         .force_send(
             1,
-            Some(Box::new(move |_: &mut Runner| {
+            Message::Callback(Box::new(move |_: &mut Runner| {
                 tx.send(1).unwrap();
             })),
         )

@@ -12,8 +12,8 @@ use kvproto::metapb;
 use kvproto::pdpb;
 
 use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use raftstore::store;
 use test_util;
-use tikv::raftstore::store;
 use tikv_util::security::{SecurityConfig, SecurityManager};
 use txn_types::TimeStamp;
 

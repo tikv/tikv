@@ -2,8 +2,6 @@
 
 pub mod config;
 pub mod engine_metrics;
-mod event_listener;
-pub mod metrics_flusher;
 pub mod security;
 pub mod stats;
 
@@ -19,17 +17,16 @@ use self::engine_metrics::{
     ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE,
     ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
-use crate::rocks::load_latest_options;
-use crate::rocks::supported_compression;
-use crate::rocks::{
+use crate::{Error, Result};
+use rocksdb::load_latest_options;
+use rocksdb::rocksdb::supported_compression;
+use rocksdb::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
 
-pub use self::event_listener::EventListener;
-pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::rocks::CFHandle;
+use engine_traits::{ALL_CFS, CF_DEFAULT};
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
@@ -523,7 +520,7 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::rocks::{ColumnFamilyOptions, DBOptions, Writable, DB};
-    use crate::CF_DEFAULT;
+    use engine_traits::CF_DEFAULT;
     use tempfile::Builder;
 
     #[test]

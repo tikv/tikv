@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 use std::convert::TryFrom;
+use std::convert::TryInto;
+use std::num::IntErrorKind;
 
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
@@ -10,16 +12,16 @@ use tipb::{Expr, FieldType};
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
-use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use crate::codec::mysql::{binary_literal, Time};
 use crate::codec::Error;
 use crate::expr::EvalContext;
+use crate::rpn_expr::types::RpnExpressionBuilder;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
-use std::convert::TryInto;
-use std::num::IntErrorKind;
 
 fn get_cast_fn_rpn_meta(
+    is_from_constant: bool,
     from_field_type: &FieldType,
     to_field_type: &FieldType,
 ) -> Result<RpnFnMeta> {
@@ -41,7 +43,13 @@ fn get_cast_fn_rpn_meta(
                 cast_real_as_uint_fn_meta()
             }
         }
-        (EvalType::Bytes, EvalType::Int) => cast_string_as_int_or_uint_fn_meta(),
+        (EvalType::Bytes, EvalType::Int) => {
+            if is_from_constant && from_field_type.is_binary_string_like() {
+                cast_binary_string_as_int_fn_meta()
+            } else {
+                cast_string_as_int_fn_meta()
+            }
+        }
         (EvalType::Decimal, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
                 cast_any_as_any_fn_meta::<Decimal, Int>()
@@ -78,7 +86,7 @@ fn get_cast_fn_rpn_meta(
         }
         (EvalType::Bytes, EvalType::Real) => {
             match (
-                from_field_type.is_binary_string_like(),
+                is_from_constant && from_field_type.is_binary_string_like(),
                 to_field_type.is_unsigned(),
             ) {
                 (true, true) => cast_binary_string_as_unsigned_real_fn_meta(),
@@ -195,10 +203,11 @@ fn get_cast_fn_rpn_meta(
 /// TODO: This function supports some internal casts performed by TiKV. However it would be better
 /// to be done in TiDB.
 pub fn get_cast_fn_rpn_node(
+    is_from_constant: bool,
     from_field_type: &FieldType,
     to_field_type: FieldType,
 ) -> Result<RpnExpressionNode> {
-    let func_meta = get_cast_fn_rpn_meta(from_field_type, &to_field_type)?;
+    let func_meta = get_cast_fn_rpn_meta(is_from_constant, from_field_type, &to_field_type)?;
     // This cast function is inserted by `Coprocessor` automatically,
     // the `inUnion` flag always false in this situation. Ideally,
     // the cast function should be inserted by TiDB and pushed down
@@ -207,7 +216,7 @@ pub fn get_cast_fn_rpn_node(
         func_meta,
         args_len: 1,
         field_type: to_field_type,
-        metadata: Box::new(()),
+        metadata: Box::new(tipb::InUnionMetadata::default()),
     })
 }
 
@@ -221,7 +230,11 @@ pub fn map_cast_func(expr: &Expr) -> Result<RpnFnMeta> {
             children.len()
         ));
     }
-    get_cast_fn_rpn_meta(children[0].get_field_type(), expr.get_field_type())
+    get_cast_fn_rpn_meta(
+        RpnExpressionBuilder::is_expr_eval_to_scalar(&children[0])?,
+        children[0].get_field_type(),
+        expr.get_field_type(),
+    )
 }
 
 // cast any as int/uint, some cast functions reuse `cast_any_as_any`
@@ -288,7 +301,7 @@ fn cast_real_as_uint(
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
-fn cast_string_as_int_or_uint(
+fn cast_string_as_int(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
@@ -355,6 +368,17 @@ fn cast_string_as_int_or_uint(
                     },
                 }
             }
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+fn cast_binary_string_as_int(ctx: &mut EvalContext, val: &Option<Bytes>) -> Result<Option<Int>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let r = binary_literal::to_uint(ctx, val)? as i64;
+            Ok(Some(r))
         }
     }
 }
@@ -835,16 +859,14 @@ fn cast_int_as_duration(
         None => Ok(None),
         Some(val) => {
             let fsp = extra.ret_field_type.get_decimal() as i8;
-            Duration::from_i64_without_ctx(*val, fsp)
-                .map(Some)
-                .or_else(|err| {
-                    if err.is_overflow() {
-                        ctx.handle_overflow_err(err)?;
-                        Ok(None)
-                    } else {
-                        Err(err.into())
-                    }
-                })
+            Duration::from_i64(ctx, *val, fsp).map(Some).or_else(|err| {
+                if err.is_overflow() {
+                    ctx.handle_overflow_err(err)?;
+                    Ok(None)
+                } else {
+                    Err(err.into())
+                }
+            })
         }
     }
 }
@@ -889,17 +911,18 @@ macro_rules! cast_as_duration {
             match val {
                 None => Ok(None),
                 Some(val) => {
-                    let result = Duration::parse($extra, extra.ret_field_type.get_decimal() as i8);
+                    let result =
+                        Duration::parse(ctx, $extra, extra.ret_field_type.get_decimal() as i8);
                     match result {
                         Ok(dur) => Ok(Some(dur)),
                         Err(e) => match e.code() {
                             ERR_DATA_OUT_OF_RANGE => {
                                 ctx.handle_overflow_err(e)?;
-                                Ok(Some(Duration::zero()))
+                                Ok(None)
                             }
-                            WARN_DATA_TRUNCATED => {
+                            ERR_TRUNCATE_WRONG_VALUE => {
                                 ctx.handle_truncate_err(e)?;
-                                Ok(Some(Duration::zero()))
+                                Ok(None)
                             }
                             _ => Err(e.into()),
                         },
@@ -921,7 +944,11 @@ cast_as_duration!(
     cast_decimal_as_duration,
     val.to_string().as_bytes()
 );
-cast_as_duration!(Json, cast_json_as_duration, val.unquote()?.as_bytes());
+cast_as_duration!(
+    Json,
+    cast_json_as_duration,
+    val.as_ref().unquote()?.as_bytes()
+);
 
 #[rpn_fn(capture = [ctx, extra])]
 fn cast_int_as_time(
@@ -1068,7 +1095,7 @@ fn cast_duration_as_time(
 fn cast_bool_as_json(val: &Option<Int>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
-        Some(val) => Ok(Some(Json::Boolean(*val != 0))),
+        Some(val) => Ok(Some(Json::from_bool(*val != 0)?)),
     }
 }
 
@@ -1077,7 +1104,7 @@ fn cast_bool_as_json(val: &Option<Int>) -> Result<Option<Json>> {
 fn cast_uint_as_json(val: &Option<Int>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
-        Some(val) => Ok(Some(Json::U64(*val as u64))),
+        Some(val) => Ok(Some(Json::from_u64(*val as u64)?)),
     }
 }
 
@@ -1100,7 +1127,7 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: &Option<Bytes>) -> Resul
             } else {
                 // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8 string
                 let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
-                Ok(Some(Json::String(val)))
+                Ok(Some(Json::from_string(val)?))
             }
         }
     }
@@ -1375,25 +1402,6 @@ mod tests {
         }
     }
 
-    fn check_warnings(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
-        assert_eq!(
-            ctx.warnings.warning_cnt,
-            err_code.len(),
-            "{}, warnings: {:?}",
-            log,
-            ctx.warnings.warnings
-        );
-        for i in 0..err_code.len() {
-            let e1 = err_code[i];
-            let e2 = ctx.warnings.warnings[i].get_code();
-            assert_eq!(
-                e1, e2,
-                "log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
-                log, ctx.warnings.warnings, err_code
-            );
-        }
-    }
-
     fn check_result<R: Debug + PartialEq>(expect: Option<&R>, res: &Result<Option<R>>, log: &str) {
         assert!(res.is_ok(), "{}", log);
         let res = res.as_ref().unwrap();
@@ -1562,8 +1570,15 @@ mod tests {
     }
 
     #[test]
-    fn test_string_as_int_or_uint() {
-        test_none_with_ctx_and_extra_and_metadata(cast_string_as_int_or_uint);
+    fn test_cast_string_as_int() {
+        // None
+        {
+            let output: Option<Int> = RpnFnScalarEvaluator::new()
+                .push_param(ScalarValue::Bytes(None))
+                .evaluate(ScalarFuncSig::CastStringAsInt)
+                .unwrap();
+            assert_eq!(output, None);
+        }
 
         #[derive(Debug)]
         enum Cond {
@@ -1644,9 +1659,9 @@ mod tests {
             // FIXME: in mysql, this case will return 18446744073709551615
             //  and `show warnings` will show
             //  `| Warning | 1292 | Truncated incorrect INTEGER value: '18446744073709551616'`
-            //  fix this cast_string_as_int_or_uint after fix TiDB's
+            //  fix this cast_string_as_int after fix TiDB's
             // ("18446744073709551616", 18446744073709551615 as i64, Some(ERR_TRUNCATE_WRONG_VALUE) , Cond::Unsigned)
-            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
+            // FIXME: our cast_string_as_int's err handle is not exactly same as TiDB's
             // ("18446744073709551616", 18446744073709551615u64 as i64, Some(ERR_TRUNCATE_WRONG_VALUE), Cond::InSelectStmt),
 
             // has prefix `-` and in_union and unsigned
@@ -1660,7 +1675,7 @@ mod tests {
                 vec![],
                 Cond::None,
             ),
-            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
+            // FIXME: our cast_string_as_int's err handle is not exactly same as TiDB's
             (
                 "-9223372036854775809",
                 -9223372036854775808i64,
@@ -1682,30 +1697,82 @@ mod tests {
             ),
         ];
 
-        for (input, expect, err_code, cond) in cs {
-            let mut ctx = CtxConfig {
-                overflow_as_warning: true,
-                truncate_as_warning: true,
-                ..CtxConfig::default()
-            }
-            .into();
-            let metadata = make_metadata(cond.in_union());
-            let rft = FieldTypeConfig {
-                unsigned: cond.is_unsigned(),
-                ..FieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft);
-
-            let val = Some(Vec::from(input.as_bytes()));
-            let r = cast_string_as_int_or_uint(&mut ctx, &extra, &metadata, &val);
-
-            let log = format!(
-                "input: {}, expect: {}, expect_err_code: {:?}, cond: {:?}, output: {:?}",
-                input, expect, err_code, cond, r
+        for (input, expected, mut err_code, cond) in cs {
+            let (result, ctx) = RpnFnScalarEvaluator::new()
+                .context(CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                })
+                .metadata(Box::new(make_metadata(cond.in_union())))
+                .push_param(ScalarValue::Bytes(Some(input.as_bytes().to_owned())))
+                .evaluate_raw(
+                    FieldTypeConfig {
+                        tp: Some(FieldTypeTp::LongLong),
+                        unsigned: cond.is_unsigned(),
+                        ..FieldTypeConfig::default()
+                    },
+                    ScalarFuncSig::CastStringAsInt,
+                );
+            let output: Option<Int> = result.unwrap().into();
+            assert_eq!(
+                output.unwrap(),
+                expected,
+                "input:{:?}, expected:{:?}, cond:{:?}",
+                input,
+                expected,
+                cond,
             );
-            check_result(Some(&expect), &r, log.as_str());
-            check_warnings(&ctx, err_code, log.as_str());
+            let mut got_warnings = ctx
+                .warnings
+                .warnings
+                .iter()
+                .map(|w| w.get_code())
+                .collect::<Vec<i32>>();
+            got_warnings.sort();
+            err_code.sort();
+            assert_eq!(
+                ctx.warnings.warning_cnt,
+                err_code.len(),
+                "input:{:?}, expected:{:?}, warnings:{:?}",
+                input,
+                expected,
+                got_warnings,
+            );
+            assert_eq!(got_warnings, err_code);
+        }
+
+        // binary literal
+        let cases = vec![
+            (vec![0x01, 0x02, 0x03], Some(0x010203 as i64)),
+            (vec![0x01, 0x02, 0x03, 0x4], Some(0x01020304 as i64)),
+            (
+                vec![0x01, 0x02, 0x03, 0x4, 0x05, 0x06, 0x06, 0x06, 0x06],
+                None,
+            ),
+        ];
+        for (input, expected) in cases {
+            let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
+                .return_field_type(FieldTypeConfig {
+                    tp: Some(FieldTypeTp::LongLong),
+                    ..FieldTypeConfig::default()
+                })
+                .push_param_with_field_type(
+                    input.clone(),
+                    FieldTypeConfig {
+                        tp: Some(FieldTypeTp::VarString),
+                        collation: Some(Collation::Binary),
+                        ..FieldTypeConfig::default()
+                    },
+                )
+                .evaluate(ScalarFuncSig::CastStringAsInt);
+
+            if let Some(exp) = expected {
+                assert!(output.is_ok(), "input: {:?}", input);
+                assert_eq!(output.unwrap().unwrap(), exp, "input={:?}", input);
+            } else {
+                assert!(output.is_err());
+            }
         }
     }
 
@@ -2025,7 +2092,7 @@ mod tests {
         for case in cases {
             let mut ctx = EvalContext::default();
 
-            let duration = Duration::parse(case.as_bytes(), MAX_FSP).unwrap();
+            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP).unwrap();
             let now = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .return_field_type(
@@ -2089,12 +2156,25 @@ mod tests {
 
     #[test]
     fn test_duration_as_int() {
+        let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs: Vec<(Duration, i64)> = vec![
-            (Duration::parse(b"17:51:04.78", 2).unwrap(), 175105),
-            (Duration::parse(b"-17:51:04.78", 2).unwrap(), -175105),
-            (Duration::parse(b"17:51:04.78", 0).unwrap(), 175105),
-            (Duration::parse(b"-17:51:04.78", 0).unwrap(), -175105),
+            (
+                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                175105,
+            ),
+            (
+                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                -175105,
+            ),
+            (
+                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                175105,
+            ),
+            (
+                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                -175105,
+            ),
         ];
 
         for (input, expect) in cs {
@@ -2116,32 +2196,44 @@ mod tests {
         // no overflow
         let cs = vec![
             // (origin, expect, overflow)
-            (Json::Object(BTreeMap::default()), 0, false),
-            (Json::Array(vec![]), 0, false),
-            (Json::I64(10), 10i64, false),
-            (Json::I64(i64::MAX), i64::MAX, false),
-            (Json::I64(i64::MIN), i64::MIN, false),
-            (Json::U64(0), 0, false),
-            (Json::U64(u64::MAX), u64::MAX as i64, false),
-            (Json::Double(i64::MIN as u64 as f64), i64::MAX, false),
-            (Json::Double(i64::MAX as u64 as f64), i64::MAX, false),
-            (Json::Double(i64::MIN as u64 as f64), i64::MAX, false),
-            (Json::Double(i64::MIN as f64), i64::MIN, false),
-            (Json::Double(10.5), 11, false),
-            (Json::Double(10.4), 10, false),
-            (Json::Double(-10.4), -10, false),
-            (Json::Double(-10.5), -11, false),
-            (Json::String(String::from("10.0")), 10, false),
-            (Json::Boolean(true), 1, false),
-            (Json::Boolean(false), 0, false),
-            (Json::None, 0, false),
+            (Json::from_object(BTreeMap::default()).unwrap(), 0, false),
+            (Json::from_array(vec![]).unwrap(), 0, false),
+            (Json::from_i64(10).unwrap(), 10i64, false),
+            (Json::from_i64(i64::MAX).unwrap(), i64::MAX, false),
+            (Json::from_i64(i64::MIN).unwrap(), i64::MIN, false),
+            (Json::from_u64(0).unwrap(), 0, false),
+            (Json::from_u64(u64::MAX).unwrap(), u64::MAX as i64, false),
             (
-                Json::Double(((1u64 << 63) + (1u64 << 62)) as u64 as f64),
+                Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+                i64::MAX,
+                false,
+            ),
+            (
+                Json::from_f64(i64::MAX as u64 as f64).unwrap(),
+                i64::MAX,
+                false,
+            ),
+            (
+                Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+                i64::MAX,
+                false,
+            ),
+            (Json::from_f64(i64::MIN as f64).unwrap(), i64::MIN, false),
+            (Json::from_f64(10.5).unwrap(), 11, false),
+            (Json::from_f64(10.4).unwrap(), 10, false),
+            (Json::from_f64(-10.4).unwrap(), -10, false),
+            (Json::from_f64(-10.5).unwrap(), -11, false),
+            (Json::from_string(String::from("10.0")).unwrap(), 10, false),
+            (Json::from_bool(true).unwrap(), 1, false),
+            (Json::from_bool(false).unwrap(), 0, false),
+            (Json::none().unwrap(), 0, false),
+            (
+                Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
                 i64::MAX,
                 true,
             ),
             (
-                Json::Double(-((1u64 << 63) as f64 + (1u64 << 62) as f64)),
+                Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
                 i64::MIN,
                 true,
             ),
@@ -2167,20 +2259,20 @@ mod tests {
         // no clip to zero
         let cs: Vec<(Json, u64, Option<i32>)> = vec![
             // (origin, expect, error_code)
-            (Json::Double(-1.0), -1.0f64 as i64 as u64, None),
-            (Json::String(String::from("10")), 10, None),
+            (Json::from_f64(-1.0).unwrap(), -1.0f64 as i64 as u64, None),
+            (Json::from_string(String::from("10")).unwrap(), 10, None),
             (
-                Json::String(String::from("+10abc")),
+                Json::from_string(String::from("+10abc")).unwrap(),
                 10,
                 Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
             (
-                Json::String(String::from("9999999999999999999999999")),
+                Json::from_string(String::from("9999999999999999999999999")).unwrap(),
                 u64::MAX,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
             (
-                Json::Double(2f64 * (u64::MAX as f64)),
+                Json::from_f64(2f64 * (u64::MAX as f64)).unwrap(),
                 u64::MAX,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
@@ -2203,25 +2295,25 @@ mod tests {
         // should clip to zero
         let cs: Vec<(Json, u64, Option<i32>)> = vec![
             // (origin, expect, err_code)
-            (Json::Double(-1.0), 0, None),
+            (Json::from_f64(-1.0).unwrap(), 0, None),
             (
-                Json::String(String::from("-10")),
+                Json::from_string(String::from("-10")).unwrap(),
                 0,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
-            (Json::String(String::from("10")), 10, None),
+            (Json::from_string(String::from("10")).unwrap(), 10, None),
             (
-                Json::String(String::from("+10abc")),
+                Json::from_string(String::from("+10abc")).unwrap(),
                 10,
                 Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
             (
-                Json::String(String::from("9999999999999999999999999")),
+                Json::from_string(String::from("9999999999999999999999999")).unwrap(),
                 u64::MAX,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
             (
-                Json::Double(2f64 * (u64::MAX as f64)),
+                Json::from_f64(2f64 * (u64::MAX as f64)).unwrap(),
                 u64::MAX,
                 Some(ERR_DATA_OUT_OF_RANGE),
             ),
@@ -2923,13 +3015,26 @@ mod tests {
 
     #[test]
     fn test_duration_as_real() {
+        let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs = vec![
             // (input, expect)
-            (Duration::parse(b"17:51:04.78", 2).unwrap(), 175104.78),
-            (Duration::parse(b"-17:51:04.78", 2).unwrap(), -175104.78),
-            (Duration::parse(b"17:51:04.78", 0).unwrap(), 175105.0),
-            (Duration::parse(b"-17:51:04.78", 0).unwrap(), -175105.0),
+            (
+                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                175104.78,
+            ),
+            (
+                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                -175104.78,
+            ),
+            (
+                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                175105.0,
+            ),
+            (
+                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                -175105.0,
+            ),
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
@@ -2944,31 +3049,36 @@ mod tests {
     fn test_json_as_real() {
         let cs: Vec<(Json, f64, Option<i32>)> = vec![
             // (input, expect, err_code)
-            (Json::Object(BTreeMap::default()), 0f64, None),
-            (Json::Array(vec![]), 0f64, None),
-            (Json::I64(10), 10f64, None),
-            (Json::I64(i64::MAX), i64::MAX as f64, None),
-            (Json::I64(i64::MIN), i64::MIN as f64, None),
-            (Json::U64(0), 0f64, None),
-            (Json::U64(u64::MAX), u64::MAX as f64, None),
-            (Json::Double(f64::MAX), f64::MAX, None),
-            (Json::Double(f64::MIN), f64::MIN, None),
-            (Json::String(String::from("10.0")), 10.0, None),
-            (Json::String(String::from("-10.0")), -10.0, None),
-            (Json::Boolean(true), 1f64, None),
-            (Json::Boolean(false), 0f64, None),
-            (Json::None, 0f64, None),
+            (Json::from_object(BTreeMap::default()).unwrap(), 0f64, None),
+            (Json::from_array(vec![]).unwrap(), 0f64, None),
+            (Json::from_i64(10).unwrap(), 10f64, None),
+            (Json::from_i64(i64::MAX).unwrap(), i64::MAX as f64, None),
+            (Json::from_i64(i64::MIN).unwrap(), i64::MIN as f64, None),
+            (Json::from_u64(0).unwrap(), 0f64, None),
+            (Json::from_u64(u64::MAX).unwrap(), u64::MAX as f64, None),
+            (Json::from_f64(f64::MAX).unwrap(), f64::MAX, None),
+            (Json::from_f64(f64::MIN).unwrap(), f64::MIN, None),
+            (Json::from_string(String::from("10.0")).unwrap(), 10.0, None),
             (
-                Json::String((0..500).map(|_| '9').collect::<String>()),
+                Json::from_string(String::from("-10.0")).unwrap(),
+                -10.0,
+                None,
+            ),
+            (Json::from_bool(true).unwrap(), 1f64, None),
+            (Json::from_bool(false).unwrap(), 0f64, None),
+            (Json::none().unwrap(), 0f64, None),
+            (
+                Json::from_string((0..500).map(|_| '9').collect::<String>()).unwrap(),
                 f64::MAX,
                 Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
             (
-                Json::String(
+                Json::from_string(
                     (0..500)
                         .map(|x| if x == 0 { '-' } else { '9' })
                         .collect::<String>(),
-                ),
+                )
+                .unwrap(),
                 f64::MIN,
                 Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
@@ -3099,7 +3209,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3107,7 +3217,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3115,7 +3225,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 None,
             ),
             (
@@ -3123,7 +3233,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 None,
             ),
             (
@@ -3131,7 +3241,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 None,
             ),
             (
@@ -3139,7 +3249,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 None,
             ),
             (
@@ -3147,7 +3257,7 @@ mod tests {
                 false,
                 CHARSET_UTF8,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 None,
             ),
             (
@@ -3155,7 +3265,7 @@ mod tests {
                 false,
                 CHARSET_UTF8MB4,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 None,
             ),
             // bin_str, so need pad_zero
@@ -3182,7 +3292,7 @@ mod tests {
                 false,
                 CHARSET_ASCII,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3190,7 +3300,7 @@ mod tests {
                 false,
                 CHARSET_LATIN1,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 Some(ERR_DATA_TOO_LONG),
             ),
             (
@@ -3198,7 +3308,7 @@ mod tests {
                 false,
                 CHARSET_BIN,
                 FieldTypeTp::String,
-                Collation::UTF8Bin,
+                Collation::Utf8Mb4BinNoPadding,
                 Some(ERR_DATA_TOO_LONG),
             ),
             // branch 3 of ProduceStrWithSpecifiedTp ,
@@ -3496,25 +3606,25 @@ mod tests {
     #[test]
     fn test_duration_as_string() {
         test_none_with_ctx_and_extra(cast_any_as_string::<Duration>);
-
+        let mut ctx = EvalContext::default();
         let cs = vec![
             (
-                Duration::parse(b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
                 "17:51:04.78".to_string().into_bytes(),
                 "17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
                 "-17:51:04.78".to_string().into_bytes(),
                 "-17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
                 "17:51:05".to_string().into_bytes(),
                 "17:51:05".to_string(),
             ),
             (
-                Duration::parse(b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
                 "-17:51:05".to_string().into_bytes(),
                 "-17:51:05".to_string(),
             ),
@@ -3540,43 +3650,49 @@ mod tests {
         //  i64::MAX as f64 => "9.223372036854776e18",  "9223372036854776000",
         //  u64::MAX as f64 => "1.8446744073709552e19", "18446744073709552000",
         let cs = vec![
-            (Json::Object(BTreeMap::default()), "{}".to_string()),
-            (Json::Array(vec![]), "[]".to_string()),
-            (Json::I64(10), "10".to_string()),
-            (Json::I64(i64::MAX), i64::MAX.to_string()),
-            (Json::I64(i64::MIN), i64::MIN.to_string()),
-            (Json::U64(0), "0".to_string()),
-            (Json::U64(u64::MAX), u64::MAX.to_string()),
-            (Json::Double(f64::MIN), format!("{:e}", f64::MIN)),
-            (Json::Double(f64::MAX), format!("{:e}", f64::MAX)),
             (
-                Json::Double(f64::from(f32::MIN)),
+                Json::from_object(BTreeMap::default()).unwrap(),
+                "{}".to_string(),
+            ),
+            (Json::from_array(vec![]).unwrap(), "[]".to_string()),
+            (Json::from_i64(10).unwrap(), "10".to_string()),
+            (Json::from_i64(i64::MAX).unwrap(), i64::MAX.to_string()),
+            (Json::from_i64(i64::MIN).unwrap(), i64::MIN.to_string()),
+            (Json::from_u64(0).unwrap(), "0".to_string()),
+            (Json::from_u64(u64::MAX).unwrap(), u64::MAX.to_string()),
+            (Json::from_f64(f64::MIN).unwrap(), format!("{:e}", f64::MIN)),
+            (Json::from_f64(f64::MAX).unwrap(), format!("{:e}", f64::MAX)),
+            (
+                Json::from_f64(f64::from(f32::MIN)).unwrap(),
                 format!("{:e}", f64::from(f32::MIN)),
             ),
             (
-                Json::Double(f64::from(f32::MAX)),
+                Json::from_f64(f64::from(f32::MAX)).unwrap(),
                 format!("{:e}", f64::from(f32::MAX)),
             ),
             (
-                Json::Double(i64::MIN as f64),
+                Json::from_f64(i64::MIN as f64).unwrap(),
                 format!("{:e}", i64::MIN as f64),
             ),
             (
-                Json::Double(i64::MAX as f64),
+                Json::from_f64(i64::MAX as f64).unwrap(),
                 format!("{:e}", i64::MAX as f64),
             ),
             (
-                Json::Double(u64::MAX as f64),
+                Json::from_f64(u64::MAX as f64).unwrap(),
                 format!("{:e}", u64::MAX as f64),
             ),
-            (Json::Double(10.5), "10.5".to_string()),
-            (Json::Double(10.4), "10.4".to_string()),
-            (Json::Double(-10.4), "-10.4".to_string()),
-            (Json::Double(-10.5), "-10.5".to_string()),
-            (Json::String(String::from("10.0")), r#""10.0""#.to_string()),
-            (Json::Boolean(true), "true".to_string()),
-            (Json::Boolean(false), "false".to_string()),
-            (Json::None, "null".to_string()),
+            (Json::from_f64(10.5).unwrap(), "10.5".to_string()),
+            (Json::from_f64(10.4).unwrap(), "10.4".to_string()),
+            (Json::from_f64(-10.4).unwrap(), "-10.4".to_string()),
+            (Json::from_f64(-10.5).unwrap(), "-10.5".to_string()),
+            (
+                Json::from_string(String::from("10.0")).unwrap(),
+                r#""10.0""#.to_string(),
+            ),
+            (Json::from_bool(true).unwrap(), "true".to_string()),
+            (Json::from_bool(false).unwrap(), "false".to_string()),
+            (Json::none().unwrap(), "null".to_string()),
         ];
 
         for (input, expect) in cs {
@@ -4744,30 +4860,30 @@ mod tests {
     #[test]
     fn test_duration_as_decimal() {
         test_none_with_ctx_and_extra(cast_any_as_decimal::<Duration>);
-
+        let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs: Vec<(Duration, bool, bool, Decimal)> = vec![
             // (input, in_union, is_res_unsigned, base_result)
             (
-                Duration::parse(b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(175104.78).unwrap(),
             ),
             (
-                Duration::parse(b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(-175104.78).unwrap(),
             ),
             (
-                Duration::parse(b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(175105),
             ),
             (
-                Duration::parse(b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(-175105),
@@ -4789,75 +4905,80 @@ mod tests {
         let cs: Vec<(Json, bool, bool, Decimal)> = vec![
             // (cast_func_input, in_union, is_res_unsigned, base_result)
             (
-                Json::Object(BTreeMap::default()),
+                Json::from_object(BTreeMap::default()).unwrap(),
                 false,
                 false,
                 Decimal::zero(),
             ),
-            (Json::Array(vec![]), false, false, Decimal::zero()),
             (
-                Json::I64(10),
+                Json::from_array(vec![]).unwrap(),
+                false,
+                false,
+                Decimal::zero(),
+            ),
+            (
+                Json::from_i64(10).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(10f64).unwrap(),
             ),
             (
-                Json::I64(i64::MAX),
+                Json::from_i64(i64::MAX).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MAX as f64).unwrap(),
             ),
             (
-                Json::I64(i64::MIN),
+                Json::from_i64(i64::MIN).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MIN as f64).unwrap(),
             ),
-            (Json::U64(0), false, false, Decimal::zero()),
+            (Json::from_u64(0).unwrap(), false, false, Decimal::zero()),
             (
-                Json::U64(i64::MAX as u64),
+                Json::from_u64(i64::MAX as u64).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MAX as f64).unwrap(),
             ),
             (
-                Json::U64(u64::MAX),
+                Json::from_u64(u64::MAX).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(u64::MAX as f64).unwrap(),
             ),
             (
-                Json::Double(i64::MAX as f64),
+                Json::from_f64(i64::MAX as f64).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MAX as f64).unwrap(),
             ),
             (
-                Json::Double(i64::MIN as f64),
+                Json::from_f64(i64::MIN as f64).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(i64::MIN as f64).unwrap(),
             ),
             (
-                Json::Double(u64::MAX as f64),
+                Json::from_f64(u64::MAX as f64).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(u64::MAX as f64).unwrap(),
             ),
             (
-                Json::String("10.0".to_string()),
+                Json::from_string("10.0".to_string()).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"10.0").unwrap().unwrap(),
             ),
             (
-                Json::String("-10.0".to_string()),
+                Json::from_string("-10.0".to_string()).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"-10.0").unwrap().unwrap(),
             ),
             (
-                Json::String("9999999999999999999".to_string()),
+                Json::from_string("9999999999999999999".to_string()).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"9999999999999999999")
@@ -4865,7 +4986,7 @@ mod tests {
                     .unwrap(),
             ),
             (
-                Json::String("-9999999999999999999".to_string()),
+                Json::from_string("-9999999999999999999".to_string()).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"-9999999999999999999")
@@ -4873,13 +4994,18 @@ mod tests {
                     .unwrap(),
             ),
             (
-                Json::Boolean(true),
+                Json::from_bool(true).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(1f64).unwrap(),
             ),
-            (Json::Boolean(false), false, false, Decimal::zero()),
-            (Json::None, false, false, Decimal::zero()),
+            (
+                Json::from_bool(false).unwrap(),
+                false,
+                false,
+                Decimal::zero(),
+            ),
+            (Json::none().unwrap(), false, false, Decimal::zero()),
         ];
 
         test_as_decimal_helper(
@@ -4892,7 +5018,16 @@ mod tests {
 
     #[test]
     fn test_int_as_duration() {
-        test_none_with_ctx_and_extra(cast_int_as_duration);
+        // None
+        {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(ScalarValue::Bytes(None))
+                .evaluate(ScalarFuncSig::CastIntAsDuration)
+                .unwrap();
+            assert_eq!(output, None);
+        }
+
+        let mut ctx = EvalContext::default();
 
         // This case copy from Duration.rs::tests::test_from_i64
         let cs: Vec<(i64, isize, crate::codec::Result<Option<Duration>>, bool)> = vec![
@@ -4900,108 +5035,125 @@ mod tests {
             (
                 101010,
                 0,
-                Ok(Some(Duration::parse(b"10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 0).unwrap())),
                 false,
             ),
             (
                 101010,
                 5,
-                Ok(Some(Duration::parse(b"10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 5).unwrap())),
                 false,
             ),
             (
                 8385959,
                 0,
-                Ok(Some(Duration::parse(b"838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
                 false,
             ),
             (
                 8385959,
                 6,
-                Ok(Some(Duration::parse(b"838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 6).unwrap())),
                 false,
             ),
             (
                 -101010,
                 0,
-                Ok(Some(Duration::parse(b"-10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 0).unwrap())),
                 false,
             ),
             (
                 -101010,
                 5,
-                Ok(Some(Duration::parse(b"-10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 5).unwrap())),
                 false,
             ),
             (
                 -8385959,
                 0,
-                Ok(Some(Duration::parse(b"-838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
                 false,
             ),
             (
                 -8385959,
                 6,
-                Ok(Some(Duration::parse(b"-838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 6).unwrap())),
                 false,
             ),
-            // will overflow
-            (8385960, 0, Ok(None), true),
-            (8385960, 1, Ok(None), true),
-            (8385960, 5, Ok(None), true),
-            (8385960, 6, Ok(None), true),
-            (-8385960, 0, Ok(None), true),
-            (-8385960, 1, Ok(None), true),
-            (-8385960, 5, Ok(None), true),
-            (-8385960, 6, Ok(None), true),
+            // overflow as warning
+            (
+                8385960,
+                0,
+                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
+                true,
+            ),
+            (
+                -8385960,
+                0,
+                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
+                true,
+            ),
             // will truncated
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO: add test for num>=10000000000
-            //  after Duration::from_f64 had impl logic for num>=10000000000
-            // (10000000000, 0, Ok(Duration::parse(b"0:0:0", 0).unwrap())),
-            // (10000235959, 0, Ok(Duration::parse(b"23:59:59", 0).unwrap())),
-            // (10000000000, 0, Ok(Duration::parse(b"0:0:0", 0).unwrap())),
+            (
+                10000000000,
+                0,
+                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                false,
+            ),
+            (
+                10000235959,
+                0,
+                Ok(Some(Duration::parse(&mut ctx, b"23:59:59", 0).unwrap())),
+                false,
+            ),
+            (
+                -10000235959,
+                0,
+                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
+                false,
+            ),
         ];
 
-        for (input, fsp, expect, overflow) in cs {
-            let mut ctx = CtxConfig {
-                overflow_as_warning: overflow,
-                ..CtxConfig::default()
-            }
-            .into();
-            let rft = FieldTypeConfig {
-                decimal: fsp,
-                ..FieldTypeConfig::default()
-            }
-            .into();
-            let extra = make_extra(&rft);
-
-            let result = cast_int_as_duration(&mut ctx, &extra, &Some(input));
-
-            // make log
-            let expect_str = match expect.as_ref() {
-                Ok(x) => format!("{:?}", x.map(|x| x.to_string())),
-                Err(e) => format!("{:?}", e),
-            };
-            let result_str = match result {
-                Ok(Some(x)) => x.to_string(),
-                _ => format!("{:?}", result),
-            };
-            let log = format!(
-                "input: {}, fsp: {}, expect: {}, result: {:?}",
-                input, fsp, expect_str, result_str
-            );
-
-            match expect {
-                Ok(expect) => {
-                    check_result(expect.as_ref(), &result, log.as_str());
-                    check_overflow(&ctx, overflow, log.as_str());
+        for (input, fsp, expected, overflow) in cs {
+            let (result, ctx) = RpnFnScalarEvaluator::new()
+                .context(CtxConfig {
+                    overflow_as_warning: true,
+                    ..CtxConfig::default()
+                })
+                .push_param(input)
+                .evaluate_raw(
+                    FieldTypeConfig {
+                        tp: Some(FieldTypeTp::Duration),
+                        decimal: fsp,
+                        ..FieldTypeConfig::default()
+                    },
+                    ScalarFuncSig::CastIntAsDuration,
+                );
+            match expected {
+                Ok(expected) => {
+                    let result: Option<Duration> = result.unwrap().into();
+                    assert_eq!(
+                        result, expected,
+                        "input:{:?}, expected:{:?}, got:{:?}",
+                        input, expected, result,
+                    );
                 }
-                Err(e) => {
-                    assert!(result.is_err(), "log: {}, output_err: {}", log, e);
+                Err(_) => {
+                    assert!(
+                        result.is_err(),
+                        "input:{:?}, expected err:{:?}, got:{:?}",
+                        input,
+                        expected,
+                        result
+                    );
                 }
+            }
+            if overflow {
+                assert_eq!(ctx.warnings.warning_cnt, 1);
+                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
             }
         }
     }
@@ -5015,10 +5167,10 @@ mod tests {
     ) where
         FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<T>) -> Result<Option<Duration>>,
     {
-        // cast_real_as_duration call Duration::parse directly,
-        // and Duration::parse is test in duration.rs.
-        // Our test here is to make sure that the result is same as calling Duration::parse
-        // no matter whether call_real_as_duration call Duration::parse directly.
+        // cast_real_as_duration call `Duration::parse`, directly,
+        // and `Duration::parse`, is test in duration.rs.
+        // Our test here is to make sure that the result is same as calling `Duration::parse`,
+        // no matter whether call_real_as_duration call `Duration::parse`, directly.
         for val in base_cs {
             for fsp in MIN_FSP..=MAX_FSP {
                 let mut ctx = CtxConfig {
@@ -5037,7 +5189,7 @@ mod tests {
                 let result = func_cast(&mut ctx, &extra, &Some(val.clone()));
 
                 let val_str = func_to_cast_str(&val);
-                let base_expect = Duration::parse(val_str.as_bytes(), fsp);
+                let base_expect = Duration::parse(&mut ctx, val_str.as_bytes(), fsp);
 
                 // make log
                 let result_str = result.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -5050,15 +5202,15 @@ mod tests {
                                 func_name, func_to_debug_str(&val), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
                             );
                             check_overflow(&ctx, true, log.as_str());
-                            check_result(Some(&Duration::zero()), &result, log.as_str());
+                            check_result(None, &result, log.as_str());
                         }
-                        WARN_DATA_TRUNCATED => {
+                        ERR_TRUNCATE_WRONG_VALUE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {}, expect_warn: {}",
                                 func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
                             );
-                            check_warning(&ctx, Some(WARN_DATA_TRUNCATED), log.as_str());
-                            check_result(Some(&Duration::zero()), &result, log.as_str());
+                            check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str());
+                            check_result(None, &result, log.as_str());
                         }
                         _ => {
                             let expect_err: crate::error::Error = e.into();
@@ -5230,7 +5382,8 @@ mod tests {
             let extra = make_extra(&rft);
 
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
-            let expect_time = Duration::parse(expect.as_bytes(), expect_fsp as i8).unwrap();
+            let expect_time =
+                Duration::parse(&mut ctx, expect.as_bytes(), expect_fsp as i8).unwrap();
             let result = cast_time_as_duration(&mut ctx, &extra, &Some(input_time));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
@@ -5263,8 +5416,9 @@ mod tests {
             .into();
             let extra = make_extra(&rft);
 
-            let dur = Duration::parse(input.as_bytes(), input_fsp).unwrap();
-            let expect = Duration::parse(expect.as_bytes(), output_fsp).unwrap();
+            let mut ctx = EvalContext::default();
+            let dur = Duration::parse(&mut ctx, input.as_bytes(), input_fsp).unwrap();
+            let expect = Duration::parse(&mut ctx, expect.as_bytes(), output_fsp).unwrap();
             let r = cast_duration_as_duration(&extra, &Some(dur));
 
             let result_str = r.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -5283,47 +5437,51 @@ mod tests {
         // the case that Json::unquote failed had be tested by test_json_unquote
 
         let cs = vec![
-            Json::Object(BTreeMap::default()),
-            Json::Array(vec![]),
-            Json::I64(10),
-            Json::I64(i64::MAX),
-            Json::I64(i64::MIN),
-            Json::U64(0),
-            Json::U64(u64::MAX),
-            Json::Double(10.5),
-            Json::Double(10.4),
-            Json::Double(-10.4),
-            Json::Double(-10.5),
-            Json::Double(i64::MIN as u64 as f64),
-            Json::Double(i64::MAX as u64 as f64),
-            Json::Double(i64::MIN as u64 as f64),
-            Json::Double(i64::MIN as f64),
-            Json::Double(((1u64 << 63) + (1u64 << 62)) as u64 as f64),
-            Json::Double(-((1u64 << 63) as f64 + (1u64 << 62) as f64)),
-            Json::Double(f64::from(f32::MIN)),
-            Json::Double(f64::from(f32::MAX)),
-            Json::Double(f64::MAX),
-            Json::Double(f64::MAX),
-            Json::String(String::from("10.0")),
-            Json::String(String::from(
+            Json::from_object(BTreeMap::default()).unwrap(),
+            Json::from_array(vec![]).unwrap(),
+            Json::from_i64(10).unwrap(),
+            Json::from_i64(i64::MAX).unwrap(),
+            Json::from_i64(i64::MIN).unwrap(),
+            Json::from_u64(0).unwrap(),
+            Json::from_u64(u64::MAX).unwrap(),
+            Json::from_f64(10.5).unwrap(),
+            Json::from_f64(10.4).unwrap(),
+            Json::from_f64(-10.4).unwrap(),
+            Json::from_f64(-10.5).unwrap(),
+            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+            Json::from_f64(i64::MAX as u64 as f64).unwrap(),
+            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+            Json::from_f64(i64::MIN as f64).unwrap(),
+            Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
+            Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
+            Json::from_f64(f64::from(f32::MIN)).unwrap(),
+            Json::from_f64(f64::from(f32::MAX)).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+            Json::from_string(String::from("10.0")).unwrap(),
+            Json::from_string(String::from(
                 "999999999999999999999999999999999999999999999999",
-            )),
-            Json::String(String::from(
+            ))
+            .unwrap(),
+            Json::from_string(String::from(
                 "-999999999999999999999999999999999999999999999999",
-            )),
-            Json::String(String::from(
+            ))
+            .unwrap(),
+            Json::from_string(String::from(
                 "99999999999999999999999999999999999999999999999aabcde9",
-            )),
-            Json::String(String::from(
+            ))
+            .unwrap(),
+            Json::from_string(String::from(
                 "-99999999999999999999999999999999999999999999999aabcde9",
-            )),
-            Json::Boolean(true),
-            Json::Boolean(false),
-            Json::None,
+            ))
+            .unwrap(),
+            Json::from_bool(true).unwrap(),
+            Json::from_bool(false).unwrap(),
+            Json::none().unwrap(),
         ];
         test_as_duration_helper(
             cs,
-            |x| x.unquote().unwrap(),
+            |x| x.as_ref().unquote().unwrap(),
             |x| format!("{:?}", x),
             cast_json_as_duration,
             "cast_json_as_duration",
@@ -5335,9 +5493,9 @@ mod tests {
         test_none_with_ctx(cast_any_as_any::<Int, Json>);
 
         let cs = vec![
-            (i64::MIN, Json::I64(i64::MIN)),
-            (0, Json::I64(0)),
-            (i64::MAX, Json::I64(i64::MAX)),
+            (i64::MIN, Json::from_i64(i64::MIN).unwrap()),
+            (0, Json::from_i64(0).unwrap()),
+            (i64::MAX, Json::from_i64(i64::MAX).unwrap()),
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
@@ -5352,9 +5510,9 @@ mod tests {
         test_none_with_nothing(cast_uint_as_json);
 
         let cs = vec![
-            (u64::MAX, Json::U64(u64::MAX)),
-            (0, Json::U64(0)),
-            (i64::MAX as u64, Json::U64(i64::MAX as u64)),
+            (u64::MAX, Json::from_u64(u64::MAX).unwrap()),
+            (0, Json::from_u64(0).unwrap()),
+            (i64::MAX as u64, Json::from_u64(i64::MAX as u64).unwrap()),
         ];
         for (input, expect) in cs {
             let r = cast_uint_as_json(&Some(input as i64));
@@ -5368,9 +5526,9 @@ mod tests {
         test_none_with_nothing(cast_bool_as_json);
 
         let cs = vec![
-            (0, Json::Boolean(false)),
-            (i64::MIN, Json::Boolean(true)),
-            (i64::MAX, Json::Boolean(true)),
+            (0, Json::from_bool(false).unwrap()),
+            (i64::MIN, Json::from_bool(true).unwrap()),
+            (i64::MAX, Json::from_bool(true).unwrap()),
         ];
         for (input, expect) in cs {
             let result = cast_bool_as_json(&Some(input));
@@ -5384,10 +5542,16 @@ mod tests {
         test_none_with_ctx(cast_any_as_any::<Real, Json>);
 
         let cs = vec![
-            (f64::from(f32::MAX), Json::Double(f64::from(f32::MAX))),
-            (f64::from(f32::MIN), Json::Double(f64::from(f32::MIN))),
-            (f64::MAX, Json::Double(f64::MAX)),
-            (f64::MIN, Json::Double(f64::MIN)),
+            (
+                f64::from(f32::MAX),
+                Json::from_f64(f64::from(f32::MAX)).unwrap(),
+            ),
+            (
+                f64::from(f32::MIN),
+                Json::from_f64(f64::from(f32::MIN)).unwrap(),
+            ),
+            (f64::MAX, Json::from_f64(f64::MAX).unwrap()),
+            (f64::MIN, Json::from_f64(f64::MIN).unwrap()),
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
@@ -5402,43 +5566,67 @@ mod tests {
         test_none_with_extra(cast_string_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
-        jo1.insert(String::from("a"), Json::String(String::from("b")));
+        jo1.insert(
+            String::from("a"),
+            Json::from_string(String::from("b")).unwrap(),
+        );
         // HasParseToJSONFlag
         let cs = vec![
-            ("{\"a\": \"b\"}".to_string(), Json::Object(jo1), true),
-            ("{}".to_string(), Json::Object(BTreeMap::new()), true),
             (
-                "[1, 2, 3]".to_string(),
-                Json::Array(vec![Json::I64(1), Json::I64(2), Json::I64(3)]),
+                "{\"a\": \"b\"}".to_string(),
+                Json::from_object(jo1).unwrap(),
                 true,
             ),
-            ("[]".to_string(), Json::Array(Vec::new()), true),
+            (
+                "{}".to_string(),
+                Json::from_object(BTreeMap::new()).unwrap(),
+                true,
+            ),
+            (
+                "[1, 2, 3]".to_string(),
+                Json::from_array(vec![
+                    Json::from_i64(1).unwrap(),
+                    Json::from_i64(2).unwrap(),
+                    Json::from_i64(3).unwrap(),
+                ])
+                .unwrap(),
+                true,
+            ),
+            (
+                "[]".to_string(),
+                Json::from_array(Vec::new()).unwrap(),
+                true,
+            ),
             (
                 "9223372036854775807".to_string(),
-                Json::I64(9223372036854775807),
+                Json::from_i64(9223372036854775807).unwrap(),
                 true,
             ),
             (
                 "-9223372036854775808".to_string(),
-                Json::I64(-9223372036854775808),
+                Json::from_i64(-9223372036854775808).unwrap(),
                 true,
             ),
             (
                 "18446744073709551615".to_string(),
-                Json::Double(18446744073709552000.0),
+                Json::from_f64(18446744073709552000.0).unwrap(),
                 true,
             ),
             // FIXME: f64::MAX.to_string() to json should success
-            // (f64::MAX.to_string(), Json::Double(f64::MAX), true),
-            ("0.0".to_string(), Json::Double(0.0), true),
+            // (f64::MAX.to_string(), Json::from_f64(f64::MAX), true),
+            ("0.0".to_string(), Json::from_f64(0.0).unwrap(), true),
             (
                 "\"abcde\"".to_string(),
-                Json::String("abcde".to_string()),
+                Json::from_string("abcde".to_string()).unwrap(),
                 true,
             ),
-            ("\"\"".to_string(), Json::String("".to_string()), true),
-            ("true".to_string(), Json::Boolean(true), true),
-            ("false".to_string(), Json::Boolean(false), true),
+            (
+                "\"\"".to_string(),
+                Json::from_string("".to_string()).unwrap(),
+                true,
+            ),
+            ("true".to_string(), Json::from_bool(true).unwrap(), true),
+            ("false".to_string(), Json::from_bool(false).unwrap(), true),
         ];
         for (input, expect, parse_to_json) in cs {
             let mut rft = FieldType::default();
@@ -5463,23 +5651,23 @@ mod tests {
         let cs = vec![
             (
                 Decimal::from_f64(i64::MIN as f64).unwrap(),
-                Json::Double(i64::MIN as f64),
+                Json::from_f64(i64::MIN as f64).unwrap(),
             ),
             (
                 Decimal::from_f64(i64::MAX as f64).unwrap(),
-                Json::Double(i64::MAX as f64),
+                Json::from_f64(i64::MAX as f64).unwrap(),
             ),
             (
                 Decimal::from_bytes(b"184467440737095516160")
                     .unwrap()
                     .unwrap(),
-                Json::Double(184467440737095516160.0),
+                Json::from_f64(184467440737095516160.0).unwrap(),
             ),
             (
                 Decimal::from_bytes(b"-184467440737095516160")
                     .unwrap()
                     .unwrap(),
-                Json::Double(-184467440737095516160.0),
+                Json::from_f64(-184467440737095516160.0).unwrap(),
             ),
         ];
 
@@ -5502,32 +5690,32 @@ mod tests {
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::String("2000-01-01 12:13:14.000000".to_string()),
+                Json::from_string("2000-01-01 12:13:14.000000".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::String("2000-01-01 12:13:15.000000".to_string()),
+                Json::from_string("2000-01-01 12:13:15.000000".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::String("2000-01-01 12:13:14.000000".to_string()),
+                Json::from_string("2000-01-01 12:13:14.000000".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::String("2000-01-01 12:13:14.666600".to_string()),
+                Json::from_string("2000-01-01 12:13:14.666600".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2019-09-01", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::String("2019-09-01 00:00:00.000000".to_string()),
+                Json::from_string("2019-09-01 00:00:00.000000".to_string()).unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2019-09-01", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::String("2019-09-01 00:00:00.000000".to_string()),
+                Json::from_string("2019-09-01 00:00:00.000000".to_string()).unwrap(),
             ),
         ];
         for (input, time_type, expect) in cs {
@@ -5555,11 +5743,11 @@ mod tests {
         let cs = vec![
             (
                 Duration::zero(),
-                Json::String("00:00:00.000000".to_string()),
+                Json::from_string("00:00:00.000000".to_string()).unwrap(),
             ),
             (
-                Duration::parse(b"10:10:10", 0).unwrap(),
-                Json::String("10:10:10.000000".to_string()),
+                Duration::parse(&mut EvalContext::default(), b"10:10:10", 0).unwrap(),
+                Json::from_string("10:10:10.000000".to_string()).unwrap(),
             ),
         ];
 
@@ -5576,20 +5764,25 @@ mod tests {
         test_none_with_nothing(cast_json_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
-        jo1.insert("a".to_string(), Json::String("b".to_string()));
+        jo1.insert("a".to_string(), Json::from_string("b".to_string()).unwrap());
         let cs = vec![
-            Json::Object(jo1),
-            Json::Array(vec![Json::I64(1), Json::I64(3), Json::I64(4)]),
-            Json::I64(i64::MIN),
-            Json::I64(i64::MAX),
-            Json::U64(0u64),
-            Json::U64(u64::MAX),
-            Json::Double(f64::MIN),
-            Json::Double(f64::MAX),
-            Json::String("abcde".to_string()),
-            Json::Boolean(true),
-            Json::Boolean(false),
-            Json::None,
+            Json::from_object(jo1).unwrap(),
+            Json::from_array(vec![
+                Json::from_i64(1).unwrap(),
+                Json::from_i64(3).unwrap(),
+                Json::from_i64(4).unwrap(),
+            ])
+            .unwrap(),
+            Json::from_i64(i64::MIN).unwrap(),
+            Json::from_i64(i64::MAX).unwrap(),
+            Json::from_u64(0u64).unwrap(),
+            Json::from_u64(u64::MAX).unwrap(),
+            Json::from_f64(f64::MIN).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+            Json::from_string("abcde".to_string()).unwrap(),
+            Json::from_bool(true).unwrap(),
+            Json::from_bool(false).unwrap(),
+            Json::none().unwrap(),
         ];
 
         for input in cs {

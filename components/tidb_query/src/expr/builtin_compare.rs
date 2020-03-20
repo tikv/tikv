@@ -4,7 +4,10 @@ use std::borrow::Cow;
 use std::cmp::{max, min, Ordering};
 use std::{f64, i64};
 
+use tidb_query_datatype::{Collation, FieldTypeAccessor};
+
 use super::{Error, EvalContext, Result, ScalarFunc};
+use crate::codec::collation::*;
 use crate::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::codec::{datum, mysql, Datum};
 use crate::expr::Expression;
@@ -58,14 +61,29 @@ impl ScalarFunc {
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
-    pub fn compare_string(
+    fn compare_string_with_collator<C: Collator>(
         &self,
         ctx: &mut EvalContext,
         row: &[Datum],
         op: CmpOp,
     ) -> Result<Option<i64>> {
         let e = |i: usize| self.children[i].eval_string(ctx, row);
-        do_compare(e, op, |l, r| Ok(l.cmp(&r)))
+        do_compare(e, op, |l, r| {
+            Ok(box_try!(C::sort_compare(l.as_ref(), r.as_ref())))
+        })
+    }
+
+    pub fn compare_string(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+        op: CmpOp,
+    ) -> Result<Option<i64>> {
+        match_template_collator! {
+            TT, match self.field_type.as_accessor().collation()? {
+                Collation::TT => self.compare_string_with_collator::<TT>(ctx, row, op)
+            }
+        }
     }
 
     pub fn compare_time(
@@ -502,8 +520,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         let dec = "1.1".parse::<Decimal>().unwrap();
         let s = "你好".as_bytes().to_owned();
-        let dur = Duration::parse(b"01:00:00", 0).unwrap();
-        let json = Json::I64(12);
+        let dur = Duration::parse(&mut ctx, b"01:00:00", 0).unwrap();
+        let json = Json::from_i64(12).unwrap();
         let t = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:39", 0, true).unwrap();
         let cases = vec![
             (ScalarFuncSig::CoalesceInt, vec![Datum::Null], Datum::Null),
@@ -577,10 +595,10 @@ mod tests {
         let mut ctx = EvalContext::default();
         let dec1 = "1.1".parse::<Decimal>().unwrap();
         let dec2 = "1.11".parse::<Decimal>().unwrap();
-        let dur1 = Duration::parse(b"01:00:00", 0).unwrap();
-        let dur2 = Duration::parse(b"02:00:00", 0).unwrap();
-        let json1 = Json::I64(11);
-        let json2 = Json::I64(12);
+        let dur1 = Duration::parse(&mut ctx, b"01:00:00", 0).unwrap();
+        let dur2 = Duration::parse(&mut ctx, b"02:00:00", 0).unwrap();
+        let json1 = Json::from_i64(11).unwrap();
+        let json2 = Json::from_i64(12).unwrap();
         let s1 = "你好".as_bytes().to_owned();
         let s2 = "你好啊".as_bytes().to_owned();
         let t1 = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:39", 0, false).unwrap();

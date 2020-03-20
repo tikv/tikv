@@ -9,3 +9,8 @@ name = "configuration"
 
 [dependencies]
 configuration_derive = { path = "./configuration_derive" }
+serde = "1.0"
+
+[dev-dependencies]
+serde_derive = "1.0"
+toml = "0.4"

@@ -3,7 +3,8 @@
 mod backward;
 mod forward;
 
-use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::IterOption;
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, TimeStamp, TsSet, Value};
 
@@ -17,7 +18,7 @@ use crate::storage::kv::{
 use crate::storage::mvcc::{default_not_found_error, Result};
 use crate::storage::txn::{Result as TxnResult, Scanner as StoreScanner};
 
-pub use self::forward::{DeltaScanner, EntryScanner};
+pub use self::forward::{test_util, DeltaScanner, EntryScanner};
 
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 

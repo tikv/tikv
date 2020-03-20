@@ -136,11 +136,6 @@ fn main() {
                      leaves it empty will disable Prometheus push",
                 ),
         )
-        .arg(
-            Arg::with_name("dynamic-config")
-                .long("dynamic-config")
-                .help("switch of online config change feature"),
-        )
         .get_matches();
 
     if matches.is_present("print-sample-config") {

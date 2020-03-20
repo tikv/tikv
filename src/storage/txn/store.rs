@@ -139,7 +139,7 @@ impl TxnEntry {
                     let v = WriteRef::parse(&write.1)
                         .map_err(MvccError::from)?
                         .to_owned();
-                    let v = v.short_value.unwrap();
+                    let v = v.short_value.unwrap_or_else(Vec::default);
                     Ok((k, v))
                 }
             }
@@ -171,6 +171,10 @@ impl EntryBatch {
 
     pub fn is_empty(&self) -> bool {
         self.entries.len() == 0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &TxnEntry> {
+        self.entries.iter()
     }
 
     pub fn drain(&mut self) -> std::vec::Drain<'_, TxnEntry> {
@@ -526,7 +530,8 @@ mod tests {
         TestEngineBuilder,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
-    use engine::{CfName, IterOption};
+    use engine::IterOption;
+    use engine_traits::CfName;
     use kvproto::kvrpcpb::Context;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -883,7 +888,7 @@ mod tests {
         data.insert(
             Key::from_raw(b"zz"),
             Err(Error::from(ErrorInner::Mvcc(MvccError::from(
-                txn_types::Error::BadFormatLock,
+                txn_types::Error::from(txn_types::ErrorInner::BadFormatLock),
             )))),
         );
 

@@ -3,8 +3,8 @@
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::FieldType;
 
+use super::scalar::ScalarValueRef;
 use super::*;
-use crate::codec::data_type::scalar::ScalarValueRef;
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::Result;
 
@@ -158,14 +158,14 @@ impl VectorValue {
     }
 
     /// Returns maximum encoded size in binary format.
-    pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> Result<usize> {
+    pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> usize {
         match self {
-            VectorValue::Int(_) => Ok(logical_rows.len() * 9),
+            VectorValue::Int(_) => logical_rows.len() * 9,
 
             // Some elements might be NULLs which encoded size is 1 byte. However it's fine because
             // this function only calculates a maximum encoded size (for constructing buffers), not
             // actual encoded size.
-            VectorValue::Real(_) => Ok(logical_rows.len() * 9),
+            VectorValue::Real(_) => logical_rows.len() * 9,
             VectorValue::Decimal(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
@@ -181,7 +181,7 @@ impl VectorValue {
                         }
                     }
                 }
-                Ok(size)
+                size
             }
             VectorValue::Bytes(vec) => {
                 let mut size = 0;
@@ -196,36 +196,36 @@ impl VectorValue {
                         }
                     }
                 }
-                Ok(size)
+                size
             }
-            VectorValue::DateTime(_) => Ok(logical_rows.len() * 9),
-            VectorValue::Duration(_) => Ok(logical_rows.len() * 9),
+            VectorValue::DateTime(_) => logical_rows.len() * 9,
+            VectorValue::Duration(_) => logical_rows.len() * 9,
             VectorValue::Json(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
                     let el = &vec[*idx];
                     match el {
                         Some(v) => {
-                            size += 1 /* FLAG */ + v.binary_len();
+                            size += 1 /* FLAG */ + v.as_ref().binary_len();
                         }
                         None => {
                             size += 1;
                         }
                     }
                 }
-                Ok(size)
+                size
             }
         }
     }
 
     /// Returns maximum encoded size in chunk format.
-    pub fn maximum_encoded_size_chunk(&self, logical_rows: &[usize]) -> Result<usize> {
+    pub fn maximum_encoded_size_chunk(&self, logical_rows: &[usize]) -> usize {
         match self {
-            VectorValue::Int(_) => Ok(logical_rows.len() * 9 + 10),
-            VectorValue::Real(_) => Ok(logical_rows.len() * 9 + 10),
-            VectorValue::Decimal(_) => Ok(logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1) + 10),
-            VectorValue::DateTime(_) => Ok(logical_rows.len() * 21 + 10),
-            VectorValue::Duration(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Int(_) => logical_rows.len() * 9 + 10,
+            VectorValue::Real(_) => logical_rows.len() * 9 + 10,
+            VectorValue::Decimal(_) => logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1) + 10,
+            VectorValue::DateTime(_) => logical_rows.len() * 21 + 10,
+            VectorValue::Duration(_) => logical_rows.len() * 9 + 10,
             VectorValue::Bytes(vec) => {
                 let mut size = logical_rows.len() + 10;
                 for idx in logical_rows {
@@ -239,7 +239,7 @@ impl VectorValue {
                         }
                     }
                 }
-                Ok(size)
+                size
             }
             VectorValue::Json(vec) => {
                 let mut size = logical_rows.len() + 10;
@@ -247,14 +247,14 @@ impl VectorValue {
                     let el = &vec[*idx];
                     match el {
                         Some(v) => {
-                            size += 8 /* Offset */ + v.binary_len();
+                            size += 8 /* Offset */ + v.as_ref().binary_len();
                         }
                         None => {
                             size += 8 /* Offset */;
                         }
                     }
                 }
-                Ok(size)
+                size
             }
         }
     }
@@ -349,6 +349,38 @@ impl VectorValue {
                 }
                 Ok(())
             }
+        }
+    }
+
+    pub fn encode_sort_key(
+        &self,
+        row_index: usize,
+        field_type: &FieldType,
+        ctx: &mut EvalContext,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        use crate::codec::collation::{match_template_collator, Collator};
+        use crate::codec::datum_codec::EvaluableDatumEncoder;
+        use tidb_query_datatype::Collation;
+
+        match self {
+            VectorValue::Bytes(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(ref val) => {
+                        let sort_key = match_template_collator! {
+                            TT, match field_type.collation()? {
+                                Collation::TT => TT::sort_key(val)?
+                            }
+                        };
+                        output.write_evaluable_datum_bytes(&sort_key)?;
+                    }
+                }
+                Ok(())
+            }
+            _ => self.encode(row_index, field_type, ctx, output),
         }
     }
 }

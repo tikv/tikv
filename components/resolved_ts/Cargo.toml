@@ -4,7 +4,11 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[features]
+protobuf-codec = ["txn_types/protobuf-codec"]
+prost-codec = ["txn_types/prost-codec"]
+
 [dependencies]
+hex = "0.4"
 tikv_util = { path = "../tikv_util" }
 txn_types = { path = "../txn_types" }
-hex = "0.3"

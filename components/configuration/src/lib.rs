@@ -93,19 +93,74 @@ impl_into!(bool, Bool);
 impl_into!(String, String);
 impl_into!(ConfigChange, Module);
 
-/// the Configuration trait
-/// There are three type of fields inside derived Configuration struct:
+pub struct RollbackCollector<'a, 'b, T> {
+    pub cfg: &'a T,
+    change: &'b mut ConfigChange,
+}
+
+impl<'a, 'b, T> RollbackCollector<'a, 'b, T> {
+    pub fn new(cfg: &'a T, change: &'b mut ConfigChange) -> Self {
+        RollbackCollector { cfg, change }
+    }
+
+    pub fn push(&mut self, name: String, val: impl Into<ConfigValue>) {
+        self.change.insert(name, val.into());
+    }
+}
+
+#[macro_export]
+macro_rules! rollback_or {
+    ($rollback: ident, $($name: ident),+ , $err: block) => {{
+        let err = $err;
+        if let Some(rb_collector) = &mut $rollback {
+            $(
+                rb_collector.push(
+                    stringify!($name).to_owned(),
+                    rb_collector.cfg.$name.clone()
+                );
+            )*
+            warn!("Invalid config"; "err" => ?err)
+        } else { return err; }
+    }};
+    ($rollback: ident, $name: ident, $valid_or_rb: expr, $else_branch: expr) => {
+        if let Some(rb_collector) = &mut $rollback {
+            let mut r = std::collections::HashMap::new();
+            let sub_rb_collector = RollbackCollector::new(&rb_collector.cfg.$name, &mut r);
+            let _ = $valid_or_rb(Some(sub_rb_collector));
+            if !r.is_empty() {
+                rb_collector.push(stringify!($name).to_owned(), r);
+            }
+        } else {$else_branch;}
+    };
+}
+
+/// The Configuration trait
+///
+/// There are four type of fields inside derived Configuration struct:
 /// 1. `#[config(skip)]` field, these fields will not return
 /// by `diff` method and have not effect of `update` method
-/// 2. `#[config(submodule)]` field, these fields represent the
+/// 2. `#[config(hidden)]` field, these fields have the same effect of
+/// `#[config(skip)]` field, in addition, these fields will not appear
+/// at the output of serializing `Self::Encoder`
+/// 3. `#[config(submodule)]` field, these fields represent the
 /// submodule, and should also derive `Configuration`
-/// 3. normal fields, the type of these fields should be implment
+/// 4. normal fields, the type of these fields should be implment
 /// `Into` and `From` for `ConfigValue`
-pub trait Configuration {
+pub trait Configuration<'a> {
+    type Encoder: serde::Serialize;
     /// Compare to other config, return the difference
     fn diff(&self, _: &Self) -> ConfigChange;
     /// Update config with difference returned by `diff`
     fn update(&mut self, _: ConfigChange);
+    /// Get encoder that can be serialize with `serde::Serializer`
+    /// with the disappear of `#[config(hidden)]` field
+    fn get_encoder(&'a self) -> Self::Encoder;
+}
+
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+pub trait ConfigManager: Send {
+    fn dispatch(&mut self, _: ConfigChange) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -209,5 +264,52 @@ mod tests {
             "submodule should be updated"
         );
         assert_eq!(cfg, updated_cfg, "cfg should be updated");
+    }
+
+    #[test]
+    fn test_hidden_field() {
+        use serde::Serialize;
+
+        #[derive(Configuration, Default, Serialize)]
+        #[serde(default)]
+        #[serde(rename_all = "kebab-case")]
+        pub struct TestConfig {
+            #[config(skip)]
+            skip_field: String,
+            #[config(hidden)]
+            hidden_field: u64,
+            #[config(submodule)]
+            submodule_field: SubConfig,
+        }
+
+        #[derive(Configuration, Default, Serialize)]
+        #[serde(default)]
+        #[serde(rename_all = "kebab-case")]
+        pub struct SubConfig {
+            #[serde(rename = "rename_field")]
+            bool_field: bool,
+            #[config(hidden)]
+            hidden_field: usize,
+        }
+
+        let cfg = SubConfig::default();
+        assert_eq!(
+            toml::to_string(&cfg).unwrap(),
+            "rename_field = false\nhidden-field = 0\n"
+        );
+        assert_eq!(
+            toml::to_string(&cfg.get_encoder()).unwrap(),
+            "rename_field = false\n"
+        );
+
+        let cfg = TestConfig::default();
+        assert_eq!(
+            toml::to_string(&cfg).unwrap(),
+            "skip-field = \"\"\nhidden-field = 0\n\n[submodule-field]\nrename_field = false\nhidden-field = 0\n"
+        );
+        assert_eq!(
+            toml::to_string(&cfg.get_encoder()).unwrap(),
+            "skip-field = \"\"\n\n[submodule-field]\nrename_field = false\n"
+        );
     }
 }

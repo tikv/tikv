@@ -1,5 +1,7 @@
 log-level = "debug"
 log-file = "foo"
+slow-log-file = "slow_foo"
+slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 
@@ -9,6 +11,8 @@ unify-read-pool = true
 [readpool.unified]
 min-thread-count = 5
 max-thread-count = 10
+stack-size = "20MB"
+max-tasks-per-worker = 2200
 
 [readpool.storage]
 high-concurrency = 1
@@ -144,6 +148,8 @@ store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = false
+early-apply = false
+quorum-algorithm = "integration-on-half-fail"
 
 [coprocessor]
 split-region-on-table = false
@@ -467,3 +473,10 @@ stream-channel-window = 123
 ratio-threshold = 1.2
 batch-keys = 256
 max-write-bytes-per-sec = "10MB"
+
+[pessimistic-txn]
+enabled = false
+wait-for-lock-timeout = 10
+wake-up-delay-duration = 100
+pipelined = true
+

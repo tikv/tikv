@@ -12,6 +12,7 @@ required-features = ["failpoints"]
 [[test]]
 name = "integrations"
 path = "integrations/mod.rs"
+required-features = ["testexport"]
 
 [[bench]]
 name = "raftstore"
@@ -31,6 +32,7 @@ path = "benches/hierarchy/mod.rs"
 [[bench]]
 name = "misc"
 path = "benches/misc/mod.rs"
+test = true
 
 [[bench]]
 name = "deadlock_detector"
@@ -40,34 +42,61 @@ path = "benches/deadlock_detector/mod.rs"
 [[bench]]
 name = "channel"
 path = "benches/channel/mod.rs"
+test = true
 
 [features]
+default = ["failpoints", "testexport", "protobuf-codec"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
+testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
-protobuf-codec = ["tikv/protobuf-codec", "external_storage/protobuf-codec"]
-prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec", "external_storage/prost-codec"]
+protobuf-codec = [
+  "engine/protobuf-codec",
+  "grpcio/protobuf-codec",
+  "kvproto/protobuf-codec",
+  "pd_client/protobuf-codec",
+  "raft/protobuf-codec",
+  "raftstore/protobuf-codec",
+  "tikv/protobuf-codec",
+  "tidb_query/protobuf-codec",
+  "tipb/protobuf-codec",
+  "txn_types/protobuf-codec",
+  "cdc/protobuf-codec",
+]
+prost-codec = [
+  "engine/prost-codec",
+  "grpcio/prost-codec",
+  "kvproto/prost-codec",
+  "pd_client/prost-codec",
+  "raft/prost-codec",
+  "raftstore/prost-codec",
+  "tikv/prost-codec",
+  "tidb_query/prost-codec",
+  "tipb/prost-codec",
+  "txn_types/prost-codec",
+  "cdc/prost-codec",
+]
 jemalloc = ["tikv/jemalloc"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
 fail = { version = "0.3", optional = true }
-crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
 configuration = { path = "../components/configuration" }
 engine = { path = "../components/engine" }
-txn_types = { path = "../components/txn_types" }
+cdc = { path = "../components/cdc" }
 futures = "0.1"
 futures-cpupool = "0.1"
 futures03 = { package = "futures", version = "0.3", features = ["executor"] }
-grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
-hex = "0.3"
+grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
+hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../components/pd_client" }
 protobuf = "2.8"
-raft = { version = "0.6.0-alpha" , default-features = false }
-rand = "0.6.5"
+raft = { version = "0.6.0-alpha", default-features = false }
+raftstore = { path = "../components/raftstore" }
+rand = "0.7.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tempfile = "3.0"
@@ -77,7 +106,8 @@ tikv_util = { path = "../components/tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio-threadpool = "0.1.13"
 toml = "0.4"
-uuid = { version = "0.7", features = [ "serde", "v4" ] }
+txn_types = { path = "../components/txn_types" }
+uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
@@ -85,7 +115,7 @@ uuid = { version = "0.7", features = [ "serde", "v4" ] }
 criterion = "0.3"
 criterion-cpu-time = "0.1"
 arrow = "0.10.0"
-rand_xorshift = "0.1"
+rand_xorshift = "0.2"
 
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }

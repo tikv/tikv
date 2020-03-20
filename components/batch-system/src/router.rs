@@ -32,7 +32,7 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
-    normal_scheduler: Ns,
+    pub(crate) normal_scheduler: Ns,
     control_scheduler: Cs,
 }
 

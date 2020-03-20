@@ -222,6 +222,12 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
 - Support multi-thread Apply [#4044](https://github.com/tikv/tikv/pull/4044)
 - Support multi-thread Raftstore [#4066](https://github.com/tikv/tikv/pull/4066)
 
+## [2.1.19]
+- Raftstore：Fix the panic occurred when restarting TiKV and `is_merging` is given an incorrect value in the process of merging Regions and applying the Compact log [#5884](https://github.com/tikv/tikv/pull/5884)
+- Importer：Remove the limit on the gRPC message length [#5809](https://github.com/tikv/tikv/pull/5809)
+
+## [2.1.18]
+
 ## [2.1.17] - 2019-09-11
 - Fix the incorrect result of counting keys in a Region in some cases [#5415](https://github.com/tikv/tikv/pull/5415)
 - Add the `config-check` option in TiKV to check whether the TiKV configuration item is valid [#5391](https://github.com/tikv/tikv/pull/5391)

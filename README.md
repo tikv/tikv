@@ -1,7 +1,9 @@
 <img src="images/tikv-logo.png" alt="tikv_logo" width="300"/>
 
-[![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/)
-[![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master)
+## [Website](https://tikv.org) | [Documentation](https://tikv.org/docs/latest/concepts/overview/) | [Community Chat](https://tikv.org/chat)
+
+[![Build Status](https://internal.pingcap.net/idc-jenkins/buildStatus/icon?job=build_tikv_multi_branch%2Fmaster)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_multi_branch/)
+[![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
 TiKV is an open-source, distributed, and transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
@@ -40,6 +42,10 @@ TiKV has the following key features:
 
     Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transactions, support for RDBMS, and NoSQL design patterns.
 
+## Governance
+
+See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
+
 ## Documentation
 
 For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
@@ -75,7 +81,7 @@ We provide multiple deployment methods, but it is recommended to use our Ansible
 
 ### Testing deployment
 
-- [Try TiKV and TiDB](https://github.com/pingcap/docs/blob/master/dev/how-to/get-started/deploy-tidb-from-docker-compose.md)
+- [Try TiKV and TiDB](https://tikv.org/docs/3.0/tasks/try/)
 
     You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://pingcap.com/docs/).
 
@@ -103,6 +109,12 @@ These are the clients for TiKV:
 - [C](https://github.com/tikv/client-c)
 
 If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/reference/clients/go/).
+
+## Security
+
+### Security Audit
+
+A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security-Audit.pdf).
 
 ## Communication
 

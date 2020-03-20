@@ -3,8 +3,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::{CF_DEFAULT, CF_WRITE, DB};
+use engine::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use futures_util::io::AllowStdIo;
@@ -12,6 +13,7 @@ use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err, file::Sha256Reader, time::Limiter};
+use txn_types::KvPair;
 
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -56,6 +58,15 @@ impl Writer {
         Ok(())
     }
 
+    fn update_raw_with(&mut self, key: &[u8], value: &[u8], need_checksum: bool) -> Result<()> {
+        self.total_kvs += 1;
+        self.total_bytes += (key.len() + value.len()) as u64;
+        if need_checksum {
+            self.checksum = checksum_crc64_xor(self.checksum, self.digest.clone(), key, value);
+        }
+        Ok(())
+    }
+
     fn save_and_build_file(
         self,
         name: &str,
@@ -69,14 +80,18 @@ impl Writer {
             .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
 
-        let reader = Sha256Reader::new(sst_reader)
+        let (reader, hasher) = Sha256Reader::new(sst_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
-        let mut reader = limiter.limit(AllowStdIo::new(reader));
-        storage.write(&file_name, &mut reader)?;
-        let sha256 = reader
-            .into_inner()
-            .into_inner()
-            .hash()
+        storage.write(
+            &file_name,
+            Box::new(limiter.limit(AllowStdIo::new(reader))),
+            sst_info.file_size(),
+        )?;
+        let sha256 = hasher
+            .lock()
+            .unwrap()
+            .finish()
+            .map(|digest| digest.to_vec())
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
 
         let mut file = File::default();
@@ -85,6 +100,8 @@ impl Writer {
         file.set_crc64xor(self.checksum);
         file.set_total_kvs(self.total_kvs);
         file.set_total_bytes(self.total_bytes);
+        file.set_cf(cf.to_owned());
+        file.set_size(sst_info.file_size());
         Ok(file)
     }
 
@@ -185,23 +202,89 @@ impl BackupWriter {
     }
 }
 
+/// A writer writes Raw kv into SST files.
+pub struct BackupRawKVWriter {
+    name: String,
+    cf: CfName,
+    writer: Writer,
+    limiter: Limiter,
+}
+
+impl BackupRawKVWriter {
+    /// Create a new BackupRawKVWriter.
+    pub fn new(db: Arc<DB>, name: &str, cf: CfName, limiter: Limiter) -> Result<BackupRawKVWriter> {
+        let writer = RocksSstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_cf(cf)
+            .set_db(RocksEngine::from_ref(&db))
+            .build(name)?;
+        Ok(BackupRawKVWriter {
+            name: name.to_owned(),
+            cf,
+            writer: Writer::new(writer),
+            limiter,
+        })
+    }
+
+    /// Write Kv_pair to buffered SST files.
+    pub fn write<I>(&mut self, kv_pairs: I, need_checksum: bool) -> Result<()>
+    where
+        I: Iterator<Item = Result<KvPair>>,
+    {
+        for kv_pair in kv_pairs {
+            let (k, v) = match kv_pair {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("write raw kv"; "error" => ?e);
+                    return Err(Error::Other("occur an error when written raw kv".into()));
+                }
+            };
+
+            assert!(!k.is_empty());
+            self.writer.write(&k, &v)?;
+            self.writer.update_raw_with(&k, &v, need_checksum)?;
+        }
+        Ok(())
+    }
+
+    /// Save buffered SST files to the given external storage.
+    pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
+        let start = Instant::now();
+        let mut files = Vec::with_capacity(1);
+        if !self.writer.is_empty() {
+            let file = self.writer.save_and_build_file(
+                &self.name,
+                self.cf,
+                self.limiter.clone(),
+                storage,
+            )?;
+            files.push(file);
+        }
+        BACKUP_RANGE_HISTOGRAM_VEC
+            .with_label_values(&["save_raw"])
+            .observe(start.elapsed().as_secs_f64());
+        Ok(files)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::Iterable;
+    use engine_rocks::Compat;
+    use engine_traits::Iterable;
     use std::collections::BTreeMap;
     use std::f64::INFINITY;
     use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
 
-    type CfKvs<'a> = (engine::CfName, &'a [(&'a [u8], &'a [u8])]);
+    type CfKvs<'a> = (engine_traits::CfName, &'a [(&'a [u8], &'a [u8])]);
 
-    fn check_sst(ssts: &[(engine::CfName, &Path)], kvs: &[CfKvs]) {
+    fn check_sst(ssts: &[(engine_traits::CfName, &Path)], kvs: &[CfKvs]) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine::CF_DEFAULT, engine::CF_WRITE])
+            .cfs(&[engine_traits::CF_DEFAULT, engine_traits::CF_WRITE])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
@@ -214,18 +297,19 @@ mod tests {
         }
         for (cf, kv) in kvs {
             let mut map = BTreeMap::new();
-            db.scan_cf(
-                cf,
-                keys::DATA_MIN_KEY,
-                keys::DATA_MAX_KEY,
-                false,
-                |key, value| {
-                    map.insert(key.to_owned(), value.to_owned());
-                    Ok(true)
-                },
-            )
-            .unwrap();
-            assert_eq!(map.len(), kv.len(), "{:?} {:?}", map, kv);
+            db.c()
+                .scan_cf(
+                    cf,
+                    keys::DATA_MIN_KEY,
+                    keys::DATA_MAX_KEY,
+                    false,
+                    |key, value| {
+                        map.insert(key.to_owned(), value.to_owned());
+                        Ok(true)
+                    },
+                )
+                .unwrap();
+            assert_eq!(map.len(), kv.len(), "{} {:?} {:?}", cf, map, kv);
             for (k, v) in *kv {
                 assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());
             }
@@ -237,7 +321,11 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine::CF_DEFAULT, engine::CF_LOCK, engine::CF_WRITE])
+            .cfs(&[
+                engine_traits::CF_DEFAULT,
+                engine_traits::CF_LOCK,
+                engine_traits::CF_WRITE,
+            ])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
@@ -264,18 +352,30 @@ mod tests {
         let files = writer.save(&storage).unwrap();
         assert_eq!(files.len(), 1);
         check_sst(
-            &[(engine::CF_WRITE, &temp.path().join(files[0].get_name()))],
-            &[(engine::CF_WRITE, &[(&keys::data_key(&[b'a']), &[b'a'])])],
+            &[(
+                engine_traits::CF_WRITE,
+                &temp.path().join(files[0].get_name()),
+            )],
+            &[(
+                engine_traits::CF_WRITE,
+                &[(&keys::data_key(&[b'a']), &[b'a'])],
+            )],
         );
 
         // Test write and default.
         let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY)).unwrap();
         writer
             .write(
-                vec![TxnEntry::Commit {
-                    default: (vec![b'a'], vec![b'a']),
-                    write: (vec![b'a'], vec![b'a']),
-                }]
+                vec![
+                    TxnEntry::Commit {
+                        default: (vec![b'a'], vec![b'a']),
+                        write: (vec![b'a'], vec![b'a']),
+                    },
+                    TxnEntry::Commit {
+                        default: (vec![], vec![]),
+                        write: (vec![b'b'], vec![]),
+                    },
+                ]
                 .into_iter(),
                 false,
             )
@@ -284,12 +384,27 @@ mod tests {
         assert_eq!(files.len(), 2);
         check_sst(
             &[
-                (engine::CF_DEFAULT, &temp.path().join(files[0].get_name())),
-                (engine::CF_WRITE, &temp.path().join(files[1].get_name())),
+                (
+                    engine_traits::CF_DEFAULT,
+                    &temp.path().join(files[0].get_name()),
+                ),
+                (
+                    engine_traits::CF_WRITE,
+                    &temp.path().join(files[1].get_name()),
+                ),
             ],
             &[
-                (engine::CF_DEFAULT, &[(&keys::data_key(&[b'a']), &[b'a'])]),
-                (engine::CF_WRITE, &[(&keys::data_key(&[b'a']), &[b'a'])]),
+                (
+                    engine_traits::CF_DEFAULT,
+                    &[(&keys::data_key(&[b'a']), &[b'a'])],
+                ),
+                (
+                    engine_traits::CF_WRITE,
+                    &[
+                        (&keys::data_key(&[b'a']), &[b'a']),
+                        (&keys::data_key(&[b'b']), &[]),
+                    ],
+                ),
             ],
         );
     }

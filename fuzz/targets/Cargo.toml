@@ -5,13 +5,15 @@ publish = false
 edition = "2018"
 
 [features]
-prost-codec = ["tikv_util/prost-codec"]
+default = ["protobuf-codec"]
+protobuf-codec = ["tidb_query/protobuf-codec"]
+prost-codec = ["tidb_query/prost-codec"]
 
 [lib]
 path = "mod.rs"
 
 [dependencies]
+anyhow = "1.0"
 byteorder = "1"
-failure = "0.1"
 tidb_query = { path = "../../components/tidb_query" }
 tikv_util = { path = "../../components/tikv_util" }
