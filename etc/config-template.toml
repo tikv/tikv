@@ -775,15 +775,15 @@
 ## Enable pessimistic transaction
 # enabled = true
 
-## The default and maximum delay in milliseconds before responding to TiDB when pessimistic
+## The default and maximum delay before responding to TiDB when pessimistic
 ## transactions encounter locks
-# wait-for-lock-timeout = 1000
+# wait-for-lock-timeout = "1s"
 
 ## If more than one transaction is waiting for the same lock, only the one with smallest
 ## start timestamp will be waked up immediately when the lock is released. Others will
-## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
+## be waked up after `wake_up_delay_duration` to reduce contention and make the oldest
 ## one more likely acquires the lock.
-# wake-up-delay-duration = 20
+# wake-up-delay-duration = "20ms"
 
 ## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
 ## Enabled this will improve performance, but slightly increase the transcation failure rate

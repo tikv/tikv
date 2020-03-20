@@ -5,6 +5,7 @@ use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
 
 use std::error::Error;
+use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
@@ -12,8 +13,8 @@ use std::error::Error;
 pub struct Config {
     #[config(skip)]
     pub enabled: bool,
-    pub wait_for_lock_timeout: u64,
-    pub wake_up_delay_duration: u64,
+    pub wait_for_lock_timeout: ReadableDuration,
+    pub wake_up_delay_duration: ReadableDuration,
     pub pipelined: bool,
 }
 
@@ -21,8 +22,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             enabled: true,
-            wait_for_lock_timeout: 1000,
-            wake_up_delay_duration: 20,
+            wait_for_lock_timeout: ReadableDuration::millis(1000),
+            wake_up_delay_duration: ReadableDuration::millis(20),
             pipelined: false,
         }
     }
@@ -37,7 +38,7 @@ impl Config {
         &self,
         mut rb_collector: Option<RollbackCollector<Config>>,
     ) -> Result<(), Box<dyn Error>> {
-        if self.wait_for_lock_timeout == 0 {
+        if self.wait_for_lock_timeout.as_millis() == 0 {
             rollback_or!(rb_collector, wait_for_lock_timeout, {
                 Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into())
             })
@@ -71,7 +72,7 @@ impl ConfigManager for LockManagerConfigManager {
         ) {
             (timeout @ Some(_), delay) => {
                 self.waiter_mgr_scheduler.change_config(timeout, delay);
-                self.detector_scheduler.change_ttl(timeout.unwrap());
+                self.detector_scheduler.change_ttl(timeout.unwrap().into());
             }
             (None, delay @ Some(_)) => self.waiter_mgr_scheduler.change_config(None, delay),
             (None, None) => {}
