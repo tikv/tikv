@@ -31,4 +31,3 @@ structopt = "0.3"
 rusoto_mock = "0.43.0"
 tempfile = "3.1"
 rust-ini = "0.14.0"
-# tikv_util = { path = "../tikv_util" }
