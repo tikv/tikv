@@ -362,9 +362,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
 
     /// Prepares WriteBatch.
     ///
-    /// If `enable_multi_batch_write` was set false, we use first `RawWriteBatch`
-    /// of `RocksWriteBatchVec`. Otherwise we limit size of each `RawWriteBatch` in
-    /// `RocksWriteBatchVec` not exceed `WRITE_BATCH_LIMIT`.
+    /// If `enable_multi_batch_write` was set true, we create `RocksWriteBatchVec`.
+    /// Otherwise create `RocksWriteBatch`.
     pub fn prepare_write_batch(&mut self) {
         if self.kv_wb.is_none() {
             let kv_wb = W::write_batch_vec(&self.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
@@ -3014,7 +3013,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
             importer: builder.importer.clone(),
             region_scheduler: builder.region_scheduler.clone(),
             engine: RocksEngine::from_db(builder.engines.kv.clone()),
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
             sender,
             router,
         }
