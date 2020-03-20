@@ -33,6 +33,7 @@ prost-codec = [
   "tidb_query/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
+  "encryption/prost-codec",
 ]
 protobuf-codec = [
   "engine/protobuf-codec",
@@ -47,6 +48,7 @@ protobuf-codec = [
   "tidb_query/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
+  "encryption/protobuf-codec"
 ]
 testexport = ["raftstore/testexport"]
 
@@ -136,6 +138,7 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 into_other = { path = "components/into_other" }
+encryption = { path = "components/encryption" }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
@@ -197,6 +200,7 @@ members = [
   "components/cdc",
   "components/raftstore",
   "components/into_other",
+  "components/encryption",
 ]
 default-members = ["cmd"]
 
