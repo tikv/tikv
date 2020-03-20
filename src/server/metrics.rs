@@ -119,6 +119,16 @@ make_auto_flush_static_metric! {
     }
 }
 
+make_static_metric! {
+    pub label_enum GlobalGrpcTypeKind {
+        kv_get,
+    }
+
+    pub struct GrpcMsgHistogramGlobal: Histogram {
+        "type" => GlobalGrpcTypeKind,
+    }
+}
+
 lazy_static! {
     pub static ref GC_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "gc_command_total",
@@ -174,6 +184,8 @@ lazy_static! {
 lazy_static! {
     pub static ref GRPC_MSG_HISTOGRAM_STATIC: GrpcMsgHistogramVec =
         auto_flush_from!(GRPC_MSG_HISTOGRAM_VEC, GrpcMsgHistogramVec);
+    pub static ref GRPC_MSG_HISTOGRAM_GLOBAL: GrpcMsgHistogramGlobal =
+        GrpcMsgHistogramGlobal::from(&GRPC_MSG_HISTOGRAM_VEC);
     pub static ref GC_COMMAND_COUNTER_VEC_STATIC: GcCommandCounterVec =
         auto_flush_from!(GC_COMMAND_COUNTER_VEC, GcCommandCounterVec);
     pub static ref SNAP_TASK_COUNTER_STATIC: SnapTaskCounterVec =

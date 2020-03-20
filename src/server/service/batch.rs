@@ -334,7 +334,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
                 BatchLimiter::new(
                     BatchableRequestKind::PointGet,
                     timeout,
-                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_get"])),
+                    HistogramReader::new(GRPC_MSG_HISTOGRAM_GLOBAL.kv_get.clone()),
                     readpool_thread_load,
                 ),
                 Box::new(ReadBatcher::new()),
