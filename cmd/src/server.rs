@@ -668,7 +668,9 @@ impl TiKVServer {
         if let Some(lock_mgr) = servers.lock_mgr.as_mut() {
             if servers
                 .server
-                .register_service(create_deadlock(lock_mgr.deadlock_service()))
+                .register_service(create_deadlock(
+                    lock_mgr.deadlock_service(self.security_mgr.clone()),
+                ))
                 .is_some()
             {
                 fatal!("failed to register deadlock service");

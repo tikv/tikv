@@ -217,7 +217,7 @@ impl Simulator for ServerCluster {
         );
 
         // Create deadlock service.
-        let deadlock_service = lock_mgr.deadlock_service();
+        let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
