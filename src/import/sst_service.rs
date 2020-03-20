@@ -178,6 +178,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
+                req.get_is_raw_kv(),
                 limiter,
                 sst_writer,
             );

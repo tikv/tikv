@@ -103,6 +103,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
+        is_raw_kv: bool,
         speed_limiter: Limiter,
         sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
@@ -113,7 +114,15 @@ impl SSTImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
+        match self.do_download::<E>(
+            meta,
+            backend,
+            name,
+            rewrite_rule,
+            is_raw_kv,
+            speed_limiter,
+            sst_writer,
+        ) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "range" => ?r);
                 Ok(r)
@@ -131,8 +140,9 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
+        is_raw_kv: bool,
         speed_limiter: Limiter,
-        mut sst_writer: E::SstWriter,
+        sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         let start = Instant::now();
         let path = self.dir.join(meta)?;
@@ -169,6 +179,26 @@ impl SSTImporter {
             "path" => path_str,
         );
 
+        if is_raw_kv {
+            self.finish_downloading_rawkv::<E>(meta, path, sst_writer, start)
+        } else {
+            self.finish_downloading::<E>(meta, rewrite_rule, path, sst_writer, start)
+        }
+    }
+
+    fn finish_downloading<E: KvEngine>(
+        &self,
+        meta: &SstMeta,
+        rewrite_rule: &RewriteRule,
+        path: ImportPath,
+        mut sst_writer: E::SstWriter,
+        timer: Instant,
+    ) -> Result<Option<Range>> {
+        // now validate the SST file.
+        let path_str = path.temp.to_str().unwrap();
+        let sst_reader = E::SstReader::open(path_str)?;
+        sst_reader.verify_checksum()?;
+
         // undo key rewrite so we could compare with the keys inside SST
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
@@ -193,7 +223,7 @@ impl SSTImporter {
             Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
         })?;
 
-        // read and first and last keys from the SST, determine if we could
+        // read the first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
         let mut iter = sst_reader.iter();
         let direct_retval = (|| -> Result<Option<_>> {
@@ -232,7 +262,7 @@ impl SSTImporter {
         if let Some(range) = direct_retval {
             // TODO: what about encrypted SSTs?
             fs::rename(&path.temp, &path.save)?;
-            let duration = start.elapsed();
+            let duration = timer.elapsed();
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])
                 .observe(duration.as_secs_f64());
@@ -297,18 +327,128 @@ impl SSTImporter {
             }
         }
 
-        let _ = fs::remove_file(&path.temp);
-
-        let duration = start.elapsed();
+        let duration = timer.elapsed();
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
             .observe(duration.as_secs_f64());
+
+        let _ = fs::remove_file(&path.temp);
 
         if let Some(start_key) = first_key {
             sst_writer.finish()?;
             let mut final_range = Range::default();
             final_range.set_start(start_key);
             final_range.set_end(keys::origin_key(&key).to_vec());
+            Ok(Some(final_range))
+        } else {
+            // nothing is written: prevents finishing the SST at all.
+            Ok(None)
+        }
+    }
+
+    fn finish_downloading_rawkv<E: KvEngine>(
+        &self,
+        meta: &SstMeta,
+        path: ImportPath,
+        mut sst_writer: E::SstWriter,
+        timer: Instant,
+    ) -> Result<Option<Range>> {
+        // now validate the SST file.
+        let path_str = path.temp.to_str().unwrap();
+        let sst_reader = E::SstReader::open(path_str)?;
+        sst_reader.verify_checksum()?;
+
+        let range_start_key = meta.get_range().get_start();
+        let range_end_key = meta.get_range().get_end();
+
+        let range_start = key_to_bound(range_start_key);
+        let range_end = if meta.get_end_key_exclusive() {
+            key_to_exclusive_bound(range_end_key)
+        } else {
+            key_to_bound(range_end_key)
+        };
+
+        // TODO: This code is partially duplicated with `import_sst`
+        // read the first and last keys from the SST, determine if we could
+        // simply move the entire SST instead of iterating and generate a new one.
+        let mut iter = sst_reader.iter();
+        let direct_retval = (|| -> Result<Option<_>> {
+            if !iter.seek(SeekKey::Start)? {
+                // the SST is empty, so no need to iterate at all (should be impossible?)
+                return Ok(Some(meta.get_range().clone()));
+            }
+            let start_key = keys::origin_key(iter.key());
+            if is_before_start_bound(start_key, &range_start) {
+                // SST's start is before the range to consume, so needs to iterate to skip over
+                return Ok(None);
+            }
+            let start_key = start_key.to_vec();
+
+            // seek to end and fetch the last (inclusive) key of the SST.
+            iter.seek(SeekKey::End)?;
+            let last_key = keys::origin_key(iter.key());
+            if is_after_end_bound(last_key, &range_end) {
+                // SST's end is after the range to consume
+                return Ok(None);
+            }
+
+            // range contained the entire SST, no need to iterate, just moving the file is ok
+            let mut range = Range::default();
+            range.set_start(start_key);
+            range.set_end(last_key.to_vec());
+            Ok(Some(range))
+        })()?;
+
+        if let Some(range) = direct_retval {
+            // TODO: what about encrypted SSTs?
+            fs::rename(&path.temp, &path.save)?;
+            let duration = timer.elapsed();
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["rename"])
+                .observe(duration.as_secs_f64());
+            return Ok(Some(range));
+        }
+
+        let mut first_key = None;
+        let mut last_key = None;
+
+        match range_start {
+            Bound::Unbounded => iter.seek(SeekKey::Start)?,
+            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s)))?,
+            Bound::Excluded(_) => unreachable!(),
+        };
+        while iter.valid()? {
+            let key = iter.key().to_vec();
+            let origin_key = keys::origin_key(&key);
+            if is_after_end_bound(origin_key, &range_end) {
+                break;
+            }
+
+            if first_key.is_none() {
+                first_key = Some(origin_key.to_vec());
+            }
+
+            let value = iter.value();
+            sst_writer.put(&key, value)?;
+            iter.next()?;
+
+            last_key = Some(origin_key.to_vec());
+        }
+
+        let duration = timer.elapsed();
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["rewrite"])
+            .observe(duration.as_secs_f64());
+
+        let _ = fs::remove_file(&path.temp);
+
+        if let Some(start_key) = first_key {
+            assert!(last_key.is_some());
+
+            sst_writer.finish()?;
+            let mut final_range = Range::default();
+            final_range.set_start(start_key);
+            final_range.set_end(last_key.unwrap());
             Ok(Some(final_range))
         } else {
             // nothing is written: prevents finishing the SST at all.
@@ -585,19 +725,27 @@ fn key_to_bound(key: &[u8]) -> Bound<&[u8]> {
     }
 }
 
-fn is_before_start_bound(value: &[u8], bound: &Bound<Vec<u8>>) -> bool {
-    match bound {
-        Bound::Unbounded => false,
-        Bound::Included(b) => *value < **b,
-        Bound::Excluded(b) => *value <= **b,
+fn key_to_exclusive_bound(key: &[u8]) -> Bound<&[u8]> {
+    if key.is_empty() {
+        Bound::Unbounded
+    } else {
+        Bound::Excluded(key)
     }
 }
 
-fn is_after_end_bound(value: &[u8], bound: &Bound<Vec<u8>>) -> bool {
+fn is_before_start_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
     match bound {
         Bound::Unbounded => false,
-        Bound::Included(b) => *value > **b,
-        Bound::Excluded(b) => *value >= **b,
+        Bound::Included(b) => *value < *b.as_ref(),
+        Bound::Excluded(b) => *value <= *b.as_ref(),
+    }
+}
+
+fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
+    match bound {
+        Bound::Unbounded => false,
+        Bound::Included(b) => *value > *b.as_ref(),
+        Bound::Excluded(b) => *value >= *b.as_ref(),
     }
 }
 
@@ -616,7 +764,7 @@ mod tests {
     };
     use tempfile::Builder;
     use test_sst_importer::{
-        new_sst_reader, new_sst_writer, new_test_engine, PROP_TEST_MARKER_CF_NAME,
+        new_sst_reader, new_sst_writer, new_test_engine, RocksSstWriter, PROP_TEST_MARKER_CF_NAME,
     };
     use txn_types::{Value, WriteType};
 
@@ -749,15 +897,16 @@ mod tests {
         assert_eq!(meta, new_meta);
     }
 
-    fn create_sample_external_sst_file() -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+    fn create_external_sst_file_with_write_fn<F>(
+        write_fn: F,
+    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)>
+    where
+        F: FnOnce(&mut RocksSstWriter) -> Result<()>,
+    {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer =
             new_sst_writer(ext_sst_dir.path().join("sample.sst").to_str().unwrap());
-        sst_writer.put(b"zt123_r01", b"abc")?;
-        sst_writer.put(b"zt123_r04", b"xyz")?;
-        sst_writer.put(b"zt123_r07", b"pqrst")?;
-        // sst_writer.delete(b"t123_r10")?; // FIXME: can't handle DELETE ops yet.
-        sst_writer.put(b"zt123_r13", b"www")?;
+        write_fn(&mut sst_writer)?;
         let sst_info = sst_writer.finish()?;
 
         // make up the SST meta for downloading.
@@ -772,6 +921,38 @@ mod tests {
 
         let backend = external_storage::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
+    }
+
+    fn create_sample_external_sst_file() -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+        create_external_sst_file_with_write_fn(|writer| {
+            writer.put(b"zt123_r01", b"abc")?;
+            writer.put(b"zt123_r04", b"xyz")?;
+            writer.put(b"zt123_r07", b"pqrst")?;
+            // writer.delete(b"t123_r10")?; // FIXME: can't handle DELETE ops yet.
+            writer.put(b"zt123_r13", b"www")?;
+            Ok(())
+        })
+    }
+
+    fn create_sample_external_rawkv_sst_file(
+        start_key: &[u8],
+        end_key: &[u8],
+        end_key_exclusive: bool,
+    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+        let (dir, backend, mut meta) = create_external_sst_file_with_write_fn(|writer| {
+            writer.put(b"za", b"v1")?;
+            writer.put(b"zb", b"v2")?;
+            writer.put(b"zb\x00", b"v3")?;
+            writer.put(b"zc", b"v4")?;
+            writer.put(b"zc\x00", b"v5")?;
+            writer.put(b"zc\x00\x00", b"v6")?;
+            writer.put(b"zd", b"v7")?;
+            Ok(())
+        })?;
+        meta.mut_range().set_start(start_key.to_vec());
+        meta.mut_range().set_end(end_key.to_vec());
+        meta.set_end_key_exclusive(end_key_exclusive);
+        Ok((dir, backend, meta))
     }
 
     fn get_encoded_key(key: &[u8], ts: u64) -> Vec<u8> {
@@ -911,6 +1092,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
+                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -958,6 +1140,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567", 0),
+                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1004,6 +1187,7 @@ mod tests {
                 &backend,
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
+                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1046,6 +1230,7 @@ mod tests {
                 &backend,
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
+                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1107,6 +1292,7 @@ mod tests {
                     &backend,
                     "sample.sst",
                     &new_rewrite_rule(b"t123", b"t9102", 0),
+                    false,
                     Limiter::new(INFINITY),
                     sst_writer,
                 )
@@ -1170,6 +1356,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
+                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1213,6 +1400,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5", 0),
+                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1256,6 +1444,7 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
+            false,
             Limiter::new(INFINITY),
             sst_writer,
         );
@@ -1280,6 +1469,7 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
+            false,
             Limiter::new(INFINITY),
             sst_writer,
         );
@@ -1302,6 +1492,7 @@ mod tests {
             &backend,
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
+            false,
             Limiter::new(INFINITY),
             sst_writer,
         );
@@ -1313,5 +1504,152 @@ mod tests {
             }
             _ => panic!("unexpected download result: {:?}", result),
         }
+    }
+
+    #[test]
+    fn test_download_rawkv_sst() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) =
+            create_sample_external_rawkv_sst_file(b"0", b"z", false).unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                true,
+                Limiter::new(INFINITY),
+                sst_writer,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(range.get_start(), b"a");
+        assert_eq!(range.get_end(), b"d");
+
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+        assert_eq!(sst_file_metadata.len(), meta.get_length());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"za".to_vec(), b"v1".to_vec()),
+                (b"zb".to_vec(), b"v2".to_vec()),
+                (b"zb\x00".to_vec(), b"v3".to_vec()),
+                (b"zc".to_vec(), b"v4".to_vec()),
+                (b"zc\x00".to_vec(), b"v5".to_vec()),
+                (b"zc\x00\x00".to_vec(), b"v6".to_vec()),
+                (b"zd".to_vec(), b"v7".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_download_rawkv_sst_partial() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) =
+            create_sample_external_rawkv_sst_file(b"b", b"c\x00", false).unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                true,
+                Limiter::new(INFINITY),
+                sst_writer,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(range.get_start(), b"b");
+        assert_eq!(range.get_end(), b"c\x00");
+
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"zb".to_vec(), b"v2".to_vec()),
+                (b"zb\x00".to_vec(), b"v3".to_vec()),
+                (b"zc".to_vec(), b"v4".to_vec()),
+                (b"zc\x00".to_vec(), b"v5".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_download_rawkv_sst_partial_exclusive_end_key() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) =
+            create_sample_external_rawkv_sst_file(b"b", b"c\x00", true).unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                true,
+                Limiter::new(INFINITY),
+                sst_writer,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(range.get_start(), b"b");
+        assert_eq!(range.get_end(), b"c");
+
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"zb".to_vec(), b"v2".to_vec()),
+                (b"zb\x00".to_vec(), b"v3".to_vec()),
+                (b"zc".to_vec(), b"v4".to_vec()),
+            ]
+        );
     }
 }
