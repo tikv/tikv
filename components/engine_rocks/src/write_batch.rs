@@ -227,6 +227,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         for i in 0..=self.index {
             self.wbs[i].clear();
         }
+        self.save_points.clear();
         self.index = 0;
         self.cur_batch_size = 0;
     }
@@ -245,8 +246,8 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
 
     fn rollback_to_save_point(&mut self) -> Result<()> {
         if let Some(x) = self.save_points.pop() {
-            for i in x..self.index {
-                self.wbs[i + 1].clear();
+            for i in x + 1..=self.index {
+                self.wbs[i].clear();
             }
             self.index = x;
             return self.wbs[x].rollback_to_save_point().map_err(Error::Engine);
