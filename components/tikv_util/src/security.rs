@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::collections::HashSet;
 use grpcio::{
-    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
-    ServerCredentialsBuilder, ServerCredentialsFetcher,
+    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, RpcContext,
+    ServerBuilder, ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -150,6 +150,10 @@ impl SecurityManager {
     pub fn cipher_file(&self) -> &str {
         &self.cfg.cipher_file
     }
+
+    pub fn cert_allowed_cn(&self) -> &HashSet<String> {
+        &self.cfg.cert_allowed_cn
+    }
 }
 
 struct Fetcher {
@@ -166,10 +170,6 @@ impl ServerCredentialsFetcher for Fetcher {
                 CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
             );
         Ok(Some(new_cred))
-    }
-
-    pub fn cert_allowed_cn(&self) -> &HashSet<String> {
-        &self.cert_allowed_cn
     }
 }
 
