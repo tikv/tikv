@@ -4,8 +4,7 @@ use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use grpcio::{
@@ -91,6 +90,7 @@ struct Certs {
     pub ca: Vec<u8>,
     pub cert: Vec<u8>,
     pub key: Vec<u8>,
+    pub last_modified: SystemTime,
 }
 
 impl Default for Certs {
@@ -99,6 +99,7 @@ impl Default for Certs {
             ca: vec![],
             cert: vec![],
             key: vec![],
+            last_modified: SystemTime::now(),
         }
     }
 }
@@ -126,6 +127,7 @@ impl SecurityManager {
                 ca: load_key("CA", &cfg.ca_path)?,
                 cert: load_key("certificate", &cfg.cert_path)?,
                 key: load_key("private key", &cfg.key_path)?,
+                last_modified: SystemTime::now(),
             })),
             reload_cfg: if cfg.reload_mode {
                 Some(Arc::new(cfg.clone()))
@@ -138,6 +140,11 @@ impl SecurityManager {
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
+        // update certs when reload is enabled
+        if let Some(cfg) = &self.reload_cfg {
+            // This is to trigger updated_certs and the result doesn't care
+            updated_certs(&self.certs, cfg).is_ok();
+        }
         let certs = self.certs.read().unwrap();
         if certs.ca.is_empty() {
             cb.connect(addr)
@@ -160,7 +167,6 @@ impl SecurityManager {
         } else if self.reload_cfg.is_some() {
             let fetcher = Box::new(Fetcher {
                 certs: self.certs.clone(),
-                last_modified: Arc::new(RwLock::new(SystemTime::now())),
                 cfg: self.reload_cfg.clone().unwrap(),
             });
             sb.bind_with_fetcher(
@@ -188,37 +194,56 @@ impl SecurityManager {
 
 struct Fetcher {
     certs: Arc<RwLock<Certs>>,
-    last_modified: Arc<RwLock<SystemTime>>,
     cfg: Arc<SecurityConfig>,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
-        let cert_modified_time = fs::metadata(&self.cfg.cert_path)?.modified()?;
-        let last = self.last_modified.read().unwrap();
-        if *last == cert_modified_time {
-            Ok(None)
-        } else {
-            drop(last);
-            *self.last_modified.write().unwrap() = cert_modified_time;
-            let ca = load_key("CA", &self.cfg.ca_path)?;
-            let cert = load_key("certificate", &self.cfg.cert_path)?;
-            let key = load_key("private key", &self.cfg.key_path)?;
-            if ca.is_empty() || cert.is_empty() || key.is_empty() {
-                return Err("ca, cert and private key should be all configured.".into());
-            }
+        if updated_certs(&self.certs, &self.cfg)? {
+            // use the new certs
+            let cert_read = self.certs.read().unwrap();
+            let ca = cert_read.ca.clone();
+            let cert = cert_read.cert.clone();
+            let key = cert_read.key.clone();
             let new_cred = ServerCredentialsBuilder::new()
-                .add_cert(cert.clone(), key.clone())
+                .add_cert(cert, key)
                 .root_cert(
-                    ca.clone(),
+                    ca,
                     CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
                 );
-            let mut certs = self.certs.write().unwrap();
-            certs.ca = ca;
-            certs.cert = cert;
-            certs.key = key;
             Ok(Some(new_cred))
+        } else {
+            // continue to use previous certs
+            Ok(None)
         }
+    }
+}
+
+fn updated_certs(
+    certs: &Arc<RwLock<Certs>>,
+    cfg: &Arc<SecurityConfig>,
+) -> Result<bool, Box<dyn Error>> {
+    let cert_modified_time = fs::metadata(&cfg.cert_path)?.modified()?;
+    let last_modified;
+    {
+        let cert_read = certs.read().unwrap();
+        last_modified = cert_read.last_modified;
+    }
+    if last_modified == cert_modified_time {
+        Ok(false)
+    } else {
+        let mut cert_write = certs.write().unwrap();
+        cert_write.last_modified = cert_modified_time;
+        let ca = load_key("CA", &cfg.ca_path)?;
+        let cert = load_key("certificate", &cfg.cert_path)?;
+        let key = load_key("private key", &cfg.key_path)?;
+        if ca.is_empty() || cert.is_empty() || key.is_empty() {
+            return Err("ca, cert and private key should be all configured.".into());
+        }
+        cert_write.ca = ca;
+        cert_write.cert = cert;
+        cert_write.key = key;
+        Ok(true)
     }
 }
 

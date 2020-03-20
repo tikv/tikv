@@ -763,6 +763,7 @@
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
+# reload-mode = false
 
 [import]
 ## Number of threads to handle RPC requests.
