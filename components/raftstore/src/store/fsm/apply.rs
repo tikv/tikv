@@ -15,7 +15,6 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{
     KvEngine, MiscExt, Peekable, Snapshot as SnapshotTrait, WriteBatch, WriteBatchVecExt,
