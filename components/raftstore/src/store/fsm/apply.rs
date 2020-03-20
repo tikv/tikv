@@ -3337,7 +3337,7 @@ mod tests {
             importer,
             region_scheduler,
             sender,
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
             engine: engine.clone(),
             router: router.clone(),
         };
@@ -3710,7 +3710,7 @@ mod tests {
             cfg,
             sender,
             region_scheduler,
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
             coprocessor_host: host,
             importer: importer.clone(),
             engine: engine.clone(),
@@ -3972,7 +3972,7 @@ mod tests {
             coprocessor_host: host,
             importer,
             engine,
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
             router: router.clone(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
@@ -4232,7 +4232,7 @@ mod tests {
             sender,
             importer,
             region_scheduler,
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
             coprocessor_host: host,
             engine: engine.clone(),
             router: router.clone(),
