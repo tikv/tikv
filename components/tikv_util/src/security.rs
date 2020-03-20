@@ -177,10 +177,10 @@ impl ServerCredentialsFetcher for Fetcher {
 /// Return true when the match is successful (support wildcard pattern).
 /// Skip the check when cert-allowed-cn is not set or the secure channel is not used.
 pub fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> bool {
-    if cert_allowed_cn.is_empty() || ctx.auth_context().is_none() {
+    let auth_ctx = ctx.auth_context();
+    if cert_allowed_cn.is_empty() || auth_ctx.is_none() {
         return true;
-    } else if let Some(auth_property) = ctx
-        .auth_context()
+    } else if let Some(auth_property) = auth_ctx
         .unwrap()
         .into_iter()
         .find(|x| x.name() == "x509_common_name")
@@ -201,21 +201,21 @@ fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
 }
 
 fn do_match_name(pattern: &str, name: &str) -> bool {
-    let pattern = pattern.trim();
-    let name = name.trim();
-
     if pattern.is_empty() {
         return false;
     }
+    // Try exact match
     if pattern == name {
         return true;
     }
 
     let mut pat_iter = pattern.bytes();
+    // Ensure wildcard mode usage
     if pat_iter.len() < 3 || pat_iter.next().unwrap() != b'*' || pat_iter.next().unwrap() != b'.' {
         return false;
     }
     let mut name_iter = name.chars();
+    // Must find at least one dot and cannot be the last
     loop {
         if let Some(next) = name_iter.next() {
             if next == '.' {
@@ -225,6 +225,7 @@ fn do_match_name(pattern: &str, name: &str) -> bool {
             return false;
         }
     }
+
     let sub_name = name_iter.as_str().as_bytes();
     let sub_pattern: Vec<u8> = pat_iter.collect();
     sub_name == sub_pattern.as_slice()
@@ -295,12 +296,12 @@ mod tests {
     fn test_do_match_name() {
         // supported wildcard usage
         assert!(do_match_name("aa.bb.cc", "aa.bb.cc"));
-        assert!(do_match_name("  aa.bb.cc  ", "aa.bb.cc"));
-        assert!(do_match_name("*.bb.cc ", "aa.bb.cc"));
+        assert!(do_match_name("*.bb.cc", "aa.bb.cc"));
         // Unsupported wildcard usage
         let mut cn = HashSet::default();
         cn.insert(String::from("*bb.cc"));
         cn.insert(String::from("a*.bb.cc"));
+        cn.insert(String::from("  aa.bb.cc"));
         cn.insert(String::from("*.cc"));
         assert!(!match_peer_names(&cn, "aa.bb.cc"));
     }
