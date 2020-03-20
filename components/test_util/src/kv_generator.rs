@@ -18,7 +18,7 @@ impl KvGenerator {
         KvGenerator {
             key_len,
             value_len,
-            rng: FromEntropy::from_entropy(),
+            rng: SeedableRng::from_entropy(),
         }
     }
 
