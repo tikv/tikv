@@ -3192,7 +3192,7 @@ mod tests {
 
     #[test]
     fn test_should_sync_log() {
-        let (_path, engines) = create_tmp_engine("test-delegate");
+        let (_path, engine) = create_tmp_engine("test-delegate");
 
         // Admin command
         let mut req = RaftCmdRequest::default();
@@ -3206,7 +3206,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        let wb = engines.kv.c().write_batch();
+        let wb = engine.write_batch();
         assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
         assert_eq!(should_sync_log(&cmd), true);
 
