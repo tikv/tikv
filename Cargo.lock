@@ -380,7 +380,8 @@ checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
 [[package]]
 name = "bzip2-sys"
 version = "0.1.8+1.0.8"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#461d66916a5e6848e455c6d4fb9a5f70f4617efd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05305b41c5034ff0e93937ac64133d109b5a2660114ec45e9760bc6816d83038"
 dependencies = [
  "cc",
  "libc",
@@ -1949,7 +1950,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#f6c5af656e540e444afed704ffa0c8de6fa12e37"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b979f9fa68999f89355228753fd89d175f1f80e2"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1967,7 +1968,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#f6c5af656e540e444afed704ffa0c8de6fa12e37"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b979f9fa68999f89355228753fd89d175f1f80e2"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3310,7 +3311,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#f6c5af656e540e444afed704ffa0c8de6fa12e37"
+source = "git+https://github.com/tikv/rust-rocksdb.git#b979f9fa68999f89355228753fd89d175f1f80e2"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -5227,10 +5228,10 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.15+zstd.1.4.4"
-source = "git+https://github.com/gyscos/zstd-rs.git#d8c90d64aa55ee3e7e53b53eaf44bc6603c11d7f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89719b034dc22d240d5b407fb0a3fe6d29952c181cff9a9f95c0bd40b4f8f7d8"
 dependencies = [
  "cc",
  "glob",
- "itertools",
  "libc",
 ]
