@@ -116,6 +116,8 @@ impl SecurityManager {
                 cb = cb.override_ssl_target(self.cfg.override_ssl_target.clone());
             }
             // Fill in empty certificate information if read fails.
+            // Returning empty certificates delays error processing until
+            // actual connection in grpc.
             let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
 
             let cred = ChannelCredentialsBuilder::new()
