@@ -2,6 +2,7 @@
 
 use batch_system::test_runner::*;
 use batch_system::*;
+use std::thread::sleep;
 use std::time::Duration;
 use tikv_util::mpsc;
 
@@ -26,6 +27,8 @@ fn test_batch() {
         })))
         .unwrap();
     assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));
+    // sleep to wait Batch-System to finish calling end().
+    sleep(Duration::from_millis(20));
     router
         .send(
             1,

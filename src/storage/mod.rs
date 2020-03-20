@@ -166,6 +166,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         config: &Config,
         read_pool: ReadPoolHandle,
         lock_mgr: Option<L>,
+        pipelined_pessimistic_lock: bool,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
         let sched = TxnScheduler::new(
@@ -174,6 +175,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
+            pipelined_pessimistic_lock,
         );
 
         info!("Storage started.");
@@ -1123,6 +1125,7 @@ pub struct TestStorageBuilder<E: Engine> {
     engine: E,
     config: Config,
     pessimistic_txn_enabled: bool,
+    pipelined_pessimistic_lock: bool,
 }
 
 impl TestStorageBuilder<RocksEngine> {
@@ -1132,6 +1135,7 @@ impl TestStorageBuilder<RocksEngine> {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: Config::default(),
             pessimistic_txn_enabled: false,
+            pipelined_pessimistic_lock: false,
         }
     }
 }
@@ -1142,6 +1146,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             engine,
             config: Config::default(),
             pessimistic_txn_enabled: false,
+            pipelined_pessimistic_lock: false,
         }
     }
 
@@ -1150,6 +1155,11 @@ impl<E: Engine> TestStorageBuilder<E> {
     /// By default, `Config::default()` will be used.
     pub fn config(mut self, config: Config) -> Self {
         self.config = config;
+        self
+    }
+
+    pub fn set_pipelined_pessimistic_lock(mut self, enabled: bool) -> Self {
+        self.pipelined_pessimistic_lock = enabled;
         self
     }
 
@@ -1164,7 +1174,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
-        let lock_manager = if self.pessimistic_txn_enabled {
+        let lock_manager = if self.pessimistic_txn_enabled || self.pipelined_pessimistic_lock {
             Some(DummyLockManager {})
         } else {
             None
@@ -1174,6 +1184,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             &self.config,
             ReadPool::from(read_pool).handle(),
             lock_manager,
+            self.pipelined_pessimistic_lock,
         )
     }
 }
@@ -3854,8 +3865,7 @@ mod tests {
         assert_eq!(cmd.ts, None);
     }
 
-    #[test]
-    fn test_pessimistic_lock() {
+    fn test_pessimistic_lock_impl(pipelined_pessimistic_lock: bool) {
         type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
         fn new_acquire_pessimistic_lock_command(
             keys: Vec<(Key, bool)>,
@@ -3910,6 +3920,7 @@ mod tests {
 
         let storage = TestStorageBuilder::new()
             .enable_pessimistic_txn()
+            .set_pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4065,5 +4076,11 @@ mod tests {
 
             delete_pessimistic_lock(&storage, key.clone(), 30, 30);
         }
+    }
+
+    #[test]
+    fn test_pessimistic_lock() {
+        test_pessimistic_lock_impl(false);
+        test_pessimistic_lock_impl(true);
     }
 }
