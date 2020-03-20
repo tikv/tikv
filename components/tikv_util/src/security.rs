@@ -1,11 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error;
-use std::fs;
 use std::fs::File;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
@@ -88,7 +86,6 @@ struct Certs {
     pub ca: Vec<u8>,
     pub cert: Vec<u8>,
     pub key: Vec<u8>,
-    pub last_modified: SystemTime,
 }
 
 impl Default for Certs {
@@ -97,7 +94,6 @@ impl Default for Certs {
             ca: vec![],
             cert: vec![],
             key: vec![],
-            last_modified: SystemTime::now(),
         }
     }
 }
@@ -125,7 +121,6 @@ impl SecurityManager {
                 ca: load_key("CA", &cfg.ca_path)?,
                 cert: load_key("certificate", &cfg.cert_path)?,
                 key: load_key("private key", &cfg.key_path)?,
-                last_modified: SystemTime::now(),
             })),
             config: Arc::new(cfg.clone()),
             override_ssl_target: cfg.override_ssl_target.clone(),
@@ -134,16 +129,16 @@ impl SecurityManager {
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
-        let mut certs = self.certs.lock().unwrap();
-        if certs.ca.is_empty() {
+        if self.config.ca_path.is_empty() {
             cb.connect(addr)
         } else {
             // This is to trigger updated_certs and the result doesn't care
-            let _ = updated_certs(&mut certs, &self.config);
+            let _ = updated_certs(&self.certs, &self.config);
 
             if !self.override_ssl_target.is_empty() {
                 cb = cb.override_ssl_target(self.override_ssl_target.clone());
             }
+            let certs = self.certs.lock().unwrap();
             let ca = certs.ca.clone();
             let cert = certs.cert.clone();
             let key = certs.key.clone();
@@ -156,13 +151,12 @@ impl SecurityManager {
     }
 
     pub fn bind(&self, sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
-        let certs = self.certs.lock().unwrap();
-        if certs.ca.is_empty() {
+        if self.config.ca_path.is_empty() {
             sb.bind(addr, port)
         } else {
             let fetcher = Box::new(Fetcher {
                 certs: self.certs.clone(),
-                cfg: self.config.clone(),
+                config: self.config.clone(),
             });
             sb.bind_with_fetcher(
                 addr,
@@ -180,48 +174,41 @@ impl SecurityManager {
 
 struct Fetcher {
     certs: Arc<Mutex<Certs>>,
-    cfg: Arc<SecurityConfig>,
+    config: Arc<SecurityConfig>,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
-        let mut certs = self.certs.lock().unwrap();
-        if updated_certs(&mut certs, &self.cfg)? {
-            // use the new certs
-            let ca = certs.ca.clone();
-            let cert = certs.cert.clone();
-            let key = certs.key.clone();
-            let new_cred = ServerCredentialsBuilder::new()
-                .add_cert(cert, key)
-                .root_cert(
-                    ca,
-                    CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
-                );
-            Ok(Some(new_cred))
-        } else {
-            // continue to use previous certs
-            Ok(None)
-        }
+        let _ = updated_certs(&self.certs, &self.config);
+        let certs = self.certs.lock().unwrap();
+        let ca = certs.ca.clone();
+        let cert = certs.cert.clone();
+        let key = certs.key.clone();
+        let new_cred = ServerCredentialsBuilder::new()
+            .add_cert(cert, key)
+            .root_cert(
+                ca,
+                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
+            );
+        Ok(Some(new_cred))
     }
 }
 
-fn updated_certs(certs: &mut Certs, cfg: &Arc<SecurityConfig>) -> Result<bool, Box<dyn Error>> {
-    let cert_modified_time = fs::metadata(&cfg.cert_path)?.modified()?;
-    if certs.last_modified == cert_modified_time {
-        Ok(false)
-    } else {
-        certs.last_modified = cert_modified_time;
-        let ca = load_key("CA", &cfg.ca_path)?;
-        let cert = load_key("certificate", &cfg.cert_path)?;
-        let key = load_key("private key", &cfg.key_path)?;
-        if ca.is_empty() || cert.is_empty() || key.is_empty() {
-            return Err("ca, cert and private key should be all configured.".into());
-        }
-        certs.ca = ca;
-        certs.cert = cert;
-        certs.key = key;
-        Ok(true)
+fn updated_certs(
+    certs: &Arc<Mutex<Certs>>,
+    cfg: &Arc<SecurityConfig>,
+) -> Result<(), Box<dyn Error>> {
+    let mut certs = certs.lock().unwrap();
+    let ca = load_key("CA", &cfg.ca_path)?;
+    let cert = load_key("certificate", &cfg.cert_path)?;
+    let key = load_key("private key", &cfg.key_path)?;
+    if ca.is_empty() || cert.is_empty() || key.is_empty() {
+        return Err("ca, cert and private key should be all configured.".into());
     }
+    certs.ca = ca;
+    certs.cert = cert;
+    certs.key = key;
+    Ok(())
 }
 
 #[cfg(test)]
