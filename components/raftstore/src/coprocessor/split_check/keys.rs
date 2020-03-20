@@ -1,12 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine::rocks::DB;
-use engine::rocks::{self, Range};
-use engine_rocks::{Compat, RocksEngine};
 use engine_traits::CF_WRITE;
-use engine_traits::{CFHandleExt, TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
+use std::marker::PhantomData;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
@@ -43,7 +41,10 @@ impl Checker {
     }
 }
 
-impl SplitChecker for Checker {
+impl<E> SplitChecker<E> for Checker
+where
+    E: KvEngine,
+{
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
         if !key.is_commit_version() {
             return false;
@@ -83,26 +84,34 @@ impl SplitChecker for Checker {
 }
 
 #[derive(Clone)]
-pub struct KeysCheckObserver<C> {
+pub struct KeysCheckObserver<C, E> {
     router: Arc<Mutex<C>>,
+    _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<RocksEngine>> KeysCheckObserver<C> {
-    pub fn new(router: C) -> KeysCheckObserver<C> {
+impl<C: CasualRouter<E>, E> KeysCheckObserver<C, E>
+where
+    E: KvEngine,
+{
+    pub fn new(router: C) -> KeysCheckObserver<C, E> {
         KeysCheckObserver {
             router: Arc::new(Mutex::new(router)),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
+impl<C: Send, E: Send> Coprocessor for KeysCheckObserver<C, E> {}
 
-impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for KeysCheckObserver<C, E>
+where
+    E: KvEngine,
+{
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host,
-        engine: &Arc<DB>,
+        host: &mut Host<'_, E>,
+        engine: &E,
         policy: CheckPolicy,
     ) {
         let region = ctx.region();
@@ -163,7 +172,7 @@ impl<C: CasualRouter<RocksEngine> + Send> SplitCheckObserver for KeysCheckObserv
 }
 
 /// Get the approximate number of keys in the range.
-pub fn get_region_approximate_keys(db: &Arc<DB>, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys(db: &impl KvEngine, region: &Region) -> Result<u64> {
     // try to get from RangeProperties first.
     match get_region_approximate_keys_cf(db, CF_WRITE, region) {
         Ok(v) => {
@@ -177,19 +186,22 @@ pub fn get_region_approximate_keys(db: &Arc<DB>, region: &Region) -> Result<u64>
 
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
-    let cf = box_try!(db.c().cf_handle(CF_WRITE));
-    let (_, keys) = get_range_entries_and_versions(db.c(), cf, &start, &end).unwrap_or_default();
+    let cf = box_try!(db.cf_handle(CF_WRITE));
+    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
     Ok(keys)
 }
 
-pub fn get_region_approximate_keys_cf(db: &Arc<DB>, cfname: &str, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys_cf(
+    db: &impl KvEngine,
+    cfname: &str,
+    region: &Region,
+) -> Result<u64> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
     let range = Range::new(&start_key, &end_key);
-    let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
+    let (mut keys, _) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
 
-    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
+    let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
     for (_, v) in collection.iter() {
         let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
         keys += props.get_approximate_keys_in_range(&start_key, &end_key);
@@ -209,6 +221,7 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
+    use engine_rocks::Compat;
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
@@ -397,7 +410,7 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
     }
 
@@ -450,13 +463,13 @@ mod tests {
         region.set_start_key(b"b1".to_vec());
         region.set_end_key(b"b2".to_vec());
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region).unwrap();
         assert_eq!(range_keys, 0);
 
         // range properties get 1, mvcc properties get 3
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"c".to_vec());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region).unwrap();
         assert_eq!(range_keys, 1);
     }
 }

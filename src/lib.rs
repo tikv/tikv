@@ -55,6 +55,8 @@ extern crate test;
 
 extern crate coarsetime;
 
+extern crate encryption;
+
 pub mod config;
 pub mod coprocessor;
 pub mod import;
