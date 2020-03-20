@@ -3,7 +3,6 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
-use std::sync::{Arc, Mutex};
 
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
@@ -82,66 +81,37 @@ impl SecurityConfig {
     }
 }
 
-struct Certs {
-    pub ca: Vec<u8>,
-    pub cert: Vec<u8>,
-    pub key: Vec<u8>,
-}
-
-impl Default for Certs {
-    fn default() -> Self {
-        Certs {
-            ca: vec![],
-            cert: vec![],
-            key: vec![],
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct SecurityManager {
-    certs: Arc<Mutex<Certs>>,
-    config: Arc<SecurityConfig>,
+    ca_path: String,
+    cert_path: String,
+    key_path: String,
     override_ssl_target: String,
     cipher_file: String,
-}
-
-impl Drop for SecurityManager {
-    fn drop(&mut self) {
-        use zeroize::Zeroize;
-        let mut certs = self.certs.lock().unwrap();
-        certs.key.zeroize();
-    }
 }
 
 impl SecurityManager {
     pub fn new(cfg: &SecurityConfig) -> Result<SecurityManager, Box<dyn Error>> {
         Ok(SecurityManager {
-            certs: Arc::new(Mutex::new(Certs {
-                ca: load_key("CA", &cfg.ca_path)?,
-                cert: load_key("certificate", &cfg.cert_path)?,
-                key: load_key("private key", &cfg.key_path)?,
-            })),
-            config: Arc::new(cfg.clone()),
+            ca_path: cfg.ca_path.clone(),
+            cert_path: cfg.cert_path.clone(),
+            key_path: cfg.key_path.clone(),
             override_ssl_target: cfg.override_ssl_target.clone(),
             cipher_file: cfg.cipher_file.clone(),
         })
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
-        if self.config.ca_path.is_empty() {
+        if self.ca_path.is_empty() {
             cb.connect(addr)
         } else {
-            // This is to trigger updated_certs and the result doesn't care
-            let _ = updated_certs(&self.certs, &self.config);
-
             if !self.override_ssl_target.is_empty() {
                 cb = cb.override_ssl_target(self.override_ssl_target.clone());
             }
-            let certs = self.certs.lock().unwrap();
-            let ca = certs.ca.clone();
-            let cert = certs.cert.clone();
-            let key = certs.key.clone();
+            // Fill in empty certificate information if read fails.
+            let (ca, cert, key) =
+                load_certs(&self.ca_path, &self.cert_path, &self.key_path).unwrap_or_default();
+
             let cred = ChannelCredentialsBuilder::new()
                 .root_cert(ca)
                 .cert(cert, key)
@@ -151,12 +121,13 @@ impl SecurityManager {
     }
 
     pub fn bind(&self, sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
-        if self.config.ca_path.is_empty() {
+        if self.ca_path.is_empty() {
             sb.bind(addr, port)
         } else {
             let fetcher = Box::new(Fetcher {
-                certs: self.certs.clone(),
-                config: self.config.clone(),
+                ca_path: self.ca_path.clone(),
+                cert_path: self.cert_path.clone(),
+                key_path: self.key_path.clone(),
             });
             sb.bind_with_fetcher(
                 addr,
@@ -173,17 +144,14 @@ impl SecurityManager {
 }
 
 struct Fetcher {
-    certs: Arc<Mutex<Certs>>,
-    config: Arc<SecurityConfig>,
+    ca_path: String,
+    cert_path: String,
+    key_path: String,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
-        let _ = updated_certs(&self.certs, &self.config);
-        let certs = self.certs.lock().unwrap();
-        let ca = certs.ca.clone();
-        let cert = certs.cert.clone();
-        let key = certs.key.clone();
+        let (ca, cert, key) = load_certs(&self.ca_path, &self.cert_path, &self.key_path)?;
         let new_cred = ServerCredentialsBuilder::new()
             .add_cert(cert, key)
             .root_cert(
@@ -194,21 +162,18 @@ impl ServerCredentialsFetcher for Fetcher {
     }
 }
 
-fn updated_certs(
-    certs: &Arc<Mutex<Certs>>,
-    cfg: &Arc<SecurityConfig>,
-) -> Result<(), Box<dyn Error>> {
-    let mut certs = certs.lock().unwrap();
-    let ca = load_key("CA", &cfg.ca_path)?;
-    let cert = load_key("certificate", &cfg.cert_path)?;
-    let key = load_key("private key", &cfg.key_path)?;
+fn load_certs(
+    ca_path: &str,
+    cert_path: &str,
+    key_path: &str,
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Box<dyn Error>> {
+    let ca = load_key("CA", ca_path)?;
+    let cert = load_key("certificate", cert_path)?;
+    let key = load_key("private key", key_path)?;
     if ca.is_empty() || cert.is_empty() || key.is_empty() {
         return Err("ca, cert and private key should be all configured.".into());
     }
-    certs.ca = ca;
-    certs.cert = cert;
-    certs.key = key;
-    Ok(())
+    Ok((ca, cert, key))
 }
 
 #[cfg(test)]
@@ -224,10 +189,10 @@ mod tests {
         let cfg = SecurityConfig::default();
         // default is disable secure connection.
         cfg.validate().unwrap();
-        let mut mgr = SecurityManager::new(&cfg).unwrap();
-        assert!(mgr.certs.lock().unwrap().ca.is_empty());
-        assert!(mgr.certs.lock().unwrap().cert.is_empty());
-        assert!(mgr.certs.lock().unwrap().key.is_empty());
+        let mgr = SecurityManager::new(&cfg).unwrap();
+        assert!(mgr.ca_path.is_empty());
+        assert!(mgr.cert_path.is_empty());
+        assert!(mgr.key_path.is_empty());
 
         let assert_cfg = |c: fn(&mut SecurityConfig), valid: bool| {
             let mut invalid_cfg = cfg.clone();
@@ -255,18 +220,16 @@ mod tests {
         {
             fs::write(f, &[id as u8]).unwrap();
         }
-        let mut c = cfg.clone();
-        c.cert_path = format!("{}", example_cert.display());
-        c.key_path = format!("{}", example_key.display());
-        // incomplete configuration.
-        c.validate().unwrap_err();
 
-        // data should be loaded from file after validating.
-        c.ca_path = format!("{}", example_ca.display());
-        c.validate().unwrap();
-        mgr = SecurityManager::new(&c).unwrap();
-        assert_eq!(mgr.certs.lock().unwrap().ca, vec![0]);
-        assert_eq!(mgr.certs.lock().unwrap().cert, vec![1]);
-        assert_eq!(mgr.certs.lock().unwrap().key, vec![2]);
+        let (ca, cert, key) = load_certs(
+            &format!("{}", example_ca.display()),
+            &format!("{}", example_cert.display()),
+            &format!("{}", example_key.display()),
+        )
+        .unwrap_or_default();
+
+        assert_eq!(ca, vec![0]);
+        assert_eq!(cert, vec![1]);
+        assert_eq!(key, vec![2]);
     }
 }
