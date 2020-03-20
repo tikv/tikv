@@ -4,7 +4,9 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::DB;
-use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch};
+use engine_rocks::{
+    Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec,
+};
 use engine_traits::{
     CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
     WriteBatchVecExt, WriteOptions,
@@ -1069,21 +1071,9 @@ impl RaftBatchSystem {
         let region_peers = builder.init()?;
         let engine = RocksEngine::from_db(builder.engines.kv.clone());
         if engine.support_write_batch_vec() {
-            self.start_system(
-                workers,
-                region_peers,
-                builder,
-                dyn_cfg,
-                engine.write_batch_vec(0, 0),
-            )?;
+            self.start_system::<T, C, RocksWriteBatchVec>(workers, region_peers, builder, dyn_cfg)?;
         } else {
-            self.start_system(
-                workers,
-                region_peers,
-                builder,
-                dyn_cfg,
-                engine.write_batch(),
-            )?;
+            self.start_system::<T, C, RocksWriteBatch>(workers, region_peers, builder, dyn_cfg)?;
         }
         Ok(())
     }
@@ -1098,7 +1088,6 @@ impl RaftBatchSystem {
         region_peers: Vec<SenderFsmPair<RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
         dyn_cfg: Box<dyn DynamicConfig>,
-        phantom: W,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1109,11 +1098,10 @@ impl RaftBatchSystem {
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::new(
+        let apply_poller_builder = ApplyPollerBuilder::<W>::new(
             &builder,
             ApplyNotifier::Router(self.router.clone()),
             self.apply_router.clone(),
-            phantom,
         );
         self.apply_system
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));

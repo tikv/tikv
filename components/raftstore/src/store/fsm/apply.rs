@@ -3006,7 +3006,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
         builder: &RaftPollerBuilder<T, C>,
         sender: Notifier,
         router: ApplyRouter,
-        _phantom: W,
     ) -> Builder<W> {
         Builder::<W> {
             tag: format!("[store {}]", builder.store.get_id()),

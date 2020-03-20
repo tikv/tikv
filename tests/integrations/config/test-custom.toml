@@ -185,8 +185,8 @@ max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
-enable-unordered-write = false
-enable-multi-batch-write = true
+enable-unordered-write = true
+enable-multi-batch-write = false
 
 [rocksdb.titan]
 enabled = true
