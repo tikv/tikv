@@ -17,6 +17,7 @@ use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
+use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
@@ -547,6 +548,12 @@ fn test_serde_custom_tikv_config() {
         ratio_threshold: 1.2,
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
+    };
+    value.pessimistic_txn = PessimisticTxnConfig {
+        enabled: false,
+        wait_for_lock_timeout: 10,
+        wake_up_delay_duration: 100,
+        pipelined: true,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
