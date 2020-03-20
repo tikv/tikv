@@ -6,9 +6,11 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
-use tidb_query_datatype::def::BATCH_MAX_SIZE;
 use tidb_query_datatype::expr::EvalContext;
 use tidb_query_datatype::Result;
+
+// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
+pub const BATCH_MAX_SIZE: usize = 1024;
 
 /// Identical logical row is a special case in expression evaluation that
 /// the rows in physical_value are continuous and in order.

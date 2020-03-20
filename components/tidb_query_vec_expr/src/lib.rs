@@ -10,27 +10,17 @@
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
-#![feature(iter_order_by)]
 #![feature(test)]
 #![feature(int_error_matching)]
-#![feature(decl_macro)]
-#![feature(str_internals)]
 #![feature(const_loop)]
 #![feature(const_if_match)]
 #![feature(ptr_offset_from)]
-// FIXME: rustc says there are redundant semicolons here but isn't
-// saying where as of nightly-2019-09-05
-// See https://github.com/rust-lang/rust/issues/63967
-#![allow(redundant_semicolon)]
-// FIXME: ditto. probably a result of the above
-#![allow(clippy::no_effect)]
-#![feature(box_patterns)]
 
 #[macro_use(box_err, box_try, try_opt)]
 extern crate tikv_util;
 
 #[macro_use(other_err)]
-extern crate tidb_query_datatype;
+extern crate tidb_query_common;
 
 #[cfg(test)]
 extern crate test;
@@ -54,7 +44,6 @@ pub mod impl_time;
 
 pub use self::types::*;
 
-//use tidb_query_datatype::rpn_expr::types;
 use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeFlag};
 use tipb::{Expr, FieldType, ScalarFuncSig};
 

@@ -495,6 +495,33 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
     Ok((RowColsDict::new(meta_map, key), handle))
 }
 
+pub fn generate_index_data_for_test(
+    table_id: i64,
+    index_id: i64,
+    handle: i64,
+    col_val: &Datum,
+    unique: bool,
+) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
+    let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
+    let mut expect_row = HashMap::default();
+    let mut v: Vec<_> = indice
+        .iter()
+        .map(|&(ref cid, ref value)| {
+            expect_row.insert(
+                *cid,
+                datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
+            );
+            value.clone()
+        })
+        .collect();
+    if !unique {
+        v.push(Datum::I64(handle));
+    }
+    let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
+    let idx_key = encode_index_seek_key(table_id, index_id, &encoded);
+    (expect_row, idx_key)
+}
+
 #[cfg(test)]
 mod tests {
     use std::i64;
@@ -509,33 +536,6 @@ mod tests {
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
-
-    pub fn generate_index_data(
-        table_id: i64,
-        index_id: i64,
-        handle: i64,
-        col_val: &Datum,
-        unique: bool,
-    ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
-        let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
-        let mut expect_row = HashMap::default();
-        let mut v: Vec<_> = indice
-            .iter()
-            .map(|&(ref cid, ref value)| {
-                expect_row.insert(
-                    *cid,
-                    datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
-                );
-                value.clone()
-            })
-            .collect();
-        if !unique {
-            v.push(Datum::I64(handle));
-        }
-        let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
-        let idx_key = encode_index_seek_key(table_id, index_id, &encoded);
-        (expect_row, idx_key)
-    }
 
     #[test]
     fn test_row_key_codec() {
@@ -803,7 +803,8 @@ mod tests {
         assert!(check_key_type(&record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
         assert!(check_key_type(&record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
 
-        let (_, index_key) = generate_index_data(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
+        let (_, index_key) =
+            generate_index_data_for_test(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
         assert!(check_key_type(&index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
         assert!(check_key_type(&index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
 

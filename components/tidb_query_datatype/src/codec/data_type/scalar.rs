@@ -3,8 +3,8 @@
 use std::cmp::Ordering;
 
 use crate::codec::collation::{match_template_collator, Collator};
-use match_template::match_template;
 use crate::{Collation, EvalType, FieldTypeAccessor};
+use match_template::match_template;
 use tipb::FieldType;
 
 use super::*;

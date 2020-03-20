@@ -133,6 +133,7 @@ pub mod tests {
 
     use tidb_query_common::storage::test_fixture::FixtureStorage;
     use tidb_query_datatype::codec::datum::{self, Datum};
+    use tidb_query_datatype::codec::table::generate_index_data_for_test;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
@@ -148,8 +149,9 @@ pub mod tests {
         val_end: &Datum,
         unique: bool,
     ) -> KeyRange {
-        let (_, start_key) = generate_index_data(table_id, idx_id, start, val_start, unique);
-        let (_, end_key) = generate_index_data(table_id, idx_id, end, val_end, unique);
+        let (_, start_key) =
+            generate_index_data_for_test(table_id, idx_id, start, val_start, unique);
+        let (_, end_key) = generate_index_data_for_test(table_id, idx_id, end, val_end, unique);
         let mut key_range = KeyRange::default();
         key_range.set_start(start_key);
         key_range.set_end(end_key);
@@ -172,8 +174,13 @@ pub mod tests {
 
         let idx_col_val = Datum::Bytes(b"abc".to_vec());
         for handle in 0..key_number {
-            let (expect_row, idx_key) =
-                generate_index_data(table_id, index_id, handle as i64, &idx_col_val, unique);
+            let (expect_row, idx_key) = generate_index_data_for_test(
+                table_id,
+                index_id,
+                handle as i64,
+                &idx_col_val,
+                unique,
+            );
             expect_rows.push(expect_row);
             let value = if unique {
                 let mut value = Vec::with_capacity(8);

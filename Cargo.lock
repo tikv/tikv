@@ -4322,7 +4322,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "servo_arc",
  "slog",
  "slog-global",
  "static_assertions",
@@ -4383,6 +4382,7 @@ dependencies = [
  "match_template",
  "panic_hook",
  "tidb_query_codegen",
+ "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_vec_expr",
  "tikv_util",
@@ -4440,7 +4440,6 @@ dependencies = [
  "tipb_helper",
  "twoway",
  "uuid",
- "yatp",
 ]
 
 [[package]]

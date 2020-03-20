@@ -1159,9 +1159,9 @@ mod tests {
             let src_exec = make_src_executor_unsigned();
             let mut exec = BatchTopNExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new()
-                    .push_column_ref(col_index)
-                    .build()],
+                vec![RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(col_index)
+                    .build_for_test()],
                 vec![is_desc],
                 5,
             );

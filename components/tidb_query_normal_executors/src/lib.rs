@@ -1,30 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This crate implements a simple SQL query engine to work with TiDB pushed down executors.
-//!
-//! The query engine is able to scan and understand rows stored by TiDB, run against a
-//! series of executors and then return the execution result. The query engine is provided via
-//! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
-//! standalone.
+//! This crate implements normal executors of tidb_query
 
-#![feature(proc_macro_hygiene)]
-#![feature(specialization)]
-#![feature(const_fn)]
-#![feature(iter_order_by)]
 #![feature(test)]
-#![feature(int_error_matching)]
-#![feature(decl_macro)]
-#![feature(str_internals)]
-#![feature(const_loop)]
-#![feature(const_if_match)]
-#![feature(ptr_offset_from)]
-// FIXME: rustc says there are redundant semicolons here but isn't
-// saying where as of nightly-2019-09-05
-// See https://github.com/rust-lang/rust/issues/63967
-#![allow(redundant_semicolon)]
-// FIXME: ditto. probably a result of the above
-#![allow(clippy::no_effect)]
-#![feature(box_patterns)]
 
 #[macro_use]
 extern crate failure;
@@ -35,7 +13,7 @@ extern crate tikv_util;
 extern crate test;
 
 #[macro_use(other_err)]
-extern crate tidb_query_datatype;
+extern crate tidb_query_common;
 
 mod aggregate;
 mod aggregation;
@@ -453,33 +431,6 @@ pub mod tests {
         key_range.set_start(table::encode_row_key(table_id, start));
         key_range.set_end(table::encode_row_key(table_id, end));
         key_range
-    }
-
-    pub fn generate_index_data(
-        table_id: i64,
-        index_id: i64,
-        handle: i64,
-        col_val: &Datum,
-        unique: bool,
-    ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
-        let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
-        let mut expect_row = HashMap::default();
-        let mut v: Vec<_> = indice
-            .iter()
-            .map(|&(ref cid, ref value)| {
-                expect_row.insert(
-                    *cid,
-                    datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
-                );
-                value.clone()
-            })
-            .collect();
-        if !unique {
-            v.push(Datum::I64(handle));
-        }
-        let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
-        let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
-        (expect_row, idx_key)
     }
 
     pub struct TableData {

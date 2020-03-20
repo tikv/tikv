@@ -1,3 +1,6 @@
+#[macro_use]
+pub mod macros;
+
 pub mod execute_stats;
 pub mod expr_util;
 pub mod metrics;

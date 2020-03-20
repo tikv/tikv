@@ -27,9 +27,6 @@ uuid = { version = "0.8.1", features = ["v4"] }
 git = "https://github.com/tikv/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
-[dependencies.yatp]
-git = "https://github.com/tikv/yatp.git"
-
 [dev-dependencies]
 bstr = "0.2.8"
 chrono = "0.4"

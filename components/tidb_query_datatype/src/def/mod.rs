@@ -15,6 +15,3 @@ pub const UNSPECIFIED_LENGTH: isize = -1;
 pub const MAX_BLOB_WIDTH: i32 = 16_777_216; // FIXME: Should be isize
 pub const MAX_DECIMAL_WIDTH: isize = 65;
 pub const MAX_REAL_WIDTH: isize = 23;
-
-// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
-pub const BATCH_MAX_SIZE: usize = 1024;
