@@ -270,7 +270,7 @@ impl EncryptionKeyManager for DataKeyManager {
             (file.method, file.key_id, file.iv.to_owned())
         };
         // Fail if key is specified but not found.
-        let key = if method == EncryptionMethod::Plaintext.into() {
+        let key = if method as i32 == EncryptionMethod::Plaintext as i32 {
             vec![]
         } else {
             match dicts.get_key(key_id) {
@@ -373,7 +373,7 @@ mod tests {
 
         // Must fail if key is specified but not found.
         let mut file = FileInfo::default();
-        file.method = EncryptionMethod::Aes192Ctr;
+        file.method = EncryptionMethod::Aes192Ctr as _;
         file.key_id = 7; // Not exists.
         manager
             .dicts
