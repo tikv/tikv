@@ -428,7 +428,7 @@ impl GcStrategy {
             }
             GcStrategy::CompactionFilter(ratio) => {
                 // Only DELETE marks are treated as garbage.
-                props.num_versions as f64 > props.num_puts as f64 * ratio
+                props.num_deletes as f64 > props.num_versions as f64 * (ratio - 1.0)
             }
         }
     }
