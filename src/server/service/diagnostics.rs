@@ -124,6 +124,7 @@ mod sys {
 
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
     use sysinfo::{DiskExt, ProcessExt, SystemExt};
+    use tikv_util::config::KB;
 
     fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
         // CPU load
@@ -192,12 +193,12 @@ mod sys {
     fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
         system.refresh_all();
-        let total_memory = system.get_total_memory();
-        let used_memory = system.get_used_memory();
-        let free_memory = system.get_free_memory();
-        let total_swap = system.get_total_swap();
-        let used_swap = system.get_used_swap();
-        let free_swap = system.get_free_swap();
+        let total_memory = system.get_total_memory() * KB;
+        let used_memory = system.get_used_memory() * KB;
+        let free_memory = system.get_free_memory() * KB;
+        let total_swap = system.get_total_swap() * KB;
+        let used_swap = system.get_used_swap() * KB;
+        let free_swap = system.get_free_swap() * KB;
         let used_memory_pct = (used_memory as f64) / (total_memory as f64);
         let free_memory_pct = (free_memory as f64) / (total_memory as f64);
         let used_swap_pct = (used_swap as f64) / (total_swap as f64);
@@ -389,7 +390,7 @@ mod sys {
         system.refresh_all();
         let mut pair = ServerInfoPair::default();
         pair.set_key("capacity".to_string());
-        pair.set_value(system.get_total_memory().to_string());
+        pair.set_value((system.get_total_memory() * KB).to_string());
         let mut item = ServerInfoItem::default();
         item.set_tp("memory".to_string());
         item.set_name("memory".to_string());
