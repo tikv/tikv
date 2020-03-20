@@ -252,6 +252,76 @@ fn test_read_on_replica() {
     assert_has(&follower_ctx, &follower_storage, k4, v4);
 }
 
+#[test]
+fn test_invalid_read_index_when_no_leader() {
+    // Initialize cluster
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(3));
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
+    cluster.cfg.raft_store.hibernate_regions = false;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Set region and peers
+    cluster.run();
+    cluster.must_put(b"k0", b"v0");
+    // Transfer leader to p2
+    let region = cluster.get_region(b"k0");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let mut follower_peers = region.get_peers().to_vec();
+    follower_peers.retain(|p| p.get_id() != leader.get_id());
+    let follower = follower_peers.pop().unwrap();
+
+    // Delay all raft messages on follower.
+    let heartbeat_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), follower.get_store_id())
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgHeartbeat)
+            .when(Arc::new(AtomicBool::new(true))),
+    );
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(follower.get_store_id(), heartbeat_filter);
+    let vote_resp_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), follower.get_store_id())
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgRequestVoteResponse)
+            .when(Arc::new(AtomicBool::new(true))),
+    );
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(follower.get_store_id(), vote_resp_filter);
+
+    // wait for election timeout
+    thread::sleep(time::Duration::from_millis(300));
+    // send read index requests to follower
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    request.mut_header().set_peer(follower.clone());
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(follower.get_store_id(), request, cb)
+        .unwrap();
+
+    let resp = rx.recv_timeout(time::Duration::from_millis(500)).unwrap();
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("can not read index due to no leader"),
+        "{:?}",
+        resp.get_header()
+    );
+}
+
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
     engine.put(ctx, Key::from_raw(key), value.to_vec()).unwrap();
 }

@@ -135,10 +135,7 @@ fn test_download_sst() {
 
     let result = import.download(&download).unwrap();
     assert!(
-        result
-            .get_error()
-            .get_message()
-            .contains("CannotReadExternalStorage"),
+        result.has_error(),
         "unexpected download reply: {:?}",
         result
     );
