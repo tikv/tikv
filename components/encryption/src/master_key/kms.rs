@@ -1,13 +1,16 @@
 use std::fs::create_dir_all;
+use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
+use futures::future::{self, TryFutureExt};
 use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod};
 use rusoto_core::region;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::HttpClient;
 use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
+use tokio::runtime::{Builder, Runtime};
 
 use super::{metadata::MetadataKey, Backend, FileBackend, PlainTextBackend, WithMetadata};
 use crate::config::KmsConfig;
@@ -38,7 +41,6 @@ impl AwsKms {
     fn with_request_dispatcher<D>(config: KmsConfig, dispatcher: D) -> Result<AwsKms>
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
-        D::Future: Send,
     {
         if config.key_id.is_empty() {
             return Err(Error::Other(
@@ -77,22 +79,24 @@ impl AwsKms {
         })
     }
 
-    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    fn decrypt(&self, runtime: &mut Runtime, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
-            ciphertext_blob: ciphertext.into(),
+            ciphertext_blob: ciphertext.to_vec().into(),
             encryption_context: None,
             grant_tokens: None,
+            encryption_algorithm: None,
+            key_id: None,
         };
-        let decrypt_response = retry(|timeout| {
-            let mut req = self.client.decrypt(decrypt_request.clone());
-            req.set_timeout(timeout);
-            req.sync().map_err(|e| Error::Other(e.into()))
+        let decrypt_response = retry(runtime, || {
+            self.client
+                .decrypt(decrypt_request.clone())
+                .map_err(|e| Error::Other(e.into()))
         });
         let plaintext = decrypt_response.plaintext.unwrap().as_ref().to_vec();
         Ok(plaintext)
     }
 
-    fn generate_data_key(&self) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn generate_data_key(&self, runtime: &mut Runtime) -> Result<(Vec<u8>, Vec<u8>)> {
         let generate_request = GenerateDataKeyRequest {
             encryption_context: None,
             grant_tokens: None,
@@ -100,10 +104,10 @@ impl AwsKms {
             key_spec: Some(AWS_KMS_DATA_KEY_SPEC.to_owned()),
             number_of_bytes: None,
         };
-        let generate_response = retry(|timeout| {
-            let mut req = self.client.generate_data_key(generate_request.clone());
-            req.set_timeout(timeout);
-            req.sync().map_err(|e| Error::Other(e.into()))
+        let generate_response = retry(runtime, || {
+            self.client
+                .generate_data_key(generate_request.clone())
+                .map_err(|e| Error::Other(e.into()))
         });
         let ciphertext_key = generate_response.ciphertext_blob.unwrap().as_ref().to_vec();
         let plaintext_key = generate_response.plaintext.unwrap().as_ref().to_vec();
@@ -111,17 +115,26 @@ impl AwsKms {
     }
 }
 
-fn retry<T, F>(mut func: F) -> T
+fn retry<T, U, F>(runtime: &mut Runtime, mut func: F) -> T
 where
-    F: FnMut(Duration) -> Result<T>,
+    F: FnMut() -> U,
+    U: Future<Output = Result<T>> + std::marker::Unpin,
 {
     let retry_limit = 6;
-    let timeout = Duration::from_secs(10);
+    let timeout_duration = Duration::from_secs(10);
     for _ in 0..retry_limit {
-        match func(timeout) {
-            Ok(t) => return t,
-            Err(e) => {
+        let fut = func();
+
+        match runtime.block_on(async move {
+            let timeout = tokio::time::delay_for(timeout_duration);
+            future::select(fut, timeout).await
+        }) {
+            future::Either::Left((Ok(resp), _)) => return resp,
+            future::Either::Left((Err(e), _)) => {
                 error!("kms request failed"; "error"=>?e);
+            }
+            future::Either::Right((_, _)) => {
+                error!("kms request timeout"; "timeout" => ?timeout_duration);
             }
         }
     }
@@ -151,15 +164,23 @@ impl KmsBackend {
 
         // Read the master key or generate a new master key.
         let key_path = Path::new(base).join(KMS_ENCRYPTION_KEY_NAME);
+
+        let mut runtime = Builder::new()
+            .basic_scheduler()
+            .thread_name("kms-pool")
+            .core_threads(1)
+            .enable_all()
+            .build()?;
+
         let key = if !key_path.exists() {
-            let (ciphertext_key, plaintext_key) = kms.generate_data_key()?;
+            let (ciphertext_key, plaintext_key) = kms.generate_data_key(&mut runtime)?;
             let f = EncryptedFile::new(Path::new(base), KMS_ENCRYPTION_KEY_NAME);
             f.write(&ciphertext_key, &vendor_backend)?;
             plaintext_key
         } else {
             let f = EncryptedFile::new(Path::new(base), KMS_ENCRYPTION_KEY_NAME);
             let ciphertext_key = f.read(&vendor_backend)?;
-            kms.decrypt(&ciphertext_key)?
+            kms.decrypt(&mut runtime, &ciphertext_key)?
         };
 
         // Always use AES 256 for encrypting master key.
@@ -192,6 +213,13 @@ mod tests {
 
     #[test]
     fn test_aws_kms() {
+        let mut runtime = Builder::new()
+            .basic_scheduler()
+            .core_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+
         let magic_contents = b"5678";
         let config = KmsConfig {
             key_id: "test_key_id".to_string(),
@@ -208,16 +236,19 @@ mod tests {
                 plaintext: Some(magic_contents.as_ref().into()),
             });
         let aws_kms = AwsKms::with_request_dispatcher(config.clone(), dispatcher).unwrap();
-        let (ciphertext, plaintext) = aws_kms.generate_data_key().unwrap();
+        let (ciphertext, plaintext) = aws_kms.generate_data_key(&mut runtime).unwrap();
         assert_eq!(ciphertext, magic_contents);
         assert_eq!(plaintext, magic_contents);
 
         let dispatcher = MockRequestDispatcher::with_status(200).with_json_body(DecryptResponse {
             plaintext: Some(magic_contents.as_ref().into()),
             key_id: Some("test_key_id".to_string()),
+            encryption_algorithm: None,
         });
         let aws_kms = AwsKms::with_request_dispatcher(config, dispatcher).unwrap();
-        let plaintext = aws_kms.decrypt(ciphertext.as_slice()).unwrap();
+        let plaintext = aws_kms
+            .decrypt(&mut runtime, ciphertext.as_slice())
+            .unwrap();
         assert_eq!(plaintext, magic_contents);
     }
 
@@ -239,9 +270,9 @@ mod tests {
 
         let dispatcher =
             MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
-                ciphertext_blob: Some(plaintext_key.as_slice().into()),
+                ciphertext_blob: Some(plaintext_key.to_vec().into()),
                 key_id: Some("test_key_id".to_string()),
-                plaintext: Some(plaintext_key.as_slice().into()),
+                plaintext: Some(plaintext_key.to_vec().into()),
             });
         let aws_kms = AwsKms::with_request_dispatcher(config.clone(), dispatcher).unwrap();
         let backend = KmsBackend::with_kms(aws_kms, base_dir).unwrap();
@@ -252,8 +283,9 @@ mod tests {
 
         // Reopen kms backup.
         let dispatcher = MockRequestDispatcher::with_status(200).with_json_body(DecryptResponse {
-            plaintext: Some(plaintext_key.as_slice().into()),
+            plaintext: Some(plaintext_key.clone().into()),
             key_id: Some("test_key_id".to_string()),
+            encryption_algorithm: None,
         });
         let aws_kms = AwsKms::with_request_dispatcher(config, dispatcher).unwrap();
         let backend = KmsBackend::with_kms(aws_kms, base_dir).unwrap();
