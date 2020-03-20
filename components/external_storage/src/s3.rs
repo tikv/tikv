@@ -141,7 +141,7 @@ impl ExternalStorage for S3Storage {
                     Err(RusotoError::Service(GetObjectError::NoSuchKey(key))) => {
                         ByteStream::new(error_stream(Error::new(
                             ErrorKind::NotFound,
-                            format!("not key {} not at bucket {}", key, bucket),
+                            format!("no key {} at bucket {}", key, bucket),
                         )))
                     }
                     Err(e) => ByteStream::new(error_stream(Error::new(
