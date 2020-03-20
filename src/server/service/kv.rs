@@ -754,7 +754,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .read_index
-                    .observe(duration_to_sec(timer.elapsed()))
+                    .observe(timer.elapsed_secs())
             })
             .map_err(move |e| {
                 debug!("kv rpc failed";
