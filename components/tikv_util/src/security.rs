@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use grpcio::{
@@ -106,7 +106,7 @@ impl Default for Certs {
 
 #[derive(Default)]
 pub struct SecurityManager {
-    certs: Arc<RwLock<Certs>>,
+    certs: Arc<Mutex<Certs>>,
     reload_cfg: Option<Arc<SecurityConfig>>,
     override_ssl_target: String,
     cipher_file: String,
@@ -115,7 +115,7 @@ pub struct SecurityManager {
 impl Drop for SecurityManager {
     fn drop(&mut self) {
         use zeroize::Zeroize;
-        let mut certs = self.certs.write().unwrap();
+        let mut certs = self.certs.lock().unwrap();
         certs.key.zeroize();
     }
 }
@@ -123,7 +123,7 @@ impl Drop for SecurityManager {
 impl SecurityManager {
     pub fn new(cfg: &SecurityConfig) -> Result<SecurityManager, Box<dyn Error>> {
         Ok(SecurityManager {
-            certs: Arc::new(RwLock::new(Certs {
+            certs: Arc::new(Mutex::new(Certs {
                 ca: load_key("CA", &cfg.ca_path)?,
                 cert: load_key("certificate", &cfg.cert_path)?,
                 key: load_key("private key", &cfg.key_path)?,
@@ -140,20 +140,20 @@ impl SecurityManager {
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
-        if self.certs.read().unwrap().ca.is_empty() {
+        let mut certs = self.certs.lock().unwrap();
+        if certs.ca.is_empty() {
             cb.connect(addr)
         } else {
             if let Some(cfg) = &self.reload_cfg {
                 // This is to trigger updated_certs and the result doesn't care
-                let _ = updated_certs(&self.certs, cfg);
+                let _ = updated_certs(&mut certs, cfg);
             }
             if !self.override_ssl_target.is_empty() {
                 cb = cb.override_ssl_target(self.override_ssl_target.clone());
             }
-            let cert_read = self.certs.read().unwrap();
-            let ca = cert_read.ca.clone();
-            let cert = cert_read.cert.clone();
-            let key = cert_read.key.clone();
+            let ca = certs.ca.clone();
+            let cert = certs.cert.clone();
+            let key = certs.key.clone();
             let cred = ChannelCredentialsBuilder::new()
                 .root_cert(ca)
                 .cert(cert, key)
@@ -163,7 +163,7 @@ impl SecurityManager {
     }
 
     pub fn bind(&self, sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
-        let certs = self.certs.read().unwrap();
+        let certs = self.certs.lock().unwrap();
         if certs.ca.is_empty() {
             sb.bind(addr, port)
         } else if self.reload_cfg.is_some() {
@@ -195,18 +195,18 @@ impl SecurityManager {
 }
 
 struct Fetcher {
-    certs: Arc<RwLock<Certs>>,
+    certs: Arc<Mutex<Certs>>,
     cfg: Arc<SecurityConfig>,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
-        if updated_certs(&self.certs, &self.cfg)? {
+        let mut certs = self.certs.lock().unwrap();
+        if updated_certs(&mut certs, &self.cfg)? {
             // use the new certs
-            let cert_read = self.certs.read().unwrap();
-            let ca = cert_read.ca.clone();
-            let cert = cert_read.cert.clone();
-            let key = cert_read.key.clone();
+            let ca = certs.ca.clone();
+            let cert = certs.cert.clone();
+            let key = certs.key.clone();
             let new_cred = ServerCredentialsBuilder::new()
                 .add_cert(cert, key)
                 .root_cert(
@@ -221,30 +221,21 @@ impl ServerCredentialsFetcher for Fetcher {
     }
 }
 
-fn updated_certs(
-    certs: &Arc<RwLock<Certs>>,
-    cfg: &Arc<SecurityConfig>,
-) -> Result<bool, Box<dyn Error>> {
+fn updated_certs(certs: &mut Certs, cfg: &Arc<SecurityConfig>) -> Result<bool, Box<dyn Error>> {
     let cert_modified_time = fs::metadata(&cfg.cert_path)?.modified()?;
-    let last_modified;
-    {
-        let cert_read = certs.read().unwrap();
-        last_modified = cert_read.last_modified;
-    }
-    if last_modified == cert_modified_time {
+    if certs.last_modified == cert_modified_time {
         Ok(false)
     } else {
-        let mut cert_write = certs.write().unwrap();
-        cert_write.last_modified = cert_modified_time;
+        certs.last_modified = cert_modified_time;
         let ca = load_key("CA", &cfg.ca_path)?;
         let cert = load_key("certificate", &cfg.cert_path)?;
         let key = load_key("private key", &cfg.key_path)?;
         if ca.is_empty() || cert.is_empty() || key.is_empty() {
             return Err("ca, cert and private key should be all configured.".into());
         }
-        cert_write.ca = ca;
-        cert_write.cert = cert;
-        cert_write.key = key;
+        certs.ca = ca;
+        certs.cert = cert;
+        certs.key = key;
         Ok(true)
     }
 }
@@ -263,9 +254,9 @@ mod tests {
         // default is disable secure connection.
         cfg.validate().unwrap();
         let mut mgr = SecurityManager::new(&cfg).unwrap();
-        assert!(mgr.certs.read().unwrap().ca.is_empty());
-        assert!(mgr.certs.read().unwrap().cert.is_empty());
-        assert!(mgr.certs.read().unwrap().key.is_empty());
+        assert!(mgr.certs.lock().unwrap().ca.is_empty());
+        assert!(mgr.certs.lock().unwrap().cert.is_empty());
+        assert!(mgr.certs.lock().unwrap().key.is_empty());
 
         let assert_cfg = |c: fn(&mut SecurityConfig), valid: bool| {
             let mut invalid_cfg = cfg.clone();
@@ -303,8 +294,8 @@ mod tests {
         c.ca_path = format!("{}", example_ca.display());
         c.validate().unwrap();
         mgr = SecurityManager::new(&c).unwrap();
-        assert_eq!(mgr.certs.read().unwrap().ca, vec![0]);
-        assert_eq!(mgr.certs.read().unwrap().cert, vec![1]);
-        assert_eq!(mgr.certs.read().unwrap().key, vec![2]);
+        assert_eq!(mgr.certs.lock().unwrap().ca, vec![0]);
+        assert_eq!(mgr.certs.lock().unwrap().cert, vec![1]);
+        assert_eq!(mgr.certs.lock().unwrap().key, vec![2]);
     }
 }
