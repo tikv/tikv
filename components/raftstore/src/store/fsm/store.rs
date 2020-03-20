@@ -1153,7 +1153,7 @@ impl RaftBatchSystem {
             Arc::clone(&pd_client),
             dyn_cfg,
             self.router.clone(),
-            engines.kv.clone(),
+            engines.kv,
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
         );
