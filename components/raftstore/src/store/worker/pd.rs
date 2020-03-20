@@ -14,7 +14,7 @@ use tokio_timer::Delay;
 
 use engine::rocks::util::*;
 use engine::rocks::DB;
-use engine_rocks::RocksEngine;
+use engine_rocks::{Compat, RocksEngine};
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -408,7 +408,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                     send_admin_request(&router, region_id, epoch, peer, req, callback)
                 }
                 Err(e) => {
-                    debug!("failed to ask split";
+                    warn!("failed to ask split";
                     "region_id" => region.get_id(),
                     "err" => ?e);
                 }
@@ -484,7 +484,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                         }
                     }
                     Err(e) => {
-                        debug!(
+                        warn!(
                             "ask batch split failed";
                             "region_id" => region.get_id(),
                             "err" => ?e,
@@ -611,7 +611,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
 
     fn handle_report_batch_split(&self, handle: &Handle, regions: Vec<metapb::Region>) {
         let f = self.pd_client.report_batch_split(regions).map_err(|e| {
-            debug!("report split failed"; "err" => ?e);
+            warn!("report split failed"; "err" => ?e);
         });
         handle.spawn(f);
     }
@@ -881,10 +881,10 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 approximate_keys,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
-                    get_region_approximate_size(&self.db, &region).unwrap_or_default()
+                    get_region_approximate_size(self.db.c(), &region).unwrap_or_default()
                 });
                 let approximate_keys = approximate_keys.unwrap_or_else(|| {
-                    get_region_approximate_keys(&self.db, &region).unwrap_or_default()
+                    get_region_approximate_keys(self.db.c(), &region).unwrap_or_default()
                 });
                 let (
                     read_bytes_delta,

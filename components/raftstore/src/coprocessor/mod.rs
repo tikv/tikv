@@ -2,7 +2,6 @@
 
 use std::vec::IntoIter;
 
-use engine::rocks::DB;
 use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
@@ -10,7 +9,6 @@ use kvproto::raft_cmdpb::{
     AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
 };
 use raft::StateRole;
-use std::sync::Arc;
 
 pub mod config;
 pub mod dispatcher;
@@ -113,7 +111,7 @@ pub trait ApplySnapshotObserver: Coprocessor {
 
 /// SplitChecker is invoked during a split check scan, and decides to use
 /// which keys to split a region.
-pub trait SplitChecker {
+pub trait SplitChecker<E> {
     /// Hook to call for every kv scanned during split.
     ///
     /// Return true to abort scan early.
@@ -125,7 +123,7 @@ pub trait SplitChecker {
     fn split_keys(&mut self) -> Vec<Vec<u8>>;
 
     /// Get approximate split keys without scan.
-    fn approximate_split_keys(&mut self, _: &Region, _: &Arc<DB>) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, _: &Region, _: &E) -> Result<Vec<Vec<u8>>> {
         Ok(vec![])
     }
 
@@ -133,13 +131,13 @@ pub trait SplitChecker {
     fn policy(&self) -> CheckPolicy;
 }
 
-pub trait SplitCheckObserver: Coprocessor {
+pub trait SplitCheckObserver<E>: Coprocessor {
     /// Add a checker for a split scan.
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
-        _: &mut SplitCheckerHost<'_>,
-        _: &Arc<DB>,
+        _: &mut SplitCheckerHost<'_, E>,
+        _: &E,
         policy: CheckPolicy,
     );
 }

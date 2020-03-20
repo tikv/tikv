@@ -157,7 +157,9 @@ dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
-	bash scripts/check-sse4_2.sh
+ifeq ($(shell uname),Linux) # Macs binary isn't elf format
+	@python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
+endif
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
@@ -236,7 +238,10 @@ run-test:
 
 .PHONY: test
 test: run-test
-	bash scripts/check-bins-for-jemalloc.sh
+	@if [[ "`uname`" = "Linux" ]]; then \
+		env EXTRA_CARGO_ARGS="--message-format=json-render-diagnostics -q --no-run" make run-test |\
+                python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-tests; \
+	fi
 
 ## Static analysis
 ## ---------------
@@ -265,6 +270,7 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 	-A clippy::identity_conversion -A clippy::new_ret_no_self
 
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
+ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))
 clippy: pre-clippy
 	@cargo clippy --all --exclude cdc --exclude backup --exclude tests --exclude cmd \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
@@ -274,13 +280,17 @@ clippy: pre-clippy
 		cd $$pkg && \
 		cargo clippy --all-targets --no-default-features \
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
-		cd - ;\
+		cd - >/dev/null;\
 	done
 	@for pkg in "fuzz" "fuzz/fuzzer-afl" "fuzz/fuzzer-honggfuzz" "fuzz/fuzzer-libfuzzer"; do \
 		cd $$pkg && \
 		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null; \
 	done
+else
+clippy: pre-clippy
+	@cargo clippy --workspace --features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
+endif
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
@@ -295,7 +305,7 @@ audit: pre-audit
 
 .PHONY: check-udeps
 check-udeps:
-	bash scripts/check-udeps.sh
+	which cargo-udeps &>/dev/null || cargo install cargo-udeps && cargo udeps
 
 FUZZER ?= Honggfuzz
 
