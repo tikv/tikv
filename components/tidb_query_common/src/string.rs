@@ -6,6 +6,17 @@ pub enum TrimDirection {
     Trailing,
 }
 
+impl TrimDirection {
+    pub fn from_i64(i: i64) -> Option<Self> {
+        match i {
+            1 => Some(TrimDirection::Both),
+            2 => Some(TrimDirection::Leading),
+            3 => Some(TrimDirection::Trailing),
+            _ => None,
+        }
+    }
+}
+
 #[inline]
 pub fn trim(s: &str, pat: &str, direction: TrimDirection) -> Vec<u8> {
     let r = match direction {

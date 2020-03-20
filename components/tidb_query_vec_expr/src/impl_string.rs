@@ -465,6 +465,23 @@ pub fn trim_2_args(arg: &Option<Bytes>, pat: &Option<Bytes>) -> Result<Option<By
 
 #[rpn_fn]
 #[inline]
+pub fn trim_3_args(arg: &Option<Bytes>, pat: &Option<Bytes>, direction: &Option<i64>) -> Result<Option<Bytes>> {
+    if let (Some(arg), Some(pat), Some(direction)) = (arg, pat, direction) {
+        match TrimDirection::from_i64(*direction) {
+            Some(d) => {
+                let arg = String::from_utf8_lossy(arg);
+                let pat = String::from_utf8_lossy(pat);
+                Ok(Some(trim(&arg, &pat, d)))
+            },
+            _ => Err(box_err!("invalid direction value: {}", direction)),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn]
+#[inline]
 pub fn char_length(bs: &Option<Bytes>) -> Result<Option<Int>> {
     Ok(bs.as_ref().map(|b| b.len() as i64))
 }
@@ -1847,6 +1864,65 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
+    }
+
+    #[test]
+    fn test_trim_3_args() {
+        let tests = vec![
+            (Some("xxxbarxxx"), Some("x"), Some(TrimDirection::Leading as i64), Some("barxxx")),
+            (Some("barxxyz"), Some("xyz"), Some(TrimDirection::Trailing as i64), Some("barx")),
+            (Some("xxxbarxxx"), Some("x"), Some(TrimDirection::Both as i64), Some("bar")),
+        ];
+        for (arg, pat, direction, exp) in tests {
+            let arg = arg.map(|s| s.as_bytes().to_vec());
+            let pat = pat.map(|s| s.as_bytes().to_vec());
+            let exp = exp.map(|s| s.as_bytes().to_vec());
+
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(pat)
+                .push_param(direction)
+                .evaluate(ScalarFuncSig::Trim3Args)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let invalid_tests: Vec<(Option<Bytes>, Option<Bytes>, Option<i64>, Option<Bytes>)> = vec![
+            (
+                None,
+                Some(b"x".to_vec()),
+                Some(TrimDirection::Leading as i64),
+                None,
+            ),
+            (
+                Some(b"bar".to_vec()),
+                None,
+                Some(TrimDirection::Leading as i64),
+                None,
+            ),
+        ];
+        for (arg, pat, direction, exp) in invalid_tests {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(pat)
+                .push_param(direction)
+                .evaluate(ScalarFuncSig::Trim3Args)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        // test invalid direction value
+        let args = (
+            Some(b"bar".to_vec()),
+            Some(b"b".to_vec()),
+            Some(0 as i64),
+        );
+        let got: Result<Option<Bytes>> = RpnFnScalarEvaluator::new()
+            .push_param(args.0)
+            .push_param(args.1)
+            .push_param(args.2)
+            .evaluate(ScalarFuncSig::Trim3Args);
+        assert!(got.is_err());
     }
 
     #[test]
