@@ -1038,14 +1038,16 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
         false,
     );
     req.mut_header().set_peer(left_peer_3);
-    cluster
+    if let Ok(()) = cluster
         .sim
         .rl()
         .async_command_on_node(3, req, Callback::None)
-        .unwrap();
-    sleep_ms(200);
-    // The write must not succeed
-    must_get_none(&cluster.get_engine(2), b"k11");
-    must_get_none(&cluster.get_engine(3), b"k11");
+    {
+        sleep_ms(200);
+        // The write must not succeed
+        must_get_none(&cluster.get_engine(2), b"k11");
+        must_get_none(&cluster.get_engine(3), b"k11");
+    }
+
     fail::remove(on_handle_apply_2_fp);
 }

@@ -240,7 +240,7 @@ pub struct Peer {
     /// There are more details in the annotation above
     /// `test_node_merge_write_data_to_source_region_after_merging`
     /// The peers who want to rollback merge
-    pub want_rollback_merge_peers: Option<HashSet<u64>>,
+    pub want_rollback_merge_peers: HashSet<u64>,
     /// source region is catching up logs for merge
     pub catch_up_logs: Option<CatchUpLogs>,
 
@@ -311,7 +311,7 @@ impl Peer {
             pending_remove: false,
             should_wake_up: false,
             pending_merge_state: None,
-            want_rollback_merge_peers: None,
+            want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
             last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
@@ -2517,13 +2517,7 @@ impl Peer {
 
     pub fn add_want_rollback_merge_peer(&mut self, peer_id: u64) {
         assert!(self.pending_merge_state.is_some());
-        if self.want_rollback_merge_peers.is_none() {
-            self.want_rollback_merge_peers = Some(HashSet::default());
-        }
-        self.want_rollback_merge_peers
-            .as_mut()
-            .unwrap()
-            .insert(peer_id);
+        self.want_rollback_merge_peers.insert(peer_id);
     }
 }
 
