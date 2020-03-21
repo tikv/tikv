@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
-use engine::{Peekable, DB};
-use engine_traits::CF_RAFT;
+use engine::DB;
+use engine_rocks::Compat;
+use engine_traits::{Peekable, CF_RAFT};
 use fail;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
@@ -227,6 +228,7 @@ fn test_read_applying_snapshot() {
     let region_key = keys::region_state_key(r1);
     let region_state: RegionLocalState = cluster
         .get_engine(3)
+        .c()
         .get_msg_cf(CF_RAFT, &region_key)
         .unwrap()
         .unwrap();
@@ -286,10 +288,12 @@ fn test_read_after_cleanup_range_for_snap() {
     cluster.pd_client.must_none_pending_peer(p3.clone());
     let region = cluster.get_region(b"k0");
     assert_eq!(cluster.leader_of_region(region.get_id()).unwrap(), p1);
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
     cluster.stop_node(3);
+    let last_index = cluster.raft_local_state(r1, 1).last_index;
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
     // Ensure logs are compacted, then node 1 will send a snapshot to node 3 later
-    must_truncated_to(cluster.get_engine(1), r1, 8);
+    must_truncated_to(cluster.get_engine(1), r1, last_index + 1);
 
     fail::cfg("send_snapshot", "pause").unwrap();
     cluster.run_node(3).unwrap();
@@ -318,8 +322,6 @@ fn test_read_after_cleanup_range_for_snap() {
     );
     cluster.sim.wl().add_recv_filter(3, recv_filter);
     fail::remove("send_snapshot");
-
-    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -358,6 +360,7 @@ fn test_read_after_cleanup_range_for_snap() {
 fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
     for _ in 1..300 {
         let apply_state: RaftApplyState = engine
+            .c()
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
             .unwrap()
             .unwrap();

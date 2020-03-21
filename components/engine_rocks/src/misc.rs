@@ -2,7 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Result};
+use engine_traits::{MiscExt, Range, Result};
 
 impl MiscExt for RocksEngine {
     fn is_titan(&self) -> bool {
@@ -26,6 +26,14 @@ impl MiscExt for RocksEngine {
             .as_inner()
             .delete_files_in_range_cf(handle, start_key, end_key, include_end)?)
     }
+
+    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)> {
+        let range = util::range_to_rocks_range(range);
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .get_approximate_memtable_stats_cf(handle, &range))
+    }
 }
 
 #[cfg(test)]
@@ -41,7 +49,7 @@ mod tests {
 
     use super::*;
     use engine_traits::ALL_CFS;
-    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, WriteBatchExt};
+    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt};
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
@@ -71,7 +79,7 @@ mod tests {
         let db = Arc::new(db);
         let db = RocksEngine::from_db(db);
 
-        let wb = db.write_batch();
+        let mut wb = db.write_batch();
         let ts: u8 = 12;
         let keys: Vec<_> = vec![
             b"k1".to_vec(),
@@ -181,7 +189,7 @@ mod tests {
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
         let db = Arc::new(db);
         let db = RocksEngine::from_db(db);
-        let wb = db.write_batch();
+        let mut wb = db.write_batch();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),
             (b"kabcdefg2", b"v2"),
