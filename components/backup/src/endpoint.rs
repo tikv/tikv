@@ -517,9 +517,17 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let store_id = self.store_id;
         // TODO: make it async.
         self.pool.borrow_mut().spawn(lazy(move || loop {
-            let mut progress = prs.lock().unwrap();
-            let branges = progress.forward(WORKER_TAKE_RANGE);
-            let is_raw_kv = progress.is_raw_kv;
+            let (branges, is_raw_kv, cf) = {
+                // Release lock as soon as possible.
+                // It is critical to speed up backup, otherwise workers are
+                // blocked by each other.
+                let mut progress = prs.lock().unwrap();
+                (
+                    progress.forward(WORKER_TAKE_RANGE),
+                    progress.is_raw_kv,
+                    progress.cf,
+                )
+            };
             if branges.is_empty() {
                 return Ok(());
             }
@@ -541,7 +549,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 let name = backup_file_name(store_id, &brange.region, key);
 
                 let res = if is_raw_kv {
-                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, progress.cf)
+                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf)
                 } else {
                     brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts)
                 };
