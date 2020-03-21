@@ -233,6 +233,7 @@ impl<T: Simulator> Cluster<T> {
                 }
             }
         }
+        self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
     }
 
