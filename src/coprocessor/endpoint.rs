@@ -15,7 +15,9 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
-use rustracing::{sampler::AllSampler, Tracer};
+use rustracing::{sampler::AllSampler};
+use rustracing_jaeger::Tracer;
+use rustracing_jaeger::reporter::JaegerCompactReporter;
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
@@ -33,6 +35,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use rustracing::span::FinishedSpan;
+use rustracing_jaeger::span::SpanContextState;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -311,8 +314,8 @@ impl<E: Engine> Endpoint<E> {
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
-        span: rustracing::span::Span<()>,
-        receiver: crossbeam::channel::Receiver<FinishedSpan<()>>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
+        receiver: crossbeam::channel::Receiver<FinishedSpan<SpanContextState>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
         // When this function is being executed, it may be queued for a long time, so that
@@ -340,7 +343,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
 
         let child_span = span.child("coprocessor executor", |options| {
-            options.start_with_state(())
+            options.start()
         });
         let handle_request_future = track(handler.handle_request(child_span), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
@@ -350,10 +353,13 @@ impl<E: Engine> Endpoint<E> {
         };
 
         std::mem::drop(span);
-        for finished_span in receiver.iter() {
-            //TODO 糊 generate span details
-            info!("receive span: {:?}", finished_span);
-        }
+        let reporter = JaegerCompactReporter::new("tikv").unwrap();
+        // for finished_span in receiver.iter() {
+        //     // info!("receive span: {:?}", finished_span);
+        //     reporter.report(&[finished_span]).unwrap();
+        // }
+        let spans = receiver.iter().collect::<Vec<_>>();
+        reporter.report(&spans).unwrap();
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
@@ -371,7 +377,6 @@ impl<E: Engine> Endpoint<E> {
             Err(e) => make_error_response(e),
         };
         resp.set_exec_details(exec_details);
-        //TODO 糊 resp.set_span_details
         Ok(resp)
     }
 
@@ -383,8 +388,8 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-        span: rustracing::span::Span<()>,
-        receiver: crossbeam::channel::Receiver<FinishedSpan<()>>,
+        span: rustracing::span::Span<SpanContextState>,
+        receiver: crossbeam::channel::Receiver<FinishedSpan<rustracing_jaeger::span::SpanContextState>>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx
@@ -421,7 +426,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
-        let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+        let entry_span = tracer.span("coprocessor endpoint").start();
         // let inactive = rustracing::span::Span::<()>::inactive();
 
         let result_of_future =
@@ -649,7 +654,7 @@ mod tests {
     impl RequestHandler for UnaryFixture {
         async fn handle_request(
             &mut self,
-            _span: rustracing::span::Span<()>,
+            _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
         ) -> Result<coppb::Response> {
             thread::sleep(Duration::from_millis(self.handle_duration_millis));
             self.result.take().unwrap()
@@ -756,7 +761,7 @@ mod tests {
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
-        let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+        let entry_span = tracer.span("coprocessor endpoint").start();
 
         let resp = cop
             .handle_unary_request(
@@ -784,7 +789,7 @@ mod tests {
         );
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
-        let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+        let entry_span = tracer.span("coprocessor endpoint").start();
 
         assert!(cop
             .handle_unary_request(outdated_req_ctx, handler_builder, entry_span, span_rx)
@@ -912,7 +917,7 @@ mod tests {
             });
             let (span_tx, span_rx) = crossbeam::channel::unbounded();
             let tracer = Tracer::with_sender(AllSampler, span_tx);
-            let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+            let entry_span = tracer.span("coprocessor endpoint").start();
 
             let future = cop.handle_unary_request(
                 ReqContext::default_for_test(),
@@ -948,7 +953,7 @@ mod tests {
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle());
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
-        let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+        let entry_span = tracer.span("coprocessor endpoint").start();
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
@@ -1213,7 +1218,7 @@ mod tests {
             });
             let (span_tx, span_rx) = crossbeam::channel::unbounded();
             let tracer = Tracer::with_sender(AllSampler, span_tx);
-            let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+            let entry_span = tracer.span("coprocessor endpoint").start();
 
             let resp_future_1 = cop.handle_unary_request(
                 req_with_exec_detail.clone(),
@@ -1235,7 +1240,7 @@ mod tests {
             });
             let (span_tx, span_rx) = crossbeam::channel::unbounded();
             let tracer = Tracer::with_sender(AllSampler, span_tx);
-            let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+            let entry_span = tracer.span("coprocessor endpoint").start();
             let resp_future_2 = cop.handle_unary_request(
                 req_with_exec_detail.clone(),
                 handler_builder,
@@ -1301,7 +1306,7 @@ mod tests {
             });
             let (span_tx, span_rx) = crossbeam::channel::unbounded();
             let tracer = Tracer::with_sender(AllSampler, span_tx);
-            let entry_span = tracer.span("coprocessor endpoint").start_with_state(());
+            let entry_span = tracer.span("coprocessor endpoint").start();
 
             let resp_future_1 = cop.handle_unary_request(
                 req_with_exec_detail.clone(),

@@ -48,10 +48,10 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     fn next_batch(
         &mut self,
         scan_rows: usize,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
         let _child_span = span.child("coprocessor BatchFastHashAggregationExecutor", |options| {
-            options.start_with_state(())
+            options.start()
         });
 
         self.0.next_batch(scan_rows, span)

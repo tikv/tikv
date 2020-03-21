@@ -344,7 +344,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     pub async fn handle_request(
         &mut self,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> Result<SelectResponse> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
@@ -363,7 +363,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             self.deadline.check()?;
 
             let child_span = span.child("coprocessor next batch", |options| {
-                options.start_with_state(())
+                options.start()
             });
             let mut result = self.out_most_executor.next_batch(batch_size, child_span);
 

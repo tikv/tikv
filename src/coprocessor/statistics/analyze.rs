@@ -102,7 +102,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    async fn handle_request(&mut self, _span: rustracing::span::Span<()>) -> Result<Response> {
+    async fn handle_request(&mut self, _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();

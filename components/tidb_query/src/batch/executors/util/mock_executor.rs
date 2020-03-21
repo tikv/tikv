@@ -34,7 +34,7 @@ impl BatchExecutor for MockExecutor {
     fn next_batch(
         &mut self,
         _scan_rows: usize,
-        _span: rustracing::span::Span<()>,
+        _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
         self.results.next().unwrap()
     }

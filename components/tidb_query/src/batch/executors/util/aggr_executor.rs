@@ -190,7 +190,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     #[inline]
     fn handle_next_batch(
         &mut self,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
         // always needs to calculate over all data.
@@ -285,7 +285,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     fn next_batch(
         &mut self,
         _scan_rows: usize,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
         assert!(!self.is_ended);
 

@@ -163,7 +163,7 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     fn next_batch(
         &mut self,
         scan_rows: usize,
-        _span: rustracing::span::Span<()>,
+        _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
         assert!(!self.is_ended);
         assert!(scan_rows > 0);

@@ -339,7 +339,7 @@ impl BatchExecutor for BatchFixtureExecutor {
     fn next_batch(
         &mut self,
         scan_rows: usize,
-        _span: rustracing::span::Span<()>,
+        _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
         let mut columns = Vec::with_capacity(self.columns.len());
         for col in &mut self.columns {

@@ -41,6 +41,7 @@ use kvproto::{coprocessor as coppb, kvrpcpb};
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
+use rustracing_jaeger::span::SpanContextState;
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -54,7 +55,7 @@ pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
     async fn handle_request(
         &mut self,
-        _span: rustracing::span::Span<()>,
+        _span: rustracing::span::Span<SpanContextState>,
     ) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }

@@ -152,7 +152,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     #[inline]
     fn handle_next_batch(
         &mut self,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because top N
         // always needs to calculate over all data.
@@ -297,10 +297,10 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     fn next_batch(
         &mut self,
         _scan_rows: usize,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
         let child_span = span.child("coprocessor BatchTopNExecutor", |options| {
-            options.start_with_state(())
+            options.start()
         });
 
         assert!(!self.is_ended);

@@ -29,7 +29,7 @@ pub trait BatchExecutor: Send {
     fn next_batch(
         &mut self,
         scan_rows: usize,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult;
 
     /// Collects execution statistics (including but not limited to metrics and execution summaries)
@@ -76,7 +76,7 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
     fn next_batch(
         &mut self,
         scan_rows: usize,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
         (**self).next_batch(scan_rows, span)
     }
@@ -106,10 +106,10 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
     fn next_batch(
         &mut self,
         scan_rows: usize,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
         let child_span = span.child("coprocessor WithSummaryCollector", |options| {
-            options.start_with_state(())
+            options.start()
         });
 
         let timer = self.summary_collector.on_start_iterate();

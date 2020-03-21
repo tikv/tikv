@@ -172,10 +172,10 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     fn next_batch(
         &mut self,
         scan_rows: usize,
-        span: rustracing::span::Span<()>,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
         let child_span = span.child("coprocessor BatchSelectionExecutor", |options| {
-            options.start_with_state(())
+            options.start()
         });
 
         let mut src_result = self.src.next_batch(scan_rows, child_span);

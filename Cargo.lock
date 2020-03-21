@@ -1638,6 +1638,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c731c3e10504cc8ed35cfe2f1db4c9274c3d35fa486e3b31df46f068ef3e867"
+dependencies = [
+ "libc",
+ "match_cfg",
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "http"
 version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2106,6 +2117,12 @@ dependencies = [
  "cc",
  "libc",
 ]
+
+[[package]]
+name = "match_cfg"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffbee8634e0d45d258acb448e7eaab3fce7a0a467395d4d9f228e3c1f01fb2e4"
 
 [[package]]
 name = "match_template"
@@ -3546,6 +3563,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustracing_jaeger"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "873f575e7e9630a83f34e49cd6bc0c1edbe8c65195e4724eb1f33da59df9f9f1"
+dependencies = [
+ "crossbeam-channel",
+ "hostname",
+ "percent-encoding",
+ "rand 0.7.3",
+ "rustracing",
+ "thrift_codec",
+ "trackable",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4265,6 +4297,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "thrift_codec"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fb61fb3d0a0af14949f3a6949b2639112e13226647112824f4d081533f9b1a8"
+dependencies = [
+ "byteorder",
+ "trackable",
+]
+
+[[package]]
 name = "tidb_query"
 version = "0.0.1"
 dependencies = [
@@ -4301,6 +4343,7 @@ dependencies = [
  "rand 0.7.3",
  "regex",
  "rustracing",
+ "rustracing_jaeger",
  "safemem",
  "serde",
  "serde_json",
@@ -4405,6 +4448,7 @@ dependencies = [
  "regex",
  "rev_lines",
  "rustracing",
+ "rustracing_jaeger",
  "serde",
  "serde_derive",
  "serde_json",
