@@ -184,7 +184,7 @@ impl LeaderClient {
 
     /// Re-establishes connection with PD leader in synchronized fashion.
     pub fn reconnect(&self) -> PdFuture<()> {
-        let ((env, security_mgr, members), start) = {
+        let (try_connect, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
                 // Avoid unnecessary updating.
@@ -193,44 +193,42 @@ impl LeaderClient {
 
             let start = Instant::now();
             (
-                (
+                try_connect_leader(
                     Arc::clone(&inner.env),
-                    inner.security_mgr.clone(),
-                    inner.members.clone(),
+                    Arc::clone(&inner.security_mgr),
+                    &inner.members,
                 ),
                 start,
             )
         };
 
         let inner = self.inner.clone();
-        Box::new(try_connect_leader(env, security_mgr, members).and_then(
-            move |(client, members)| {
-                {
-                    let mut inner = inner.wl();
-                    let (tx, rx) = client.region_heartbeat().unwrap();
-                    info!("heartbeat sender and receiver are stale, refreshing ...");
+        Box::new(try_connect.and_then(move |(client, members)| {
+            {
+                let mut inner = inner.wl();
+                let (tx, rx) = client.region_heartbeat().unwrap();
+                info!("heartbeat sender and receiver are stale, refreshing ...");
 
-                    // Try to cancel an unused heartbeat sender.
-                    if let Either::Left(Some(ref mut r)) = inner.hb_sender {
-                        debug!("cancel region heartbeat sender");
-                        r.cancel();
-                    }
-                    inner.hb_sender = Either::Left(Some(tx));
-                    if let Either::Right(ref mut task) = inner.hb_receiver {
-                        task.notify();
-                    }
-                    inner.hb_receiver = Either::Left(Some(rx));
-                    inner.client_stub = client;
-                    inner.members = members;
-                    inner.last_update = Instant::now();
-                    if let Some(ref on_reconnect) = inner.on_reconnect {
-                        on_reconnect();
-                    }
+                // Try to cancel an unused heartbeat sender.
+                if let Either::Left(Some(ref mut r)) = inner.hb_sender {
+                    debug!("cancel region heartbeat sender");
+                    r.cancel();
                 }
-                warn!("updating PD client done"; "spend" => ?start.elapsed());
-                ok(())
-            },
-        ))
+                inner.hb_sender = Either::Left(Some(tx));
+                if let Either::Right(ref mut task) = inner.hb_receiver {
+                    task.notify();
+                }
+                inner.hb_receiver = Either::Left(Some(rx));
+                inner.client_stub = client;
+                inner.members = members;
+                inner.last_update = Instant::now();
+                if let Some(ref on_reconnect) = inner.on_reconnect {
+                    on_reconnect();
+                }
+            }
+            warn!("updating PD client done"; "spend" => ?start.elapsed());
+            ok(())
+        }))
     }
 }
 
@@ -421,7 +419,7 @@ pub fn validate_endpoints(
     match members {
         Some(members) => {
             let (client, members) =
-                try_connect_leader(Arc::clone(&env), security_mgr, members).wait()?;
+                try_connect_leader(Arc::clone(&env), security_mgr, &members).wait()?;
             info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
@@ -469,7 +467,7 @@ struct TryConnectCtx {
 pub fn try_connect_leader(
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
-    previous: GetMembersResponse,
+    previous: &GetMembersResponse,
 ) -> PdFuture<(PdClientStub, GetMembersResponse)> {
     let previous_leader = previous.get_leader().clone();
 
