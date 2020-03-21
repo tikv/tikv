@@ -12,8 +12,8 @@ protobuf-codec = [
 ]
 prost-codec = [
   "engine/prost-codec",
-  "keys/protobuf-codec",
-  "txn_types/protobuf-codec",
+  "keys/prost-codec",
+  "txn_types/prost-codec",
 ]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
