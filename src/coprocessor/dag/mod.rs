@@ -119,7 +119,10 @@ impl DAGHandler {
 
 #[async_trait]
 impl RequestHandler for DAGHandler {
-    async fn handle_request(&mut self, _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>) -> Result<Response> {
+    async fn handle_request(
+        &mut self,
+        _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
+    ) -> Result<Response> {
         handle_qe_response(self.runner.handle_request(), self.data_version)
     }
 
@@ -159,7 +162,10 @@ impl BatchDAGHandler {
 
 #[async_trait]
 impl RequestHandler for BatchDAGHandler {
-    async fn handle_request(&mut self, span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>) -> Result<Response> {
+    async fn handle_request(
+        &mut self,
+        span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
+    ) -> Result<Response> {
         handle_qe_response(self.runner.handle_request(span).await, self.data_version)
     }
 

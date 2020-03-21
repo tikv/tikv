@@ -15,9 +15,9 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
-use rustracing::{sampler::AllSampler};
-use rustracing_jaeger::Tracer;
+use rustracing::sampler::AllSampler;
 use rustracing_jaeger::reporter::JaegerCompactReporter;
+use rustracing_jaeger::Tracer;
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
@@ -342,9 +342,7 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
-        let child_span = span.child("coprocessor executor", |options| {
-            options.start()
-        });
+        let child_span = span.child("coprocessor executor", |options| options.start());
         let handle_request_future = track(handler.handle_request(child_span), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
@@ -389,7 +387,9 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
         span: rustracing::span::Span<SpanContextState>,
-        receiver: crossbeam::channel::Receiver<FinishedSpan<rustracing_jaeger::span::SpanContextState>>,
+        receiver: crossbeam::channel::Receiver<
+            FinishedSpan<rustracing_jaeger::span::SpanContextState>,
+        >,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx

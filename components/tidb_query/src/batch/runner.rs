@@ -362,9 +362,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             self.deadline.check()?;
 
-            let child_span = span.child("coprocessor next batch", |options| {
-                options.start()
-            });
+            let child_span = span.child("coprocessor next batch", |options| options.start());
             let mut result = self.out_most_executor.next_batch(batch_size, child_span);
 
             let is_drained;

@@ -299,9 +299,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
         _scan_rows: usize,
         span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
     ) -> BatchExecuteResult {
-        let child_span = span.child("coprocessor BatchTopNExecutor", |options| {
-            options.start()
-        });
+        let child_span = span.child("coprocessor BatchTopNExecutor", |options| options.start());
 
         assert!(!self.is_ended);
 
@@ -1152,17 +1150,17 @@ mod tests {
                 5,
             );
 
-            let r = exec.next_batch(1,Span::inactive());
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1,Span::inactive());
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1,Span::inactive());
+            let r = exec.next_batch(1, Span::inactive());
             assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
             assert_eq!(r.physical_columns.rows_len(), 5);
             assert_eq!(r.physical_columns.columns_len(), 3);

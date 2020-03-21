@@ -48,7 +48,10 @@ impl<S: Snapshot> ChecksumContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
-    async fn handle_request(&mut self, _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>) -> Result<Response> {
+    async fn handle_request(
+        &mut self,
+        _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
+    ) -> Result<Response> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));

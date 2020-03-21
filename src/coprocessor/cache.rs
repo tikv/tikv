@@ -25,7 +25,10 @@ impl CachedRequestHandler {
 
 #[async_trait]
 impl RequestHandler for CachedRequestHandler {
-    async fn handle_request(&mut self, _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>) -> Result<Response> {
+    async fn handle_request(
+        &mut self,
+        _span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
+    ) -> Result<Response> {
         let mut resp = Response::default();
         resp.set_is_cache_hit(true);
         if let Some(v) = self.data_version {
