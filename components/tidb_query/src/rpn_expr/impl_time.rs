@@ -273,6 +273,11 @@ pub fn last_day(ctx: &mut EvalContext, t: &Option<Time>) -> Result<Option<Time>>
             .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
             .map(|_| Ok(None))?;
     }
+    if t.day() == 0 {
+        let one_day = Duration::parse(ctx, b"1 00:00:00", 6).unwrap();
+        let adjusted_t: Time = t.checked_add(ctx, one_day).unwrap();
+        return Ok(adjusted_t.last_date_of_month());
+    }
     Ok(t.last_date_of_month())
 }
 
@@ -871,6 +876,7 @@ mod tests {
             ("2100-02-11", "2100-02-28"),
             ("2011-11-11", "2011-11-30"),
             ("2011-11-11 10:10:10", "2011-11-30 00:00:00"),
+            ("2011-01-00 10:00:00", "2011-01-31"),
         ];
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
@@ -881,6 +887,15 @@ mod tests {
                 .evaluate(ScalarFuncSig::LastDay)
                 .unwrap();
             assert_eq!(output, exp_val);
+        }
+        let none_cases = vec!["2011-00-01 10:10:10"];
+        for case in none_cases {
+            let time = Some(Time::parse_date(&mut ctx, case).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time.clone())
+                .evaluate::<Time>(ScalarFuncSig::LastDay)
+                .unwrap();
+            assert_eq!(output, None);
         }
         let output = RpnFnScalarEvaluator::new()
             .push_param(None::<Time>)
