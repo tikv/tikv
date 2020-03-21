@@ -331,6 +331,28 @@ mod tests {
         assert!(val.starts_with(prefix));
     }
 
+    fn must_get_value_check_cacheable<S: Snapshot>(
+        point_getter: &mut PointGetter<S>,
+        key: &[u8],
+        value: &[u8],
+        cacheable: bool,
+    ) {
+        let mut can_be_cached = true;
+        let val = point_getter
+            .get(&Key::from_raw(key), Some(&mut can_be_cached))
+            .unwrap()
+            .unwrap();
+        assert_eq!(val, value);
+        assert_eq!(cacheable, can_be_cached);
+
+        let mut can_be_cached = false;
+        point_getter
+            .get(&Key::from_raw(key), Some(&mut can_be_cached))
+            .unwrap()
+            .unwrap();
+        assert_eq!(cacheable, can_be_cached);
+    }
+
     fn must_get_none<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
         assert!(point_getter
             .get(&Key::from_raw(key), None)
@@ -735,5 +757,46 @@ mod tests {
             .build()
             .unwrap();
         must_get_err(&mut getter, key);
+    }
+
+    #[test]
+    fn test_can_be_cached_by_data() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (key, val1) = (b"foo", b"bar1");
+        must_prewrite_put(&engine, key, val1, key, 10);
+        must_commit(&engine, key, 10, 20);
+
+        let (key, val2) = (b"foo", b"bar2");
+        must_prewrite_put(&engine, key, val2, key, 30);
+        must_commit(&engine, key, 30, 40);
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut getter = PointGetterBuilder::new(snapshot, 20.into())
+            .isolation_level(IsolationLevel::Si)
+            .build()
+            .unwrap();
+        must_get_value_check_cacheable(&mut getter, key, val1, false);
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut getter = PointGetterBuilder::new(snapshot, 30.into())
+            .isolation_level(IsolationLevel::Si)
+            .build()
+            .unwrap();
+        must_get_value_check_cacheable(&mut getter, key, val1, false);
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut getter = PointGetterBuilder::new(snapshot, 40.into())
+            .isolation_level(IsolationLevel::Si)
+            .build()
+            .unwrap();
+        must_get_value_check_cacheable(&mut getter, key, val2, true);
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut getter = PointGetterBuilder::new(snapshot, 50.into())
+            .isolation_level(IsolationLevel::Si)
+            .build()
+            .unwrap();
+        must_get_value_check_cacheable(&mut getter, key, val2, true);
     }
 }

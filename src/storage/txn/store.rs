@@ -639,7 +639,6 @@ mod tests {
                 IsolationLevel::Si,
                 true,
                 Default::default(),
-                false,
             )
         }
     }
@@ -861,7 +860,6 @@ mod tests {
             IsolationLevel::Si,
             true,
             Default::default(),
-            false,
         );
         let bound_a = Key::from_encoded(b"a".to_vec());
         let bound_b = Key::from_encoded(b"b".to_vec());
@@ -907,7 +905,6 @@ mod tests {
             IsolationLevel::Si,
             true,
             Default::default(),
-            false,
         );
         assert!(store2.scanner(false, false, false, None, None).is_ok());
         assert!(store2
