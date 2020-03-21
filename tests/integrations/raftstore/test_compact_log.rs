@@ -3,7 +3,8 @@
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
 use engine::*;
-use engine_traits::CF_RAFT;
+use engine_rocks::Compat;
+use engine_traits::{Peekable, CF_RAFT};
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
@@ -12,6 +13,7 @@ use tikv_util::config::*;
 fn get_raft_msg_or_default<M: protobuf::Message + Default>(engines: &Engines, key: &[u8]) -> M {
     engines
         .kv
+        .c()
         .get_msg_cf(CF_RAFT, key)
         .unwrap()
         .unwrap_or_default()

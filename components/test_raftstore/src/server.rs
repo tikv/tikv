@@ -184,6 +184,7 @@ impl Simulator for ServerCluster {
             &cfg.storage,
             storage_read_pool.handle(),
             Some(lock_mgr.clone()),
+            false,
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -283,7 +284,7 @@ impl Simulator for ServerCluster {
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
         let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
-        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default());
+        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
