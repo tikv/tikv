@@ -471,7 +471,7 @@ mod tests {
     use super::*;
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeTp};
+    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
 
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::expr::EvalWarnings;
@@ -1055,5 +1055,194 @@ mod tests {
             ]
         );
         assert!(r.is_drained.unwrap());
+    }
+
+    /// Builds an executor that will return these data:
+    ///
+    /// == Schema ==
+    /// Col0 (LongLong(Unsigned))      Col1(LongLong[Signed])       Col2(Long[Unsigned])
+    /// == Call #1 ==
+    /// 18,446,744,073,709,551,615     -3                           4,294,967,293
+    /// NULL                           NULL                         NULL
+    /// 18,446,744,073,709,551,613     -1                           4,294,967,295
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// 2000                           2000                         2000
+    /// 9,223,372,036,854,775,807      9,223,372,036,854,775,807    2,147,483,647
+    /// 300                            300                          300
+    /// 9,223,372,036,854,775,808      -9,223,372,036,854,775,808   2,147,483,648
+    /// (drained)                      (drained)                    (drained)
+    fn make_src_executor_unsigned() -> MockExecutor {
+        MockExecutor::new(
+            vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::LongLong)
+                    .flag(FieldTypeFlag::UNSIGNED)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::Long)
+                    .flag(FieldTypeFlag::UNSIGNED)
+                    .into(),
+            ],
+            vec![
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Int(vec![
+                            Some(18_446_744_073_709_551_613_u64 as i64),
+                            None,
+                            Some(18_446_744_073_709_551_615_u64 as i64),
+                        ]),
+                        VectorValue::Int(vec![Some(-1), None, Some(-3)]),
+                        VectorValue::Int(vec![
+                            Some(4_294_967_295_u32 as i64),
+                            None,
+                            Some(4_294_967_295_u32 as i64),
+                        ]),
+                    ]),
+                    logical_rows: vec![2, 1, 0],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Int(vec![
+                            Some(300_u64 as i64),
+                            Some(9_223_372_036_854_775_807_u64 as i64),
+                            Some(2000_u64 as i64),
+                            Some(9_223_372_036_854_775_808_u64 as i64),
+                        ]),
+                        VectorValue::Int(vec![
+                            Some(300),
+                            Some(9_223_372_036_854_775_807),
+                            Some(2000),
+                            Some(-9_223_372_036_854_775_808),
+                        ]),
+                        VectorValue::Int(vec![
+                            Some(300_u32 as i64),
+                            Some(2_147_483_647_u32 as i64),
+                            Some(2000_u32 as i64),
+                            Some(2_147_483_648_u32 as i64),
+                        ]),
+                    ]),
+                    logical_rows: vec![2, 1, 0, 3],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn test_top_unsigned() {
+        let test_top5 = |col_index: usize, is_desc: bool, expected: &[Option<i64>]| {
+            let src_exec = make_src_executor_unsigned();
+            let mut exec = BatchTopNExecutor::new_for_test(
+                src_exec,
+                vec![RpnExpressionBuilder::new()
+                    .push_column_ref(col_index)
+                    .build()],
+                vec![is_desc],
+                5,
+            );
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+            assert_eq!(r.physical_columns.rows_len(), 5);
+            assert_eq!(r.physical_columns.columns_len(), 3);
+            assert_eq!(
+                r.physical_columns[col_index].decoded().as_int_slice(),
+                expected
+            );
+            assert!(r.is_drained.unwrap());
+        };
+
+        test_top5(
+            0,
+            false,
+            &[
+                None,
+                Some(300_u64 as i64),
+                Some(2000_u64 as i64),
+                Some(9_223_372_036_854_775_807_u64 as i64),
+                Some(9_223_372_036_854_775_808_u64 as i64),
+            ],
+        );
+
+        test_top5(
+            0,
+            true,
+            &[
+                Some(18_446_744_073_709_551_615_u64 as i64),
+                Some(18_446_744_073_709_551_613_u64 as i64),
+                Some(9_223_372_036_854_775_808_u64 as i64),
+                Some(9_223_372_036_854_775_807_u64 as i64),
+                Some(2000_u64 as i64),
+            ],
+        );
+
+        test_top5(
+            1,
+            false,
+            &[
+                None,
+                Some(-9_223_372_036_854_775_808),
+                Some(-3),
+                Some(-1),
+                Some(300),
+            ],
+        );
+
+        test_top5(
+            1,
+            true,
+            &[
+                Some(9_223_372_036_854_775_807),
+                Some(2000),
+                Some(300),
+                Some(-1),
+                Some(-3),
+            ],
+        );
+
+        test_top5(
+            2,
+            false,
+            &[
+                None,
+                Some(300_u32 as i64),
+                Some(2000_u32 as i64),
+                Some(2_147_483_647_u32 as i64),
+                Some(2_147_483_648_u32 as i64),
+            ],
+        );
+
+        test_top5(
+            2,
+            true,
+            &[
+                Some(4_294_967_295_u32 as i64),
+                Some(4_294_967_295_u32 as i64),
+                Some(2_147_483_648_u32 as i64),
+                Some(2_147_483_647_u32 as i64),
+                Some(2000_u32 as i64),
+            ],
+        );
     }
 }
