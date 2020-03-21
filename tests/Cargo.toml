@@ -81,6 +81,7 @@ portable = ["tikv/portable"]
 
 [dependencies]
 rustracing = "0.4"
+rustracing_jaeger = "0.4.0"
 fail = { version = "0.3", optional = true }
 crc64fast = "0.1"
 crossbeam = "0.7.2"
