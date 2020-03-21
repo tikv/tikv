@@ -17,8 +17,7 @@ use crate::storage::Key;
 use engine::rocks::util::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 use engine::rocks::{IngestExternalFileOptions, SeekKey, SstReader, SstWriter, DB};
 use engine::CF_WRITE;
-use external_storage::{create_storage, url_of_backend};
-use futures_executor::block_on;
+use external_storage::{block_on_external_io, create_storage, url_of_backend};
 use futures_util::io::{copy, AllowStdIo};
 use tikv_util::time::Limiter;
 
@@ -141,15 +140,16 @@ impl SSTImporter {
 
         // prepare to download the file from the external_storage
         let ext_storage = create_storage(backend)?;
-        let ext_reader = ext_storage
-            .read(name)
-            .map_err(|e| Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e))?;
+        let ext_reader = ext_storage.read(name);
         let ext_reader = speed_limiter.limit(ext_reader);
 
         // do the I/O copy from external_storage to the local file.
         {
             let mut file_writer = AllowStdIo::new(File::create(&path.temp)?);
-            let file_length = block_on(copy(ext_reader, &mut file_writer))?;
+            let file_length =
+                block_on_external_io(copy(ext_reader, &mut file_writer)).map_err(|e| {
+                    Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e)
+                })?;
             if meta.length != 0 && meta.length != file_length {
                 let reason = format!("length {}, expect {}", file_length, meta.length);
                 return Err(Error::FileCorrupted(path.temp, reason));

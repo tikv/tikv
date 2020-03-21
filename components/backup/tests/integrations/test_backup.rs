@@ -366,7 +366,7 @@ fn test_backup_and_import() {
     sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
     let mut metas = vec![];
     for f in files1.clone().into_iter() {
-        let mut reader = storage.read(&f.name).unwrap();
+        let mut reader = storage.read(&f.name);
         let mut content = vec![];
         block_on(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
@@ -529,7 +529,7 @@ fn test_backup_rawkv() {
     sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
     let mut metas = vec![];
     for f in files1.clone().into_iter() {
-        let mut reader = storage.read(&f.name).unwrap();
+        let mut reader = storage.read(&f.name);
         let mut content = vec![];
         block_on(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();

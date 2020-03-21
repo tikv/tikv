@@ -1058,6 +1058,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "bytes 0.5.4",
  "futures 0.3.1",
  "futures-executor",
  "futures-io",
@@ -1075,7 +1076,6 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tokio 0.2.13",
- "tokio-util 0.3.1",
  "url 2.1.0",
 ]
 
@@ -1494,7 +1494,7 @@ dependencies = [
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "slab",
  "tokio 0.2.13",
- "tokio-util 0.2.0",
+ "tokio-util",
 ]
 
 [[package]]
@@ -4455,7 +4455,6 @@ checksum = "0fa5e81d6bc4e67fe889d5783bd2a128ab2e0cfa487e0be16b6a8d177b101616"
 dependencies = [
  "bytes 0.5.4",
  "fnv",
- "futures-core",
  "iovec",
  "lazy_static 1.4.0",
  "libc",
@@ -4707,21 +4706,6 @@ checksum = "571da51182ec208780505a32528fc5512a8fe1443ab960b3f2f3ef093cd16930"
 dependencies = [
  "bytes 0.5.4",
  "futures-core",
- "futures-sink",
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "pin-project-lite",
- "tokio 0.2.13",
-]
-
-[[package]]
-name = "tokio-util"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be8242891f2b6cbef26a2d7e8605133c2c554cd35b3e4948ea892d6d68436499"
-dependencies = [
- "bytes 0.5.4",
- "futures-core",
- "futures-io",
  "futures-sink",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project-lite",

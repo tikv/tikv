@@ -90,8 +90,7 @@ pub fn sha256(input: &[u8]) -> Result<Vec<u8>, ErrorStack> {
 
 /// Wrapper of a reader which computes its SHA-256 hash while reading.
 pub struct Sha256Reader<R> {
-    // Use mutex on reader to provide Sync trait to Sha256Reader.
-    reader: Mutex<R>,
+    reader: R,
     hasher: Arc<Mutex<Hasher>>,
 }
 
@@ -101,7 +100,7 @@ impl<R> Sha256Reader<R> {
         let hasher = Arc::new(Mutex::new(Hasher::new(MessageDigest::sha256())?));
         Ok((
             Sha256Reader {
-                reader: Mutex::new(reader),
+                reader,
                 hasher: hasher.clone(),
             },
             hasher,
@@ -111,8 +110,8 @@ impl<R> Sha256Reader<R> {
 
 impl<R: Read> Read for Sha256Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let len = self.reader.get_mut().unwrap().read(buf)?;
-        (*self.hasher).lock().unwrap().update(&buf[..len])?;
+        let len = self.reader.read(buf)?;
+        self.hasher.lock().unwrap().update(&buf[..len])?;
         Ok(len)
     }
 }

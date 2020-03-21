@@ -118,7 +118,7 @@ fn process() -> Result<()> {
             storage.write(&opt.name, Box::new(AllowStdIo::new(file)), file_size)?;
         }
         Command::Load => {
-            let reader = storage.read(&opt.name)?;
+            let reader = storage.read(&opt.name);
             let mut file = AllowStdIo::new(File::create(&opt.file)?);
             block_on(copy(reader, &mut file))?;
         }
