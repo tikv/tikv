@@ -1856,9 +1856,9 @@ mod tests {
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
 
-        let invalid_tests: Vec<(Option<Bytes>, Option<Bytes>, Option<Bytes>)> = vec![
-            (None, Some(b"x".to_vec()), None),
-            (Some(b"bar".to_vec()), None, None),
+        let invalid_tests = vec![
+            (None, Some(b"x".to_vec()), None as Option<Bytes>),
+            (Some(b"bar".to_vec()), None, None as Option<Bytes>),
         ];
         for (arg, pat, expect_output) in invalid_tests {
             let output = RpnFnScalarEvaluator::new()
@@ -1906,18 +1906,18 @@ mod tests {
             assert_eq!(got, exp);
         }
 
-        let invalid_tests: Vec<(Option<Bytes>, Option<Bytes>, Option<i64>, Option<Bytes>)> = vec![
+        let invalid_tests = vec![
             (
                 None,
                 Some(b"x".to_vec()),
                 Some(TrimDirection::Leading as i64),
-                None,
+                None as Option<Bytes>,
             ),
             (
                 Some(b"bar".to_vec()),
                 None,
                 Some(TrimDirection::Leading as i64),
-                None,
+                None as Option<Bytes>,
             ),
         ];
         for (arg, pat, direction, exp) in invalid_tests {
