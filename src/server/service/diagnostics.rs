@@ -787,6 +787,7 @@ mod log {
     use nom::sequence::tuple;
     use nom::*;
     use rev_lines;
+    use tikv_util::logger::DATETIME_ROTATE_SUFFIX;
 
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
@@ -983,7 +984,7 @@ mod log {
 
         // for rotated *.<rotated-datetime> file
         if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
-            if NaiveDateTime::parse_from_str(res, "%Y-%m-%d-%H:%M:%S%.f").is_ok() {
+            if NaiveDateTime::parse_from_str(res, DATETIME_ROTATE_SUFFIX).is_ok() {
                 return true;
             }
         }
