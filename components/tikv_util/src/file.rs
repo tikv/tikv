@@ -110,7 +110,7 @@ impl<R> Sha256Reader<R> {
 impl<R: Read> Read for Sha256Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let len = self.reader.read(buf)?;
-        (*self.hasher).lock().unwrap().update(&buf[..len])?;
+        self.hasher.lock().unwrap().update(&buf[..len])?;
         Ok(len)
     }
 }

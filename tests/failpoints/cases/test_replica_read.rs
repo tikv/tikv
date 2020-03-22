@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
-use engine::{Peekable, DB};
-use engine_traits::CF_RAFT;
+use engine::DB;
+use engine_rocks::Compat;
+use engine_traits::{Peekable, CF_RAFT};
 use fail;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
@@ -59,7 +60,7 @@ fn test_wait_for_apply_index() {
         .unwrap();
     // Must timeout here
     assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
-    fail::cfg("on_apply_write_cmd", "off").unwrap();
+    fail::remove("on_apply_write_cmd");
 
     // After write cmd applied, the follower read will be executed.
     match rx.recv_timeout(Duration::from_secs(3)) {
@@ -143,7 +144,7 @@ fn test_duplicate_read_index_ctx() {
     for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
         router.send_raft_message(raft_msg).unwrap();
     }
-    fail::cfg("pause_on_peer_collect_message", "off").unwrap();
+    fail::remove("pause_on_peer_collect_message");
 
     // read index response must not be dropped
     rx2.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -190,6 +191,7 @@ fn test_read_before_init() {
         .async_command_on_node(3, request, cb)
         .unwrap();
     let resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    fail::remove("before_apply_snap_update_region");
     assert!(
         resp.get_header()
             .get_error()
@@ -226,6 +228,7 @@ fn test_read_applying_snapshot() {
     let region_key = keys::region_state_key(r1);
     let region_state: RegionLocalState = cluster
         .get_engine(3)
+        .c()
         .get_msg_cf(CF_RAFT, &region_key)
         .unwrap()
         .unwrap();
@@ -250,11 +253,11 @@ fn test_read_applying_snapshot() {
     let resp = match rx.recv_timeout(Duration::from_secs(5)) {
         Ok(r) => r,
         Err(_) => {
-            fail::cfg("region_apply_snap", "off").unwrap();
+            fail::remove("region_apply_snap");
             panic!("cannot receive response");
         }
     };
-    fail::cfg("region_apply_snap", "off").unwrap();
+    fail::remove("region_apply_snap");
     assert!(
         resp.get_header()
             .get_error()
@@ -285,10 +288,12 @@ fn test_read_after_cleanup_range_for_snap() {
     cluster.pd_client.must_none_pending_peer(p3.clone());
     let region = cluster.get_region(b"k0");
     assert_eq!(cluster.leader_of_region(region.get_id()).unwrap(), p1);
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
     cluster.stop_node(3);
+    let last_index = cluster.raft_local_state(r1, 1).last_index;
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
     // Ensure logs are compacted, then node 1 will send a snapshot to node 3 later
-    must_truncated_to(cluster.get_engine(1), r1, 8);
+    must_truncated_to(cluster.get_engine(1), r1, last_index + 1);
 
     fail::cfg("send_snapshot", "pause").unwrap();
     cluster.run_node(3).unwrap();
@@ -316,9 +321,7 @@ fn test_read_after_cleanup_range_for_snap() {
             })),
     );
     cluster.sim.wl().add_recv_filter(3, recv_filter);
-    fail::cfg("send_snapshot", "off").unwrap();
-
-    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+    fail::remove("send_snapshot");
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -346,17 +349,18 @@ fn test_read_after_cleanup_range_for_snap() {
     router.send_raft_message(heartbeat_msg).unwrap();
     router.send_raft_message(snap_msg).unwrap();
     router.send_raft_message(read_index_msg).unwrap();
-    fail::cfg("pause_on_peer_collect_message", "off").unwrap();
+    fail::remove("pause_on_peer_collect_message");
     must_get_none(&cluster.get_engine(3), b"k0");
     // Should not receive resp
     rx1.recv_timeout(Duration::from_millis(500)).unwrap_err();
-    fail::cfg("apply_snap_cleanup_range", "off").unwrap();
+    fail::remove("apply_snap_cleanup_range");
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
 fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
     for _ in 1..300 {
         let apply_state: RaftApplyState = engine
+            .c()
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
             .unwrap()
             .unwrap();
