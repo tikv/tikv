@@ -870,7 +870,7 @@ mod log {
                 };
                 // Rotated file name have the same prefix with the original
                 if !is_log_file(file_name, log_name) {
-                    continue
+                    continue;
                 }
                 // Open the file
                 let mut file = match File::open(entry.path()) {
@@ -974,7 +974,7 @@ mod log {
         }
     }
 
-    // Returns true if target 'filename' is part of given 'log_file' 
+    // Returns true if target 'filename' is part of given 'log_file'
     fn is_log_file(filename: &str, log_file: &str) -> bool {
         // for not rotated nomral file
         if filename == log_file {
@@ -1466,10 +1466,13 @@ mod log {
             req.set_end_time(std::i64::MAX);
             req.set_levels(vec![LogLevel::Warn.into()].into());
             req.set_patterns(vec![".*test-filter.*".to_string()].into());
-            let expected = vec!["2019/08/23 18:11:58.387 +08:00", "2019/08/23 18:09:58.387 +08:00"]
-                .iter()
-                .map(|s| timestamp(s))
-                .collect::<Vec<i64>>();
+            let expected = vec![
+                "2019/08/23 18:11:58.387 +08:00",
+                "2019/08/23 18:09:58.387 +08:00",
+            ]
+            .iter()
+            .map(|s| timestamp(s))
+            .collect::<Vec<i64>>();
             assert_eq!(
                 search(log_file, req)
                     .unwrap()
