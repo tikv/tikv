@@ -148,7 +148,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
     }
 
     pub fn can_be_cached(&mut self) -> bool {
-        self.can_be_cached
+        self.cfg.check_can_be_cached && self.can_be_cached
     }
 
     /// Get the next key-value pair, in forward order.

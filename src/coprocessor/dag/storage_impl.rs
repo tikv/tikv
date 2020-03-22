@@ -23,7 +23,7 @@ impl<S: Store> TiKVStorage<S> {
             scanner: None,
             cf_stats_backlog: Statistics::default(),
             check_can_be_cached,
-            can_be_cached: true,
+            can_be_cached: check_can_be_cached,
         }
     }
 }
@@ -71,9 +71,10 @@ impl<S: Store> Storage for TiKVStorage<S> {
     }
 
     fn can_be_cached(&mut self) -> bool {
-        self.check_can_be_cached
-            && self.scanner.as_mut().unwrap().can_be_cached()
-            && self.can_be_cached
+        if self.scanner.is_some() && !self.scanner.as_mut().unwrap().can_be_cached() {
+            return false;
+        }
+        self.check_can_be_cached && self.can_be_cached
     }
 
     fn get(&mut self, _is_key_only: bool, range: PointRange) -> QEResult<Option<OwnedKvPair>> {

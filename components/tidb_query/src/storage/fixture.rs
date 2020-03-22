@@ -105,7 +105,7 @@ impl super::Storage for FixtureStorage {
     fn collect_statistics(&mut self, _dest: &mut Self::Statistics) {}
 
     fn can_be_cached(&mut self) -> bool {
-        false
+        true
     }
 }
 

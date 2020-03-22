@@ -61,7 +61,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     }
 
     pub fn can_be_cached(&mut self) -> bool {
-        self.can_be_cached
+        self.cfg.check_can_be_cached && self.can_be_cached
     }
 
     /// Get the next key-value pair, in backward order.
@@ -143,7 +143,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        if lock.ts > self.cfg.ts {
+                        if lock.ts > self.cfg.ts && self.cfg.check_can_be_cached {
                             self.can_be_cached = false;
                         }
                         result = lock
@@ -214,7 +214,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 } else if last_checked_commit_ts > ts {
                     // Meet an unwanted version, use `last_version` as the return as well.
                     is_done = true;
-                    self.can_be_cached = false;
+                    if self.cfg.check_can_be_cached {
+                        self.can_be_cached = false;
+                    }
                 }
             }
             if is_done {
@@ -251,8 +253,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 current_key,
                 user_key.as_encoded().as_slice()
             ));
-            let current_ts = Key::decode_ts_from(current_key)?;
-            if current_ts > ts {
+            let max_ts = Key::decode_ts_from(current_key)?;
+            if max_ts > ts {
                 self.can_be_cached = false
             }
         }

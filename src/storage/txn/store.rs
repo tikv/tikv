@@ -348,6 +348,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             isolation_level,
             fill_cache,
             bypass_locks,
+
             point_getter_cache: None,
         }
     }

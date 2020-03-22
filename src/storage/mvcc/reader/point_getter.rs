@@ -341,12 +341,12 @@ mod tests {
         assert!(val.starts_with(prefix));
     }
 
-    fn must_get_value_check_cacheable<E: Engine>(
+    fn must_check_can_be_cached<E: Engine>(
         engine: &E,
         getter_ts: impl Into<TimeStamp>,
         key: &[u8],
         value: &[u8],
-        should_be_cacheable: bool,
+        expected_can_be_cached: bool,
     ) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut point_getter = PointGetterBuilder::new(snapshot, getter_ts.into())
@@ -359,14 +359,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(val, value);
-        assert_eq!(should_be_cacheable, can_be_cached);
+        assert_eq!(expected_can_be_cached, can_be_cached);
 
         let mut can_be_cached = false;
         point_getter
             .get(&Key::from_raw(key), Some(&mut can_be_cached))
             .unwrap()
             .unwrap();
-        assert_eq!(should_be_cacheable, can_be_cached);
+        assert_eq!(expected_can_be_cached, can_be_cached);
     }
 
     fn must_get_none<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
@@ -783,16 +783,18 @@ mod tests {
         must_prewrite_put(&engine, key, val1, key, 10);
         must_commit(&engine, key, 10, 20);
 
-        must_prewrite_lock(&engine, key, key, 30);
-
         let (key, val2) = (b"foo", b"bar2");
-        must_prewrite_put(&engine, key, val2, key, 40);
-        must_commit(&engine, key, 40, 50);
+        must_prewrite_put(&engine, key, val2, key, 30);
+        must_commit(&engine, key, 30, 40);
 
-        must_get_value_check_cacheable(&engine, 20, key, val1, false);
-        must_get_value_check_cacheable(&engine, 30, key, val1, false);
-        must_get_value_check_cacheable(&engine, 40, key, val2, true);
-        must_get_value_check_cacheable(&engine, 50, key, val2, true);
-        must_get_value_check_cacheable(&engine, 60, key, val2, true);
+        must_check_can_be_cached(&engine, 20, key, val1, false);
+        must_check_can_be_cached(&engine, 30, key, val1, false);
+        must_check_can_be_cached(&engine, 40, key, val2, true);
+        must_check_can_be_cached(&engine, 50, key, val2, true);
+
+        must_prewrite_lock(&engine, key, key, 60);
+
+        must_check_can_be_cached(&engine, 50, key, val2, false);
+        must_check_can_be_cached(&engine, 60, key, val2, true);
     }
 }

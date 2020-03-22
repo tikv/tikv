@@ -617,17 +617,19 @@ mod tests {
 
         must_prewrite_put(&engine, key, val1, key, 100);
         must_commit(&engine, key, 100, 200);
-
-        must_prewrite_lock(&engine, key, key, 300);
-
         let (key, val2) = (b"foo", b"bar2");
-        must_prewrite_put(&engine, key, val2, key, 400);
-        must_commit(&engine, key, 400, 500);
+        must_prewrite_put(&engine, key, val2, key, 300);
+        must_commit(&engine, key, 300, 400);
 
+        must_check_can_be_cached(&engine, 100, key, val1, desc, false);
         must_check_can_be_cached(&engine, 200, key, val1, desc, false);
         must_check_can_be_cached(&engine, 300, key, val1, desc, false);
         must_check_can_be_cached(&engine, 400, key, val2, desc, true);
         must_check_can_be_cached(&engine, 500, key, val2, desc, true);
+
+        must_prewrite_lock(&engine, key, key, 600);
+
+        must_check_can_be_cached(&engine, 500, key, val2, desc, false);
         must_check_can_be_cached(&engine, 600, key, val2, desc, true);
     }
 
