@@ -358,6 +358,7 @@ pub fn has_data_in_range<S: Snapshot>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::kv::SEEK_BOUND;
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
@@ -577,5 +578,64 @@ mod tests {
     fn test_scan_bypass_locks() {
         test_scan_bypass_locks_impl(false);
         test_scan_bypass_locks_impl(true);
+    }
+
+    fn must_check_can_be_cached<E: Engine>(
+        engine: &E,
+        scanner_ts: impl Into<TimeStamp>,
+        key: &[u8],
+        value: &[u8],
+        desc: bool,
+        can_be_cached: bool,
+    ) {
+        let mut scanner = ScannerBuilder::new(
+            engine.snapshot(&Context::default()).unwrap(),
+            scanner_ts.into(),
+            desc,
+        )
+        .range(Some(Key::from_raw(key)), None)
+        .set_check_can_be_cached(true)
+        .build()
+        .unwrap();
+
+        let (k, v) = scanner.next().unwrap().unwrap();
+        assert_eq!(k, Key::from_raw(key));
+        assert_eq!(v, value);
+        assert_eq!(can_be_cached, scanner.can_be_cached());
+    }
+
+    fn test_can_be_cached_impl(deep_write_seek: bool, desc: bool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (key, val1) = (b"foo", b"bar1");
+
+        if deep_write_seek {
+            for i in 0..SEEK_BOUND {
+                must_prewrite_put(&engine, key, val1, key, i);
+                must_commit(&engine, key, i, i);
+            }
+        }
+
+        must_prewrite_put(&engine, key, val1, key, 100);
+        must_commit(&engine, key, 100, 200);
+
+        must_prewrite_lock(&engine, key, key, 300);
+
+        let (key, val2) = (b"foo", b"bar2");
+        must_prewrite_put(&engine, key, val2, key, 400);
+        must_commit(&engine, key, 400, 500);
+
+        must_check_can_be_cached(&engine, 200, key, val1, desc, false);
+        must_check_can_be_cached(&engine, 300, key, val1, desc, false);
+        must_check_can_be_cached(&engine, 400, key, val2, desc, true);
+        must_check_can_be_cached(&engine, 500, key, val2, desc, true);
+        must_check_can_be_cached(&engine, 600, key, val2, desc, true);
+    }
+
+    #[test]
+    fn test_can_be_cached() {
+        test_can_be_cached_impl(false, false);
+        test_can_be_cached_impl(false, true);
+        test_can_be_cached_impl(true, false);
+        test_can_be_cached_impl(true, true);
     }
 }
