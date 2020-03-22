@@ -869,8 +869,8 @@ mod log {
                     None => continue,
                 };
                 // Rotated file name have the same prefix with the original
-                if !file_name.starts_with(log_name) {
-                    continue;
+                if !is_log_file(file_name, log_name) {
+                    continue
                 }
                 // Open the file
                 let mut file = match File::open(entry.path()) {
@@ -972,6 +972,22 @@ mod log {
             }
             None
         }
+    }
+
+    // Returns true if target 'filename' is part of given 'log_file' 
+    fn is_log_file(filename: &str, log_file: &str) -> bool {
+        // for not rotated nomral file
+        if filename == log_file {
+            return true;
+        }
+
+        // for rotated *.<rotated-datetime> file
+        if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
+            if let Ok(_) = DateTime::parse_from_str(res, "%Y-%m-%d-%H:%M:%S%.f") {
+                return true;
+            }
+        }
+        false
     }
 
     fn parse_time(input: &str) -> IResult<&str, &str> {
@@ -1427,7 +1443,21 @@ mod log {
 [2019/08/23 18:10:03.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:10:04.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:10:05.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
-[2019/08/23 18:10:06.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val]"#
+[2019/08/23 18:10:06.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter"#
+            )
+            .unwrap();
+
+            let log_file3 = dir.path().join("tikv.log.2019-08-23-18:11:02.387");
+            let mut file = File::create(&log_file3).unwrap();
+            write!(
+                file,
+                r#"[2019/08/23 18:09:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:54.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:55.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:56.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:57.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:58.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter
+[2019/08/23 18:11:59.387 +08:00] [warning] [foo.rs:100] [some message] [key=val]"#
             )
             .unwrap();
 
