@@ -1271,7 +1271,7 @@ mod log {
             )
             .unwrap();
 
-            let log_file2 = dir.path().join("tikv.log.2");
+            let log_file2 = dir.path().join("tikv.log.2019-08-23-18:10:00.387000");
             let mut file = File::create(&log_file2).unwrap();
             write!(
                 file,
