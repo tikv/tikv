@@ -9,8 +9,9 @@ use rusoto_core::region;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::{HttpClient, HttpConfig};
 use rusoto_core::{ByteStream, RusotoError};
-use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
+use rusoto_credential::{DefaultCredentialsProvider, StaticProvider, };
 use rusoto_s3::*;
+use rusoto_sts::WebIdentityProvider;
 
 use super::{
     util::{block_on_external_io, error_stream, AsyncReadAsSyncStreamOfBytes},
@@ -61,12 +62,15 @@ impl S3Storage {
             }
         };
         let client = if config.access_key.is_empty() || config.secret_access_key.is_empty() {
+            /*
             let cred_provider = DefaultCredentialsProvider::new().map_err(|e| {
                 Error::new(
                     ErrorKind::PermissionDenied,
                     format!("unable to get credentials: {}", e),
                 )
             })?;
+            */
+            let cred_provider = WebIdentityProvider::from_k8s_env();
             S3Client::new_with(dispatcher, cred_provider, region)
         } else {
             let cred_provider = StaticProvider::new(
