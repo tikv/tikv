@@ -12,13 +12,13 @@ use tipb::{Expr, FieldType};
 
 use crate::types::RpnExpressionBuilder;
 use crate::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::convert::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use tidb_query_datatype::codec::mysql::{binary_literal, Time};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 
 fn get_cast_fn_rpn_meta(
     is_from_constant: bool,
@@ -5212,7 +5212,7 @@ mod tests {
                             check_result(None, &result, log.as_str());
                         }
                         _ => {
-                            let expect_err: tidb_query_datatype::error::Error = e.into();
+                            let expect_err: tidb_query_common::error::Error = e.into();
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
                                 func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, expect_err

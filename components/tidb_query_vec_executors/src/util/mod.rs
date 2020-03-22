@@ -8,9 +8,9 @@ pub mod scan_executor;
 
 use tipb::FieldType;
 
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 use tidb_query_vec_expr::RpnExpression;
 use tidb_query_vec_expr::RpnStackNode;
 

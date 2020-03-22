@@ -456,7 +456,7 @@ impl ConvertTo<Json> for Duration {
 
 impl crate::codec::data_type::AsMySQLBool for Json {
     #[inline]
-    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> Result<bool> {
         // TODO: This logic is not correct. See pingcap/tidb#9593
         Ok(false)
     }

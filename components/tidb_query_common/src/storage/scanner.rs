@@ -3,7 +3,7 @@
 use super::range::*;
 use super::ranges_iter::*;
 use super::{OwnedKvPair, Storage};
-use tidb_query_datatype::error::StorageError;
+use crate::error::StorageError;
 
 const KEY_BUFFER_CAPACITY: usize = 64;
 

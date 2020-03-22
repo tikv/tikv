@@ -169,10 +169,10 @@ impl RequestHandler for BatchDAGHandler {
 }
 
 fn handle_qe_response(
-    result: tidb_query_datatype::Result<SelectResponse>,
+    result: tidb_query_common::Result<SelectResponse>,
     data_version: Option<u64>,
 ) -> Result<Response> {
-    use tidb_query_datatype::error::ErrorInner;
+    use tidb_query_common::error::ErrorInner;
 
     match result {
         Ok(sel_resp) => {
@@ -200,9 +200,9 @@ fn handle_qe_response(
 }
 
 fn handle_qe_stream_response(
-    result: tidb_query_datatype::Result<(Option<(StreamResponse, IntervalRange)>, bool)>,
+    result: tidb_query_common::Result<(Option<(StreamResponse, IntervalRange)>, bool)>,
 ) -> Result<(Option<Response>, bool)> {
-    use tidb_query_datatype::error::ErrorInner;
+    use tidb_query_common::error::ErrorInner;
 
     match result {
         Ok((Some((s_resp, range)), finished)) => {

@@ -8,10 +8,10 @@ use tipb::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::{JsonDecoder, MAX_FSP};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 
 /// Helper to build an `RpnExpression`.
 #[derive(Debug)]
@@ -464,7 +464,7 @@ mod tests {
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
-    use tidb_query_datatype::Result;
+    use tidb_query_common::Result;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
     #[rpn_fn]

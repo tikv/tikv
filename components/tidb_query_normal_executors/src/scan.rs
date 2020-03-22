@@ -9,9 +9,9 @@ use super::{Executor, Row};
 use tidb_query_common::execute_stats::ExecuteStats;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::{IntervalRange, Range, Storage};
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::table;
 use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
-use tidb_query_datatype::Result;
 
 // an InnerExecutor is used in ScanExecutor,
 // hold the different logics between table scan and index scan

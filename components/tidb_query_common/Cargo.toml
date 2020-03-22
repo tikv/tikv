@@ -9,6 +9,7 @@ description = "Common utility of a query engine to run TiDB pushed down executor
 hex = "0.3"
 rand = "0.6.5"
 time = "0.1"
+failure = "0.1"
 derive_more = "0.15.0"
 tikv_util = { path = "../tikv_util" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }

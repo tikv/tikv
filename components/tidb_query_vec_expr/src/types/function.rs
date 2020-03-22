@@ -28,9 +28,9 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
 
 use super::RpnStackNode;
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::{Evaluable, ScalarValueRef, VectorValue};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 
 /// Metadata of an RPN function.
 #[derive(Clone, Copy)]

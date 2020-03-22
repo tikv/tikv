@@ -1926,7 +1926,7 @@ impl Display for Decimal {
 
 impl crate::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
-    fn as_mysql_bool(&self, ctx: &mut EvalContext) -> crate::Result<bool> {
+    fn as_mysql_bool(&self, ctx: &mut EvalContext) -> Result<bool> {
         Ok(ConvertTo::<f64>::convert(self, ctx)?.round() != 0f64)
     }
 }

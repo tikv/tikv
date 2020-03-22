@@ -13,11 +13,11 @@ use tipb::TableScan;
 use super::util::scan_executor::*;
 use crate::interface::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::row;
 use tidb_query_datatype::codec::table::check_record_key;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::Result;
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
 
@@ -903,7 +903,7 @@ mod tests {
             let key = table::encode_row_key(TABLE_ID, 1);
             let value: std::result::Result<
                 _,
-                Box<dyn Send + Sync + Fn() -> tidb_query_datatype::error::StorageError>,
+                Box<dyn Send + Sync + Fn() -> tidb_query_common::error::StorageError>,
             > = Err(Box::new(|| failure::format_err!("locked").into()));
             kv.push((key, value));
         }

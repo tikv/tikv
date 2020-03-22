@@ -6,7 +6,7 @@ use tidb_query_datatype::builder::FieldTypeBuilder;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
 use tipb::{Expr, FieldType};
 
-use tidb_query_datatype::Result;
+use tidb_query_common::Result;
 use tidb_query_vec_expr::impl_cast::get_cast_fn_rpn_node;
 use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
 

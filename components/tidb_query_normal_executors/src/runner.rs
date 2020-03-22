@@ -13,8 +13,8 @@ use super::Executor;
 use tidb_query_common::execute_stats::*;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
+use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::Result;
 
 pub struct ExecutorsRunner<SS> {
     deadline: Deadline,

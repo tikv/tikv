@@ -527,7 +527,7 @@ impl ValidatorFnGenerator {
         quote! {
             fn validate #impl_generics (
                 expr: &tipb::Expr
-            ) -> tidb_query_datatype::Result<()> #where_clause {
+            ) -> tidb_query_common::Result<()> #where_clause {
                 use tidb_query_datatype::codec::data_type::Evaluable;
                 use crate::function;
                 #( #inners )*
@@ -725,7 +725,7 @@ impl VargsRpnFn {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
                     #downcast_metadata
                     crate::function::VARG_PARAM_BUF.with(|vargs_buf| {
                         use tidb_query_datatype::codec::data_type::Evaluable;
@@ -864,7 +864,7 @@ impl RawVargsRpnFn {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
                     #downcast_metadata
                     crate::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
@@ -978,7 +978,7 @@ impl NormalRpnFn {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue>;
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue>;
             }
         }
     }
@@ -1001,7 +1001,7 @@ impl NormalRpnFn {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     unreachable!()
                 }
             }
@@ -1059,7 +1059,7 @@ impl NormalRpnFn {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     #downcast_metadata
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
@@ -1099,7 +1099,7 @@ impl NormalRpnFn {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, output_rows, args, extra, metadata)
                 }
             }
@@ -1145,7 +1145,7 @@ impl NormalRpnFn {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
                     use crate::function::{ArgConstructor, Evaluator, Null};
                     #evaluator.eval(Null, ctx, output_rows, args, extra, metadata)
                 }
@@ -1173,7 +1173,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             #[inline]
-            fn foo(arg0: &Option<Int>, arg1: &Option<Real>) -> tidb_query_datatype::Result<Option<Decimal>> {
+            fn foo(arg0: &Option<Int>, arg1: &Option<Real>) -> tidb_query_common::Result<Option<Decimal>> {
                 Ok(None)
             }
         "#,
@@ -1194,7 +1194,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue>;
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue>;
             }
         };
         assert_eq!(expected.to_string(), gen.generate_fn_trait().to_string());
@@ -1212,7 +1212,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     unreachable!()
                 }
             }
@@ -1245,7 +1245,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
@@ -1279,7 +1279,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     Foo_Fn::eval(def, ctx, output_rows, args, extra, metadata)
                 }
             }
@@ -1299,7 +1299,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     use crate::function::{ArgConstructor, Evaluator, Null};
                     <ArgConstructor<Real, _>>::new(
                         1usize,
@@ -1311,7 +1311,7 @@ mod tests_normal {
                 {
                     Ok(Box::new(()))
                 }
-                fn validate(expr: &tipb::Expr) -> tidb_query_datatype::Result<()> {
+                fn validate(expr: &tipb::Expr) -> tidb_query_common::Result<()> {
                     use tidb_query_datatype::codec::data_type::Evaluable;
                     use crate::function;
 
@@ -1361,7 +1361,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue>;
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue>;
             }
         };
         assert_eq!(expected.to_string(), gen.generate_fn_trait().to_string());
@@ -1382,7 +1382,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     unreachable!()
                 }
             }
@@ -1413,7 +1413,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
@@ -1451,7 +1451,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     Foo_Fn::<A, B>::eval(def, ctx, output_rows, args, extra, metadata)
                 }
             }
@@ -1474,7 +1474,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue>
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue>
                 where
                     B: N<A>
                 {
@@ -1488,7 +1488,7 @@ mod tests_normal {
                 {
                     Ok(Box::new(()))
                 }
-                fn validate<A: M, B>(expr: &tipb::Expr) -> tidb_query_datatype::Result<()>
+                fn validate<A: M, B>(expr: &tipb::Expr) -> tidb_query_common::Result<()>
                 where
                     B: N<A>
                 {
@@ -1559,7 +1559,7 @@ mod tests_normal {
                     args: &[crate::RpnStackNode<'_>],
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
-                ) -> tidb_query_datatype::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {

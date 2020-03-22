@@ -1,8 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// FIXME: Move to tidb_query_datatype. Currently it refers some types in `crate::codec::mysql`
-// so that it is not possible to move.
-
 mod scalar;
 mod vector;
 
@@ -19,8 +16,8 @@ pub use self::vector::{VectorValue, VectorValueExt};
 use crate::{EvalType, FieldTypeTp};
 
 use crate::codec::convert::ToInt;
+use crate::codec::error::Result;
 use crate::expr::EvalContext;
-use crate::Result;
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
 /// Rust's `bool` type.

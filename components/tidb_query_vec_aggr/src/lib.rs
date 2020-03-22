@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This crate provides aggregate functions for batch executors.
 
@@ -23,9 +23,9 @@ mod util;
 
 pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 
 /// A trait for all single parameter aggregate functions.
 ///

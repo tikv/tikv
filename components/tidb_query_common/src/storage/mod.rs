@@ -7,7 +7,7 @@ pub mod test_fixture;
 
 pub use self::range::*;
 
-pub type Result<T> = std::result::Result<T, tidb_query_datatype::error::StorageError>;
+pub type Result<T> = std::result::Result<T, crate::error::StorageError>;
 
 pub type OwnedKvPair = (Vec<u8>, Vec<u8>);
 

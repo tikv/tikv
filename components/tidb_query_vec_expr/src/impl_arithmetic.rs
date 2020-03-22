@@ -3,10 +3,10 @@
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::{self, div_i64, div_i64_with_u64, div_u64_with_i64, Error};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 
 #[rpn_fn]
 #[inline]

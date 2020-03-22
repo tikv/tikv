@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This crate implements normal executors of tidb_query
 
@@ -47,10 +47,10 @@ use tipb::{Expr, ExprType};
 use tidb_query_common::execute_stats::*;
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_common::util;
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::datum::{self, Datum, DatumEncoder};
 use tidb_query_datatype::codec::table::{self, RowColsDict};
 use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
-use tidb_query_datatype::Result;
 
 /// An expression tree visitor that extracts all column offsets in the tree.
 pub struct ExprColumnRefVisitor {

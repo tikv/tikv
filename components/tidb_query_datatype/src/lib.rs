@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This crate stores data types which used by other tidb query related crates.
 
@@ -41,4 +41,3 @@ extern crate test;
 
 pub mod codec;
 pub mod expr;
-pub use self::error::{Error, Result};

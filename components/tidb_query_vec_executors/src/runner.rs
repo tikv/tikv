@@ -15,8 +15,8 @@ use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::Storage;
+use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::Result;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value

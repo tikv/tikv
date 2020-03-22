@@ -8,9 +8,9 @@ use tipb::Selection;
 
 use crate::interface::*;
 use tidb_query_common::storage::IntervalRange;
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::Result;
 use tidb_query_vec_expr::RpnStackNode;
 use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
 
@@ -135,7 +135,7 @@ fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
     ctx: &mut EvalContext,
     eval_result: &[Option<T>],
     eval_result_logical_rows: &[usize],
-) -> Result<()> {
+) -> tidb_query_datatype::codec::error::Result<()> {
     let mut err_result = Ok(());
     let mut logical_index = 0;
     logical_rows.retain(|_| {

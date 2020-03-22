@@ -3,12 +3,12 @@
 #[macro_export]
 macro_rules! other_err {
     ($msg:tt) => ({
-        tidb_query_datatype::Error::from(tidb_query_datatype::error::EvaluateError::Other(
+        tidb_query_common::error::Error::from(tidb_query_common::error::EvaluateError::Other(
             format!(concat!("[{}:{}]: ", $msg), file!(), line!())
         ))
     });
     ($f:tt, $($arg:expr),+) => ({
-        tidb_query_datatype::Error::from(tidb_query_datatype::error::EvaluateError::Other(
+        tidb_query_common::error::Error::from(tidb_query_common::error::EvaluateError::Other(
             format!(concat!("[{}:{}]: ", $f), file!(), line!(), $($arg),+)
         ))
     });

@@ -9,9 +9,9 @@ use tipb::TableScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use tidb_query_common::storage::Storage;
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::table::{self, check_record_key};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 
 pub struct TableInnerExecutor {
     col_ids: HashSet<i64>,

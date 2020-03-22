@@ -4,6 +4,7 @@ use tidb_query_codegen::rpn_fn;
 
 use tidb_query_datatype::expr::EvalContext;
 
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
@@ -11,7 +12,6 @@ use tidb_query_datatype::codec::mysql::time::WeekdayExtension;
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::SqlMode;
-use tidb_query_datatype::Result;
 
 #[rpn_fn(capture = [ctx])]
 #[inline]

@@ -4,10 +4,10 @@ use tipb::FieldType;
 
 use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 
 // TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
 pub const BATCH_MAX_SIZE: usize = 1024;
@@ -294,11 +294,11 @@ mod tests {
     use crate::impl_compare::*;
     use crate::{RpnExpressionBuilder, RpnFnMeta};
     use test::{black_box, Bencher};
+    use tidb_query_common::Result;
     use tidb_query_datatype::codec::batch::LazyBatchColumn;
     use tidb_query_datatype::codec::data_type::{Int, Real};
     use tidb_query_datatype::codec::datum::{Datum, DatumEncoder};
     use tidb_query_datatype::expr::EvalContext;
-    use tidb_query_datatype::Result;
 
     /// Single constant node
     #[test]

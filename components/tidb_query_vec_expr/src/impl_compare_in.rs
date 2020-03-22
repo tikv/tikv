@@ -9,10 +9,10 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::EvalType;
 use tipb::{Expr, ExprType};
 
+use tidb_query_common::{Error, Result};
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::{Decimal, MAX_FSP};
-use tidb_query_datatype::{Error, Result};
 
 pub trait InByHash {
     type Key: Evaluable + Extract + Eq;

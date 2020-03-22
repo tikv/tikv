@@ -5,9 +5,9 @@ use tidb_query_datatype::builder::FieldTypeBuilder;
 use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 use tipb::{Expr, ExprType, FieldType};
 
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
 
 /// The parser for COUNT aggregate function.

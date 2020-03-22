@@ -385,7 +385,7 @@ impl Executor for NormalFixtureExecutor {
     type StorageStats = Statistics;
 
     #[inline]
-    fn next(&mut self) -> tidb_query_datatype::Result<Option<Row>> {
+    fn next(&mut self) -> tidb_query_common::Result<Option<Row>> {
         Ok(self.rows.next())
     }
 

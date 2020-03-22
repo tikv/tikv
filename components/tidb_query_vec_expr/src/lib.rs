@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This crate implements a simple SQL query engine to work with TiDB pushed down executors.
 //!
@@ -47,9 +47,9 @@ pub use self::types::*;
 use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeFlag};
 use tipb::{Expr, FieldType, ScalarFuncSig};
 
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::Result;
 
 use self::impl_arithmetic::*;
 use self::impl_cast::*;

@@ -6,10 +6,10 @@ use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::types::function::RpnFnMeta;
 use crate::RpnExpressionBuilder;
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::codec::data_type::{Evaluable, ScalarValue};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::Result;
 
 /// Helper utility to evaluate RPN function over scalar inputs.
 ///

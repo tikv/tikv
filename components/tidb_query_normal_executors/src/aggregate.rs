@@ -3,9 +3,9 @@
 use std::cmp::Ordering;
 use tipb::ExprType;
 
+use tidb_query_common::Result;
 use tidb_query_datatype::codec::mysql::Decimal;
 use tidb_query_datatype::codec::Datum;
-use tidb_query_datatype::Result;
 
 use tidb_query_datatype::expr::EvalContext;
 use tidb_query_normal_expr::eval_arith;
