@@ -164,6 +164,7 @@ impl<S: Snapshot> PointGetter<S> {
             IsolationLevel::Rc => {}
         }
 
+        let mut use_near_seek = false;
         if let Some(can_be_cached) = can_be_cached {
             self.write_cursor.seek(
                 &user_key.clone().append_ts(TimeStamp::max()),
@@ -171,9 +172,10 @@ impl<S: Snapshot> PointGetter<S> {
             )?;
             let current_key = self.write_cursor.key(&mut self.statistics.write);
             *can_be_cached = can_be_cached_by_lock && Key::decode_ts_from(current_key)? <= self.ts;
+            use_near_seek = true;
         }
 
-        self.load_data(user_key)
+        self.load_data(user_key, use_near_seek)
     }
 
     /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
@@ -209,11 +211,19 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
     /// from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
-        if !self.write_cursor.seek(
-            &user_key.clone().append_ts(self.ts),
-            &mut self.statistics.write,
-        )? {
+    fn load_data(&mut self, user_key: &Key, use_near_seek: bool) -> Result<Option<Value>> {
+        let data_found = if use_near_seek {
+            self.write_cursor.near_seek(
+                &user_key.clone().append_ts(self.ts),
+                &mut self.statistics.write,
+            )?
+        } else {
+            self.write_cursor.seek(
+                &user_key.clone().append_ts(self.ts),
+                &mut self.statistics.write,
+            )?
+        };
+        if !data_found {
             return Ok(None);
         }
 

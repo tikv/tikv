@@ -239,10 +239,12 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         assert!(ts > last_checked_commit_ts);
 
         // Check newer data if needed
+        let mut use_near_seek = false;
         if self.cfg.check_can_be_cached && self.can_be_cached {
             let seek_key = user_key.clone().append_ts(TimeStamp::max());
             self.write_cursor
                 .internal_seek(&seek_key, &mut self.statistics.write)?;
+            use_near_seek = true;
             assert!(self.write_cursor.valid()?);
             let current_key = self.write_cursor.key(&mut self.statistics.write);
             assert!(Key::is_user_key_eq(
@@ -262,8 +264,13 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         let seek_key = user_key.clone().append_ts(ts);
 
         // TODO: Replace by cast + seek().
-        self.write_cursor
-            .internal_seek(&seek_key, &mut self.statistics.write)?;
+        if use_near_seek {
+            self.write_cursor
+                .near_seek_for_prev(&seek_key, &mut self.statistics.write)?;
+        } else {
+            self.write_cursor
+                .internal_seek(&seek_key, &mut self.statistics.write)?;
+        }
         assert!(self.write_cursor.valid()?);
 
         loop {
