@@ -177,18 +177,22 @@ impl ServerCredentialsFetcher for Fetcher {
 /// Return true when the match is successful (support wildcard pattern).
 /// Skip the check when cert-allowed-cn is not set or the secure channel is not used.
 pub fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> bool {
-    let auth_ctx = ctx.auth_context();
-    if cert_allowed_cn.is_empty() || auth_ctx.is_none() {
+    if cert_allowed_cn.is_empty() {
         return true;
-    } else if let Some(auth_property) = auth_ctx
-        .unwrap()
-        .into_iter()
-        .find(|x| x.name() == "x509_common_name")
-    {
-        let peer_cn = auth_property.value_str().unwrap();
-        return match_peer_names(cert_allowed_cn, peer_cn);
     }
-    false
+    if let Some(auth_ctx) = ctx.auth_context() {
+        if let Some(auth_property) = auth_ctx
+            .into_iter()
+            .find(|x| x.name() == "x509_common_name")
+        {
+            let peer_cn = auth_property.value_str().unwrap();
+            match_peer_names(cert_allowed_cn, peer_cn)
+        } else {
+            false
+        }
+    } else {
+        true
+    }
 }
 
 fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
