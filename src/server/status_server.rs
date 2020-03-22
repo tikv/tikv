@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn test_security_status_service() {
         let mut status_server = StatusServer::new(1, dummy_future_scheduler());
-        let _ = status_server.start("127.0.0.1:0".to_string(), &new_security_cfg());
+        let _ = status_server.start("127.0.0.1:0".to_string(), &new_security_cfg(None));
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
         let mut connector = HttpConnector::new(1);

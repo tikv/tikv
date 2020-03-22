@@ -217,8 +217,8 @@ fn do_match_name(pattern: &str, name: &str) -> bool {
     let mut name_iter = name.chars();
     // Must find at least one dot and cannot be the last
     loop {
-        if let Some(next) = name_iter.next() {
-            if next == '.' {
+        if let Some(c) = name_iter.next() {
+            if c == '.' {
                 break;
             }
         } else {
