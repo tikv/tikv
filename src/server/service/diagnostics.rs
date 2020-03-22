@@ -983,7 +983,7 @@ mod log {
 
         // for rotated *.<rotated-datetime> file
         if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
-            if let Ok(_) = NaiveDateTime::parse_from_str(res, "%Y-%m-%d-%H:%M:%S%.f") {
+            if NaiveDateTime::parse_from_str(res, "%Y-%m-%d-%H:%M:%S%.f").is_ok() {
                 return true;
             }
         }
