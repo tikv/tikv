@@ -778,7 +778,7 @@ mod log {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     use std::path::Path;
 
-    use chrono::DateTime;
+    use chrono::{DateTime, NaiveDateTime};
     use futures::stream::{iter_ok, Stream};
     use itertools::Itertools;
     use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
@@ -983,7 +983,7 @@ mod log {
 
         // for rotated *.<rotated-datetime> file
         if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
-            if let Ok(_) = DateTime::parse_from_str(res, "%Y-%m-%d-%H:%M:%S%.f") {
+            if let Ok(_) = NaiveDateTime::parse_from_str(res, "%Y-%m-%d-%H:%M:%S%.f") {
                 return true;
             }
         }
@@ -1447,7 +1447,7 @@ mod log {
             )
             .unwrap();
 
-            let log_file3 = dir.path().join("tikv.log.2019-08-23-18:11:02.387");
+            let log_file3 = dir.path().join("tikv.log.2019-08-23-18:11:02.123456789");
             let mut file = File::create(&log_file3).unwrap();
             write!(
                 file,
@@ -1466,7 +1466,7 @@ mod log {
             req.set_end_time(std::i64::MAX);
             req.set_levels(vec![LogLevel::Warn.into()].into());
             req.set_patterns(vec![".*test-filter.*".to_string()].into());
-            let expected = vec!["2019/08/23 18:09:58.387 +08:00"]
+            let expected = vec!["2019/08/23 18:11:58.387 +08:00", "2019/08/23 18:09:58.387 +08:00"]
                 .iter()
                 .map(|s| timestamp(s))
                 .collect::<Vec<i64>>();
