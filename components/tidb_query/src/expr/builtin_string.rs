@@ -15,18 +15,9 @@ use tikv_util::try_opt_or;
 
 use super::{EvalContext, Result, ScalarFunc};
 use crate::codec::{datum, Datum};
-use safemem;
+use crate::expr_util;
 
 const SPACE: u8 = 0o40u8;
-
-// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
-// mysql base64 doc: A newline is added after each 76 characters of encoded output
-const BASE64_LINE_WRAP_LENGTH: usize = 76;
-
-// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
-const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
-const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
-const BASE64_LINE_WRAP: u8 = b'\n';
 
 enum TrimDirection {
     Both = 1,
@@ -524,17 +515,13 @@ impl ScalarFunc {
         if self.field_type.get_flen() == -1
             || self.field_type.get_flen() > tidb_query_datatype::MAX_BLOB_WIDTH
         {
-            return Ok(Some(Cow::Borrowed(b"")));
+            return Ok(None);
         }
 
-        if let Some(size) = encoded_size(s.len()) {
-            let mut buf = vec![0; size];
-            let len_without_wrap =
-                base64::encode_config_slice(s.as_ref(), base64::STANDARD, &mut buf);
-            line_wrap(&mut buf, len_without_wrap);
-            Ok(Some(Cow::Owned(buf)))
+        if let Some(result) = expr_util::string::to_base64(&s) {
+            Ok(Some(Cow::Owned(result)))
         } else {
-            Ok(Some(Cow::Borrowed(b"")))
+            Ok(None)
         }
     }
 
@@ -550,10 +537,11 @@ impl ScalarFunc {
         let input_copy = strip_whitespace(&input);
         let will_overflow = input_copy
             .len()
-            .checked_mul(BASE64_INPUT_CHUNK_LENGTH)
+            .checked_mul(expr_util::string::BASE64_INPUT_CHUNK_LENGTH)
             .is_none();
         // mysql will return "" when the input is incorrectly padded
-        let invalid_padding = input_copy.len() % BASE64_ENCODED_CHUNK_LENGTH != 0;
+        let invalid_padding =
+            input_copy.len() % expr_util::string::BASE64_ENCODED_CHUNK_LENGTH != 0;
         if will_overflow || invalid_padding {
             return Ok(Some(Cow::Borrowed(b"")));
         }
@@ -1087,45 +1075,6 @@ fn strip_whitespace(input: &[u8]) -> Vec<u8> {
 }
 
 #[inline]
-fn encoded_size(len: usize) -> Option<usize> {
-    if len == 0 {
-        return Some(0);
-    }
-    // size_without_wrap = (len + (3 - 1)) / 3 * 4
-    // size = size_without_wrap + (size_withou_wrap - 1) / 76
-    len.checked_add(BASE64_INPUT_CHUNK_LENGTH - 1)
-        .and_then(|r| r.checked_div(BASE64_INPUT_CHUNK_LENGTH))
-        .and_then(|r| r.checked_mul(BASE64_ENCODED_CHUNK_LENGTH))
-        .and_then(|r| r.checked_add((r - 1) / BASE64_LINE_WRAP_LENGTH))
-}
-
-// similar logic to crate `line-wrap`, since we had call `encoded_size` before,
-// there is no need to use checked_xxx math operation like `line-wrap` does.
-#[inline]
-fn line_wrap(buf: &mut [u8], input_len: usize) {
-    let line_len = BASE64_LINE_WRAP_LENGTH;
-    if input_len <= line_len {
-        return;
-    }
-    let last_line_len = if input_len % line_len == 0 {
-        line_len
-    } else {
-        input_len % line_len
-    };
-    let lines_with_ending = (input_len - 1) / line_len;
-    let line_with_ending_len = line_len + 1;
-    let mut old_start = input_len - last_line_len;
-    let mut new_start = buf.len() - last_line_len;
-    safemem::copy_over(buf, old_start, new_start, last_line_len);
-    for _ in 0..lines_with_ending {
-        old_start -= line_len;
-        new_start -= line_with_ending_len;
-        safemem::copy_over(buf, old_start, new_start, line_len);
-        buf[new_start + line_len] = BASE64_LINE_WRAP;
-    }
-}
-
-#[inline]
 fn substring_index_positive(s: &str, delim: &str, count: usize) -> String {
     let mut bg = 0;
     let mut cnt = 0;
@@ -1170,7 +1119,7 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 
 #[cfg(test)]
 mod tests {
-    use super::{encoded_size, TrimDirection};
+    use super::TrimDirection;
     use crate::codec::mysql::charset::CHARSET_BIN;
     use std::{f64, i64, str};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
@@ -2711,14 +2660,6 @@ mod tests {
         ];
         let got = eval_func(ScalarFuncSig::Trim3Args, &args);
         assert!(got.is_err());
-    }
-
-    #[test]
-    fn test_encoded_size() {
-        assert_eq!(encoded_size(0).unwrap(), 0);
-        assert_eq!(encoded_size(54).unwrap(), 72);
-        assert_eq!(encoded_size(58).unwrap(), 81);
-        assert!(encoded_size(usize::max_value()).is_none());
     }
 
     #[test]

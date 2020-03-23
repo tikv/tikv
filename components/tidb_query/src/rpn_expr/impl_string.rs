@@ -4,6 +4,7 @@ use std::str;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::expr_util;
 use crate::Result;
 use tidb_query_datatype::*;
 
@@ -387,6 +388,20 @@ pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<In
     } else {
         Ok(None)
     }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn to_base64(s: &Option<Bytes>) -> Result<Option<Bytes>> {
+    if let Some(s) = s {
+        if s.len() > tidb_query_datatype::MAX_BLOB_WIDTH as usize {
+            return Ok(None);
+        }
+        if let Some(result) = expr_util::string::to_base64(&s) {
+            return Ok(Some(result));
+        }
+    }
+    Ok(None)
 }
 
 #[rpn_fn]
@@ -1599,6 +1614,34 @@ mod tests {
                 .evaluate::<Int>(ScalarFuncSig::InstrUtf8)
                 .unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_to_base64() {
+        let test_cases = vec![
+            (None, None),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (Some(b"abc".to_vec()), Some(b"YWJj".to_vec())),
+            (Some(b"ab c".to_vec()), Some(b"YWIgYw==".to_vec())),
+            (Some(b"1".to_vec()), Some(b"MQ==".to_vec())),
+            (Some(b"1.1".to_vec()), Some(b"MS4x".to_vec())),
+            (Some(b"ab\nc".to_vec()), Some(b"YWIKYw==".to_vec())),
+            (Some(b"ab\tc".to_vec()), Some(b"YWIJYw==".to_vec())),
+            (Some(b"qwerty123456".to_vec()), Some(b"cXdlcnR5MTIzNDU2".to_vec())),
+            (Some(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_vec()), Some(b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrLw==".to_vec())),
+            (Some(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_vec()),Some(b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv".to_vec())),
+            (Some(b"ABCD  EFGHI\nJKLMNOPQRSTUVWXY\tZabcdefghijklmnopqrstuv  wxyz012\r3456789+/".to_vec()),Some(b"QUJDRCAgRUZHSEkKSktMTU5PUFFSU1RVVldYWQlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1diAgd3h5\nejAxMg0zNDU2Nzg5Ky8=".to_vec())),
+            (Some(b"000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw".to_vec())),
+            (Some(b"0000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMA==".to_vec())),
+            (Some(b"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw".to_vec())),
+        ];
+        for (input, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::ToBase64)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 
