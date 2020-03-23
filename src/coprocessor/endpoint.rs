@@ -318,6 +318,7 @@ impl<E: Engine> Endpoint<E> {
         receiver: crossbeam::channel::Receiver<FinishedSpan<SpanContextState>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
+        let _snapshot_span = span.child("coprocessor prepare snapshot", |options| options.start());
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.req_ctx.deadline.check()?;
@@ -341,9 +342,9 @@ impl<E: Engine> Endpoint<E> {
         };
 
         tracker.on_begin_all_items();
-
-        let child_span = span.child("coprocessor executor", |options| options.start());
-        let handle_request_future = track(handler.handle_request(child_span), &mut tracker);
+        std::mem::drop(_snapshot_span);
+        let handle_request_span = span.child("coprocessor executor", |options| options.start());
+        let handle_request_future = track(handler.handle_request(handle_request_span), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
