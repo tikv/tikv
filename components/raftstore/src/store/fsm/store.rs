@@ -1186,10 +1186,7 @@ impl RaftBatchSystem {
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
-
-        if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
-            warn!("set thread priority for raftstore failed"; "error" => ?e);
-        }
+        let _ = sys_util::thread::set_priority(sys_util::HIGH_PRI);
         self.workers = Some(workers);
         Ok(())
     }
