@@ -9,7 +9,7 @@ use rusoto_core::region;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::{HttpClient, HttpConfig};
 use rusoto_core::{ByteStream, RusotoError};
-use rusoto_credential::{DefaultCredentialsProvider, StaticProvider, };
+use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_s3::*;
 use rusoto_sts::WebIdentityProvider;
 
