@@ -2,7 +2,6 @@
 
 use test_raftstore::*;
 use test_util;
-use tikv_util::collections::HashSet;
 
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -52,33 +51,14 @@ fn test_server_partition_write() {
 
 #[test]
 fn test_secure_connect() {
-    let mut allowed_cn = HashSet::default();
-    allowed_cn.insert("tikv-server".to_owned());
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.security = test_util::new_security_cfg(None);
+    cluster.run_conf_change();
+
     let (key, value) = (b"k1", b"v1");
+    cluster.must_put(key, value);
 
-    assert!(std::panic::catch_unwind(|| {
-        let mut cluster = new_server_cluster(0, 3);
-        cluster.cfg.security = test_util::new_security_cfg(Some(allowed_cn));
-        cluster.run_conf_change();
-        cluster.must_put(key, value);
-        for id in 1..4 {
-            must_get_equal(&cluster.get_engine(id), key, value);
-        }
-    })
-    .is_ok());
-}
-
-#[test]
-fn test_secure_connect_fail() {
-    let mut allowed_cn = HashSet::default();
-    allowed_cn.insert("invalid-cn".to_owned());
-    let (key, value) = (b"k1", b"v1");
-
-    assert!(std::panic::catch_unwind(|| {
-        let mut cluster = new_server_cluster(0, 3);
-        cluster.cfg.security = test_util::new_security_cfg(Some(allowed_cn));
-        cluster.run_conf_change();
-        cluster.must_put(key, value);
-    })
-    .is_err());
+    for id in 1..4 {
+        must_get_equal(&cluster.get_engine(id), key, value);
+    }
 }
