@@ -9,6 +9,15 @@ use tidb_query_datatype::*;
 
 const SPACE: u8 = 0o40u8;
 
+// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
+// mysql base64 doc: A newline is added after each 76 characters of encoded output
+const BASE64_LINE_WRAP_LENGTH: usize = 76;
+
+// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
+const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
+const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
+const BASE64_LINE_WRAP: u8 = b'\n';
+
 #[rpn_fn]
 #[inline]
 pub fn bin(num: &Option<Int>) -> Result<Option<Bytes>> {
@@ -424,6 +433,69 @@ pub fn char_length_utf8(bs: &Option<Bytes>) -> Result<Option<Int>> {
             Err(err) => Err(box_err!("invalid input value: {:?}", err)),
         },
         _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn to_base64(bs: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match bs.as_ref() {
+        Some(bytes) => {
+            if bytes.len() > tidb_query_datatype::MAX_BLOB_WIDTH as usize {
+                return Ok(Some(Vec::new()));
+            }
+
+            if let Some(size) = encoded_size(bytes.len()) {
+                let mut buf = vec![0; size];
+                let len_without_wrap =
+                    base64::encode_config_slice(bytes, base64::STANDARD, &mut buf);
+                line_wrap(&mut buf, len_without_wrap);
+                Ok(Some(buf))
+            } else {
+                Ok(Some(Vec::new()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[inline]
+fn encoded_size(len: usize) -> Option<usize> {
+    if len == 0 {
+        return Some(0);
+    }
+
+    // size_without_wrap = (len + (3 - 1)) / 3 * 4
+    // size = size_without_wrap + (size_without_wrap - 1) / 76
+    len.checked_add(BASE64_INPUT_CHUNK_LENGTH - 1)
+        .and_then(|r| r.checked_div(BASE64_INPUT_CHUNK_LENGTH))
+        .and_then(|r| r.checked_mul(BASE64_ENCODED_CHUNK_LENGTH))
+        .and_then(|r| r.checked_add((r - 1) / BASE64_LINE_WRAP_LENGTH))
+}
+
+// similar logic to crate `line-wrap`, since we had call `encoded_size` before,
+// there is no need to use checked_xxx math operation like `line-wrap` does.
+#[inline]
+fn line_wrap(buf: &mut [u8], input_len: usize) {
+    let line_len = BASE64_LINE_WRAP_LENGTH;
+    if input_len <= line_len {
+        return;
+    }
+    let last_line_len = if input_len % line_len == 0 {
+        line_len
+    } else {
+        input_len % line_len
+    };
+    let lines_with_ending = (input_len - 1) / line_len;
+    let line_with_ending_len = line_len + 1;
+    let mut old_start = input_len - last_line_len;
+    let mut new_start = buf.len() - last_line_len;
+    safemem::copy_over(buf, old_start, new_start, last_line_len);
+    for _ in 0..lines_with_ending {
+        old_start -= line_len;
+        new_start -= line_with_ending_len;
+        safemem::copy_over(buf, old_start, new_start, line_len);
+        buf[new_start + line_len] = BASE64_LINE_WRAP;
     }
 }
 
@@ -1689,6 +1761,54 @@ mod tests {
                 .push_param(arg)
                 .evaluate::<i64>(ScalarFuncSig::CharLengthUtf8);
             assert!(output.is_err());
+        }
+    }
+
+    #[test]
+    fn test_to_base64() {
+        let cases = vec![
+            ("", ""),
+            ("abc", "YWJj"),
+            ("ab c", "YWIgYw=="),
+            ("1", "MQ=="),
+            ("1.1", "MS4x"),
+            ("ab\nc", "YWIKYw=="),
+            ("ab\tc", "YWIJYw=="),
+            ("qwerty123456", "cXdlcnR5MTIzNDU2"),
+            (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrLw==",
+            ),
+            (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv",
+            ),
+            (
+                "ABCD  EFGHI\nJKLMNOPQRSTUVWXY\tZabcdefghijklmnopqrstuv  wxyz012\r3456789+/",
+                "QUJDRCAgRUZHSEkKSktMTU5PUFFSU1RVVldYWQlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1diAgd3h5\nejAxMg0zNDU2Nzg5Ky8=",
+            ),
+            (
+                "000000000000000000000000000000000000000000000000000000000",
+                "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+            ),
+            (
+                "0000000000000000000000000000000000000000000000000000000000",
+                "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMA==",
+            ),
+            (
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+            )
+        ];
+
+        for (arg, expected) in cases {
+            let param = Some(arg.to_string().into_bytes());
+            let expected_output = Some(expected.to_string().into_bytes());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(param)
+                .evaluate::<Bytes>(ScalarFuncSig::ToBase64)
+                .unwrap();
+            assert_eq!(output, expected_output);
         }
     }
 }
