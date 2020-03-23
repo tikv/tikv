@@ -427,7 +427,7 @@ impl<E: Engine> Endpoint<E> {
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         let entry_span = tracer.span("coprocessor endpoint").start();
-
+        std::mem::drop(tracer);
         let result_of_future =
             self.parse_request(req, peer, false)
                 .map(|(handler_builder, req_ctx)| {
@@ -761,6 +761,7 @@ mod tests {
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         let entry_span = tracer.span("coprocessor endpoint").start();
+        std::mem::drop(tracer);
 
         let resp = cop
             .handle_unary_request(
@@ -789,6 +790,7 @@ mod tests {
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         let entry_span = tracer.span("coprocessor endpoint").start();
+        std::mem::drop(tracer);
 
         assert!(cop
             .handle_unary_request(outdated_req_ctx, handler_builder, entry_span, span_rx)
@@ -917,6 +919,7 @@ mod tests {
             let (span_tx, span_rx) = crossbeam::channel::unbounded();
             let tracer = Tracer::with_sender(AllSampler, span_tx);
             let entry_span = tracer.span("coprocessor endpoint").start();
+            std::mem::drop(tracer);
 
             let future = cop.handle_unary_request(
                 ReqContext::default_for_test(),
@@ -954,6 +957,7 @@ mod tests {
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         let entry_span = tracer.span("coprocessor endpoint").start();
         std::mem::drop(tracer);
+
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
         let resp = cop
@@ -1218,6 +1222,7 @@ mod tests {
             let (span_tx, span_rx) = crossbeam::channel::unbounded();
             let tracer = Tracer::with_sender(AllSampler, span_tx);
             let entry_span = tracer.span("coprocessor endpoint").start();
+            std::mem::drop(tracer);
 
             let resp_future_1 = cop.handle_unary_request(
                 req_with_exec_detail.clone(),
@@ -1240,6 +1245,8 @@ mod tests {
             let (span_tx, span_rx) = crossbeam::channel::unbounded();
             let tracer = Tracer::with_sender(AllSampler, span_tx);
             let entry_span = tracer.span("coprocessor endpoint").start();
+            std::mem::drop(tracer);
+
             let resp_future_2 = cop.handle_unary_request(
                 req_with_exec_detail.clone(),
                 handler_builder,
@@ -1306,6 +1313,7 @@ mod tests {
             let (span_tx, span_rx) = crossbeam::channel::unbounded();
             let tracer = Tracer::with_sender(AllSampler, span_tx);
             let entry_span = tracer.span("coprocessor endpoint").start();
+            std::mem::drop(tracer);
 
             let resp_future_1 = cop.handle_unary_request(
                 req_with_exec_detail.clone(),
