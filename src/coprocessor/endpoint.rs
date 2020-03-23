@@ -427,7 +427,6 @@ impl<E: Engine> Endpoint<E> {
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         let entry_span = tracer.span("coprocessor endpoint").start();
-        // let inactive = rustracing::span::Span::<()>::inactive();
 
         let result_of_future =
             self.parse_request(req, peer, false)
@@ -954,7 +953,7 @@ mod tests {
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         let entry_span = tracer.span("coprocessor endpoint").start();
-
+        std::mem::drop(tracer);
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
         let resp = cop
