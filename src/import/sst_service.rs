@@ -213,7 +213,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
         let (cb, future) = paired_future_callback();
         if let Err(e) = self.router.send_command(cmd, Callback::Write(cb)) {
-            return send_rpc_error(ctx, sink, e);
+            let mut resp = IngestResponse::default();
+            resp.set_error(e.into());
+            ctx.spawn(sink.success(resp).map_err(|e| {
+                warn!("send rpc failed"; "err" => %e);
+            }));
+            return;
         }
 
         ctx.spawn(
