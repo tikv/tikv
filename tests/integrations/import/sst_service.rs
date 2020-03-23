@@ -214,8 +214,28 @@ fn test_cleanup_sst() {
     check_sst_deleted(&import, &meta, &data);
 }
 
+#[test]
+fn test_ingest_sst_region_not_found() {
+    let (_cluster, mut ctx_not_found, _, import) = new_cluster_and_tikv_import_client();
+
+    let temp_dir = TempDir::new("test_ingest_sst_errors").unwrap();
+
+    ctx_not_found.set_region_id(1 << 31); // A large region id that must no exists.
+    let sst_path = temp_dir.path().join("test_split.sst");
+    let sst_range = (0, 100);
+    let (mut meta, _data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx_not_found.get_region_id());
+    meta.set_region_epoch(ctx_not_found.get_region_epoch().clone());
+
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx_not_found);
+    ingest.set_sst(meta);
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(resp.get_error().has_region_not_found());
+}
+
 fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
-    let mut m = SSTMeta::new();
+    let mut m = SSTMeta::default();
     m.set_uuid(Uuid::new_v4().as_bytes().to_vec());
     m.set_crc32(crc32);
     m.set_length(length);
