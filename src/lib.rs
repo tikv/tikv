@@ -53,6 +53,8 @@ extern crate failure;
 #[cfg(test)]
 extern crate test;
 
+extern crate encryption;
+
 pub mod config;
 pub mod coprocessor;
 pub mod import;

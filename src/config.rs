@@ -774,6 +774,8 @@ pub struct DbConfig {
     #[config(skip)]
     pub enable_pipelined_write: bool,
     #[config(skip)]
+    pub enable_multi_batch_write: bool,
+    #[config(skip)]
     pub enable_unordered_write: bool,
     #[config(submodule)]
     pub defaultcf: DefaultCfConfig,
@@ -819,6 +821,7 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            enable_multi_batch_write: true,
             enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -874,7 +877,11 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_pipelined_write(
+            (self.enable_pipelined_write || self.enable_multi_batch_write)
+                && !self.enable_unordered_write,
+        );
+        opts.enable_multi_batch_write(self.enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
 
@@ -913,7 +920,7 @@ impl DbConfig {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
             }
-            if self.enable_pipelined_write {
+            if self.enable_pipelined_write || self.enable_multi_batch_write {
                 return Err("pipelined_write is not compatible with unordered_write".into());
             }
         }
