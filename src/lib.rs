@@ -26,6 +26,7 @@
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
+#![feature(str_strip)]
 
 #[macro_use(fail_point)]
 extern crate fail;
