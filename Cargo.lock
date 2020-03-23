@@ -4292,7 +4292,6 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "rand 0.6.5",
- "tidb_query_datatype",
  "tikv_util",
  "time 0.1.42",
  "tipb",
@@ -4326,6 +4325,7 @@ dependencies = [
  "slog",
  "slog-global",
  "static_assertions",
+ "tidb_query_common",
  "tikv_alloc",
  "tikv_util",
  "tipb",
@@ -4370,10 +4370,20 @@ dependencies = [
  "slog-global",
  "tidb_query_common",
  "tidb_query_datatype",
+ "tidb_query_shared_expr",
  "tikv_util",
  "tipb",
  "twoway",
  "uuid",
+]
+
+[[package]]
+name = "tidb_query_shared_expr"
+version = "0.0.1"
+dependencies = [
+ "rand 0.6.5",
+ "tidb_query_datatype",
+ "time 0.1.42",
 ]
 
 [[package]]
@@ -4436,6 +4446,7 @@ dependencies = [
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
+ "tidb_query_shared_expr",
  "tikv_util",
  "tipb",
  "tipb_helper",
@@ -4521,6 +4532,7 @@ dependencies = [
  "tidb_query_datatype",
  "tidb_query_normal_executors",
  "tidb_query_normal_expr",
+ "tidb_query_shared_expr",
  "tidb_query_vec_aggr",
  "tidb_query_vec_executors",
  "tidb_query_vec_expr",

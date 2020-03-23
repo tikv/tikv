@@ -1,9 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor as coppb;
-use tipb::ColumnInfo;
-
-use tidb_query_datatype::codec::Datum;
 
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
@@ -89,18 +86,6 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
 #[inline]
 pub fn is_point(range: &coppb::KeyRange) -> bool {
     is_prefix_next(range.get_start(), range.get_end())
-}
-
-#[inline]
-pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag};
-
-    if col.as_accessor().flag().contains(FieldTypeFlag::UNSIGNED) {
-        // PK column is unsigned
-        Datum::U64(h as u64)
-    } else {
-        Datum::I64(h)
-    }
 }
 
 #[cfg(test)]

@@ -125,6 +125,7 @@ sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tempfile = "3.0"
 tidb_query_datatype = { path = "components/tidb_query_datatype" }
 tidb_query_common = { path = "components/tidb_query_common" }
+tidb_query_shared_expr = { path = "components/tidb_query_shared_expr" }
 tidb_query_normal_expr = { path = "components/tidb_query_normal_expr" }
 tidb_query_normal_executors = { path = "components/tidb_query_normal_executors" }
 tidb_query_vec_expr = { path = "components/tidb_query_vec_expr" }

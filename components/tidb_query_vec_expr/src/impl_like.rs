@@ -2,10 +2,10 @@
 
 use tidb_query_codegen::rpn_fn;
 
-use tidb_query_common::expr_util;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_shared_expr::*;
 
 #[rpn_fn]
 #[inline]
@@ -15,11 +15,11 @@ pub fn like<C: Collator>(
     escape: &Option<i64>,
 ) -> Result<Option<i64>> {
     match (target, pattern, escape) {
-        (Some(target), Some(pattern), Some(escape)) => Ok(Some(expr_util::like::like::<C>(
-            target.as_slice(),
-            pattern.as_slice(),
-            *escape as u32,
-        )? as i64)),
+        (Some(target), Some(pattern), Some(escape)) => {
+            Ok(Some(
+                like::like::<C>(target.as_slice(), pattern.as_slice(), *escape as u32)? as i64,
+            ))
+        }
         _ => Ok(None),
     }
 }

@@ -8,9 +8,9 @@ use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex;
 use openssl::hash::{self, MessageDigest};
-use tidb_query_common::expr_util::rand::{gen_random_bytes, MAX_RAND_BYTES_LENGTH};
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::expr::{Error, EvalContext, Result};
+use tidb_query_shared_expr::rand::{gen_random_bytes, MAX_RAND_BYTES_LENGTH};
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;

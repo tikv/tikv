@@ -1,11 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::ScalarFunc;
-use tidb_query_common::expr_util;
 use tidb_query_datatype::codec::data_type::Duration;
 use tidb_query_datatype::codec::mysql::{Decimal, Json, Time};
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::expr::{EvalContext, Result};
+use tidb_query_shared_expr::*;
 
 use std::borrow::Cow;
 use std::convert::TryFrom;
@@ -133,7 +133,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
         let addr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        Ok(expr_util::miscellaneous::inet_aton(addr))
+        Ok(miscellaneous::inet_aton(addr))
     }
 
     pub fn inet_ntoa<'a, 'b: 'a>(

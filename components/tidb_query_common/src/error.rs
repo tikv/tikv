@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use failure::Fail;
-use tidb_query_datatype::codec::Error as CodecError;
 
 #[derive(Fail, Debug)]
 pub enum EvaluateError {
@@ -28,17 +27,6 @@ impl EvaluateError {
             EvaluateError::DeadlineExceeded => 9007,
             EvaluateError::Custom { code, .. } => *code,
             EvaluateError::Other(_) => 10000,
-        }
-    }
-}
-
-// TODO: `codec::Error` should be substituted by EvaluateError.
-impl From<CodecError> for EvaluateError {
-    #[inline]
-    fn from(err: CodecError) -> Self {
-        match err {
-            CodecError::Eval(msg, code) => EvaluateError::Custom { code, msg },
-            e => EvaluateError::Other(e.to_string()),
         }
     }
 }

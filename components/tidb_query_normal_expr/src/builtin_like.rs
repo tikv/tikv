@@ -3,11 +3,11 @@
 use regex::{bytes::Regex as BytesRegex, Regex};
 
 use crate::ScalarFunc;
-use tidb_query_common::expr_util;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::expr::{EvalContext, Result};
 use tidb_query_datatype::{Collation, FieldTypeAccessor};
+use tidb_query_shared_expr::*;
 
 impl ScalarFunc {
     pub fn like(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -16,7 +16,7 @@ impl ScalarFunc {
         let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
         Ok(Some(match_template_collator! {
             TT, match self.field_type.collation()? {
-                Collation::TT => expr_util::like::like::<TT>(&target, &pattern, escape)?
+                Collation::TT => like::like::<TT>(&target, &pattern, escape)?
             }
         } as i64))
     }

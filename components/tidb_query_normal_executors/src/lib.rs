@@ -46,7 +46,6 @@ use tipb::{Expr, ExprType};
 
 use tidb_query_common::execute_stats::*;
 use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::util;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::datum::{self, Datum, DatumEncoder};
 use tidb_query_datatype::codec::table::{self, RowColsDict};
@@ -154,6 +153,16 @@ impl Row {
     }
 }
 
+#[inline]
+pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
+    if col.as_accessor().flag().contains(FieldTypeFlag::UNSIGNED) {
+        // PK column is unsigned
+        Datum::U64(h as u64)
+    } else {
+        Datum::I64(h)
+    }
+}
+
 impl OriginCols {
     pub fn new(handle: i64, data: RowColsDict, cols: Arc<Vec<ColumnInfo>>) -> OriginCols {
         OriginCols { handle, data, cols }
@@ -164,7 +173,7 @@ impl OriginCols {
         let mut res = Vec::with_capacity(self.cols.len());
         for col in self.cols.iter() {
             if col.get_pk_handle() {
-                let v = util::get_pk(col, self.handle);
+                let v = get_pk(col, self.handle);
                 let bt = box_try!(datum::encode_value(ctx, &[v],));
                 res.push(bt);
                 continue;
@@ -196,7 +205,7 @@ impl OriginCols {
             match self.data.get(col_id) {
                 Some(value) => values.extend_from_slice(value),
                 None if col.get_pk_handle() => {
-                    let pk = util::get_pk(col, self.handle);
+                    let pk = get_pk(col, self.handle);
                     box_try!(values.write_datum(ctx, &[pk], false));
                 }
                 None if col.has_default_val() => {
@@ -230,7 +239,7 @@ impl OriginCols {
         for offset in offsets {
             let col = &self.cols[*offset];
             if col.get_pk_handle() {
-                let v = util::get_pk(col, self.handle);
+                let v = get_pk(col, self.handle);
                 res[*offset] = v;
             } else {
                 let col_id = col.get_column_id();

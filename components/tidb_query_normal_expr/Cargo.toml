@@ -24,6 +24,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 tidb_query_common = { path = "../tidb_query_common" }
+tidb_query_shared_expr = { path = "../tidb_query_shared_expr" }
 tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 twoway = "0.2.0"
