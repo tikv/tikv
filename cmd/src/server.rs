@@ -656,7 +656,11 @@ impl TiKVServer {
         let diag_service = DiagnosticsService::new(
             pool,
             self.config.log_file.clone(),
+<<<<<<< HEAD
             self.security_mgr.clone(),
+=======
+            self.config.slow_log_file.clone(),
+>>>>>>> ed71f20... service: Support slow log searching (#7085)
         );
         if servers
             .server

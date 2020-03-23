@@ -32,7 +32,14 @@ macro_rules! fatal {
 // number while rotate by size.
 fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     let mut new_path = path.to_path_buf().into_os_string();
+<<<<<<< HEAD
     new_path.push(format!(".{}", Local::now().format("%Y-%m-%d-%H:%M:%S%.f")));
+=======
+    new_path.push(format!(
+        "{}",
+        Local::now().format(logger::DATETIME_ROTATE_SUFFIX)
+    ));
+>>>>>>> ed71f20... service: Support slow log searching (#7085)
     Ok(PathBuf::from(new_path))
 }
 
