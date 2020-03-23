@@ -374,7 +374,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let mut status_server = StatusServer::new(server_cfg.status_thread_pool_size);
     if status_enabled {
         // Start the status server.
-        if let Err(e) = status_server.start(server_cfg.status_addr) {
+        if let Err(e) = status_server.start(server_cfg.status_addr, &cfg.security) {
             error!(
                 "failed to bind addr for status service";
                 "err" => %e
