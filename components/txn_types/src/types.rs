@@ -1,6 +1,5 @@
 use super::timestamp::TimeStamp;
 use byteorder::{ByteOrder, NativeEndian};
-use hex::ToHex;
 use kvproto::kvrpcpb;
 use std::fmt::{self, Debug, Display, Formatter};
 use tikv_util::codec;
@@ -216,13 +215,13 @@ impl Clone for Key {
 
 impl Debug for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.write_hex_upper(f)
+        f.write_str(&hex::encode_upper(&self.0))
     }
 }
 
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.write_hex_upper(f)
+        f.write_str(&hex::encode_upper(&self.0))
     }
 }
 
