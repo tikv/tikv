@@ -7,7 +7,8 @@ use futures::{self, Future};
 use hyper::server::Builder as HyperBuilder;
 use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use openssl::x509::X509StoreContextRef;
 use pprof;
 use pprof::protos::Message;
 use regex::Regex;
@@ -29,7 +30,7 @@ use raftstore::store::PdTask;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
-use tikv_util::security::SecurityConfig;
+use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::FutureScheduler;
 
@@ -451,6 +452,40 @@ impl StatusServer {
             acceptor.set_ca_file(&security_config.ca_path)?;
             acceptor.set_certificate_chain_file(&security_config.cert_path)?;
             acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
+
+            if !security_config.cert_allowed_cn.is_empty() {
+                let allowed_cn = security_config.cert_allowed_cn.clone();
+                // The verification callback to check if the peer CN is allowed.
+                let verify_cb = move |flag: bool, x509_ctx: &mut X509StoreContextRef| {
+                    if !flag || x509_ctx.error_depth() != 0 {
+                        return flag;
+                    }
+                    if let Some(chains) = x509_ctx.chain() {
+                        if chains.len() != 0 {
+                            let cn_data = chains
+                                .get(0)
+                                .unwrap()
+                                .subject_name()
+                                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
+                                .next()
+                                .unwrap()
+                                .data()
+                                .as_slice();
+                            return security::match_peer_names(
+                                &allowed_cn,
+                                std::str::from_utf8(cn_data).unwrap(),
+                            );
+                        }
+                    }
+                    false
+                };
+                // Request and require cert from client-side.
+                acceptor.set_verify_callback(
+                    SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
+                    verify_cb,
+                );
+            }
+
             let acceptor = acceptor.build();
 
             let tls_stream = tcp_listener
@@ -574,6 +609,7 @@ mod tests {
     use hyper::client::HttpConnector;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;
+    use openssl::ssl::SslFiletype;
     use openssl::ssl::{SslConnector, SslMethod};
     use tokio_core::reactor::Handle;
 
@@ -584,6 +620,7 @@ mod tests {
     use crate::server::status_server::StatusServer;
     use raftstore::store::PdTask;
     use test_util::new_security_cfg;
+    use tikv_util::collections::HashSet;
     use tikv_util::security::SecurityConfig;
     use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
 
@@ -614,17 +651,43 @@ mod tests {
     }
 
     #[test]
-    fn test_security_status_service() {
+    fn test_security_status_service_with_cn_validation() {
         let mut status_server = StatusServer::new(1, dummy_future_scheduler());
-        let _ = status_server.start("127.0.0.1:0".to_string(), &new_security_cfg(None));
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut allowed_cn = HashSet::default();
+        allowed_cn.insert("tikv-server".to_owned());
+        let _ = status_server.start(
+            "127.0.0.1:0".to_string(),
+            &new_security_cfg(Some(allowed_cn)),
+        );
 
         let mut connector = HttpConnector::new(1);
         connector.enforce_http(false);
         let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
+        ssl.set_certificate_file(
+            format!(
+                "{}",
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("components/test_util/data/server.pem")
+                    .display()
+            ),
+            SslFiletype::PEM,
+        )
+        .unwrap();
+        ssl.set_private_key_file(
+            format!(
+                "{}",
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("components/test_util/data/key.pem")
+                    .display()
+            ),
+            SslFiletype::PEM,
+        )
+        .unwrap();
         ssl.set_ca_file(format!(
             "{}",
-            p.join("components/test_util/data/ca.pem").display()
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("components/test_util/data/ca.pem")
+                .display()
         ))
         .unwrap();
 

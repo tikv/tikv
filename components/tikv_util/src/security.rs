@@ -195,44 +195,14 @@ pub fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) ->
     }
 }
 
-fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
+/// Check peer CN with a set of allowed CN.
+pub fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
     for cn in allowed_cn {
-        if do_match_name(cn, name) {
+        if cn == name {
             return true;
         }
     }
     false
-}
-
-fn do_match_name(pattern: &str, name: &str) -> bool {
-    if pattern.is_empty() {
-        return false;
-    }
-    // Try exact match
-    if pattern == name {
-        return true;
-    }
-
-    let mut pat_iter = pattern.bytes();
-    // Ensure wildcard mode usage
-    if pat_iter.len() < 3 || pat_iter.next().unwrap() != b'*' || pat_iter.next().unwrap() != b'.' {
-        return false;
-    }
-    let mut name_iter = name.chars();
-    // Must find at least one dot and cannot be the last
-    loop {
-        if let Some(c) = name_iter.next() {
-            if c == '.' {
-                break;
-            }
-        } else {
-            return false;
-        }
-    }
-
-    let sub_name = name_iter.as_str().as_bytes();
-    let sub_pattern: Vec<u8> = pat_iter.collect();
-    sub_name == sub_pattern.as_slice()
 }
 
 #[cfg(test)]
@@ -294,19 +264,5 @@ mod tests {
         assert_eq!(ca, vec![0]);
         assert_eq!(cert, vec![1]);
         assert_eq!(key, vec![2]);
-    }
-
-    #[test]
-    fn test_do_match_name() {
-        // supported wildcard usage
-        assert!(do_match_name("aa.bb.cc", "aa.bb.cc"));
-        assert!(do_match_name("*.bb.cc", "aa.bb.cc"));
-        // Unsupported wildcard usage
-        let mut cn = HashSet::default();
-        cn.insert(String::from("*bb.cc"));
-        cn.insert(String::from("a*.bb.cc"));
-        cn.insert(String::from("  aa.bb.cc"));
-        cn.insert(String::from("*.cc"));
-        assert!(!match_peer_names(&cn, "aa.bb.cc"));
     }
 }
