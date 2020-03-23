@@ -344,7 +344,8 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
         std::mem::drop(_snapshot_span);
         let handle_request_span = span.child("coprocessor executor", |options| options.start());
-        let handle_request_future = track(handler.handle_request(handle_request_span), &mut tracker);
+        let handle_request_future =
+            track(handler.handle_request(handle_request_span), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {

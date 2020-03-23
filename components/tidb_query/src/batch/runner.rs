@@ -373,6 +373,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 Ok(f) => is_drained = f,
             }
 
+            let _fill_chunk_span = span.child("coprocessor fill chunk", |options| options.start());
+
             // We will only get warnings limited by max_warning_count. Note that in future we
             // further want to ignore warnings from unused rows. See TODOs in the `result.warnings`
             // field.

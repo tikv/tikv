@@ -114,6 +114,8 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
 
         let timer = self.summary_collector.on_start_iterate();
         let result = self.inner.next_batch(scan_rows, child_span);
+        let _on_finish_iterate_span =
+            span.child("coprocessor on_finish_iterate", |options| options.start());
         self.summary_collector
             .on_finish_iterate(timer, result.logical_rows.len());
         result

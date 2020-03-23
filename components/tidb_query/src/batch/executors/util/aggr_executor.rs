@@ -194,10 +194,16 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     ) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
         // always needs to calculate over all data.
-        let src_result = self
-            .entities
-            .src
-            .next_batch(crate::batch::runner::BATCH_MAX_SIZE, span);
+        let src_result = self.entities.src.next_batch(
+            crate::batch::runner::BATCH_MAX_SIZE,
+            span.child("coprocessor AggregationExecutor next_batch", |options| {
+                options.start()
+            }),
+        );
+        let _consume_result = span.child(
+            "coprocessor AggregationExecutor consume result",
+            |options| options.start(),
+        );
 
         self.entities.context.warnings = src_result.warnings;
 
