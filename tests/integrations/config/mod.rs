@@ -17,6 +17,7 @@ use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
+use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
@@ -192,6 +193,10 @@ fn test_serde_custom_tikv_config() {
         sample_ratio: 0.982,
         merge_small_file_threshold: ReadableSize::kb(21),
         blob_run_mode: BlobRunMode::Fallback,
+        level_merge: true,
+        range_merge: true,
+        max_sorted_runs: 100,
+        gc_merge_rewrite: true,
     };
     let titan_db_config = TitanDBConfig {
         enabled: true,
@@ -226,6 +231,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
+        enable_multi_batch_write: false,
         enable_unordered_write: true,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
@@ -320,6 +326,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly,
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -374,6 +384,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -428,6 +442,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -547,6 +565,12 @@ fn test_serde_custom_tikv_config() {
         ratio_threshold: 1.2,
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
+    };
+    value.pessimistic_txn = PessimisticTxnConfig {
+        enabled: false,
+        wait_for_lock_timeout: 10,
+        wake_up_delay_duration: 100,
+        pipelined: true,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

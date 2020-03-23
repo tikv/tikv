@@ -41,9 +41,12 @@ pub struct Opt {
     /// Credential file path. For S3, use ~/.aws/credentials.
     #[structopt(short, long)]
     credential_file: Option<String>,
+    /// Remote endpoint
+    #[structopt(short, long)]
+    endpoint: Option<String>,
     /// Remote region.
     #[structopt(short, long)]
-    region: Option<u64>,
+    region: Option<String>,
     /// Remote bucket name.
     #[structopt(short, long)]
     bucket: Option<String>,
@@ -87,8 +90,11 @@ fn create_s3_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
         .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
         .clone();
 
-    if let Some(region) = opt.region {
-        config.region = format!("{}", region);
+    if let Some(endpoint) = &opt.endpoint {
+        config.endpoint = endpoint.to_string();
+    }
+    if let Some(region) = &opt.region {
+        config.region = region.to_string();
     } else {
         return Err(Error::new(ErrorKind::Other, "missing region"));
     }
@@ -118,7 +124,7 @@ fn process() -> Result<()> {
             storage.write(&opt.name, Box::new(AllowStdIo::new(file)), file_size)?;
         }
         Command::Load => {
-            let reader = storage.read(&opt.name)?;
+            let reader = storage.read(&opt.name);
             let mut file = AllowStdIo::new(File::create(&opt.file)?);
             block_on(copy(reader, &mut file))?;
         }

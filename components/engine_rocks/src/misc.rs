@@ -2,7 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Result};
+use engine_traits::{MiscExt, Range, Result};
 
 impl MiscExt for RocksEngine {
     fn is_titan(&self) -> bool {
@@ -25,6 +25,14 @@ impl MiscExt for RocksEngine {
         Ok(self
             .as_inner()
             .delete_files_in_range_cf(handle, start_key, end_key, include_end)?)
+    }
+
+    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)> {
+        let range = util::range_to_rocks_range(range);
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .get_approximate_memtable_stats_cf(handle, &range))
     }
 }
 

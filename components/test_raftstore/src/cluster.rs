@@ -15,9 +15,9 @@ use raft::eraftpb::ConfChangeType;
 use tempfile::{Builder, TempDir};
 
 use engine::rocks;
-use engine::{Engines, Peekable, DB};
+use engine::{Engines, DB};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Iterable, Mutable, WriteBatchExt, CF_DEFAULT, CF_RAFT};
+use engine_traits::{Iterable, Mutable, Peekable, WriteBatchExt, CF_DEFAULT, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -230,6 +230,7 @@ impl<T: Simulator> Cluster<T> {
                 }
             }
         }
+        self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
     }
 
@@ -500,7 +501,7 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.remove(&region_id);
     }
 
-    pub fn assert_quorum<F: FnMut(&DB) -> bool>(&self, mut condition: F) {
+    pub fn assert_quorum<F: FnMut(&Arc<DB>) -> bool>(&self, mut condition: F) {
         if self.engines.is_empty() {
             return;
         }
@@ -857,6 +858,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
+            .c()
             .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &key)
             .unwrap()
             .unwrap()
@@ -865,6 +867,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> raft_serverpb::RaftLocalState {
         let key = keys::raft_state_key(region_id);
         self.get_raft_engine(store_id)
+            .c()
             .get_msg::<raft_serverpb::RaftLocalState>(&key)
             .unwrap()
             .unwrap()
