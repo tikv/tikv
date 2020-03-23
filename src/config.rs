@@ -107,7 +107,6 @@ pub struct TitanCfConfig {
     pub sample_ratio: f64,
     #[config(skip)]
     pub merge_small_file_threshold: ReadableSize,
-    #[config(skip)]
     pub blob_run_mode: BlobRunMode,
     #[config(skip)]
     pub level_merge: bool,
@@ -132,7 +131,7 @@ impl Default for TitanCfConfig {
             merge_small_file_threshold: ReadableSize::mb(8),
             blob_run_mode: BlobRunMode::Normal,
             level_merge: false,
-            range_merge: false,
+            range_merge: true,
             max_sorted_runs: 20,
             gc_merge_rewrite: false,
         }
