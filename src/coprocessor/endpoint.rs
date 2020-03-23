@@ -16,7 +16,6 @@ use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::CodedInputStream;
 use protobuf::Message;
 use rustracing::sampler::AllSampler;
-use rustracing_jaeger::reporter::JaegerCompactReporter;
 use rustracing_jaeger::Tracer;
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
@@ -36,6 +35,7 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use rustracing::span::FinishedSpan;
 use rustracing_jaeger::span::SpanContextState;
+use tikv_util::jaegerencoder::encode_spans_in_jaeger_binary;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -353,13 +353,11 @@ impl<E: Engine> Endpoint<E> {
         };
 
         std::mem::drop(span);
-        let reporter = JaegerCompactReporter::new("tikv").unwrap();
-        // for finished_span in receiver.iter() {
-        //     // info!("receive span: {:?}", finished_span);
-        //     reporter.report(&[finished_span]).unwrap();
-        // }
         let spans = receiver.iter().collect::<Vec<_>>();
-        reporter.report(&spans).unwrap();
+        let encoded_spans = encode_spans_in_jaeger_binary(&spans).unwrap();
+        // let reporter = JaegerBinaryReporter::new("tikv").unwrap();
+        // reporter.report(&spans).unwrap();
+        //TODO 糊 report to tidb
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
@@ -377,6 +375,7 @@ impl<E: Engine> Endpoint<E> {
             Err(e) => make_error_response(e),
         };
         resp.set_exec_details(exec_details);
+        resp.set_trace_spans(encoded_spans);
         Ok(resp)
     }
 

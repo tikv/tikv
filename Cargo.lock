@@ -1954,7 +1954,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#78042b285b75c1e427ac3dcf5559e1f8bcd340c9"
+source = "git+https://github.com/renkai/kvproto.git?branch=add_tracing#e7ddc69027805112dac8d57b1070302d8fcbd0d7"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3565,8 +3565,7 @@ dependencies = [
 [[package]]
 name = "rustracing_jaeger"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "873f575e7e9630a83f34e49cd6bc0c1edbe8c65195e4724eb1f33da59df9f9f1"
+source = "git+https://github.com/renkai/rustracing_jaeger?rev=c48883fe2ad3153a5fc1fe26a79690f59930d3ed#c48883fe2ad3153a5fc1fe26a79690f59930d3ed"
 dependencies = [
  "crossbeam-channel",
  "hostname",
@@ -4530,6 +4529,8 @@ dependencies = [
  "quick-error",
  "rand 0.7.3",
  "regex",
+ "rustracing",
+ "rustracing_jaeger",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4538,6 +4539,7 @@ dependencies = [
  "slog-global",
  "slog-term",
  "tempfile",
+ "thrift_codec",
  "tikv_alloc",
  "time 0.1.42",
  "tokio-core",

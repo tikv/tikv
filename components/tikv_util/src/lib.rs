@@ -44,6 +44,7 @@ pub mod future_pool;
 #[macro_use]
 pub mod macros;
 pub mod deadline;
+pub mod jaegerencoder;
 pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
