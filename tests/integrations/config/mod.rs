@@ -326,7 +326,7 @@ fn test_serde_custom_tikv_config() {
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly,
                 level_merge: false,
-                range_merge: false,
+                range_merge: true,
                 max_sorted_runs: 20,
                 gc_merge_rewrite: false,
             },
@@ -384,7 +384,7 @@ fn test_serde_custom_tikv_config() {
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
                 level_merge: false,
-                range_merge: false,
+                range_merge: true,
                 max_sorted_runs: 20,
                 gc_merge_rewrite: false,
             },
@@ -442,7 +442,7 @@ fn test_serde_custom_tikv_config() {
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
                 level_merge: false,
-                range_merge: false,
+                range_merge: true,
                 max_sorted_runs: 20,
                 gc_merge_rewrite: false,
             },
