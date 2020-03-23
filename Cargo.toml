@@ -142,8 +142,8 @@ into_other = { path = "components/into_other" }
 encryption = { path = "components/encryption" }
 
 [dependencies.prometheus-static-metric]
-git = "https://github.com/renkai/rust-prometheus.git"
-rev = "7304f464f5dfe371b0e05c37f8aab5b71c186f2d"
+git = "https://github.com/tikv/rust-prometheus.git"
+rev = "4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
@@ -162,7 +162,7 @@ raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "2518694543eb58f21f491969422d36480261ef8c" }
+prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
