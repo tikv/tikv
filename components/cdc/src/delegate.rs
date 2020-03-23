@@ -51,6 +51,8 @@ pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
     id: DownstreamID,
+    // The reqeust ID set by CDC to identify events corresponding different requests.
+    req_id: u64,
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
@@ -62,9 +64,10 @@ impl Downstream {
     ///
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
-    pub fn new(peer: String, region_epoch: RegionEpoch) -> Downstream {
+    pub fn new(peer: String, region_epoch: RegionEpoch, req_id: u64) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
+            req_id,
             peer,
             region_epoch,
             sink: None,
@@ -73,7 +76,8 @@ impl Downstream {
 
     /// Sink events to the downstream.
     /// The size of `Error` and `ResolvedTS` are considered zero.
-    pub fn sink_event(&self, change_data_event: Event, size: usize) {
+    pub fn sink_event(&self, mut change_data_event: Event, size: usize) {
+        change_data_event.set_request_id(self.req_id);
         if self
             .sink
             .as_ref()
@@ -618,7 +622,7 @@ mod tests {
 
         let (sink, rx) = batch::unbounded(1);
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
-        let mut downstream = Downstream::new(String::new(), region_epoch);
+        let mut downstream = Downstream::new(String::new(), region_epoch, 0);
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
@@ -737,7 +741,7 @@ mod tests {
 
         let (sink, rx) = batch::unbounded(1);
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
-        let mut downstream = Downstream::new(String::new(), region_epoch);
+        let mut downstream = Downstream::new(String::new(), region_epoch, 0);
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
