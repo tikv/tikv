@@ -121,6 +121,7 @@ impl DefaultCredentialsProvider {
             // We should be using WebIdentityProvider::from_k8s_env(), after the issue have been
             // fixed: https://github.com/rusoto/rusoto/pull/1724
             web_identity_provider: WebIdentityProvider::new(
+                // Get token file name from env var, then read from the file.
                 Variable::dynamic(|| {
                     Variable::from_text_file(
                         Variable::<String, CredentialsError>::from_env_var(
@@ -131,6 +132,7 @@ impl DefaultCredentialsProvider {
                     .resolve()
                 }),
                 Variable::from_env_var(AWS_ROLE_ARN),
+                // As AWS_ROLE_SESSION_NAME is optional, we cannot use Variable::from_env_var.
                 Some(Variable::dynamic(|| {
                     match var(AWS_ROLE_SESSION_NAME).map(|v| v.trim().to_owned()) {
                         Ok(v) if !v.is_empty() => Ok(v.to_owned()),
