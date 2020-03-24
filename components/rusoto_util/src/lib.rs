@@ -24,10 +24,10 @@ macro_rules! new_client {
         new_client!($client, $config, http_client)
     }};
     ($client: ty, $config: ident, $dispatcher: ident) => {{
-        let region = $crate::get_region($config.region.clone(), $config.endpoint.clone())?;
+        let region = $crate::get_region($config.region.as_ref(), $config.endpoint.as_ref())?;
         let cred_provider = $crate::CredentialsProvider::new(
-            $config.access_key.clone(),
-            $config.secret_access_key.clone(),
+            $config.access_key.as_ref(),
+            $config.secret_access_key.as_ref(),
         )?;
         <$client>::new_with($dispatcher, cred_provider, region)
     }};
@@ -47,11 +47,11 @@ pub fn new_http_client() -> io::Result<HttpClient> {
     })
 }
 
-pub fn get_region(region: String, endpoint: String) -> io::Result<Region> {
+pub fn get_region(region: &str, endpoint: &str) -> io::Result<Region> {
     if !endpoint.is_empty() {
         Ok(Region::Custom {
-            name: region,
-            endpoint,
+            name: region.to_owned(),
+            endpoint: endpoint.to_owned(),
         })
     } else if !region.is_empty() {
         region.parse::<Region>().map_err(|e| {
@@ -71,11 +71,11 @@ pub enum CredentialsProvider {
 }
 
 impl CredentialsProvider {
-    pub fn new(access_key: String, secret_access_key: String) -> io::Result<CredentialsProvider> {
+    pub fn new(access_key: &str, secret_access_key: &str) -> io::Result<CredentialsProvider> {
         let cred_provider = if !access_key.is_empty() && !secret_access_key.is_empty() {
             CredentialsProvider::Static(StaticProvider::new(
-                access_key,
-                secret_access_key,
+                access_key.to_owned(),
+                secret_access_key.to_owned(),
                 None, /* token */
                 None, /* valid_for*/
             ))
@@ -141,8 +141,7 @@ impl Default for DefaultCredentialsProvider {
                 Some(Variable::dynamic(|| {
                     match var(AWS_ROLE_SESSION_NAME).map(|v| v.trim().to_owned()) {
                         Ok(v) if !v.is_empty() => Ok(v),
-                        Ok(_) => Ok(DEFAULT_SESSION_NAME.to_owned()),
-                        Err(VarError::NotPresent) => Ok(DEFAULT_SESSION_NAME.to_owned()),
+                        Ok(_) | Err(VarError::NotPresent) => Ok(DEFAULT_SESSION_NAME.to_owned()),
                         Err(e) => Err(CredentialsError::from(e)),
                     }
                 })),
