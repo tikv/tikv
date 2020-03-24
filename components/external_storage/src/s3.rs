@@ -5,7 +5,10 @@ use std::io::{Error, ErrorKind, Result};
 use futures_io::AsyncRead;
 use futures_util::{future::FutureExt, stream::TryStreamExt};
 
-use rusoto_core::{ByteStream, RusotoError};
+use rusoto_core::{
+    request::DispatchSignedRequest,
+    {ByteStream, RusotoError},
+};
 use rusoto_s3::*;
 
 use rusoto_util::new_client;
@@ -28,14 +31,31 @@ pub struct S3Storage {
 impl S3Storage {
     /// Create a new S3 storage for the given config.
     pub fn new(config: &Config) -> Result<S3Storage> {
-        if config.bucket.is_empty() {
-            return Err(Error::new(ErrorKind::InvalidInput, "missing bucket name"));
-        }
+        Self::check_config(config)?;
         let client = new_client!(S3Client, config);
         Ok(S3Storage {
             config: config.clone(),
             client,
         })
+    }
+
+    pub fn with_request_dispatcher<D>(config: &Config, dispatcher: D) -> Result<S3Storage>
+    where
+        D: DispatchSignedRequest + Send + Sync + 'static,
+    {
+        Self::check_config(config)?;
+        let client = new_client!(S3Client, config, dispatcher);
+        Ok(S3Storage {
+            config: config.clone(),
+            client,
+        })
+    }
+
+    fn check_config(config: &Config) -> Result<()> {
+        if config.bucket.is_empty() {
+            return Err(Error::new(ErrorKind::InvalidInput, "missing bucket name"));
+        }
+        Ok(())
     }
 
     fn maybe_prefix_key(&self, key: &str) -> String {
@@ -128,19 +148,17 @@ mod tests {
             ..Default::default()
         };
         let cases = vec![
-            // missing both region and endpoint
+            // bucket is empty
             Config {
-                region: "".to_string(),
+                bucket: "".to_owned(),
                 ..config.clone()
             },
         ];
         for case in cases {
-            let dispatcher = MockRequestDispatcher::with_status(200);
-            let r = S3Storage::with_request_dispatcher(&case, dispatcher);
+            let r = S3Storage::new(&case);
             assert!(r.is_err());
         }
-        let dispatcher = MockRequestDispatcher::with_status(200);
-        assert!(S3Storage::with_request_dispatcher(&config, dispatcher).is_ok());
+        assert!(S3Storage::new(&config).is_ok());
     }
 
     #[test]
