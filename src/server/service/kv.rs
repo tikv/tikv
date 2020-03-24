@@ -36,6 +36,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -67,6 +68,8 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
     grpc_thread_load: Arc<ThreadLoad>,
 
     readpool_normal_thread_load: Arc<ThreadLoad>,
+
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
@@ -81,6 +84,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
         readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         req_batch_wait_duration: Option<Duration>,
+        security_mgr: Arc<SecurityManager>,
     ) -> Self {
         let timer_pool = Arc::new(Mutex::new(
             ThreadPoolBuilder::new()
@@ -99,6 +103,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
             timer_pool,
             enable_req_batch,
             req_batch_wait_duration,
+            security_mgr,
         }
     }
 
@@ -117,8 +122,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
+            if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+                return;
+            }
             let begin_instant = Instant::now_coarse();
-
             let future = $future_name(&self.storage, req)
                 .and_then(|res| sink.success(res).map_err(Error::from))
                 .map(move |_| GRPC_MSG_HISTOGRAM_STATIC.$fn_name.observe(duration_to_sec(begin_instant.elapsed())))
@@ -257,6 +264,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
         let future = future_gc(&self.gc_worker, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -277,8 +287,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
-
         let future = future_cop(&self.cop, Some(ctx.peer()), req)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(move |_| {
@@ -303,6 +315,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RegisterLockObserverRequest,
         sink: UnarySink<RegisterLockObserverResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -338,6 +353,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: CheckLockObserverRequest,
         sink: UnarySink<CheckLockObserverResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -379,6 +397,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RemoveLockObserverRequest,
         sink: UnarySink<RemoveLockObserverResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -414,6 +435,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: PhysicalScanLockRequest,
         sink: UnarySink<PhysicalScanLockResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -456,6 +480,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
@@ -502,6 +529,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: Request,
         sink: ServerStreamingSink<Response>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
 
         let stream = self
@@ -538,6 +568,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<RaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let ch = self.ch.clone();
         ctx.spawn(
             stream
@@ -567,6 +600,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         info!("batch_raft RPC is called, new gRPC stream established");
         let ch = self.ch.clone();
         ctx.spawn(
@@ -605,6 +641,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
             let err_msg = format!("{}", e);
@@ -623,6 +662,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
@@ -699,6 +741,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
@@ -772,6 +817,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<BatchCommandsRequest>,
         sink: DuplexSink<BatchCommandsResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
 
         let ctx = Arc::new(ctx);
