@@ -12,7 +12,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use engine_rocks::Compat;
-use engine_traits::{Iterable, CF_WRITE};
+use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
 use pd_client::PdClient;
 use raftstore::store::{Callback, WriteResponse};
@@ -279,14 +279,22 @@ fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_
             Some(l) => break l,
         }
     };
+    let mut missing_count = 0;
     for i in 1..=region.get_peers().len() as u64 {
         let engine = cluster.get_engine(i);
         if all_committed || i == leader.get_store_id() {
             must_get_equal(&engine, k, v);
         } else {
-            must_get_none(&engine, k);
+            // Note that a follower can still commit the log by an empty MsgAppend
+            // when bcast commit is disabled. A heartbeat response comes to leader
+            // before MsgAppendResponse will trigger MsgAppend.
+            match engine.c().get_value(&keys::data_key(k)).unwrap() {
+                Some(res) => assert_eq!(v, &res[..]),
+                None => missing_count += 1,
+            }
         }
     }
+    assert!(all_committed || missing_count > 0);
 }
 
 /// TiKV enables lazy broadcast commit optimization, which can delay split

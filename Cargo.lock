@@ -1098,6 +1098,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "bytes 0.5.3",
  "futures 0.3.4",
  "futures-executor",
  "futures-io",
@@ -1115,7 +1116,6 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tokio 0.2.13",
- "tokio-util 0.3.0",
  "url",
 ]
 
@@ -1546,7 +1546,7 @@ dependencies = [
  "log",
  "slab",
  "tokio 0.2.13",
- "tokio-util 0.2.0",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1975,7 +1975,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b979f9fa68999f89355228753fd89d175f1f80e2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1994,7 +1994,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b979f9fa68999f89355228753fd89d175f1f80e2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3337,7 +3337,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#b979f9fa68999f89355228753fd89d175f1f80e2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4435,6 +4435,7 @@ dependencies = [
  "slog-async",
  "slog-global",
  "slog-term",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "time 0.1.42",
@@ -4560,7 +4561,6 @@ checksum = "0fa5e81d6bc4e67fe889d5783bd2a128ab2e0cfa487e0be16b6a8d177b101616"
 dependencies = [
  "bytes 0.5.3",
  "fnv",
- "futures-core",
  "iovec",
  "lazy_static",
  "libc",
@@ -4815,21 +4815,6 @@ checksum = "571da51182ec208780505a32528fc5512a8fe1443ab960b3f2f3ef093cd16930"
 dependencies = [
  "bytes 0.5.3",
  "futures-core",
- "futures-sink",
- "log",
- "pin-project-lite",
- "tokio 0.2.13",
-]
-
-[[package]]
-name = "tokio-util"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af67cdce2b40f8dffb0ee04c853a24217b5d0d3e358f0f5ccc0b5332174ed9a8"
-dependencies = [
- "bytes 0.5.3",
- "futures-core",
- "futures-io",
  "futures-sink",
  "log",
  "pin-project-lite",
