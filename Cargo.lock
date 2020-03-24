@@ -1105,11 +1105,11 @@ dependencies = [
  "futures-util",
  "kvproto",
  "rand 0.7.3",
- "rusoto_core 0.43.0 (git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session)",
- "rusoto_credential 0.43.0 (git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session)",
+ "rusoto_core",
+ "rusoto_credential",
  "rusoto_mock",
  "rusoto_s3",
- "rusoto_sts",
+ "rusoto_util",
  "rust-ini",
  "slog",
  "slog-global",
@@ -3347,34 +3347,6 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.43.0"
-source = "git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session#d1b4628d5fce00d5c28cf749b1598262647ae083"
-dependencies = [
- "async-trait",
- "base64 0.12.0",
- "bytes 0.5.3",
- "futures 0.3.4",
- "hmac",
- "http 0.2.0",
- "hyper 0.13.3",
- "hyper-tls",
- "lazy_static",
- "log",
- "md5",
- "percent-encoding",
- "pin-project",
- "rusoto_credential 0.43.0 (git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session)",
- "rusoto_signature 0.43.0 (git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session)",
- "rustc_version",
- "serde",
- "serde_json",
- "sha2",
- "tokio 0.2.13",
- "xml-rs",
-]
-
-[[package]]
-name = "rusoto_core"
-version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a8d624cb48fcaca612329e4dd544380aa329ef338e83d3a90f5b7897e631971"
 dependencies = [
@@ -3391,33 +3363,14 @@ dependencies = [
  "md5",
  "percent-encoding",
  "pin-project",
- "rusoto_credential 0.43.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "rusoto_signature 0.43.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rusoto_credential",
+ "rusoto_signature",
  "rustc_version",
  "serde",
  "serde_json",
  "sha2",
  "tokio 0.2.13",
  "xml-rs",
-]
-
-[[package]]
-name = "rusoto_credential"
-version = "0.43.0"
-source = "git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session#d1b4628d5fce00d5c28cf749b1598262647ae083"
-dependencies = [
- "async-trait",
- "chrono",
- "dirs",
- "futures 0.3.4",
- "hyper 0.13.3",
- "pin-project",
- "regex",
- "serde",
- "serde_json",
- "shlex",
- "tokio 0.2.13",
- "zeroize",
 ]
 
 [[package]]
@@ -3450,7 +3403,7 @@ dependencies = [
  "chrono",
  "futures 0.3.4",
  "http 0.2.0",
- "rusoto_core 0.43.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rusoto_core",
  "serde",
  "serde_json",
 ]
@@ -3458,37 +3411,14 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.43.0"
-source = "git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session#d1b4628d5fce00d5c28cf749b1598262647ae083"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b6bc3221ae5a2c036d5757eee68a2ffb6b7f87b8a83adbf4271c8133fdee01c"
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
  "futures 0.3.4",
- "rusoto_core 0.43.0 (git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session)",
+ "rusoto_core",
  "xml-rs",
-]
-
-[[package]]
-name = "rusoto_signature"
-version = "0.43.0"
-source = "git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session#d1b4628d5fce00d5c28cf749b1598262647ae083"
-dependencies = [
- "base64 0.12.0",
- "bytes 0.5.3",
- "futures 0.3.4",
- "hex 0.4.0",
- "hmac",
- "http 0.2.0",
- "hyper 0.13.3",
- "log",
- "md5",
- "percent-encoding",
- "pin-project",
- "rusoto_credential 0.43.0 (git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session)",
- "rustc_version",
- "serde",
- "sha2",
- "time 0.2.9",
- "tokio 0.2.13",
 ]
 
 [[package]]
@@ -3508,7 +3438,7 @@ dependencies = [
  "md5",
  "percent-encoding",
  "pin-project",
- "rusoto_credential 0.43.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rusoto_credential",
  "rustc_version",
  "serde",
  "sha2",
@@ -3519,16 +3449,27 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.43.0"
-source = "git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session#d1b4628d5fce00d5c28cf749b1598262647ae083"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e83d166cfb294672db98a60159c4a81a8169c6c91054a275cb812158c73815e5"
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
  "chrono",
  "futures 0.3.4",
- "rusoto_core 0.43.0 (git+https://github.com/yiwu-arbug/rusoto.git?branch=br_session)",
+ "rusoto_core",
  "serde_urlencoded",
  "tempfile",
  "xml-rs",
+]
+
+[[package]]
+name = "rusoto_util"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_sts",
 ]
 
 [[package]]
