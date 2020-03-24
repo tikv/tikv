@@ -110,7 +110,17 @@ These are the clients for TiKV:
 
 If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/reference/clients/go/).
 
+## Community Meeting
+
+The TiKV team meets on the 4th Wednesday of every month (unless otherwise specified) at 06.00 p.m. PST ([Time zone converter](https://www.google.com/search?sxsrf=ALeKk02SmvBBaYBXqhMbPnrJ05YKvGfBzQ%3A1584965273869&ei=maZ4XtXbNI61mAXs4oSIBQ&q=6pm+PST&oq=6pm+PST&gs_l=psy-ab.3..0l2j0i20i263j0l7.27953.27953..28837...0.2..0.261.261.2-1......0....1..gws-wiz.......0i71.FHU-fAZ7FLU&ved=0ahUKEwiVjIXhx7DoAhWOGqYKHWwxAVEQ4dUDCAs&uact=5)).
+
+Quick links:
+
+*   [Meeting topics](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
+*   [Zoom meeting link](https://zoom.us/my/cncftikvproject)
+
 ## Security
+
 
 ### Security Audit
 
