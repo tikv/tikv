@@ -10,6 +10,7 @@ mod encrypted_file;
 mod errors;
 mod manager;
 mod master_key;
+mod metrics;
 
 pub use self::crypter::{AesCtrCrypter, Iv};
 pub use self::encrypted_file::EncryptedFile;

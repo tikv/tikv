@@ -13,6 +13,7 @@ use protobuf::Message;
 use crate::crypter::*;
 use crate::encrypted_file::EncryptedFile;
 use crate::master_key::*;
+use crate::metrics::*;
 use crate::{Error, Iv, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
@@ -38,6 +39,7 @@ impl Dicts {
         let key_bytes = key_file.read(master_key)?;
         let mut key_dict = KeyDictionary::default();
         key_dict.merge_from_bytes(&key_bytes)?;
+        ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
 
         Ok(Dicts {
             file_dict,
@@ -56,6 +58,10 @@ impl Dicts {
         }
         let key_bytes = self.key_dict.write_to_bytes()?;
         file.write(&key_bytes, master_key)?;
+
+        FILE_SIZE_GAUGE
+            .with_label_values(&["key_dictionary"])
+            .set(key_bytes.len() as _);
         Ok(())
     }
 
@@ -64,6 +70,10 @@ impl Dicts {
         let file_bytes = self.file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
         file.write(&file_bytes, &PlainTextBackend::default())?;
+
+        FILE_SIZE_GAUGE
+            .with_label_values(&["file_dictionary"])
+            .set(file_bytes.len() as _);
         Ok(())
     }
 
@@ -157,6 +167,8 @@ impl Dicts {
             Entry::Occupied(_) => return Ok(false),
             Entry::Vacant(e) => e.insert(key),
         };
+
+        ENCRYPTION_DATA_KEY_GAUGE.set(self.key_dict.keys.len() as _);
 
         // Update current data key id.
         self.key_dict.current_key_id = key_id;
