@@ -20,6 +20,8 @@ Problem Summary:
 
 Proposal: [xxx](url) <!-- REMOVE this line if not applicable -->
 
+What's Changed:
+
 ### Related changes
 
 - PR to update `pingcap/docs`/`pingcap/docs-cn`:
