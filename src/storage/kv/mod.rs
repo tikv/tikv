@@ -198,12 +198,6 @@ quick_error! {
     }
 }
 
-impl From<engine::Error> for ErrorInner {
-    fn from(err: engine::Error) -> ErrorInner {
-        ErrorInner::Request(err.into())
-    }
-}
-
 impl From<engine_traits::Error> for ErrorInner {
     fn from(err: engine_traits::Error) -> ErrorInner {
         ErrorInner::Request(err.into_other())

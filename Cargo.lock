@@ -1045,7 +1045,6 @@ dependencies = [
  "lazy_static",
  "prometheus",
  "protobuf",
- "quick-error",
  "rocksdb",
  "serde",
  "serde_derive",
