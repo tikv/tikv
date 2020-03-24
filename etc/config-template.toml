@@ -105,7 +105,9 @@
 # advertise-addr = ""
 
 ## Status address.
-## This is used for reporting the status of TiKV directly through the HTTP address.
+## This is used for reporting the status of TiKV directly through 
+## the HTTP address. Notice that there is a risk of leaking status
+## information if this port is exposed to the public.
 ## Empty string means disabling it.
 # status-addr = "127.0.0.1:20180"
 
@@ -665,6 +667,22 @@
 # default: normal
 # blob-run-mode = "normal"
 
+## If set true, values in blob file will be merged to a new blob file while
+## their corresponding keys are compacted to last two level in LSM-Tree.
+##
+## With this feature enabled, Titan could get better scan performance, and
+## better write performance during GC, but will suffer around 1.1 space
+## amplification and 3 more write amplification if no GC needed (eg. uniformly
+## distributed keys) under default rocksdb setting.
+##
+## Requirement: level_compaction_dynamic_level_base = true
+## default: false
+# level_merge = false
+
+## Use merge operator to rewrite GC blob index.
+## default: false
+# gc-merge-rewrite = false
+
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -782,6 +800,10 @@
 ## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
 ## one more likely acquires the lock.
 # wake-up-delay-duration = 20
+
+## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
+## Enabled this will improve performance, but slightly increase the transcation failure rate
+# pipelined = false
 
 [gc]
 ## The number of keys to GC in one batch.

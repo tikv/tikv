@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use engine::rocks::DB;
 use engine_rocks::{Compat, RocksWriteBatch};
-use engine_traits::{KvEngine, Mutable, WriteBatch};
+use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
 use tempfile::Builder;
 use test::Bencher;
 
 fn writebatch(db: &Arc<DB>, round: usize, batch_keys: usize) {
     let v = b"operators are syntactic sugar for calls to methods of built-in traits";
     for r in 0..round {
-        let batch = db.c().write_batch();
+        let mut batch = db.c().write_batch();
         for i in 0..batch_keys {
             let k = format!("key_round{}_key{}", r, i);
             batch.put(k.as_bytes(), v).unwrap();
@@ -88,7 +88,7 @@ fn bench_writebatch_1024(b: &mut Bencher) {
     bench_writebatch_impl(b, 1024);
 }
 
-fn fill_writebatch(wb: &RocksWriteBatch, target_size: usize) {
+fn fill_writebatch(wb: &mut RocksWriteBatch, target_size: usize) {
     let (k, v) = (b"this is the key", b"this is the value");
     loop {
         wb.put(k, v).unwrap();
@@ -106,8 +106,8 @@ fn bench_writebatch_without_capacity(b: &mut Bencher) {
         .unwrap();
     let db = Arc::new(DB::open_default(path.path().to_str().unwrap()).unwrap());
     b.iter(|| {
-        let wb = db.c().write_batch();
-        fill_writebatch(&wb, 4096);
+        let mut wb = db.c().write_batch();
+        fill_writebatch(&mut wb, 4096);
     });
 }
 
@@ -119,7 +119,7 @@ fn bench_writebatch_with_capacity(b: &mut Bencher) {
         .unwrap();
     let db = Arc::new(DB::open_default(path.path().to_str().unwrap()).unwrap());
     b.iter(|| {
-        let wb = db.c().write_batch_with_cap(4096);
-        fill_writebatch(&wb, 4096);
+        let mut wb = db.c().write_batch_with_cap(4096);
+        fill_writebatch(&mut wb, 4096);
     });
 }
