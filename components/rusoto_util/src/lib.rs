@@ -51,7 +51,7 @@ pub fn get_region(region: String, endpoint: String) -> io::Result<Region> {
     if !endpoint.is_empty() {
         Ok(Region::Custom {
             name: region,
-            endpoint: endpoint,
+            endpoint,
         })
     } else if !region.is_empty() {
         region.parse::<Region>().map_err(|e| {
@@ -66,7 +66,7 @@ pub fn get_region(region: String, endpoint: String) -> io::Result<Region> {
 }
 
 pub enum CredentialsProvider {
-    Default(AutoRefreshingProvider<DefaultCredentialsProvider>),
+    Default(Box<AutoRefreshingProvider<DefaultCredentialsProvider>>),
     Static(StaticProvider),
 }
 
@@ -80,14 +80,16 @@ impl CredentialsProvider {
                 None, /* valid_for*/
             ))
         } else {
-            CredentialsProvider::Default(
-                AutoRefreshingProvider::new(DefaultCredentialsProvider::new()).map_err(|e| {
-                    Error::new(
-                        ErrorKind::Other,
-                        format!("create aws credentials provider error: {}", e),
-                    )
-                })?,
-            )
+            CredentialsProvider::Default(Box::new(
+                AutoRefreshingProvider::new(DefaultCredentialsProvider::default()).map_err(
+                    |e| {
+                        Error::new(
+                            ErrorKind::Other,
+                            format!("create aws credentials provider error: {}", e),
+                        )
+                    },
+                )?,
+            ))
         };
         Ok(cred_provider)
     }
@@ -117,8 +119,8 @@ pub struct DefaultCredentialsProvider {
     web_identity_provider: WebIdentityProvider,
 }
 
-impl DefaultCredentialsProvider {
-    pub fn new() -> DefaultCredentialsProvider {
+impl Default for DefaultCredentialsProvider {
+    fn default() -> DefaultCredentialsProvider {
         DefaultCredentialsProvider {
             default_provider: ChainProvider::new(),
             // We should be using WebIdentityProvider::from_k8s_env(), after the issue have been
@@ -138,7 +140,7 @@ impl DefaultCredentialsProvider {
                 // As AWS_ROLE_SESSION_NAME is optional, we cannot use Variable::from_env_var.
                 Some(Variable::dynamic(|| {
                     match var(AWS_ROLE_SESSION_NAME).map(|v| v.trim().to_owned()) {
-                        Ok(v) if !v.is_empty() => Ok(v.to_owned()),
+                        Ok(v) if !v.is_empty() => Ok(v),
                         Ok(_) => Ok(DEFAULT_SESSION_NAME.to_owned()),
                         Err(VarError::NotPresent) => Ok(DEFAULT_SESSION_NAME.to_owned()),
                         Err(e) => Err(CredentialsError::from(e)),
