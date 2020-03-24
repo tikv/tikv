@@ -1041,7 +1041,6 @@ dependencies = [
  "encryption",
  "engine_traits",
  "hex 0.4.2",
- "kvproto",
  "lazy_static",
  "prometheus",
  "protobuf",
