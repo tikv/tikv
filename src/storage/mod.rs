@@ -4076,6 +4076,107 @@ mod tests {
 
             delete_pessimistic_lock(&storage, key.clone(), 30, 30);
         }
+
+        // Test pessimistic lock amending
+
+        fn commit_changes<E: Engine, L: LockManager>(
+            storage: &Storage<E, L>,
+            key: Key,
+            start_ts: u64,
+            commit_ts: u64,
+        ) {
+            let (tx, rx) = channel();
+            storage
+                .sched_txn_command(
+                    commands::Commit::new(
+                        vec![key.clone()],
+                        start_ts.into(),
+                        commit_ts.into(),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx, 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        }
+
+        fn expect_prewrite_result<E: Engine, L: LockManager>(
+            storage: &Storage<E, L>,
+            key: Key,
+            start_ts: u64,
+            for_update_ts: u64,
+            should_succeed: bool,
+            commit_ts: Option<u64>,
+        ) {
+            let (tx, rx) = channel();
+            let callback = if should_succeed {
+                expect_ok_callback(tx, 0)
+            } else {
+                expect_fail_callback(tx, 0, |e| match e {
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::PessimisticLockNotFound { .. },
+                    ))))) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                })
+            };
+            storage
+                .sched_txn_command(
+                    commands::PrewritePessimistic::new(
+                        vec![(Mutation::Put((key.clone(), b"val".to_vec())), true)],
+                        key.to_raw().unwrap(),
+                        start_ts.into(),
+                        3000,
+                        for_update_ts.into(),
+                        1,
+                        TimeStamp::zero(),
+                        Context::default(),
+                    ),
+                    callback,
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            if should_succeed {
+                if commit_ts.is_some() {
+                    commit_changes(&storage, key.clone(), start_ts, commit_ts.unwrap());
+                } else {
+                    delete_pessimistic_lock(&storage, key.clone(), start_ts, for_update_ts);
+                }
+            }
+        }
+
+        let key = Key::from_raw(b"kp");
+
+        if !pipelined_pessimistic_lock {
+            // No amending if not pipelined_pessimistic_lock
+            expect_prewrite_result(&storage, key.clone(), 10, 10, false, None);
+        } else {
+            // Should be Amended if it's inserting key
+            expect_prewrite_result(&storage, key.clone(), 10, 10, true, None);
+            expect_prewrite_result(&storage, key.clone(), 10, 10, true, Some(11));
+            // No amending if start_ts equal or small than the write.ts of the key
+            expect_prewrite_result(&storage, key.clone(), 10, 10, false, None);
+            expect_prewrite_result(&storage, key.clone(), 11, 11, false, None);
+            // Should be amended if start_ts greater than the write.ts of the key
+            expect_prewrite_result(&storage, key.clone(), 20, 20, true, None);
+            expect_prewrite_result(&storage, key.clone(), 20, 20, true, Some(21));
+
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, false),
+                    expect_ok_callback(tx, 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            // Can't ammend when another txn locked the key
+            expect_prewrite_result(&storage, key.clone(), 25, 25, false, None);
+            commit_changes(&storage, key.clone(), 30, 31);
+            expect_prewrite_result(&storage, key.clone(), 30, 30, false, None);
+            expect_prewrite_result(&storage, key.clone(), 31, 31, false, None);
+            expect_prewrite_result(&storage, key.clone(), 32, 32, true, None);
+            expect_prewrite_result(&storage, key.clone(), 32, 32, true, Some(33));
+        }
     }
 
     #[test]
