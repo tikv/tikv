@@ -19,6 +19,9 @@ use crate::config::{ReadableDuration, ReadableSize};
 
 pub use slog::{FilterFn, Level};
 
+/// The suffix appended to the end of rotated log files by datetime log rotator
+pub const DATETIME_ROTATE_SUFFIX: &str = "%Y-%m-%d-%H:%M:%S%.f";
+
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
 const SLOG_CHANNEL_SIZE: usize = 10240;
