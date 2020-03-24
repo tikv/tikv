@@ -2413,13 +2413,7 @@ mod tests {
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines.c(), &region).unwrap();
         let build_storage = || -> Result<PeerStorage> {
-            PeerStorage::new(
-                engines.c(),
-                &region,
-                sched.clone(),
-                0,
-                "".to_owned(),
-            )
+            PeerStorage::new(engines.c(), &region, sched.clone(), 0, "".to_owned())
         };
         let mut s = build_storage().unwrap();
         let mut raft_state = RaftLocalState::default();
