@@ -135,7 +135,7 @@ fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
     ctx: &mut EvalContext,
     eval_result: &[Option<T>],
     eval_result_logical_rows: &[usize],
-) -> tidb_query_datatype::codec::error::Result<()> {
+) -> tidb_query_common::error::Result<()> {
     let mut err_result = Ok(());
     let mut logical_index = 0;
     logical_rows.retain(|_| {

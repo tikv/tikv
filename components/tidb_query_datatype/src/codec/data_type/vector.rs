@@ -124,7 +124,11 @@ impl VectorValue {
     /// Evaluates values into MySQL logic values.
     ///
     /// The caller must provide an output buffer which is large enough for holding values.
-    pub fn eval_as_mysql_bools(&self, ctx: &mut EvalContext, outputs: &mut [bool]) -> Result<()> {
+    pub fn eval_as_mysql_bools(
+        &self,
+        ctx: &mut EvalContext,
+        outputs: &mut [bool],
+    ) -> tidb_query_common::error::Result<()> {
         assert!(outputs.len() >= self.len());
         match_template_evaluable! {
             TT, match self {

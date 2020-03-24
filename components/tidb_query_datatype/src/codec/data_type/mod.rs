@@ -16,8 +16,8 @@ pub use self::vector::{VectorValue, VectorValueExt};
 use crate::{EvalType, FieldTypeTp};
 
 use crate::codec::convert::ToInt;
-use crate::codec::error::Result;
 use crate::expr::EvalContext;
+use tidb_query_common::error::Result;
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
 /// Rust's `bool` type.

@@ -1717,7 +1717,10 @@ impl<T: BufferReader> TimeDecoder for T {}
 
 impl crate::codec::data_type::AsMySQLBool for Time {
     #[inline]
-    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> Result<bool> {
+    fn as_mysql_bool(
+        &self,
+        _context: &mut crate::expr::EvalContext,
+    ) -> tidb_query_common::error::Result<bool> {
         Ok(!self.is_zero())
     }
 }
