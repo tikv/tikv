@@ -121,7 +121,15 @@ impl DefaultCredentialsProvider {
             // We should be using WebIdentityProvider::from_k8s_env(), after the issue have been
             // fixed: https://github.com/rusoto/rusoto/pull/1724
             web_identity_provider: WebIdentityProvider::new(
-                Variable::from_env_var(AWS_WEB_IDENTITY_TOKEN_FILE),
+                Variable::dynamic(|| {
+                    Variable::from_text_file(
+                        Variable::<String, CredentialsError>::from_env_var(
+                            AWS_WEB_IDENTITY_TOKEN_FILE,
+                        )
+                        .resolve()?,
+                    )
+                    .resolve()
+                }),
                 Variable::from_env_var(AWS_ROLE_ARN),
                 Some(Variable::dynamic(|| {
                     match var(AWS_ROLE_SESSION_NAME).map(|v| v.trim().to_owned()) {
