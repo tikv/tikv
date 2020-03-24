@@ -25,18 +25,6 @@ quick_error! {
             description(err.description())
             display("Protobuf {}", err)
         }
-        #[cfg(feature = "prost-codec")]
-        ProstDecode(err: prost::DecodeError) {
-            cause(err)
-            description(err.description())
-            display("Prost Decode {}", err)
-        }
-        #[cfg(feature = "prost-codec")]
-        ProstEncode(err: prost::EncodeError) {
-            cause(err)
-            description(err.description())
-            display("Prost Encode {}", err)
-        }
         Io(err: std::io::Error) {
             from()
             cause(err)
@@ -58,20 +46,6 @@ pub type Result<T> = result::Result<T, Error>;
 impl From<Error> for raft::Error {
     fn from(err: Error) -> raft::Error {
         raft::Error::Store(raft::StorageError::Other(err.into()))
-    }
-}
-
-#[cfg(feature = "prost-codec")]
-impl From<prost::EncodeError> for Error {
-    fn from(err: prost::EncodeError) -> Error {
-        Error::ProstEncode(err.into())
-    }
-}
-
-#[cfg(feature = "prost-codec")]
-impl From<prost::DecodeError> for Error {
-    fn from(err: prost::DecodeError) -> Error {
-        Error::ProstDecode(err.into())
     }
 }
 

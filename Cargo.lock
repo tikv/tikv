@@ -1044,7 +1044,6 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "prometheus",
- "prost",
  "protobuf",
  "quick-error",
  "raft",
