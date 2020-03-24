@@ -149,10 +149,12 @@ impl DefaultCredentialsProvider {
 #[async_trait]
 impl ProvideAwsCredentials for DefaultCredentialsProvider {
     async fn credentials(&self) -> Result<AwsCredentials, CredentialsError> {
-        if let Ok(creds) = self.default_provider.credentials().await {
+        // Need to use web identity provider first to prevent default provider takes precedence in
+        // kubernetes environment.
+        if let Ok(creds) = self.web_identity_provider.credentials().await {
             return Ok(creds);
         }
-        if let Ok(creds) = self.web_identity_provider.credentials().await {
+        if let Ok(creds) = self.default_provider.credentials().await {
             return Ok(creds);
         }
         Err(CredentialsError::new(
