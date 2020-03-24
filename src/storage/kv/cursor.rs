@@ -590,7 +590,7 @@ mod tests {
         // test last region
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv.clone(), region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv, region);
         let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter

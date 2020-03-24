@@ -2414,7 +2414,7 @@ mod tests {
         prepare_bootstrap_cluster(&engines.c(), &region).unwrap();
         let build_storage = || -> Result<PeerStorage> {
             PeerStorage::new(
-                engines.c().clone(),
+                engines.c(),
                 &region,
                 sched.clone(),
                 0,
