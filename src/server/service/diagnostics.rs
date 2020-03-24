@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{Future, Sink, Stream};
@@ -70,6 +71,9 @@ impl Diagnostics for Service {
         req: ServerInfoRequest,
         sink: UnarySink<ServerInfoResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let tp = req.get_tp();
         let collect = self
             .pool

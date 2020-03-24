@@ -463,6 +463,9 @@ ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
 cipher-file = "invalid path"
+cert-allowed-cn = [
+    "example.tikv.com",
+]
 
 [import]
 num-threads = 123

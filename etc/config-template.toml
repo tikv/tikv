@@ -765,6 +765,7 @@
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
+# cert-allowed-cn = []
 
 [import]
 ## Number of threads to handle RPC requests.
