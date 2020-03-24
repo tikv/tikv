@@ -72,7 +72,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use tikv_util::{is_zero_duration, Either, RingQueue};
 
 type Key = Vec<u8>;
 
@@ -1124,7 +1124,7 @@ impl RaftBatchSystem {
         });
 
         let tag = format!("raftstore-{}", store.get_id());
-        self.system.spawn(tag, builder);
+        self.system.spawn(tag, builder, true);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
@@ -1144,7 +1144,7 @@ impl RaftBatchSystem {
             .unwrap();
 
         self.apply_system
-            .spawn("apply".to_owned(), apply_poller_builder);
+            .spawn("apply".to_owned(), apply_poller_builder, false);
 
         let region_runner = RegionRunner::new(
             engines.clone(),
@@ -1186,7 +1186,6 @@ impl RaftBatchSystem {
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
-        let _ = sys_util::thread::set_priority(sys_util::HIGH_PRI);
         self.workers = Some(workers);
         Ok(())
     }

@@ -12,6 +12,7 @@ use crossbeam::channel::{self, SendError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
+use tikv_util::sys;
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -376,7 +377,7 @@ where
     }
 
     /// Start the batch system.
-    pub fn spawn<B>(&mut self, name_prefix: String, mut builder: B)
+    pub fn spawn<B>(&mut self, name_prefix: String, mut builder: B, run_with_high_pri: bool)
     where
         B: HandlerBuilder<N, C>,
         B::Handler: Send + 'static,
@@ -391,7 +392,12 @@ where
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
-                .spawn(move || poller.poll())
+                .spawn(move || {
+                    if run_with_high_pri {
+                        let _ = sys::thread::set_priority(sys::HIGH_PRI);
+                    }
+                    poller.poll()
+                })
                 .unwrap();
             self.workers.push(t);
         }
