@@ -54,8 +54,6 @@ extern crate failure;
 #[cfg(test)]
 extern crate test;
 
-extern crate coarsetime;
-
 extern crate encryption;
 
 pub mod config;
