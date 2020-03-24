@@ -140,6 +140,7 @@ mod sys {
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
     use sysinfo::{DiskExt, ProcessExt, SystemExt};
     use tikv_util::config::KB;
+    use tikv_util::sys::sys_quota::SysQuota;
 
     fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
         // CPU load
@@ -208,7 +209,7 @@ mod sys {
     fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
         system.refresh_all();
-        let total_memory = system.get_total_memory() * KB;
+        let total_memory = SysQuota::new().memory_limit_in_bytes();
         let used_memory = system.get_used_memory() * KB;
         let free_memory = system.get_free_memory() * KB;
         let total_swap = system.get_total_swap() * KB;
@@ -360,7 +361,7 @@ mod sys {
         let mut infos = vec![
             (
                 "cpu-logical-cores",
-                sysinfo::get_logical_cores().to_string(),
+                SysQuota::new().cpu_cores_quota().to_string(),
             ),
             (
                 "cpu-physical-cores",
