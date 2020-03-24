@@ -38,9 +38,9 @@ use tikv::storage::RaftKv;
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
+use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::Monitor;
 use tikv_util::worker::FutureWorker;
-use tikv_util::sys::sys_quota::SysQuota;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 

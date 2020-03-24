@@ -47,8 +47,8 @@ use engine::rocks::util::{
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::security::SecurityConfig;
-use tikv_util::time::duration_to_sec;
 use tikv_util::sys::sys_quota::SysQuota;
+use tikv_util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -1208,7 +1208,7 @@ impl Default for CoprocessorReadPoolConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::new().cpu_cores_quota();
         let concurrency = if cpu_num > 8 {
-            (f64::from(cpu_num) * 0.8) as usize
+            (f64::from(cpu_num as i32) * 0.8) as usize
         } else {
             DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY
         };

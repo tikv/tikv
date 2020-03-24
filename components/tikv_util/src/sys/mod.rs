@@ -1,7 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use sys_info;
-
 #[cfg(target_os = "linux")]
 mod cgroup;
 
@@ -22,7 +20,7 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> usize {
-            let cpu_num = sys_info::cpu_num().unwrap();
+            let cpu_num = sys_info::cpu_num().unwrap() as usize;
             let cgroup_quota = self.cgroup.cpu_cores_quota();
             if cgroup_quota < 0 {
                 cpu_num
@@ -32,10 +30,7 @@ pub mod sys_quota {
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {
-            use sysinfo::SystemExt;
-            let mut system = sysinfo::System::new();
-            system.refresh_all();
-            let total_mem = system.get_total_memory() * KB;
+            let total_mem = sys_info::mem_info().unwrap().total * KB;
             let cgroup_memory_limits = self.cgroup.memory_limit_in_bytes();
             if cgroup_memory_limits <= 0 {
                 total_mem
@@ -66,7 +61,7 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> usize {
-            sys_info::cpu_num().unwrap()
+            sys_info::cpu_num().unwrap() as usize
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {
