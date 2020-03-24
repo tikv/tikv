@@ -663,6 +663,7 @@ impl TiKVServer {
             pool,
             self.config.log_file.clone(),
             self.config.slow_log_file.clone(),
+            self.security_mgr.clone(),
         );
         if servers
             .server

@@ -16,6 +16,7 @@ use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::diagnosticspb::SearchLogRequestTarget;
 
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
@@ -26,14 +27,21 @@ pub struct Service {
     pool: CpuPool,
     log_file: String,
     slow_log_file: String,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(pool: CpuPool, log_file: String, slow_log_file: String) -> Self {
+    pub fn new(
+        pool: CpuPool,
+        log_file: String,
+        slow_log_file: String,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Self {
         Service {
             pool,
             log_file,
             slow_log_file,
+            security_mgr,
         }
     }
 }
@@ -45,6 +53,9 @@ impl Diagnostics for Service {
         req: SearchLogRequest,
         sink: ServerStreamingSink<SearchLogResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let log_file = if req.get_target() == SearchLogRequestTarget::Normal {
             self.log_file.to_owned()
         } else {
