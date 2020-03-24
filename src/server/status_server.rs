@@ -1013,7 +1013,7 @@ mod tests {
             }));
             handle.wait().unwrap();
         } else {
-            let _ = status_server.thread_pool.spawn_handle(lazy(move || {
+            let handle = status_server.thread_pool.spawn_handle(lazy(move || {
                 client
                     .get(uri)
                     .map(|_| {
@@ -1023,6 +1023,7 @@ mod tests {
                         assert!(err.is_connect());
                     })
             }));
+            let _ = handle.wait();
         }
         status_server.stop();
     }
