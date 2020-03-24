@@ -23,7 +23,7 @@ fn end_hook(tx: &std::sync::mpsc::Sender<()>) -> Message {
 fn bench_spawn_many(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
-    system.spawn("test".to_owned(), Builder::new());
+    system.spawn("test".to_owned(), Builder::new(), false);
     const ID_LIMIT: u64 = 32;
     const MESSAGE_LIMIT: usize = 256;
     for id in 0..ID_LIMIT {
@@ -56,7 +56,7 @@ fn bench_spawn_many(c: &mut Criterion) {
 fn bench_imbalance(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
-    system.spawn("test".to_owned(), Builder::new());
+    system.spawn("test".to_owned(), Builder::new(), false);
     const ID_LIMIT: u64 = 10;
     const MESSAGE_LIMIT: usize = 512;
     for id in 0..ID_LIMIT {
@@ -91,7 +91,7 @@ fn bench_imbalance(c: &mut Criterion) {
 fn bench_fairness(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
-    system.spawn("test".to_owned(), Builder::new());
+    system.spawn("test".to_owned(), Builder::new(), false);
     for id in 0..10 {
         let (normal_tx, normal_fsm) = Runner::new(100000);
         let normal_box = BasicMailbox::new(normal_tx, normal_fsm);
