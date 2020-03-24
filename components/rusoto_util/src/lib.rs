@@ -19,12 +19,15 @@ const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
 
 #[macro_export]
 macro_rules! new_client {
-    ($client: ty, $region: ident, $endppoint: ident, $access_key: ident, $secret_access_key: ident) => {
+    ($client: ty, $config: ident) => {{
         let http_client = $crate::new_http_client()?;
-        let region = $crate::get_region($region, $endpoint)?
-        let cred_provider = $crate::CredentialProvider::new($access_key, $secret_access_key)?;
-        $client::new_with(http_client, cred_provider, region)
-    };
+        let region = $crate::get_region($config.region.clone(), $config.endpoint.clone())?;
+        let cred_provider = $crate::CredentialsProvider::new(
+            $config.access_key.clone(),
+            $config.secret_access_key.clone(),
+        )?;
+        <$client>::new_with(http_client, cred_provider, region)
+    }};
 }
 
 pub fn new_http_client() -> io::Result<HttpClient> {
