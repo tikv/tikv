@@ -1085,12 +1085,19 @@ impl PeerStorage {
     }
 
     /// Check if the storage is applying a snapshot.
+    ///
+    /// When it returns:
+    /// `None` means no snapshot is being applied at all or the snapshot is cancelled,
+    /// `Some(true)` means a snapshot is being applied,
+    /// `Some(false)` means a snapshot is just applied.
     #[inline]
-    pub fn check_applying_snap(&mut self) -> bool {
+    pub fn check_applying_snap(&mut self) -> Option<bool> {
+        let mut res = None;
         let new_state = match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
                 let s = status.load(Ordering::Relaxed);
                 if s == JOB_STATUS_FINISHED {
+                    res = Some(false);
                     SnapState::Relax
                 } else if s == JOB_STATUS_CANCELLED {
                     SnapState::ApplyAborted
@@ -1098,13 +1105,13 @@ impl PeerStorage {
                     // TODO: cleanup region and treat it as tombstone.
                     panic!("{} applying snapshot failed", self.tag,);
                 } else {
-                    return true;
+                    return Some(true);
                 }
             }
-            _ => return false,
+            _ => return res,
         };
         *self.snap_state.borrow_mut() = new_state;
-        false
+        res
     }
 
     #[inline]
@@ -1147,7 +1154,7 @@ impl PeerStorage {
         }
         // now status can only be JOB_STATUS_CANCELLING, JOB_STATUS_CANCELLED,
         // JOB_STATUS_FAILED and JOB_STATUS_FINISHED.
-        !self.check_applying_snap()
+        self.check_applying_snap() != Some(true)
     }
 
     #[inline]
@@ -2335,7 +2342,7 @@ mod tests {
         // PENDING can be finished.
         let mut snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_PENDING)));
         s.snap_state = RefCell::new(snap_state);
-        assert!(s.check_applying_snap());
+        assert_eq!(s.check_applying_snap(), Some(true));
         assert_eq!(
             *s.snap_state.borrow(),
             SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_PENDING)))
@@ -2344,7 +2351,7 @@ mod tests {
         // RUNNING can't be finished.
         snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)));
         s.snap_state = RefCell::new(snap_state);
-        assert!(s.check_applying_snap());
+        assert_eq!(s.check_applying_snap(), Some(true));
         assert_eq!(
             *s.snap_state.borrow(),
             SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)))
@@ -2352,19 +2359,19 @@ mod tests {
 
         snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELLED)));
         s.snap_state = RefCell::new(snap_state);
-        assert!(!s.check_applying_snap());
+        assert_eq!(s.check_applying_snap(), None);
         assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
         // ApplyAborted is not applying snapshot.
-        assert!(!s.check_applying_snap());
+        assert_eq!(s.check_applying_snap(), None);
         assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
 
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FINISHED,
         ))));
-        assert!(!s.check_applying_snap());
+        assert_eq!(s.check_applying_snap(), Some(false));
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
         // Relax is not applying snapshot.
-        assert!(!s.check_applying_snap());
+        assert_eq!(s.check_applying_snap(), None);
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
 
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(

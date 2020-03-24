@@ -1098,16 +1098,22 @@ impl Peer {
         if self.pending_remove {
             return None;
         }
-        if self.mut_store().check_applying_snap() {
-            // If we continue to handle all the messages, it may cause too many messages because
-            // leader will send all the remaining messages to this follower, which can lead
-            // to full message queue under high load.
-            debug!(
-                "still applying snapshot, skip further handling";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            return None;
+        match self.mut_store().check_applying_snap() {
+            Some(true) => {
+                // If we continue to handle all the messages, it may cause too many messages because
+                // leader will send all the remaining messages to this follower, which can lead
+                // to full message queue under high load.
+                debug!(
+                    "still applying snapshot, skip further handling";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            }
+            Some(false) => {
+                self.post_pending_read_index_on_replica(ctx);
+            }
+            None => {}
         }
 
         if !self.pending_messages.is_empty() {
