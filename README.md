@@ -116,7 +116,7 @@ The TiKV team meets on the 4th Wednesday of every month (unless otherwise specif
 
 Quick links:
 
-*   [Meeting topics](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
+*   [Meeting notes](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
 *   [Zoom meeting link](https://zoom.us/my/cncftikvproject)
 
 ## Security
