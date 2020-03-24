@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::error;
-use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -203,9 +202,12 @@ impl CGroup {
     }
 
     pub fn read_num(&self, param: &str) -> Result<i64, Box<dyn error::Error>> {
-        Ok(fs::read_to_string(Path::new(&self.path).join(param))?
-            .trim()
-            .parse::<i64>()?)
+        let f = File::open(Path::new(&self.path).join(param))?;
+        let mut reader = BufReader::new(f);
+
+        let mut first_line = String::new();
+        let _len = reader.read_line(&mut first_line)?;
+        Ok(first_line.trim().parse::<i64>()?)
     }
 }
 

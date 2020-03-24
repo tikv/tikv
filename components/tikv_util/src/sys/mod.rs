@@ -35,7 +35,7 @@ pub mod sys_quota {
             system.refresh_all();
             let total_mem = system.get_total_memory() * KB;
             let cgroup_memory_limits = self.cgroup.memory_limit_in_bytes();
-            if cgroup_memory_limits < 0 {
+            if cgroup_memory_limits <= 0 {
                 total_mem
             } else {
                 std::cmp::min(total_mem, cgroup_memory_limits as u64)
