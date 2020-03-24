@@ -2,9 +2,7 @@
 
 use std::error::Error;
 
-use sys_info;
-
-use tikv_util::config::{self, ReadableSize, KB};
+use tikv_util::config::{self, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
 
 use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
