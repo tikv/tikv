@@ -8,10 +8,6 @@ publish = false
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
-protobuf-codec = [
-]
-prost-codec = [
-]
 
 [dependencies]
 configuration = { path = "../configuration" }
