@@ -40,6 +40,7 @@ use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
 use tikv_util::worker::FutureWorker;
+use tikv_util::sys::sys_quota::SysQuota;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -56,6 +57,9 @@ pub fn run_tikv(mut config: TiKvConfig) {
         "using config";
         "config" => serde_json::to_string(&config).unwrap(),
     );
+
+    // Print resource quota.
+    SysQuota::new().log_quota();
 
     config.write_into_metrics();
     // Do some prepare works before start.

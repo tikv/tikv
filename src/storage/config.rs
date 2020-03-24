@@ -5,6 +5,7 @@ use std::error::Error;
 use sys_info;
 
 use tikv_util::config::{self, ReadableSize, KB};
+use tikv_util::sys::sys_quota::SysQuota;
 
 use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
 
@@ -40,7 +41,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let total_cpu = sys_info::cpu_num().unwrap();
+        let total_cpu = SysQuota::new().cpu_cores_quota();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
@@ -95,7 +96,7 @@ impl BlockCacheConfig {
         }
         let capacity = match self.capacity {
             None => {
-                let total_mem = sys_info::mem_info().unwrap().total * KB;
+                let total_mem = SysQuota::new().memory_limit_in_bytes();
                 ((total_mem as f64) * 0.45) as usize
             }
             Some(c) => c.0 as usize,

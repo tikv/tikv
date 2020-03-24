@@ -1,5 +1,88 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use sys_info;
+
+#[cfg(target_os = "linux")]
+mod cgroup;
+
+#[cfg(target_os = "linux")]
+pub mod sys_quota {
+    use super::super::config::KB;
+    use super::cgroup::CGroupSys;
+
+    pub struct SysQuota {
+        cgroup: CGroupSys,
+    }
+
+    impl SysQuota {
+        pub fn new() -> Self {
+            Self {
+                cgroup: CGroupSys::default(),
+            }
+        }
+
+        pub fn cpu_cores_quota(&self) -> usize {
+            let cpu_num = sys_info::cpu_num().unwrap();
+            let cgroup_quota = self.cgroup.cpu_cores_quota();
+            if cgroup_quota < 0 {
+                cpu_num
+            } else {
+                std::cmp::min(cpu_num, cgroup_quota as usize)
+            }
+        }
+
+        pub fn memory_limit_in_bytes(&self) -> u64 {
+            use sysinfo::SystemExt;
+            let mut system = sysinfo::System::new();
+            system.refresh_all();
+            let total_mem = system.get_total_memory() * KB;
+            let cgroup_memory_limits = self.cgroup.memory_limit_in_bytes();
+            if cgroup_memory_limits <= 0 {
+                total_mem
+            } else {
+                std::cmp::min(total_mem, cgroup_memory_limits as u64)
+            }
+        }
+
+        pub fn log_quota(&self) {
+            info!(
+                "memory limit in bytes: {}, cpu cores quota: {}",
+                self.memory_limit_in_bytes(),
+                self.cpu_cores_quota()
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub mod sys_quota {
+    use super::super::config::KB;
+
+    pub struct SysQuota {}
+
+    impl SysQuota {
+        pub fn new() -> Self {
+            Self {}
+        }
+
+        pub fn cpu_cores_quota(&self) -> usize {
+            sys_info::cpu_num().unwrap()
+        }
+
+        pub fn memory_limit_in_bytes(&self) -> u64 {
+            sys_info::mem_info().unwrap().total * KB
+        }
+
+        pub fn log_quota(&self) {
+            info!(
+                "memory limit in bytes: {}, cpu cores quota: {}",
+                self.memory_limit_in_bytes(),
+                self.cpu_cores_quota()
+            );
+        }
+    }
+}
+
 pub const HIGH_PRI: i32 = -1;
 
 #[cfg(target_os = "linux")]
