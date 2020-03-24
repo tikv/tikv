@@ -108,6 +108,14 @@ pub struct TitanCfConfig {
     #[config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
+    #[config(skip)]
+    pub level_merge: bool,
+    #[config(skip)]
+    pub range_merge: bool,
+    #[config(skip)]
+    pub max_sorted_runs: i32,
+    #[config(skip)]
+    pub gc_merge_rewrite: bool,
 }
 
 impl Default for TitanCfConfig {
@@ -122,6 +130,10 @@ impl Default for TitanCfConfig {
             sample_ratio: 0.1,
             merge_small_file_threshold: ReadableSize::mb(8),
             blob_run_mode: BlobRunMode::Normal,
+            level_merge: false,
+            range_merge: true,
+            max_sorted_runs: 20,
+            gc_merge_rewrite: false,
         }
     }
 }
@@ -138,6 +150,10 @@ impl TitanCfConfig {
         opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
         opts.set_blob_run_mode(self.blob_run_mode.into());
+        opts.set_level_merge(self.level_merge);
+        opts.set_range_merge(self.range_merge);
+        opts.set_max_sorted_runs(self.max_sorted_runs);
+        opts.set_gc_merge_rewrite(self.gc_merge_rewrite);
         opts
     }
 }
@@ -767,6 +783,8 @@ pub struct DbConfig {
     #[config(skip)]
     pub enable_pipelined_write: bool,
     #[config(skip)]
+    pub enable_multi_batch_write: bool,
+    #[config(skip)]
     pub enable_unordered_write: bool,
     #[config(submodule)]
     pub defaultcf: DefaultCfConfig,
@@ -812,6 +830,7 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            enable_multi_batch_write: true,
             enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -867,7 +886,11 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_pipelined_write(
+            (self.enable_pipelined_write || self.enable_multi_batch_write)
+                && !self.enable_unordered_write,
+        );
+        opts.enable_multi_batch_write(self.enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
 
@@ -906,7 +929,7 @@ impl DbConfig {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
             }
-            if self.enable_pipelined_write {
+            if self.enable_pipelined_write || self.enable_multi_batch_write {
                 return Err("pipelined_write is not compatible with unordered_write".into());
             }
         }
