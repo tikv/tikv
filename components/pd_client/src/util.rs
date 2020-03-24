@@ -200,7 +200,7 @@ impl LeaderClient {
 
         {
             let mut inner = self.inner.wl();
-            let (tx, rx) = client.region_heartbeat().unwrap();
+            let (tx, rx) = client.region_heartbeat().map_err(Error::Grpc)?;
             info!("heartbeat sender and receiver are stale, refreshing ...");
 
             // Try to cancel an unused heartbeat sender.
@@ -435,9 +435,20 @@ fn connect(
     let channel = security_mgr.connect(cb, addr);
     let client = PdClientStub::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-    match client.get_members_opt(&GetMembersRequest::default(), option) {
-        Ok(resp) => Ok((client, resp)),
-        Err(e) => Err(Error::Grpc(e)),
+    let f = client
+        .get_members_async_opt(&GetMembersRequest::default(), option)
+        .map_err(Error::Grpc)?;
+    let delay = GLOBAL_TIMER_HANDLE
+        .delay(Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
+        .then(|_| {
+            Err(grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
+                grpcio::RpcStatusCode::UNAVAILABLE,
+                None,
+            )))
+        });
+    match f.select(delay).wait() {
+        Ok((resp, _)) => Ok((client, resp)),
+        Err((e, _)) => Err(Error::Grpc(e)),
     }
 }
 
