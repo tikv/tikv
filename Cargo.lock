@@ -4434,6 +4434,7 @@ dependencies = [
  "slog-async",
  "slog-global",
  "slog-term",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "time 0.1.42",
