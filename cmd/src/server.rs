@@ -61,6 +61,7 @@ use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
     security::SecurityManager,
+    sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
 };
@@ -78,6 +79,9 @@ pub fn run_tikv(config: TiKvConfig) {
 
     // Print version information.
     tikv::log_tikv_info();
+
+    // Print resource quota.
+    SysQuota::new().log_quota();
 
     // Do some prepare works before start.
     pre_start();
