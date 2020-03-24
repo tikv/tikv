@@ -43,12 +43,6 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl From<Error> for raft::Error {
-    fn from(err: Error) -> raft::Error {
-        raft::Error::Store(raft::StorageError::Other(err.into()))
-    }
-}
-
 impl From<Error> for kvproto::errorpb::Error {
     fn from(err: Error) -> kvproto::errorpb::Error {
         let mut errorpb = kvproto::errorpb::Error::default();

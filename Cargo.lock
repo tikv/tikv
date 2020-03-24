@@ -1046,7 +1046,6 @@ dependencies = [
  "prometheus",
  "protobuf",
  "quick-error",
- "raft",
  "rocksdb",
  "serde",
  "serde_derive",
