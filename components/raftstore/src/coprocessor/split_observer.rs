@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use tidb_query::codec::table;
+use tidb_query_datatype::codec::table;
 use tikv_util::codec::bytes::{self, encode_bytes};
 
 use crate::store::util;
@@ -169,8 +169,8 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-    use tidb_query::codec::{datum, table, Datum};
-    use tidb_query::expr::EvalContext;
+    use tidb_query_datatype::codec::{datum, table, Datum};
+    use tidb_query_datatype::expr::EvalContext;
     use tikv_util::codec::bytes::encode_bytes;
 
     fn new_split_request(key: &[u8]) -> AdminRequest {

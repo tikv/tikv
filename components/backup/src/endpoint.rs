@@ -1285,23 +1285,23 @@ pub mod tests {
         req.set_concurrency(10);
         req.set_storage_backend(make_noop_backend());
 
-        let (tx, _) = futures::sync::mpsc::unbounded();
+        let (tx, resp_rx) = futures::sync::mpsc::unbounded();
         let (task, _) = Task::new(req, tx).unwrap();
 
         // if not task arrive after create the thread pool is empty
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
 
         scheduler.send(Some(task)).unwrap();
-        // wait the task send to worker
-        thread::sleep(Duration::from_millis(10));
+        // wait until the task finish
+        let _ = resp_rx.into_future().wait();
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
 
         // thread pool not yet shutdown
         thread::sleep(Duration::from_millis(50));
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
 
-        // thread pool shutdown if not task arrive for 100ms
-        thread::sleep(Duration::from_millis(50));
+        // thread pool shutdown if not task arrive more than 100ms
+        thread::sleep(Duration::from_millis(100));
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
     }
     // TODO: region err in txn(engine(request))
