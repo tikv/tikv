@@ -1180,8 +1180,7 @@ mod tests {
         Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
     };
     use tidb_query_datatype::codec::Error;
-    use tidb_query_datatype::expr::Flag;
-    use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+    use tidb_query_datatype::expr::*;
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
     use tipb::ScalarFuncSig;
 
