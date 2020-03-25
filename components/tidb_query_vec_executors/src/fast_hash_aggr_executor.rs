@@ -592,6 +592,13 @@ mod tests {
 
     #[test]
     fn test_group_by_a_constant() {
+        // This test creates a hash aggregation executor with the following aggregate functions:
+        // - COUNT(1)
+        // - COUNT(col_1 + 5.0)
+        // - AVG(col_0)
+        // And group by:
+        // - 1 (Constant)
+
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
@@ -819,7 +826,7 @@ mod tests {
             }
         }
 
-        let exec_fast = |src_exec| {
+        let exec_fast_col = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
                 RpnExpressionBuilder::new_for_test()
@@ -830,7 +837,18 @@ mod tests {
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
-        let exec_slow = |src_exec| {
+        let exec_fast_const = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                RpnExpressionBuilder::new_for_test()
+                    .push_constant_for_test(1)
+                    .build_for_test(),
+                vec![Expr::default()],
+                MyParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow_col = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
                 vec![RpnExpressionBuilder::new_for_test()
@@ -841,8 +859,40 @@ mod tests {
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
-        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
-            vec![Box::new(exec_fast), Box::new(exec_slow)];
+        let exec_slow_const = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![RpnExpressionBuilder::new_for_test()
+                    .push_constant_for_test(0)
+                    .build_for_test()],
+                vec![Expr::default()],
+                MyParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow_col_const = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(0)
+                        .build_for_test(),
+                    RpnExpressionBuilder::new_for_test()
+                        .push_constant_for_test(0)
+                        .build_for_test(),
+                ],
+                vec![Expr::default()],
+                MyParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> = vec![
+            Box::new(exec_fast_col),
+            Box::new(exec_fast_const),
+            Box::new(exec_slow_col),
+            Box::new(exec_slow_const),
+            Box::new(exec_slow_col_const),
+        ];
 
         for exec_builder in executor_builders {
             let src_exec = MockExecutor::new(
@@ -881,32 +931,30 @@ mod tests {
     /// E.g. SELECT 1 FROM t GROUP BY x
     #[test]
     fn test_no_aggr_fn() {
-        let group_by_exp = || {
-            RpnExpressionBuilder::new_for_test()
-                .push_column_ref_for_test(0)
-                .build_for_test()
-        };
-
-        let exec_fast = |src_exec| {
+        let exec_fast_col = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                group_by_exp(),
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
-        let exec_slow = |src_exec| {
+        let exec_slow_col = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![group_by_exp()],
+                vec![RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test()],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
         let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
-            vec![Box::new(exec_fast), Box::new(exec_slow)];
+            vec![Box::new(exec_fast_col), Box::new(exec_slow_col)];
 
         for exec_builder in executor_builders {
             let src_exec = make_src_executor_1();
@@ -950,6 +998,55 @@ mod tests {
                 &ordered_column,
                 &[Real::new(1.5).ok(), None, Real::new(7.0).ok()]
             );
+        }
+
+        let exec_fast_const = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                RpnExpressionBuilder::new_for_test()
+                    .push_constant_for_test(1)
+                    .build_for_test(),
+                vec![],
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow_const = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![RpnExpressionBuilder::new_for_test()
+                    .push_constant_for_test(1)
+                    .build_for_test()],
+                vec![],
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
+            vec![Box::new(exec_fast_const), Box::new(exec_slow_const)];
+
+        for exec_builder in executor_builders {
+            let src_exec = make_src_executor_1();
+            let mut exec = exec_builder(src_exec);
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let mut r = exec.next_batch(1);
+            assert_eq!(&r.logical_rows, &[0]);
+            assert_eq!(r.physical_columns.rows_len(), 1);
+            assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
+            r.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[0])
+                .unwrap();
+            assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(1)]);
         }
     }
 }
