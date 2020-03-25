@@ -2305,7 +2305,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         // If the peer is applying snapshot, it may drop some sending messages, that could
         // make clients wait for response until timeout.
-        if self.fsm.peer.mut_store().check_applying_snap() {
+        if self.fsm.peer.is_applying_snapshot() {
             self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
             // TODO: replace to a more suitable error.
             return Err(Error::Other(box_err!(
