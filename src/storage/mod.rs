@@ -4170,12 +4170,12 @@ mod tests {
             rx.recv().unwrap();
 
             // Can't ammend when another txn locked the key
-            expect_prewrite_result(&storage, key.clone(), 25, 25, false, None);
-            commit_changes(&storage, key.clone(), 30, 31);
-            expect_prewrite_result(&storage, key.clone(), 30, 30, false, None);
-            expect_prewrite_result(&storage, key.clone(), 31, 31, false, None);
-            expect_prewrite_result(&storage, key.clone(), 32, 32, true, None);
-            expect_prewrite_result(&storage, key.clone(), 32, 32, true, Some(33));
+            expect_prewrite_result(&storage, key, 25, 25, false, None);
+            commit_changes(&storage, key, 30, 31);
+            expect_prewrite_result(&storage, key, 30, 30, false, None);
+            expect_prewrite_result(&storage, key, 31, 31, false, None);
+            expect_prewrite_result(&storage, key, 32, 32, true, None);
+            expect_prewrite_result(&storage, key, 32, 32, true, Some(33));
         }
     }
 
