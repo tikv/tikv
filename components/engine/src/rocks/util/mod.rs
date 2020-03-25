@@ -29,6 +29,7 @@ use crate::rocks::{
 };
 use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
 use tikv_util::file::calc_crc32;
+use tikv_util::sys::sys_quota::SysQuota;
 
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
@@ -508,7 +509,7 @@ pub fn compact_files_in_range_cf(
 
     let mut opts = CompactionOptions::new();
     opts.set_compression(output_compression);
-    let max_subcompactions = sys_info::cpu_num().unwrap();
+    let max_subcompactions = SysQuota::new().cpu_cores_quota();
     let max_subcompactions = cmp::min(max_subcompactions, 32);
     opts.set_max_subcompactions(max_subcompactions as i32);
     opts.set_output_file_size_limit(output_file_size_limit);

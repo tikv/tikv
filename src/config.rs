@@ -19,7 +19,6 @@ use engine::rocks::{
     TitanDBOptions,
 };
 use slog;
-use sys_info;
 
 use crate::import::Config as ImportConfig;
 use crate::pd::Config as PdConfig;
@@ -45,8 +44,9 @@ use engine::rocks::util::{
     NoopSliceTransform,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
 use tikv_util::security::SecurityConfig;
+use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
@@ -57,7 +57,7 @@ const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
-    let total_mem = sys_info::mem_info().unwrap().total * KB;
+    let total_mem = SysQuota::new().memory_limit_in_bytes();
     let (ratio, min, max) = match (is_raft_db, cf) {
         (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
         (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
@@ -1205,9 +1205,9 @@ readpool_config!(
 
 impl Default for CoprocessorReadPoolConfig {
     fn default() -> Self {
-        let cpu_num = sys_info::cpu_num().unwrap();
+        let cpu_num = SysQuota::new().cpu_cores_quota();
         let concurrency = if cpu_num > 8 {
-            (f64::from(cpu_num) * 0.8) as usize
+            (f64::from(cpu_num as i32) * 0.8) as usize
         } else {
             DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY
         };
