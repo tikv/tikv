@@ -1786,7 +1786,7 @@ mod readpool_tests {
         let storage = StorageReadPoolConfig::default();
         assert!(!storage.use_unified_pool());
         let coprocessor = CoprReadPoolConfig::default();
-        assert!(!coprocessor.use_unified_pool());
+        assert!(coprocessor.use_unified_pool());
 
         let mut cfg = ReadPoolConfig {
             storage,
