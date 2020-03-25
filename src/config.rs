@@ -1648,9 +1648,7 @@ pub struct ReadPoolConfig {
 
 impl ReadPoolConfig {
     pub fn is_unified(&self) -> bool {
-        self.unify_read_pool.unwrap_or_else(|| {
-            self.storage == Default::default() && self.coprocessor == Default::default()
-        })
+        self.unify_read_pool.unwrap_or(false)
     }
 
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
@@ -1753,28 +1751,8 @@ mod readpool_tests {
 
     #[test]
     fn test_is_unified() {
-        // Read pools are unified by default.
+        // Read pools are not unified by default.
         let cfg = ReadPoolConfig::default();
-        assert!(cfg.is_unified());
-
-        // If there is any customized configs in storage or coprocessor read pool,
-        // we don't enable the unified read pool.
-        let cfg = ReadPoolConfig {
-            storage: StorageReadPoolConfig {
-                high_concurrency: 1,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert!(!cfg.is_unified());
-
-        let cfg = ReadPoolConfig {
-            coprocessor: CoprReadPoolConfig {
-                high_concurrency: 1,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
         assert!(!cfg.is_unified());
 
         // `unify-read-pool` config is the most preferred.

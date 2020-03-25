@@ -40,7 +40,7 @@
 ## (Experimental) Whether to use a single thread pool to serve all the read requests. If it is
 ## set to `true`, the `readpool.storage` and `readpool.coprocessor` sections will be invalid and
 ## be ignored automatically.
-# unify-read-pool = true
+# unify-read-pool = false
 
 # Configurations for the single thread pool serving read requests.
 # It only takes effect when `unify-read-pool` is `true`.

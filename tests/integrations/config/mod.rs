@@ -621,16 +621,6 @@ fn test_readpool_default_config() {
 }
 
 #[test]
-fn test_do_not_unify_readpool_with_legacy_config() {
-    let content = r#"
-        [readpool.storage]
-        normal-concurrency = 1
-    "#;
-    let cfg: TiKvConfig = toml::from_str(content).unwrap();
-    assert!(!cfg.readpool.is_unified());
-}
-
-#[test]
 fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
