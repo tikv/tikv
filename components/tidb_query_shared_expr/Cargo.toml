@@ -5,8 +5,11 @@ edition = "2018"
 publish = false
 description = "Shared utility of expression used by tidb_query_normal_expr and tidb_query_vec_expr"
 
+[features]
+protobuf-codec = ["tidb_query_datatype/protobuf-codec"]
+prost-codec = ["tidb_query_datatype/prost-codec"]
+
 [dependencies]
-rand = "0.6.5"
+rand = "0.7"
 time = "0.1"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
-
