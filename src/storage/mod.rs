@@ -4089,7 +4089,7 @@ mod tests {
             storage
                 .sched_txn_command(
                     commands::Commit::new(
-                        vec![key.clone()],
+                        vec![key],
                         start_ts.into(),
                         commit_ts.into(),
                         Context::default(),
@@ -4149,7 +4149,7 @@ mod tests {
 
         if !pipelined_pessimistic_lock {
             // No amending if not pipelined_pessimistic_lock
-            expect_prewrite_result(&storage, key.clone(), 10, 10, false, None);
+            expect_prewrite_result(&storage, key, 10, 10, false, None);
         } else {
             // Should be Amended if it's inserting key
             expect_prewrite_result(&storage, key.clone(), 10, 10, true, None);
