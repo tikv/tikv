@@ -99,6 +99,8 @@ pub struct PeerFsm<E: KvEngine> {
     early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<E>>>,
     pub receiver: Receiver<PeerMsg<E>>,
+    /// when snapshot is generating or sending, skip split check at most 3 times.
+    skip_split_count: u8,
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -163,6 +165,7 @@ impl<E: KvEngine> PeerFsm<E> {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
+                skip_split_count: 0,
             }),
         ))
     }
@@ -201,6 +204,7 @@ impl<E: KvEngine> PeerFsm<E> {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
+                skip_split_count: 0,
             }),
         ))
     }
@@ -2555,6 +2559,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             return;
         }
+
+        // bulk insert too fast may cause snapshot stale very soon, worst case it stale before
+        // sending. so when snapshot is generating or sending, skip split check at most 3 times.
+        // There is a trade off between region size and snapshot success rate. Split check is
+        // triggered every 10 seconds. If a snapshot can't be generated in 30 seconds, it might be
+        // just too large to be generated. Split it into smaller size can help generation. check
+        // issue 330 for more info.
+        if self.fsm.peer.get_store().is_generating_snapshot() && self.fsm.skip_split_count < 2 {
+            self.fsm.skip_split_count += 1;
+            return;
+        }
+        self.fsm.skip_split_count = 0;
+
         let task =
             SplitCheckTask::split_check(self.fsm.peer.region().clone(), true, CheckPolicy::Scan);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
