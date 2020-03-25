@@ -1732,7 +1732,7 @@ mod readpool_tests {
             storage,
             coprocessor,
         };
-        assert!(cfg.is_unified_pool_enabled());
+        assert!(!cfg.is_unified_pool_enabled());
         assert!(cfg.validate().is_ok());
 
         // Storage and coprocessor config must be valid when yatp is not used.
@@ -1818,7 +1818,7 @@ mod readpool_tests {
         };
         assert!(cfg.is_unified_pool_enabled());
 
-        cfg.storage.use_unified_pool = Some(false);
+        cfg.coprocessor.use_unified_pool = Some(false);
         assert!(!cfg.is_unified_pool_enabled());
     }
 }
