@@ -158,7 +158,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         // always needs to calculate over all data.
         let src_result = self
             .src
-            .next_batch(crate::batch::runner::BATCH_MAX_SIZE, span);
+            .next_batch(tidb_query_vec_expr::types::BATCH_MAX_SIZE, span);
 
         self.context.warnings = src_result.warnings;
 

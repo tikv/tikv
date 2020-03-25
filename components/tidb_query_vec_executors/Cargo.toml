@@ -20,6 +20,8 @@ tidb_query_vec_expr = { path = "../tidb_query_vec_expr" }
 tidb_query_vec_aggr = { path = "../tidb_query_vec_aggr" }
 tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+rustracing_jaeger = "0.4.0"
+rustracing = "0.4.0"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
