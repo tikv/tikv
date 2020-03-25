@@ -579,7 +579,7 @@ mod tests {
         );
         let ordered_column: Vec<_> = sort_column
             .iter()
-            .map(|(idx, _)| r.physical_columns[5].decoded().as_real_slice()[*idx].clone())
+            .map(|(idx, _)| r.physical_columns[5].decoded().as_real_slice()[*idx])
             .collect();
         assert_eq!(
             &ordered_column,
@@ -588,17 +588,17 @@ mod tests {
 
         let ordered_column: Vec<_> = sort_column
             .iter()
-            .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx].clone())
+            .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
             .collect();
         assert_eq!(&ordered_column, &[Some(1), Some(2), Some(1), Some(1)]);
         let ordered_column: Vec<_> = sort_column
             .iter()
-            .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx].clone())
+            .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
             .collect();
         assert_eq!(&ordered_column, &[Some(0), Some(0), Some(1), Some(1)]);
         let ordered_column: Vec<_> = sort_column
             .iter()
-            .map(|(idx, _)| r.physical_columns[2].decoded().as_real_slice()[*idx].clone())
+            .map(|(idx, _)| r.physical_columns[2].decoded().as_real_slice()[*idx])
             .collect();
         assert_eq!(
             &ordered_column,
