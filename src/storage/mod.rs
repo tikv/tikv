@@ -4137,8 +4137,8 @@ mod tests {
             rx.recv().unwrap();
 
             if should_succeed {
-                if commit_ts.is_some() {
-                    commit_changes(&storage, &key, start_ts, commit_ts.unwrap());
+                if let Some(commit_ts) = commit_ts {
+                    commit_changes(&storage, &key, start_ts, commit_ts);
                 } else {
                     delete_pessimistic_lock(&storage, key.clone(), start_ts, for_update_ts);
                 }
