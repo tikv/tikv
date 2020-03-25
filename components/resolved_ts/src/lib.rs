@@ -71,16 +71,18 @@ impl Resolver {
         // It's possible that rollback happens on a not existing transaction.
         assert!(
             entry.is_some() || commit_ts.is_none(),
-            "{}@{} is not tracked",
+            "{}@{}, commit@{} is not tracked",
             hex::encode_upper(key),
-            start_ts
+            start_ts,
+            commit_ts.unwrap_or_else(TimeStamp::zero),
         );
         if let Some(locked_keys) = entry {
             assert!(
                 locked_keys.remove(&key) || commit_ts.is_none(),
-                "{}@{} is not tracked, {:?}",
+                "{}@{}, commit@{} is not tracked, {:?}",
                 hex::encode_upper(key),
                 start_ts,
+                commit_ts.unwrap_or_else(TimeStamp::zero),
                 locked_keys,
             );
             if locked_keys.is_empty() {
@@ -177,6 +179,7 @@ mod tests {
                 Event::Unlock(2, Some(3), Key::from_raw(b"a")),
                 Event::Resolve(5, 5),
             ],
+            // Rollback may contain a key that is not locked.
             vec![
                 Event::Lock(1, Key::from_raw(b"a")),
                 Event::Unlock(1, None, Key::from_raw(b"b")),
