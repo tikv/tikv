@@ -4081,7 +4081,7 @@ mod tests {
 
         fn commit_changes<E: Engine, L: LockManager>(
             storage: &Storage<E, L>,
-            key: Key,
+            key: &Key,
             start_ts: u64,
             commit_ts: u64,
         ) {
@@ -4089,7 +4089,7 @@ mod tests {
             storage
                 .sched_txn_command(
                     commands::Commit::new(
-                        vec![key],
+                        vec![key.clone()],
                         start_ts.into(),
                         commit_ts.into(),
                         Context::default(),
@@ -4102,7 +4102,7 @@ mod tests {
 
         fn expect_prewrite_result<E: Engine, L: LockManager>(
             storage: &Storage<E, L>,
-            key: Key,
+            key: &Key,
             start_ts: u64,
             for_update_ts: u64,
             should_succeed: bool,
@@ -4138,7 +4138,7 @@ mod tests {
 
             if should_succeed {
                 if commit_ts.is_some() {
-                    commit_changes(&storage, key.clone(), start_ts, commit_ts.unwrap());
+                    commit_changes(&storage, &key, start_ts, commit_ts.unwrap());
                 } else {
                     delete_pessimistic_lock(&storage, key.clone(), start_ts, for_update_ts);
                 }
@@ -4149,17 +4149,17 @@ mod tests {
 
         if !pipelined_pessimistic_lock {
             // No amending if not pipelined_pessimistic_lock
-            expect_prewrite_result(&storage, key, 10, 10, false, None);
+            expect_prewrite_result(&storage, &key, 10, 10, false, None);
         } else {
             // Should be Amended if it's inserting key
-            expect_prewrite_result(&storage, key.clone(), 10, 10, true, None);
-            expect_prewrite_result(&storage, key.clone(), 10, 10, true, Some(11));
+            expect_prewrite_result(&storage, &key, 10, 10, true, None);
+            expect_prewrite_result(&storage, &key, 10, 10, true, Some(11));
             // No amending if start_ts equal or small than the write.ts of the key
-            expect_prewrite_result(&storage, key.clone(), 10, 10, false, None);
-            expect_prewrite_result(&storage, key.clone(), 11, 11, false, None);
+            expect_prewrite_result(&storage, &key, 10, 10, false, None);
+            expect_prewrite_result(&storage, &key, 11, 11, false, None);
             // Should be amended if start_ts greater than the write.ts of the key
-            expect_prewrite_result(&storage, key.clone(), 20, 20, true, None);
-            expect_prewrite_result(&storage, key.clone(), 20, 20, true, Some(21));
+            expect_prewrite_result(&storage, &key, 20, 20, true, None);
+            expect_prewrite_result(&storage, &key, 20, 20, true, Some(21));
 
             storage
                 .sched_txn_command(
@@ -4170,12 +4170,12 @@ mod tests {
             rx.recv().unwrap();
 
             // Can't ammend when another txn locked the key
-            expect_prewrite_result(&storage, key, 25, 25, false, None);
-            commit_changes(&storage, key, 30, 31);
-            expect_prewrite_result(&storage, key, 30, 30, false, None);
-            expect_prewrite_result(&storage, key, 31, 31, false, None);
-            expect_prewrite_result(&storage, key, 32, 32, true, None);
-            expect_prewrite_result(&storage, key, 32, 32, true, Some(33));
+            expect_prewrite_result(&storage, &key, 25, 25, false, None);
+            commit_changes(&storage, &key, 30, 31);
+            expect_prewrite_result(&storage, &key, 30, 30, false, None);
+            expect_prewrite_result(&storage, &key, 31, 31, false, None);
+            expect_prewrite_result(&storage, &key, 32, 32, true, None);
+            expect_prewrite_result(&storage, &key, 32, 32, true, Some(33));
         }
     }
 
