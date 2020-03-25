@@ -158,7 +158,7 @@ dist_release:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 ifeq ($(shell uname),Linux) # Macs binary isn't elf format
-	@python scripts/check-bins.py --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
+	@python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
 endif
 
 # Build with release flag as if it were for distribution, but without
@@ -240,7 +240,7 @@ run-test:
 test: run-test
 	@if [[ "`uname`" = "Linux" ]]; then \
 		env EXTRA_CARGO_ARGS="--message-format=json-render-diagnostics -q --no-run" make run-test |\
-                python scripts/check-bins.py --check-tests; \
+                python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-tests; \
 	fi
 
 ## Static analysis
@@ -323,11 +323,6 @@ ctl:
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
-
-# A special target for testing only "coprocessor::dag::expr"
-# per https://github.com/tikv/tikv/pull/3280
-expression: format clippy
-	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query "expr" -- --nocapture
 
 # A special target for building TiKV docker image.
 .PHONY: docker
