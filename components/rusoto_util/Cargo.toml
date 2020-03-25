@@ -1,0 +1,11 @@
+[package]
+name = "rusoto_util"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+rusoto_core = "0.43.0"
+rusoto_credential = "0.43.0"
+rusoto_sts = "0.43.0"
