@@ -77,7 +77,7 @@ impl Resolver {
         );
         if let Some(locked_keys) = entry {
             assert!(
-                locked_keys.remove(&key),
+                locked_keys.remove(&key) || commit_ts.is_none(),
                 "{}@{} is not tracked, {:?}",
                 hex::encode_upper(key),
                 start_ts,
@@ -176,6 +176,11 @@ mod tests {
                 Event::Resolve(4, 2),
                 Event::Unlock(2, Some(3), Key::from_raw(b"a")),
                 Event::Resolve(5, 5),
+            ],
+            vec![
+                Event::Lock(1, Key::from_raw(b"a")),
+                Event::Unlock(1, None, Key::from_raw(b"b")),
+                Event::Unlock(1, None, Key::from_raw(b"a")),
             ],
         ];
 
