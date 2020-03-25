@@ -39,14 +39,14 @@ impl AggrFunctionOpts {
         let name = ident.to_string();
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
         quote! {
-            impl #impl_generics crate::aggr_fn::AggrFunction for #ident #ty_generics #where_clause {
+            impl #impl_generics crate::AggrFunction for #ident #ty_generics #where_clause {
                 #[inline]
                 fn name(&self) -> &'static str {
                     #name
                 }
 
                 #[inline]
-                fn create_state(&self) -> Box<dyn crate::aggr_fn::AggrFunctionState> {
+                fn create_state(&self) -> Box<dyn crate::AggrFunctionState> {
                     Box::new(#state_expr)
                 }
             }

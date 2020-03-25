@@ -57,7 +57,7 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "raftstore/protobuf-codec",
   "tikv/protobuf-codec",
-  "tidb_query/protobuf-codec",
+  "tidb_query_datatype/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
   "cdc/protobuf-codec",
@@ -70,7 +70,7 @@ prost-codec = [
   "raft/prost-codec",
   "raftstore/prost-codec",
   "tikv/prost-codec",
-  "tidb_query/prost-codec",
+  "tidb_query_datatype/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
   "cdc/prost-codec",
@@ -100,7 +100,13 @@ rand = "0.7.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tempfile = "3.0"
-tidb_query = { path = "../components/tidb_query" }
+tidb_query_datatype = { path = "../components/tidb_query_datatype" }
+tidb_query_common = { path = "../components/tidb_query_common" }
+tidb_query_normal_expr = { path = "../components/tidb_query_normal_expr" }
+tidb_query_normal_executors = { path = "../components/tidb_query_normal_executors" }
+tidb_query_vec_aggr = { path = "../components/tidb_query_vec_aggr" }
+tidb_query_vec_executors = { path = "../components/tidb_query_vec_executors" }
+tidb_query_vec_expr = { path = "../components/tidb_query_vec_expr" }
 tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
