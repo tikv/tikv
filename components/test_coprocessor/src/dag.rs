@@ -11,7 +11,7 @@ use tipb::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableSc
 use tipb::{ByItem, Expr, ExprType};
 use tipb::{Chunk, DagRequest};
 
-use tidb_query::codec::{datum, Datum};
+use tidb_query_datatype::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv_util::codec::number::NumberEncoder;
 
