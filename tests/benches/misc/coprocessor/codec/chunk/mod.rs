@@ -4,9 +4,9 @@ mod chunk;
 
 use test::Bencher;
 
-use tidb_query::codec::chunk::{Chunk, ChunkEncoder};
-use tidb_query::codec::datum::Datum;
-use tidb_query::codec::mysql::*;
+use tidb_query_datatype::codec::chunk::{Chunk, ChunkEncoder};
+use tidb_query_datatype::codec::datum::Datum;
+use tidb_query_datatype::codec::mysql::*;
 use tidb_query_datatype::FieldTypeTp;
 use tipb::FieldType;
 

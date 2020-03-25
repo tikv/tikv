@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{Future, Sink, Stream};
@@ -15,6 +16,7 @@ use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::diagnosticspb::SearchLogRequestTarget;
 
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
@@ -25,14 +27,21 @@ pub struct Service {
     pool: CpuPool,
     log_file: String,
     slow_log_file: String,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(pool: CpuPool, log_file: String, slow_log_file: String) -> Self {
+    pub fn new(
+        pool: CpuPool,
+        log_file: String,
+        slow_log_file: String,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Self {
         Service {
             pool,
             log_file,
             slow_log_file,
+            security_mgr,
         }
     }
 }
@@ -44,6 +53,9 @@ impl Diagnostics for Service {
         req: SearchLogRequest,
         sink: ServerStreamingSink<SearchLogResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let log_file = if req.get_target() == SearchLogRequestTarget::Normal {
             self.log_file.to_owned()
         } else {
@@ -85,6 +97,9 @@ impl Diagnostics for Service {
         req: ServerInfoRequest,
         sink: UnarySink<ServerInfoResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let tp = req.get_tp();
         let collect = self
             .pool
@@ -140,6 +155,7 @@ mod sys {
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
     use sysinfo::{DiskExt, ProcessExt, SystemExt};
     use tikv_util::config::KB;
+    use tikv_util::sys::sys_quota::SysQuota;
 
     fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
         // CPU load
@@ -208,7 +224,7 @@ mod sys {
     fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
         system.refresh_all();
-        let total_memory = system.get_total_memory() * KB;
+        let total_memory = SysQuota::new().memory_limit_in_bytes();
         let used_memory = system.get_used_memory() * KB;
         let free_memory = system.get_free_memory() * KB;
         let total_swap = system.get_total_swap() * KB;
@@ -360,7 +376,7 @@ mod sys {
         let mut infos = vec![
             (
                 "cpu-logical-cores",
-                sysinfo::get_logical_cores().to_string(),
+                SysQuota::new().cpu_cores_quota().to_string(),
             ),
             (
                 "cpu-physical-cores",
