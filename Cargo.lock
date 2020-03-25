@@ -1130,9 +1130,9 @@ dependencies = [
  "kvproto",
  "rand 0.7.3",
  "rusoto_core",
- "rusoto_credential",
  "rusoto_mock",
  "rusoto_s3",
+ "rusoto_util",
  "rust-ini",
  "slog",
  "slog-global",
@@ -3485,6 +3485,32 @@ dependencies = [
  "sha2",
  "time 0.2.9",
  "tokio 0.2.13",
+]
+
+[[package]]
+name = "rusoto_sts"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e83d166cfb294672db98a60159c4a81a8169c6c91054a275cb812158c73815e5"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "chrono",
+ "futures 0.3.4",
+ "rusoto_core",
+ "serde_urlencoded",
+ "tempfile",
+ "xml-rs",
+]
+
+[[package]]
+name = "rusoto_util"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_sts",
 ]
 
 [[package]]
