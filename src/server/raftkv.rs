@@ -299,7 +299,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         }
 
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
-        let req_timer = Instant::now_coarse();
+        let begin_instant = Instant::now_coarse();
 
         self.exec_write_requests(
             ctx,
@@ -309,7 +309,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .write
-                        .observe(req_timer.elapsed_secs());
+                        .observe(begin_instant.elapsed_secs());
                     fail_point!("raftkv_async_write_finish");
                     cb((cb_ctx, Ok(())))
                 }
@@ -337,7 +337,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         req.set_cmd_type(CmdType::Snap);
 
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
-        let req_timer = Instant::now_coarse();
+        let begin_instant = Instant::now_coarse();
 
         self.exec_read_requests(
             ctx,
@@ -350,7 +350,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
-                        .observe(req_timer.elapsed_secs());
+                        .observe(begin_instant.elapsed_secs());
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     cb((cb_ctx, Ok(s)))
                 }
