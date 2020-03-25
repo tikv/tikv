@@ -11,9 +11,7 @@ use std::time::*;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN, DB};
 use engine_traits::{name_to_cf, CfName};
 use external_storage::*;
-use futures::lazy;
-use futures::prelude::Future;
-use futures::sync::mpsc::*;
+use futures::channel::mpsc::*;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
@@ -23,10 +21,10 @@ use raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, ScanMode, Snapshot};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::Statistics;
+use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
-use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{Key, TimeStamp};
 
 use crate::metrics::*;
@@ -436,7 +434,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
 struct ControlThreadPool {
     size: usize,
-    workers: Option<ThreadPool>,
+    workers: Option<ThreadPool<DefaultContext>>,
     last_active: Instant,
 }
 
@@ -449,11 +447,11 @@ impl ControlThreadPool {
         }
     }
 
-    fn spawn<F>(&mut self, future: F)
+    fn spawn<F>(&mut self, func: F)
     where
-        F: Future<Item = (), Error = ()> + Send + 'static,
+        F: FnOnce() + Send + 'static,
     {
-        self.workers.as_ref().unwrap().spawn(future);
+        self.workers.as_ref().unwrap().execute(|_| func());
     }
 
     /// Lazily adjust the thread pool's size
@@ -464,9 +462,8 @@ impl ControlThreadPool {
         if self.size >= new_size && self.size - new_size <= 10 {
             return;
         }
-        let workers = ThreadPoolBuilder::new()
-            .name_prefix("backup-worker")
-            .pool_size(new_size)
+        let workers = ThreadPoolBuilder::with_default_factory("backup-worker".to_owned())
+            .thread_count(new_size)
             .build();
         let _ = self.workers.replace(workers);
         self.size = new_size;
@@ -482,7 +479,9 @@ impl ControlThreadPool {
         if self.last_active.elapsed() >= idle_threshold {
             self.size = 0;
             if let Some(w) = self.workers.take() {
-                w.shutdown();
+                let start = Instant::now();
+                drop(w);
+                slow_log!(start.elapsed(), "backup thread pool shutdown too long");
             }
         }
     }
@@ -519,8 +518,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let engine = self.engine.clone();
         let db = self.db.clone();
         let store_id = self.store_id;
-        // TODO: make it async.
-        self.pool.borrow_mut().spawn(lazy(move || loop {
+        self.pool.borrow_mut().spawn(move || loop {
             let (branges, is_raw_kv, cf) = {
                 // Release lock as soon as possible.
                 // It is critical to speed up backup, otherwise workers are
@@ -533,12 +531,12 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 )
             };
             if branges.is_empty() {
-                return Ok(());
+                return;
             }
             for brange in branges {
                 if cancel.load(Ordering::SeqCst) {
                     warn!("backup task has canceled"; "range" => ?brange);
-                    return Ok(());
+                    return;
                 }
                 // TODO: make file_name unique and short
                 let key = brange.start_key.clone().and_then(|k| {
@@ -558,13 +556,20 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts)
                 };
                 match res {
-                    Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
+                    Err(e) => {
+                        if let Err(e) = tx.send((brange, Err(e))) {
+                            error!("send backup result failed"; "error" => ?e);
+                        }
+                        return;
+                    }
                     Ok((files, stat)) => {
-                        let _ = tx.send((brange, Ok((files, stat)))).map_err(|_| ());
+                        if let Err(e) = tx.send((brange, Ok((files, stat)))) {
+                            error!("send backup result failed"; "error" => ?e);
+                        }
                     }
                 }
             }
-        }));
+        });
     }
 
     pub fn handle_backup_task(&self, task: Task) {
@@ -760,7 +765,8 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
 pub mod tests {
     use super::*;
     use external_storage::{make_local_backend, make_noop_backend, LocalStorage};
-    use futures::{self, Future, Stream};
+    use futures::executor::block_on;
+    use futures::stream::StreamExt;
     use kvproto::metapb;
     use raftstore::coprocessor::RegionCollector;
     use raftstore::coprocessor::Result as CopResult;
@@ -841,9 +847,10 @@ pub mod tests {
     where
         F: FnOnce(Option<BackupResponse>),
     {
-        let (resp, rx) = rx.into_future().wait().unwrap();
+        let rx = rx.fuse();
+        let (resp, rx) = block_on(rx.into_future());
         check(resp);
-        let (none, _rx) = rx.into_future().wait().unwrap();
+        let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
     }
 
@@ -936,7 +943,7 @@ pub mod tests {
                     cf: engine_traits::CF_DEFAULT,
                 };
                 endpoint.handle_backup_task(task);
-                let resps: Vec<_> = rx.collect().wait().unwrap();
+                let resps: Vec<_> = block_on(rx.collect());
                 for a in &resps {
                     assert!(
                         expect
@@ -1043,7 +1050,7 @@ pub mod tests {
                 task.storage.limiter = limiter.clone();
             }
             endpoint.handle_backup_task(task);
-            let (resp, rx) = rx.into_future().wait().unwrap();
+            let (resp, rx) = block_on(rx.into_future());
             let resp = resp.unwrap();
             assert!(!resp.has_error(), "{:?}", resp);
             let file_len = if *len <= SHORT_VALUE_MAX_LEN { 1 } else { 2 };
@@ -1053,7 +1060,7 @@ pub mod tests {
                 "{:?}",
                 resp
             );
-            let (none, _rx) = rx.into_future().wait().unwrap();
+            let (none, _rx) = block_on(rx.into_future());
             assert!(none.is_none(), "{:?}", none);
         }
     }
@@ -1285,7 +1292,7 @@ pub mod tests {
         req.set_concurrency(10);
         req.set_storage_backend(make_noop_backend());
 
-        let (tx, resp_rx) = futures::sync::mpsc::unbounded();
+        let (tx, resp_rx) = unbounded();
         let (task, _) = Task::new(req, tx).unwrap();
 
         // if not task arrive after create the thread pool is empty
@@ -1293,7 +1300,7 @@ pub mod tests {
 
         scheduler.send(Some(task)).unwrap();
         // wait until the task finish
-        let _ = resp_rx.into_future().wait();
+        let _ = block_on(resp_rx.into_future());
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
 
         // thread pool not yet shutdown
