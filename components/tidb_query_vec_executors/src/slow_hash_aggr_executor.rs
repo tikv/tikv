@@ -71,9 +71,6 @@ impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         assert!(!group_by_definitions.is_empty());
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
-            if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-                return Err(other_err!("Group by expression is not a column"));
-            }
         }
 
         let aggr_definitions = descriptor.get_agg_func();
@@ -288,8 +285,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         )?;
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
-                    // we have checked that group by cannot be a scalar
-                    _ => unreachable!(),
+                    RpnStackNode::Scalar { value, field_type } => {
+                        value.as_scalar_value_ref().encode_sort_key(
+                            field_type,
+                            context,
+                            &mut self.group_key_buffer,
+                        )?;
+                        self.group_key_offsets.push(self.group_key_buffer.len());
+                    }
                 }
             }
 
@@ -311,8 +314,15 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         )?;
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
-                    // we have checked that group by cannot be a scalar
-                    _ => unreachable!(),
+                    RpnStackNode::Scalar { value, field_type } => {
+                        debug_assert!(value.eval_type() == EvalType::Bytes);
+                        value.as_scalar_value_ref().encode(
+                            field_type,
+                            context,
+                            &mut self.group_key_buffer,
+                        )?;
+                        self.group_key_offsets.push(self.group_key_buffer.len());
+                    }
                 }
             }
 
