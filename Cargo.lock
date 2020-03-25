@@ -4194,6 +4194,7 @@ name = "test_util"
 version = "0.0.1"
 dependencies = [
  "fail",
+ "grpcio",
  "rand 0.7.3",
  "rand_isaac 0.2.0",
  "slog",
@@ -4538,6 +4539,7 @@ dependencies = [
  "slog-async",
  "slog-global",
  "slog-term",
+ "sysinfo",
  "tempfile",
  "thrift_codec",
  "tikv_alloc",

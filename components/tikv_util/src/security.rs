@@ -5,9 +5,10 @@ use std::fs::File;
 use std::io::Read;
 use std::sync::Arc;
 
+use crate::collections::HashSet;
 use grpcio::{
-    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
-    ServerCredentialsBuilder, ServerCredentialsFetcher,
+    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, RpcContext,
+    ServerBuilder, ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -21,6 +22,7 @@ pub struct SecurityConfig {
     #[serde(skip)]
     pub override_ssl_target: String,
     pub cipher_file: String,
+    pub cert_allowed_cn: HashSet<String>,
 }
 
 impl Default for SecurityConfig {
@@ -31,6 +33,7 @@ impl Default for SecurityConfig {
             key_path: String::new(),
             override_ssl_target: String::new(),
             cipher_file: String::new(),
+            cert_allowed_cn: HashSet::default(),
         }
     }
 }
@@ -147,6 +150,10 @@ impl SecurityManager {
     pub fn cipher_file(&self) -> &str {
         &self.cfg.cipher_file
     }
+
+    pub fn cert_allowed_cn(&self) -> &HashSet<String> {
+        &self.cfg.cert_allowed_cn
+    }
 }
 
 struct Fetcher {
@@ -164,6 +171,38 @@ impl ServerCredentialsFetcher for Fetcher {
             );
         Ok(Some(new_cred))
     }
+}
+
+/// Check peer CN with cert-allowed-cn field.
+/// Return true when the match is successful (support wildcard pattern).
+/// Skip the check when cert-allowed-cn is not set or the secure channel is not used.
+pub fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> bool {
+    if cert_allowed_cn.is_empty() {
+        return true;
+    }
+    if let Some(auth_ctx) = ctx.auth_context() {
+        if let Some(auth_property) = auth_ctx
+            .into_iter()
+            .find(|x| x.name() == "x509_common_name")
+        {
+            let peer_cn = auth_property.value_str().unwrap();
+            match_peer_names(cert_allowed_cn, peer_cn)
+        } else {
+            false
+        }
+    } else {
+        true
+    }
+}
+
+/// Check peer CN with a set of allowed CN.
+pub fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
+    for cn in allowed_cn {
+        if cn == name {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
