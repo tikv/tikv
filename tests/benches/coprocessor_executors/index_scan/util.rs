@@ -10,10 +10,10 @@ use tipb::ColumnInfo;
 use tipb::IndexScan;
 
 use test_coprocessor::*;
-use tidb_query::batch::executors::BatchIndexScanExecutor;
-use tidb_query::batch::interface::*;
-use tidb_query::executor::{Executor, IndexScanExecutor};
-use tidb_query::expr::{EvalConfig, EvalContext};
+use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tidb_query_normal_executors::{Executor, IndexScanExecutor};
+use tidb_query_vec_executors::interface::*;
+use tidb_query_vec_executors::BatchIndexScanExecutor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
