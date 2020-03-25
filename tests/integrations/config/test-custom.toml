@@ -5,9 +5,6 @@ slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 
-[readpool]
-unify-read-pool = true
-
 [readpool.unified]
 min-thread-count = 5
 max-thread-count = 10
@@ -15,6 +12,7 @@ stack-size = "20MB"
 max-tasks-per-worker = 2200
 
 [readpool.storage]
+use-unified-pool = true
 high-concurrency = 1
 normal-concurrency = 3
 low-concurrency = 7
@@ -24,6 +22,7 @@ max-tasks-per-worker-low = 2500
 stack-size = "20MB"
 
 [readpool.coprocessor]
+use-unified-pool = false
 high-concurrency = 2
 normal-concurrency = 4
 low-concurrency = 6
