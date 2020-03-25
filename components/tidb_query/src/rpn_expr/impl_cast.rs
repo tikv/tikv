@@ -1172,8 +1172,7 @@ mod tests {
         Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
     };
     use crate::codec::Error;
-    use crate::expr::Flag;
-    use crate::expr::{EvalConfig, EvalContext};
+    use crate::expr::*;
     use crate::rpn_expr::impl_cast::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
     use crate::rpn_expr::RpnFnCallExtra;
@@ -1266,6 +1265,7 @@ mod tests {
     }
 
     struct CtxConfig {
+        strict_mode: bool,
         overflow_as_warning: bool,
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
@@ -1276,6 +1276,7 @@ mod tests {
     impl Default for CtxConfig {
         fn default() -> Self {
             CtxConfig {
+                strict_mode: true,
                 overflow_as_warning: false,
                 truncate_as_warning: false,
                 should_clip_to_zero: false,
@@ -1287,6 +1288,7 @@ mod tests {
 
     impl From<CtxConfig> for EvalContext {
         fn from(config: CtxConfig) -> Self {
+            let mut sql_mode = SqlMode::empty();
             let mut flag: Flag = Flag::empty();
             if config.overflow_as_warning {
                 flag |= Flag::OVERFLOW_AS_WARNING;
@@ -1303,8 +1305,12 @@ mod tests {
             if config.in_update_or_delete_stmt {
                 flag |= Flag::IN_UPDATE_OR_DELETE_STMT;
             }
-            let cfg = Arc::new(EvalConfig::from_flag(flag));
-            EvalContext::new(cfg)
+            if config.strict_mode {
+                sql_mode |= SqlMode::STRICT_ALL_TABLES;
+            }
+            let mut cfg = EvalConfig::default();
+            cfg.set_sql_mode(sql_mode).set_flag(flag);
+            EvalContext::new(Arc::new(cfg))
         }
     }
 
@@ -1976,12 +1982,16 @@ mod tests {
         ];
 
         for case in should_fail {
+            let ctx = CtxConfig {
+                in_insert_stmt: true,
+                ..CtxConfig::default()
+            };
             let actual = RpnFnScalarEvaluator::new()
                 .push_param(case)
                 .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::Date).build())
-                .evaluate::<Time>(ScalarFuncSig::CastIntAsTime)
-                .unwrap();
-            assert!(actual.is_none());
+                .context(ctx)
+                .evaluate::<Time>(ScalarFuncSig::CastIntAsTime);
+            assert!(actual.is_err());
         }
     }
 

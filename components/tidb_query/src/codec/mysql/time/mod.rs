@@ -574,56 +574,6 @@ impl Time {
     }
 }
 
-fn handle_zero_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<TimeArgs>> {
-    let sql_mode = ctx.cfg.sql_mode;
-    let flags = ctx.cfg.flag;
-    let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
-        | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
-    let no_zero_date = sql_mode.contains(SqlMode::NO_ZERO_DATE);
-    let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
-
-    debug_assert!(args.is_zero());
-
-    if no_zero_date {
-        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
-        ctx.warnings.append_warning(Error::truncated());
-        args.clear();
-        return Ok(None);
-    }
-    Ok(Some(args))
-}
-
-fn handle_zero_in_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<TimeArgs>> {
-    let sql_mode = ctx.cfg.sql_mode;
-    let flags = ctx.cfg.flag;
-
-    let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
-        | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
-    let no_zero_in_date = sql_mode.contains(SqlMode::NO_ZERO_IN_DATE);
-    let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
-
-    debug_assert!(args.month == 0 || args.day == 0);
-
-    if no_zero_in_date {
-        // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
-        // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
-        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
-        ctx.warnings.append_warning(Error::truncated());
-        args.clear();
-        return handle_zero_date(ctx, args);
-    }
-
-    Ok(Some(args))
-}
-
-fn handle_invalid_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<TimeArgs>> {
-    let sql_mode = ctx.cfg.sql_mode;
-    let allow_invalid_date = sql_mode.contains(SqlMode::INVALID_DATES);
-    allow_invalid_date.ok_or(Error::truncated())?;
-    args.clear();
-    handle_zero_date(ctx, args)
-}
-
 /// A validator that verify each field for the `Time`
 /// NOTE: It's inappropriate to construct `Time` first and then verify it.
 /// Because `Time` uses `bitfield`, the range of each field is quite narrow.
@@ -662,13 +612,81 @@ impl Default for TimeArgs {
 impl TimeArgs {
     fn check(mut self, ctx: &mut EvalContext) -> Option<TimeArgs> {
         self.fsp = check_fsp(self.fsp).ok()? as i8;
-        let (fsp, time_type) = (self.fsp, self.time_type);
         match self.time_type {
             TimeType::Date | TimeType::DateTime => self.check_datetime(ctx),
             TimeType::Timestamp => self.check_timestamp(ctx),
         }
-        .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
         .ok()
+    }
+
+    fn handle_zero_date(&mut self, ctx: &mut EvalContext) -> Result<()> {
+        let sql_mode = ctx.cfg.sql_mode;
+        let flags = ctx.cfg.flag;
+
+        if flags.contains(Flag::IN_SELECT_STMT) {
+            return Ok(());
+        }
+
+        let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
+            | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
+        let no_zero_date = sql_mode.contains(SqlMode::NO_ZERO_DATE);
+        let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
+
+        debug_assert!(self.is_zero());
+
+        if no_zero_date {
+            (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+            ctx.warnings.append_warning(Error::truncated());
+        };
+
+        Ok(())
+    }
+
+    fn handle_zero_in_date(&mut self, ctx: &mut EvalContext) -> Result<()> {
+        let sql_mode = ctx.cfg.sql_mode;
+        let flags = ctx.cfg.flag;
+
+        if flags.contains(Flag::IN_SELECT_STMT) {
+            return Ok(());
+        }
+
+        let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
+            | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
+        let no_zero_in_date = sql_mode.contains(SqlMode::NO_ZERO_IN_DATE);
+        let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
+
+        debug_assert!(self.month == 0 || self.day == 0);
+
+        if no_zero_in_date {
+            // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
+            // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
+            (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+            ctx.warnings.append_warning(Error::truncated());
+            self.clear();
+            return self.handle_zero_date(ctx);
+        }
+
+        Ok(())
+    }
+
+    fn handle_invalid_date(&mut self, ctx: &mut EvalContext) -> Result<()> {
+        let sql_mode = ctx.cfg.sql_mode;
+        let flags = ctx.cfg.flag;
+
+        if flags.contains(Flag::IN_SELECT_STMT) {
+            return Ok(());
+        }
+
+        let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
+            | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
+
+        if !strict_mode {
+            ctx.warnings.append_warning(Error::truncated());
+            self.clear();
+            self.handle_zero_date(ctx)
+        } else {
+            Err(Error::truncated())
+        }
     }
 
     pub fn zero(fsp: i8, time_type: TimeType) -> TimeArgs {
@@ -705,7 +723,7 @@ impl TimeArgs {
             && self.micro == 0
     }
 
-    fn check_date(mut self, ctx: &mut EvalContext) -> Result<Option<Self>> {
+    fn check_date(mut self, ctx: &mut EvalContext) -> Result<Self> {
         let Self {
             year, month, day, ..
         } = self;
@@ -713,22 +731,23 @@ impl TimeArgs {
         let is_relaxed = ctx.cfg.sql_mode.contains(SqlMode::INVALID_DATES);
 
         if self.is_zero() {
-            self = try_opt!(handle_zero_date(ctx, self));
+            self.handle_zero_date(ctx)?;
+            return Ok(self);
         }
 
         if month == 0 || day == 0 {
-            self = try_opt!(handle_zero_in_date(ctx, self));
+            self.handle_zero_in_date(ctx)?;
         }
 
         if year > 9999 || Time::check_month_and_day(year, month, day, is_relaxed).is_err() {
-            return handle_invalid_date(ctx, self);
+            self.handle_invalid_date(ctx)?;
         }
 
-        Ok(Some(self))
+        Ok(self)
     }
 
-    fn check_datetime(self, ctx: &mut EvalContext) -> Result<Option<Self>> {
-        let datetime = try_opt!(self.check_date(ctx));
+    fn check_datetime(self, ctx: &mut EvalContext) -> Result<Self> {
+        let mut datetime = self.check_date(ctx)?;
 
         let Self {
             hour,
@@ -739,15 +758,16 @@ impl TimeArgs {
         } = datetime;
 
         if hour > 23 || minute > 59 || second > 59 || micro > 999999 {
-            return handle_invalid_date(ctx, datetime);
+            datetime.handle_invalid_date(ctx)?;
         }
 
-        Ok(Some(datetime))
+        Ok(datetime)
     }
 
-    fn check_timestamp(self, ctx: &mut EvalContext) -> Result<Option<Self>> {
+    fn check_timestamp(mut self, ctx: &mut EvalContext) -> Result<Self> {
         if self.is_zero() {
-            return handle_zero_date(ctx, self);
+            self.handle_zero_date(ctx)?;
+            return Ok(self);
         }
 
         let datetime = chrono_datetime(
@@ -762,17 +782,18 @@ impl TimeArgs {
         );
 
         if datetime.is_err() {
-            return handle_invalid_date(ctx, self);
+            self.handle_invalid_date(ctx)?;
+            return Ok(self);
         }
 
         let ts = datetime.unwrap().timestamp();
 
         // Out of range
         if ts < MIN_TIMESTAMP || ts > MAX_TIMESTAMP {
-            return handle_invalid_date(ctx, self);
+            self.handle_invalid_date(ctx)?;
         }
 
-        Ok(Some(self))
+        Ok(self)
     }
 }
 
@@ -1737,17 +1758,19 @@ mod tests {
         no_zero_date: bool,
         allow_invalid_date: bool,
         ignore_truncate: bool,
+        in_select_stmt: bool,
         time_zone: Option<Tz>,
     }
 
     impl Default for TimeEnv {
         fn default() -> TimeEnv {
             TimeEnv {
-                strict_mode: false,
+                strict_mode: true,
                 no_zero_in_date: false,
                 no_zero_date: false,
                 allow_invalid_date: false,
                 ignore_truncate: false,
+                in_select_stmt: false,
                 time_zone: None,
             }
         }
@@ -1776,6 +1799,10 @@ mod tests {
                 flags |= Flag::IGNORE_TRUNCATE;
             }
 
+            if config.in_select_stmt {
+                flags |= Flag::IN_SELECT_STMT;
+            }
+
             eval_config.set_sql_mode(sql_mode).set_flag(flags).tz =
                 config.time_zone.unwrap_or_else(Tz::utc);
 
@@ -1800,7 +1827,7 @@ mod tests {
             ("1000-01-01 00:00:00", 10_000_101_000_000),
             ("1999-01-01 00:00:00", 19_990_101_000_000),
         ];
-        let mut ctx = EvalContext::default();
+        let mut ctx = TimeEnv::default().into();
         for (expected, input) in cases {
             let actual = Time::parse_from_i64(&mut ctx, input, TimeType::DateTime, 0)?;
             assert_eq!(actual.to_string(), expected);
@@ -1823,7 +1850,7 @@ mod tests {
 
     #[test]
     fn test_parse_valid_date() -> Result<()> {
-        let mut ctx = EvalContext::default();
+        let mut ctx = TimeEnv::default().into();
         let cases = vec![
             ("2019-09-16", "20190916101112"),
             ("2019-09-16", "190916101112"),
@@ -1897,7 +1924,7 @@ mod tests {
 
     #[test]
     fn test_parse_valid_datetime() -> Result<()> {
-        let mut ctx = EvalContext::default();
+        let mut ctx = TimeEnv::default().into();
         let cases = vec![
             ("2019-09-16 10:11:12", "20190916101112", 0, false),
             ("2019-09-16 10:11:12", "190916101112", 0, false),
@@ -2005,7 +2032,7 @@ mod tests {
 
     #[test]
     fn test_parse_valid_timestamp() -> Result<()> {
-        let mut ctx = EvalContext::default();
+        let mut ctx = TimeEnv::default().into();
         let cases = vec![
             ("2019-09-16 10:11:12", "20190916101112", 0, false),
             ("2019-09-16 10:11:12", "190916101112", 0, false),
@@ -2082,6 +2109,7 @@ mod tests {
         for (expected, actual) in cases {
             let mut ctx = EvalContext::from(TimeEnv {
                 allow_invalid_date: true,
+                strict_mode: false,
                 ..TimeEnv::default()
             });
             assert_eq!(expected, Time::parse_date(&mut ctx, actual)?.to_string());
@@ -2093,6 +2121,7 @@ mod tests {
     fn test_invalid_datetime() -> Result<()> {
         let mut ctx = EvalContext::from(TimeEnv {
             allow_invalid_date: true,
+            strict_mode: false,
             ..TimeEnv::default()
         });
 
@@ -2115,6 +2144,7 @@ mod tests {
     fn test_allow_invalid_timestamp() -> Result<()> {
         let mut ctx = EvalContext::from(TimeEnv {
             allow_invalid_date: true,
+            strict_mode: false,
             ..TimeEnv::default()
         });
 
@@ -2137,6 +2167,7 @@ mod tests {
         for (timestamp, time_zone) in dsts {
             let mut ctx = EvalContext::from(TimeEnv {
                 allow_invalid_date: true,
+                strict_mode: false,
                 time_zone: Tz::from_tz_name(time_zone),
                 ..TimeEnv::default()
             });
@@ -2154,6 +2185,7 @@ mod tests {
         // Enable NO_ZERO_DATE only. If zero-date is encountered, a warning is produced.
         let mut ctx = EvalContext::from(TimeEnv {
             no_zero_date: true,
+            strict_mode: false,
             ..TimeEnv::default()
         });
 
@@ -2165,7 +2197,6 @@ mod tests {
         // If zero-date is encountered, an error is returned.
         let mut ctx = EvalContext::from(TimeEnv {
             no_zero_date: true,
-            strict_mode: true,
             ..TimeEnv::default()
         });
 
@@ -2175,7 +2206,6 @@ mod tests {
         // If zero-date is encountered, an error is returned.
         let mut ctx = EvalContext::from(TimeEnv {
             no_zero_date: true,
-            strict_mode: true,
             ignore_truncate: true,
             ..TimeEnv::default()
         });
@@ -2198,7 +2228,6 @@ mod tests {
             // If an invalid date (converted to zero-date) is encountered, an error is returned.
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_date: true,
-                strict_mode: true,
                 ..TimeEnv::default()
             });
             assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
@@ -2215,6 +2244,7 @@ mod tests {
             // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is produced.
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_in_date: true,
+                strict_mode: false,
                 ..TimeEnv::default()
             });
 
@@ -2223,28 +2253,11 @@ mod tests {
             assert!(ctx.warnings.warning_cnt > 0);
         }
 
-        // Enable NO_ZERO_IN_DATE, STRICT_MODE and IGNORE_TRUNCATE.
-        // If zero-date is encountered, an error is returned.
-        let mut ctx = EvalContext::from(TimeEnv {
-            no_zero_in_date: true,
-            strict_mode: true,
-            ignore_truncate: true,
-            ..TimeEnv::default()
-        });
-
-        assert_eq!(
-            "0000-00-00 00:00:00",
-            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false)?.to_string()
-        );
-
-        assert!(ctx.warnings.warning_cnt > 0);
-
         for &case in cases.iter() {
             // Enable both NO_ZERO_IN_DATE and STRICT_MODE,.
             // If zero-date is encountered, an error is returned.
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_in_date: true,
-                strict_mode: true,
                 ..TimeEnv::default()
             });
             assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
@@ -2338,7 +2351,7 @@ mod tests {
         ];
 
         for (left, right, expected) in cases {
-            let mut ctx = EvalContext::default();
+            let mut ctx = TimeEnv::default().into();
             let left = Time::parse_datetime(&mut ctx, left, MAX_FSP, false)?;
             let right = Time::parse_datetime(&mut ctx, right, MAX_FSP, false)?;
             assert_eq!(expected, left.cmp(&right));
@@ -2350,7 +2363,7 @@ mod tests {
     fn test_from_duration() -> Result<()> {
         let cases = vec!["11:30:45.123456", "-35:30:46"];
         for case in cases {
-            let mut ctx = EvalContext::default();
+            let mut ctx = TimeEnv::default().into();
             let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP)?;
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
@@ -2462,7 +2475,7 @@ mod tests {
         ];
 
         for (lhs, rhs, expected) in normal_cases.clone() {
-            let mut ctx = EvalContext::default();
+            let mut ctx = TimeEnv::default().into();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
             let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
@@ -2470,7 +2483,7 @@ mod tests {
         }
 
         for (expected, rhs, lhs) in normal_cases {
-            let mut ctx = EvalContext::default();
+            let mut ctx = TimeEnv::default().into();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
             let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
@@ -2519,7 +2532,7 @@ mod tests {
         }
 
         // Failed cases
-        let mut ctx = EvalContext::default();
+        let mut ctx = TimeEnv::default().into();
         let lhs = Time::parse_datetime(&mut ctx, "9999-12-31 23:59:59", 6, false)?;
         let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
         assert_eq!(lhs.checked_add(&mut ctx, rhs), None);
@@ -2594,7 +2607,7 @@ mod tests {
             ),
         ];
         for (s, layout, expect) in cases {
-            let mut ctx = EvalContext::default();
+            let mut ctx = TimeEnv::default().into();
             let t = Time::parse_datetime(&mut ctx, s, 6, false)?;
             let get = t.date_format(layout)?;
             assert_eq!(get, expect);
@@ -2613,7 +2626,7 @@ mod tests {
             ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
             ("0000-00-00 00:00:00", 6, "00000000000000.000000"),
         ];
-        let mut ctx = EvalContext::default();
+        let mut ctx = TimeEnv::default().into();
         for (s, fsp, expect) in cases {
             let t = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let get = t.to_numeric_string();
@@ -2632,7 +2645,7 @@ mod tests {
             ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
             ("0000-00-00 00:00:00", 6, "0"),
         ];
-        let mut ctx = EvalContext::default();
+        let mut ctx = TimeEnv::default().into();
         for (s, fsp, expect) in cases {
             let t = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let get: Decimal = t.convert(&mut ctx).unwrap();
@@ -2656,7 +2669,7 @@ mod tests {
             ("2017-01-05 23:59:59.575601", 0, 20170106000000f64),
             ("0000-00-00 00:00:00", 6, 0f64),
         ];
-        let mut ctx = EvalContext::default();
+        let mut ctx = TimeEnv::default().into();
         for (s, fsp, expect) in cases {
             let t = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let get: f64 = t.convert(&mut ctx).unwrap();
@@ -2667,5 +2680,25 @@ mod tests {
                 get
             );
         }
+    }
+
+    #[test]
+    fn test_in_select_stmt() -> Result<()> {
+        let cases = vec![
+            ("2019-02-31", "2019-2-31"),
+            ("2019-02-29", "2019-2-29"),
+            ("2019-04-31", "2019-4-31"),
+            ("2019-02-11", "2019-02-11"),
+            ("2019-02-00", "2019-02-00"),
+        ];
+        for (expected, input) in cases {
+            let mut ctx = TimeEnv {
+                in_select_stmt: true,
+                ..TimeEnv::default()
+            }
+            .into();
+            assert_eq!(expected, Time::parse_date(&mut ctx, input)?.to_string());
+        }
+        Ok(())
     }
 }
