@@ -20,6 +20,8 @@ pub enum Error {
     Proto(ProtobufError),
     #[fail(display = "Unknown encryption error")]
     UnknownEncryption,
+    #[fail(display = "Possibly wrong master key error {}", _0)]
+    MasterKey(Box<dyn error::Error + Sync + Send>),
     #[fail(
         display = "Current master key error {}, previous master key error {}.",
         _0, _1
@@ -28,8 +30,6 @@ pub enum Error {
         Box<dyn error::Error + Sync + Send>,
         Box<dyn error::Error + Sync + Send>,
     ),
-    #[fail(display = "Encrypted file error {}", _0)]
-    EncryptedFile(Box<dyn error::Error + Sync + Send>),
 }
 
 macro_rules! impl_from {

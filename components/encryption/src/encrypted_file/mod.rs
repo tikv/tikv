@@ -8,7 +8,6 @@ use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
 
-use crate::failure::Fail;
 use crate::master_key::*;
 use crate::{Error, Result};
 
@@ -41,14 +40,10 @@ impl<'a> EncryptedFile<'a> {
             Ok(mut f) => {
                 let mut buf = Vec::new();
                 f.read_to_end(&mut buf)?;
-                let (header, content) = Header::parse(&buf)?;
-                println!("read encrypted len {}", content.len());
+                let (_, content) = Header::parse(&buf)?;
                 let mut encrypted_content = EncryptedContent::default();
                 encrypted_content.merge_from_bytes(content)?;
-                let plaintext = master_key
-                    .decrypt(&encrypted_content)
-                    .map_err(|e| Error::EncryptedFile(Box::new(e.compat())))?;
-                header.verify(&plaintext)?;
+                let plaintext = master_key.decrypt(&encrypted_content)?;
 
                 Ok(Some(plaintext))
             }
@@ -78,8 +73,7 @@ impl<'a> EncryptedFile<'a> {
             .encrypt(&plaintext_content)?
             .write_to_bytes()
             .unwrap();
-        println!("write encrypted len {}", encrypted_content.len());
-        let header = Header::new(plaintext_content);
+        let header = Header::new(&encrypted_content);
         tmp_file.write_all(&header.to_bytes())?;
         tmp_file.write_all(&encrypted_content)?;
         tmp_file.sync_all()?;
@@ -102,18 +96,17 @@ mod tests {
     fn test_open_write() {
         let tmp = tempfile::TempDir::new().unwrap();
         let file = EncryptedFile::new(tmp.path(), "encrypted");
-        let empty: Vec<u8> = vec![];
-        assert_eq!(file.read(&PlainTextBackend::default()).unwrap(), empty);
+        assert!(file.read(&PlaintextBackend::default()).unwrap().is_none());
         assert_eq!(file.base, tmp.path());
         assert_eq!(file.name, "encrypted");
 
         let content = b"test content";
-        file.write(content, &PlainTextBackend::default()).unwrap();
+        file.write(content, &PlaintextBackend::default()).unwrap();
         drop(file);
 
         let file = EncryptedFile::new(tmp.path(), "encrypted");
         assert_eq!(
-            file.read(&PlainTextBackend::default()).unwrap().unwrap(),
+            file.read(&PlaintextBackend::default()).unwrap().unwrap(),
             content
         );
     }

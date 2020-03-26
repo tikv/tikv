@@ -1020,6 +1020,7 @@ dependencies = [
  "failure",
  "hex 0.4.2",
  "kvproto",
+ "matches",
  "openssl",
  "protobuf",
  "rand 0.7.3",

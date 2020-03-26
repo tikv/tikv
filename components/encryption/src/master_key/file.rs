@@ -11,8 +11,6 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use hex;
-
 pub struct FileBackend {
     method: EncryptionMethod,
     key: Vec<u8>,
@@ -24,24 +22,37 @@ impl FileBackend {
             EncryptionMethod::Unknown => return Err(Error::UnknownEncryption),
             EncryptionMethod::Plaintext => vec![],
             _ => {
-                let key_len = crypter::get_method_key_length(method) as u64;
+                let key_len = crypter::get_method_key_length(method);
                 let mut file = File::open(path)?;
                 // Check file size to avoid reading a gigantic file accidentally.
-                let file_len = file.metadata()?.len();
-                if file_len != key_len * 2 {
+                let file_len = file.metadata()?.len() as usize;
+                if file_len != key_len * 2 + 1 {
                     return Err(Error::Other(
                         format!(
                             "mismatch master key file size, expected {}, actual {}.",
-                            key_len * 2,
+                            key_len * 2 + 1,
                             file_len,
                         )
                         .into(),
                     ));
                 }
                 let mut content = vec![];
-                let read_len = file.read_to_end(&mut content)? as u64;
-                assert_eq!(read_len, key_len * 2);
-                hex::decode(content).map_err(|e| {
+                let read_len = file.read_to_end(&mut content)?;
+                if read_len != file_len {
+                    return Err(Error::Other(
+                        format!(
+                            "mismatch master key file size read, expected {}, actual{}",
+                            file_len, read_len
+                        )
+                        .into(),
+                    ));
+                }
+                if content.last() != Some(&b'\n') {
+                    return Err(Error::Other(
+                        format!("master key file should end with newline.").into(),
+                    ));
+                }
+                hex::decode(&content[..file_len - 1]).map_err(|e| {
                     Error::Other(format!("failed to decode master key from file: {}", e).into())
                 })?
             }
@@ -95,11 +106,13 @@ impl FileBackend {
         let checksum = content
             .get_metadata()
             .get(MetadataKey::PlaintextSha256.as_str())
-            .ok_or_else(|| Error::Other("sha256 checksum not found".to_owned().into()))?;
+            .ok_or_else(|| Error::MasterKey("sha256 checksum not found".to_owned().into()))?;
         let ciphertext = content.get_content();
         let plaintext = AesCtrCrypter::new(method, key, iv).decrypt(ciphertext)?;
         if *checksum != sha256(&plaintext)? {
-            return Err(Error::Other("sha256 checksum mismatch".to_owned().into()));
+            return Err(Error::MasterKey(
+                "sha256 checksum mismatch".to_owned().into(),
+            ));
         }
         Ok(plaintext)
     }
@@ -123,6 +136,7 @@ impl Backend for FileBackend {
 #[cfg(test)]
 mod tests {
     use hex::FromHex;
+    use matches::matches;
 
     use super::*;
 
@@ -168,13 +182,19 @@ mod tests {
             .mut_metadata()
             .get_mut(MetadataKey::PlaintextSha256.as_str())
             .unwrap()[0] += 1;
-        backend.decrypt_content(&encrypted_content1).unwrap_err();
+        assert!(matches!(
+            backend.decrypt_content(&encrypted_content1).unwrap_err(),
+            Error::MasterKey(_)
+        ));
 
         // Must checksum not found
         let mut encrypted_content2 = encrypted_content;
         encrypted_content2
             .mut_metadata()
             .remove(MetadataKey::PlaintextSha256.as_str());
-        backend.decrypt_content(&encrypted_content2).unwrap_err();
+        assert!(matches!(
+            backend.decrypt_content(&encrypted_content2).unwrap_err(),
+            Error::MasterKey(_)
+        ));
     }
 }

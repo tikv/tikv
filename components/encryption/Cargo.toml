@@ -27,4 +27,5 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 
 [dev-dependencies]
+matches = "0.1.8"
 tempfile = "3.1"

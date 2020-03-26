@@ -49,13 +49,7 @@ impl Dicts {
         // File dict is saved in plaintext.
         let file_file = EncryptedFile::new(base, FILE_DICT_NAME);
         let plaintext = MasterKeyConfig::Plaintext.create_backend()?;
-        let file_bytes = file_file.read(plaintext.as_ref()).map_err(|e| {
-            if let Error::EncryptedFile(inner) = e {
-                Error::Other(inner)
-            } else {
-                e
-            }
-        })?;
+        let file_bytes = file_file.read(plaintext.as_ref())?;
 
         let key_file = EncryptedFile::new(base, KEY_DICT_NAME);
         let key_bytes = key_file.read(master_key)?;
@@ -309,7 +303,7 @@ impl DataKeyManager {
             }
             // Failed to decrypt the dictionaries using master key. Could be master key being
             // rotated. Try the previous master key.
-            (Err(Error::EncryptedFile(e_current)), _) => {
+            (Err(Error::MasterKey(e_current)), _) => {
                 warn!(
                     "failed to open encryption metadata using master key. \
                       could be master key being rotated. \
@@ -319,7 +313,7 @@ impl DataKeyManager {
                 let previous_master_key = previous_master_key_config.create_backend()?;
                 Dicts::open(dict_path, rotation_period, previous_master_key.as_ref())
                     .map_err(|e| {
-                        if let Error::EncryptedFile(e_previous) = e {
+                        if let Error::MasterKey(e_previous) = e {
                             Error::DictDecrypt(e_current, e_previous)
                         } else {
                             e
