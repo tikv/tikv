@@ -215,22 +215,25 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .block_cache_data_bytes_insert
                 .inc_by(v);
         }
-        //TODO STORE_ENGINE_FLOW_VEC
         TickerType::BlockCacheBytesRead => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "block_cache_byte_read"])
+            STORE_ENGINE_FLOW
+                .get(name_enum)
+                .block_cache_byte_read
                 .inc_by(v);
         }
         TickerType::BlockCacheBytesWrite => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "block_cache_byte_write"])
+            STORE_ENGINE_FLOW
+                .get(name_enum)
+                .block_cache_byte_write
                 .inc_by(v);
         }
         TickerType::BloomFilterUseful => {
-            STORE_ENGINE_BLOOM_EFFICIENCY_VEC
-                .with_label_values(&[name, "bloom_useful"])
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .bloom_useful
                 .inc_by(v);
         }
+        //TODO STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC
         TickerType::MemtableHit => {
             STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC
                 .with_label_values(&[name, "memtable_hit"])
@@ -282,29 +285,19 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(v);
         }
         TickerType::NumberKeysWritten => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "keys_written"])
-                .inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).keys_written.inc_by(v);
         }
         TickerType::NumberKeysRead => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "keys_read"])
-                .inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).keys_read.inc_by(v);
         }
         TickerType::NumberKeysUpdated => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "keys_updated"])
-                .inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).keys_updated.inc_by(v);
         }
         TickerType::BytesWritten => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "bytes_written"])
-                .inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).bytes_written.inc_by(v);
         }
         TickerType::BytesRead => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "bytes_read"])
-                .inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).bytes_read.inc_by(v);
         }
         TickerType::NumberDbSeek => {
             STORE_ENGINE_LOCATE_VEC
@@ -337,9 +330,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(v);
         }
         TickerType::IterBytesRead => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "iter_bytes_read"])
-                .inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).iter_bytes_read.inc_by(v);
         }
         TickerType::NoFileCloses => {
             STORE_ENGINE_FILE_STATUS_VEC
@@ -362,13 +353,15 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(v);
         }
         TickerType::BloomFilterPrefixChecked => {
-            STORE_ENGINE_BLOOM_EFFICIENCY_VEC
-                .with_label_values(&[name, "bloom_prefix_checked"])
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .bloom_prefix_checked
                 .inc_by(v);
         }
         TickerType::BloomFilterPrefixUseful => {
-            STORE_ENGINE_BLOOM_EFFICIENCY_VEC
-                .with_label_values(&[name, "bloom_prefix_useful"])
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .bloom_prefix_useful
                 .inc_by(v);
         }
         TickerType::WalFileSynced => {
@@ -377,9 +370,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(v);
         }
         TickerType::WalFileBytes => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "wal_file_bytes"])
-                .inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).wal_file_bytes.inc_by(v);
         }
         TickerType::WriteDoneBySelf => {
             STORE_ENGINE_WRITE_SERVED_VEC
@@ -412,9 +403,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(v);
         }
         TickerType::FlushWriteBytes => {
-            STORE_ENGINE_FLOW_VEC
-                .with_label_values(&[name, "flush_write_bytes"])
-                .inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).flush_write_bytes.inc_by(v);
         }
         TickerType::ReadAmpEstimateUsefulBytes => {
             STORE_ENGINE_READ_AMP_FLOW_VEC
@@ -1020,11 +1009,15 @@ lazy_static! {
         "Efficiency of rocksdb's bloom filter",
         &["db", "type"]
     ).unwrap();
+    pub static ref STORE_ENGINE_BLOOM_EFFICIENCY: EngineTickerMetrics =
+        auto_flush_from!(STORE_ENGINE_BLOOM_EFFICIENCY_VEC, EngineTickerMetrics);
     pub static ref STORE_ENGINE_FLOW_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_flow_bytes",
         "Bytes and keys of read/written",
         &["db", "type"]
     ).unwrap();
+    pub static ref STORE_ENGINE_FLOW: EngineTickerMetrics =
+        auto_flush_from!(STORE_ENGINE_FLOW_VEC, EngineTickerMetrics);
     pub static ref STORE_ENGINE_STALL_MICROS: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_stall_micro_seconds",
         "Stall micros",
