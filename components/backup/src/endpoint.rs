@@ -862,8 +862,6 @@ pub mod tests {
         let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
     }
-    // Disable the test as it is diffcult to make StorageBackend in Prost.
-    #[cfg(not(feature = "prost-codec"))]
     #[test]
     fn test_seek_range() {
         let (_tmp, endpoint) = new_endpoint();
@@ -934,10 +932,7 @@ pub mod tests {
         let test_handle_backup_task_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
-                let mut backend = StorageBackend::default();
-                backend
-                    .mut_local()
-                    .set_path(tmp.path().to_str().unwrap().to_owned());
+                let backend = external_storage::make_local_backend(tmp.path());
                 let (tx, rx) = unbounded();
                 let task = Task {
                     request: Request {

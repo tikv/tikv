@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io::{Error, ErrorKind, Result};
-use std::rc::Rc;
+use std::marker::PhantomData;
 
 use futures_io::AsyncRead;
 use futures_util::{future::FutureExt, stream::TryStreamExt};
@@ -30,7 +30,7 @@ pub struct S3Storage {
     // The current implementation (rosoto 0.43.0 + hyper 0.13.3) is not `Send`
     // in practical. See more https://github.com/tikv/tikv/issues/7236.
     // FIXME: remove it.
-    _not_send: Rc<()>,
+    _not_send: PhantomData<*const ()>,
 }
 
 impl S3Storage {
@@ -41,7 +41,7 @@ impl S3Storage {
         Ok(S3Storage {
             config: config.clone(),
             client,
-            _not_send: Rc::default(),
+            _not_send: PhantomData::default(),
         })
     }
 
@@ -54,7 +54,7 @@ impl S3Storage {
         Ok(S3Storage {
             config: config.clone(),
             client,
-            _not_send: Rc::default(),
+            _not_send: PhantomData::default(),
         })
     }
 
