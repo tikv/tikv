@@ -34,6 +34,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use rustracing::span::FinishedSpan;
+use rustracing_jaeger::reporter::JaegerBinaryReporter;
 use rustracing_jaeger::span::SpanContextState;
 use tikv_util::jaegerencoder::encode_spans_in_jaeger_binary;
 
@@ -314,10 +315,12 @@ impl<E: Engine> Endpoint<E> {
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
+        waiting_pool_span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
         span: rustracing::span::Span<rustracing_jaeger::span::SpanContextState>,
         receiver: crossbeam::channel::Receiver<FinishedSpan<SpanContextState>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
+        std::mem::drop(waiting_pool_span);
         let _snapshot_span = span.child("coprocessor prepare snapshot", |options| options.start());
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
@@ -343,7 +346,10 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
         std::mem::drop(_snapshot_span);
-        let handle_request_span = span.child("coprocessor executor", |options| options.start());
+        let handle_request_span = span.child(
+            format!("coprocessor executor {}", &tracker.req_ctx.tag),
+            |options| options.start(),
+        );
         let handle_request_future =
             track(handler.handle_request(handle_request_span), &mut tracker);
         let result = if let Some(semaphore) = &semaphore {
@@ -355,8 +361,8 @@ impl<E: Engine> Endpoint<E> {
         std::mem::drop(span);
         let spans = receiver.iter().collect::<Vec<_>>();
         let encoded_spans = encode_spans_in_jaeger_binary(&spans).unwrap();
-        // let reporter = JaegerBinaryReporter::new("tikv").unwrap();
-        // reporter.report(&spans).unwrap();
+        let reporter = JaegerBinaryReporter::new("tikv").unwrap();
+        reporter.report(&spans).unwrap();
         //TODO 糊 report to tidb
 
         // There might be errors when handling requests. In this case, we still need its
@@ -398,12 +404,15 @@ impl<E: Engine> Endpoint<E> {
             .unwrap_or_else(|| thread_rng().next_u64());
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
-
+        let waiting_pool_span = span.child("coprocessor waiting executor pool", |options| {
+            options.start()
+        });
         self.read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(
                     self.semaphore.clone(),
                     tracker,
+                    waiting_pool_span,
                     span,
                     receiver,
                     handler_builder,
@@ -428,10 +437,14 @@ impl<E: Engine> Endpoint<E> {
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         let entry_span = tracer.span("coprocessor endpoint").start();
+        let parse_request_span =
+            entry_span.child("coprocessor parse request", |options| options.start());
+
         std::mem::drop(tracer);
         let result_of_future =
             self.parse_request(req, peer, false)
-                .map(|(handler_builder, req_ctx)| {
+                .map(move |(handler_builder, req_ctx)| {
+                    std::mem::drop(parse_request_span);
                     self.handle_unary_request(req_ctx, handler_builder, entry_span, span_rx)
                 });
 
