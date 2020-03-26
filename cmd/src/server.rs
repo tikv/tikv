@@ -55,10 +55,12 @@ use tikv::{
     storage,
 };
 use tikv_util::config::VersionTrack;
+use tikv_util::metrics::ensure_updater;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
     security::SecurityManager,
+    sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
 };
@@ -77,6 +79,9 @@ pub fn run_tikv(config: TiKvConfig) {
     // Print version information.
     tikv::log_tikv_info();
 
+    // Print resource quota.
+    SysQuota::new().log_quota();
+
     // Do some prepare works before start.
     pre_start();
 
@@ -91,6 +96,8 @@ pub fn run_tikv(config: TiKvConfig) {
     let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services(gc_worker);
     tikv.init_metrics_flusher();
+
+    ensure_updater();
 
     tikv.run_server(server_config);
 
@@ -438,9 +445,7 @@ impl TiKVServer {
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
-        let is_unified = self.config.readpool.is_unified();
-
-        let unified_read_pool = if is_unified {
+        let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
@@ -450,7 +455,7 @@ impl TiKVServer {
             None
         };
 
-        let storage_read_pool_handle = if is_unified {
+        let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let storage_read_pools = ReadPool::from(storage::build_read_pool(
@@ -487,7 +492,7 @@ impl TiKVServer {
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.
-        let cop_read_pool_handle = if is_unified {
+        let cop_read_pool_handle = if self.config.readpool.coprocessor.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
@@ -620,6 +625,7 @@ impl TiKVServer {
             engines.raft_router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
+            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -642,6 +648,7 @@ impl TiKVServer {
             engines.raft_router.clone(),
             gc_worker.get_config_manager(),
             self.config.enable_dynamic_config,
+            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -656,6 +663,7 @@ impl TiKVServer {
             pool,
             self.config.log_file.clone(),
             self.config.slow_log_file.clone(),
+            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -669,7 +677,9 @@ impl TiKVServer {
         if let Some(lock_mgr) = servers.lock_mgr.as_mut() {
             if servers
                 .server
-                .register_service(create_deadlock(lock_mgr.deadlock_service()))
+                .register_service(create_deadlock(
+                    lock_mgr.deadlock_service(self.security_mgr.clone()),
+                ))
                 .is_some()
             {
                 fatal!("failed to register deadlock service");
@@ -689,7 +699,7 @@ impl TiKVServer {
         // Backup service.
         let mut backup_worker = Box::new(tikv_util::worker::Worker::new("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler);
+        let backup_service = backup::Service::new(backup_scheduler, self.security_mgr.clone());
         if servers
             .server
             .register_service(create_backup(backup_service))
@@ -709,7 +719,8 @@ impl TiKVServer {
             .start_with_timer(backup_endpoint, backup_timer)
             .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
-        let cdc_service = cdc::Service::new(servers.cdc_scheduler.clone());
+        let cdc_service =
+            cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
         if servers
             .server
             .register_service(create_change_data(cdc_service))
