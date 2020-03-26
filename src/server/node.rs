@@ -12,7 +12,8 @@ use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
-use engine::Peekable;
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
@@ -37,11 +38,12 @@ pub fn create_raft_storage<S>(
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: Option<LockManager>,
+    pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr)?;
+    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
     Ok(store)
 }
 
@@ -175,7 +177,7 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter {
+    pub fn get_router(&self) -> RaftRouter<RocksEngine> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
@@ -186,7 +188,10 @@ where
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
     fn check_store(&self, engines: &Engines) -> Result<u64> {
-        let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+        let res = engines
+            .kv
+            .c()
+            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -253,7 +258,7 @@ where
         engines: &Engines,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
-        if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
+        if let Some(first_region) = engines.kv.c().get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
             Ok(Some(first_region))
         } else {
             if self.check_cluster_bootstrapped()? {

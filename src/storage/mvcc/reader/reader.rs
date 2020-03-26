@@ -450,10 +450,11 @@ mod tests {
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use engine::rocks::util::CFOptions;
+    use engine::rocks::DB;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
-    use engine::rocks::{Writable, WriteBatch, DB};
     use engine::IterOption;
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{Compat, RocksEngine};
+    use engine_traits::{Mutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -539,6 +540,7 @@ mod tests {
                 TimeStamp::default(),
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -599,30 +601,27 @@ mod tests {
 
         fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
-            let wb = WriteBatch::default();
+            let mut wb = db.c().write_batch();
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {
                         let k = keys::data_key(k.as_encoded());
-                        let handle = rocks::util::get_cf_handle(db, cf).unwrap();
-                        wb.put_cf(handle, &k, &v).unwrap();
+                        wb.put_cf(cf, &k, &v).unwrap();
                     }
                     Modify::Delete(cf, k) => {
                         let k = keys::data_key(k.as_encoded());
-                        let handle = rocks::util::get_cf_handle(db, cf).unwrap();
-                        wb.delete_cf(handle, &k).unwrap();
+                        wb.delete_cf(cf, &k).unwrap();
                     }
                     Modify::DeleteRange(cf, k1, k2, notify_only) => {
                         if !notify_only {
                             let k1 = keys::data_key(k1.as_encoded());
                             let k2 = keys::data_key(k2.as_encoded());
-                            let handle = rocks::util::get_cf_handle(db, cf).unwrap();
-                            wb.delete_range_cf(handle, &k1, &k2).unwrap();
+                            wb.delete_range_cf(cf, &k1, &k2).unwrap();
                         }
                     }
                 }
             }
-            db.write(&wb).unwrap();
+            db.c().write(&wb).unwrap();
         }
 
         fn flush(&mut self) {

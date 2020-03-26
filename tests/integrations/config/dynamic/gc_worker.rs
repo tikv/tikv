@@ -28,7 +28,7 @@ fn setup_cfg_controller(
     let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone());
     gc_worker.start().unwrap();
 
-    let mut cfg_controller = ConfigController::new(cfg, Default::default());
+    let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
     cfg_controller.register(Module::Gc, Box::new(gc_worker.get_config_manager()));
 
     (gc_worker, cfg_controller)

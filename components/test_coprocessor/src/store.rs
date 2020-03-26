@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
-use tidb_query::codec::{datum, table, Datum};
-use tidb_query::expr::EvalContext;
+use tidb_query_datatype::codec::{datum, table, Datum};
+use tidb_query_datatype::expr::EvalContext;
 use tikv::storage::{
     kv::{Engine, RocksEngine, TestEngineBuilder},
     txn::FixtureStore,

@@ -9,9 +9,8 @@ use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
-use engine::util::delete_all_in_range_cf;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::TablePropertiesExt;
+use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
@@ -93,13 +92,13 @@ pub enum GcTask {
 }
 
 impl GcTask {
-    pub fn get_label(&self) -> &'static str {
+    pub fn get_enum_label(&self) -> GcCommandKind {
         match self {
-            GcTask::Gc { .. } => "gc",
-            GcTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
-            GcTask::PhysicalScanLock { .. } => "physical_scan_lock",
+            GcTask::Gc { .. } => GcCommandKind::gc,
+            GcTask::UnsafeDestroyRange { .. } => GcCommandKind::unsafe_destroy_range,
+            GcTask::PhysicalScanLock { .. } => GcCommandKind::physical_scan_lock,
             #[cfg(any(test, feature = "testexport"))]
-            GcTask::Validate(_) => "validate_config",
+            GcTask::Validate(_) => GcCommandKind::validate_config,
         }
     }
 }
@@ -451,7 +450,9 @@ impl<E: Engine> GcRunner<E> {
         let cleanup_all_start_time = Instant::now();
         for cf in cfs {
             // TODO: set use_delete_range with config here.
-            delete_all_in_range_cf(local_storage, cf, &start_data_key, &end_data_key, false)
+            local_storage
+                .c()
+                .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!(
@@ -519,10 +520,12 @@ impl<E: Engine> GcRunner<E> {
 
     fn update_statistics_metrics(&mut self) {
         let stats = mem::replace(&mut self.stats, Statistics::default());
-        for (cf, details) in stats.details().iter() {
+
+        for (cf, details) in stats.details_enum().iter() {
             for (tag, count) in details.iter() {
-                GC_KEYS_COUNTER_VEC
-                    .with_label_values(&[cf, *tag])
+                GC_KEYS_COUNTER_STATIC
+                    .get(*cf)
+                    .get(*tag)
                     .inc_by(*count as i64);
             }
         }
@@ -541,17 +544,18 @@ impl<E: Engine> GcRunner<E> {
 impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
     #[inline]
     fn run(&mut self, task: GcTask, _handle: &Handle) {
-        let label = task.get_label();
-        GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
+        let enum_label = task.get_enum_label();
+
+        GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
 
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
         let update_metrics = |is_err| {
             GC_TASK_DURATION_HISTOGRAM_VEC
-                .with_label_values(&[label])
+                .with_label_values(&[enum_label.get_str()])
                 .observe(duration_to_sec(timer.elapsed()));
 
             if is_err {
-                GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();
+                GC_GCTASK_FAIL_COUNTER_STATIC.get(enum_label).inc();
             }
         };
 
@@ -569,7 +573,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 callback(res);
                 self.update_statistics_metrics();
                 slow_log!(
-                    timer,
+                    T timer,
                     "GC on region {}, epoch {:?}, safe_point {}",
                     ctx.get_region_id(),
                     ctx.get_region_epoch(),
@@ -586,7 +590,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
-                    timer,
+                    T timer,
                     "UnsafeDestroyRange start_key {:?}, end_key {:?}",
                     start_key,
                     end_key
@@ -603,7 +607,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
-                    timer,
+                    T timer,
                     "PhysicalScanLock start_key {:?}, max_ts {}, limit {}",
                     start_key,
                     max_ts,

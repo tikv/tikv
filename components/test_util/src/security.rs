@@ -2,15 +2,48 @@
 
 use std::path::PathBuf;
 
+use grpcio::{ChannelCredentials, ChannelCredentialsBuilder};
+use std::fs;
+use std::io::Read;
+use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityConfig;
 
-pub fn new_security_cfg() -> SecurityConfig {
+pub fn new_security_cfg(cn: Option<HashSet<String>>) -> SecurityConfig {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     SecurityConfig {
-        ca_path: format!("{}", p.join("data/ca.crt").display()),
-        cert_path: format!("{}", p.join("data/server.crt").display()),
-        key_path: format!("{}", p.join("data/server.pem").display()),
-        override_ssl_target: "example.com".to_owned(),
+        ca_path: format!("{}", p.join("data/ca.pem").display()),
+        cert_path: format!("{}", p.join("data/server.pem").display()),
+        key_path: format!("{}", p.join("data/key.pem").display()),
+        override_ssl_target: "".to_owned(),
         cipher_file: "".to_owned(),
+        cert_allowed_cn: cn.unwrap_or_default(),
     }
+}
+
+pub fn new_channel_cred() -> ChannelCredentials {
+    let (ca, cert, key) = load_certs();
+    ChannelCredentialsBuilder::new()
+        .root_cert(ca.into())
+        .cert(cert.into(), key.into())
+        .build()
+}
+
+fn load_certs() -> (String, String, String) {
+    let mut cert = String::new();
+    let mut key = String::new();
+    let mut ca = String::new();
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    fs::File::open(format!("{}", p.join("data/server.pem").display()))
+        .unwrap()
+        .read_to_string(&mut cert)
+        .unwrap();
+    fs::File::open(format!("{}", p.join("data/key.pem").display()))
+        .unwrap()
+        .read_to_string(&mut key)
+        .unwrap();
+    fs::File::open(format!("{}", p.join("data/ca.pem").display()))
+        .unwrap()
+        .read_to_string(&mut ca)
+        .unwrap();
+    (ca, cert, key)
 }

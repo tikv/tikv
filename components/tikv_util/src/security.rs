@@ -3,9 +3,12 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
+use std::sync::Arc;
 
+use crate::collections::HashSet;
 use grpcio::{
-    Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
+    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, RpcContext,
+    ServerBuilder, ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -19,6 +22,7 @@ pub struct SecurityConfig {
     #[serde(skip)]
     pub override_ssl_target: String,
     pub cipher_file: String,
+    pub cert_allowed_cn: HashSet<String>,
 }
 
 impl Default for SecurityConfig {
@@ -29,6 +33,7 @@ impl Default for SecurityConfig {
             key_path: String::new(),
             override_ssl_target: String::new(),
             cipher_file: String::new(),
+            cert_allowed_cn: HashSet::default(),
         }
     }
 }
@@ -63,9 +68,11 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(key)
 }
 
+type CertResult = Result<(Vec<u8>, Vec<u8>, Vec<u8>), Box<dyn Error>>;
+
 impl SecurityConfig {
     /// Validates ca, cert and private key.
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         check_key_file("ca key", &self.ca_path)?;
         check_key_file("cert key", &self.cert_path)?;
         check_key_file("private key", &self.key_path)?;
@@ -78,66 +85,124 @@ impl SecurityConfig {
 
         Ok(())
     }
+
+    /// Load certificates from the given file path.
+    /// Return ca, cert, key after successful read.
+    fn load_certs(&self) -> CertResult {
+        let ca = load_key("CA", &self.ca_path)?;
+        let cert = load_key("certificate", &self.cert_path)?;
+        let key = load_key("private key", &self.key_path)?;
+        if ca.is_empty() || cert.is_empty() || key.is_empty() {
+            return Err("ca, cert and private key should be all configured.".into());
+        }
+        Ok((ca, cert, key))
+    }
 }
 
 #[derive(Default)]
 pub struct SecurityManager {
-    ca: Vec<u8>,
-    cert: Vec<u8>,
-    key: Vec<u8>,
-    override_ssl_target: String,
-    cipher_file: String,
-}
-
-impl Drop for SecurityManager {
-    fn drop(&mut self) {
-        use zeroize::Zeroize;
-
-        self.key.zeroize();
-    }
+    cfg: Arc<SecurityConfig>,
 }
 
 impl SecurityManager {
     pub fn new(cfg: &SecurityConfig) -> Result<SecurityManager, Box<dyn Error>> {
         Ok(SecurityManager {
-            ca: load_key("CA", &cfg.ca_path)?,
-            cert: load_key("certificate", &cfg.cert_path)?,
-            key: load_key("private key", &cfg.key_path)?,
-            override_ssl_target: cfg.override_ssl_target.clone(),
-            cipher_file: cfg.cipher_file.clone(),
+            cfg: Arc::new(cfg.clone()),
         })
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
-        if self.ca.is_empty() {
+        if self.cfg.ca_path.is_empty() {
             cb.connect(addr)
         } else {
-            if !self.override_ssl_target.is_empty() {
-                cb = cb.override_ssl_target(self.override_ssl_target.clone());
+            if !self.cfg.override_ssl_target.is_empty() {
+                cb = cb.override_ssl_target(self.cfg.override_ssl_target.clone());
             }
+            // Fill in empty certificate information if read fails.
+            // Returning empty certificates delays error processing until
+            // actual connection in grpc.
+            let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
+
             let cred = ChannelCredentialsBuilder::new()
-                .root_cert(self.ca.clone())
-                .cert(self.cert.clone(), self.key.clone())
+                .root_cert(ca)
+                .cert(cert, key)
                 .build();
             cb.secure_connect(addr, cred)
         }
     }
 
     pub fn bind(&self, sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
-        if self.ca.is_empty() {
+        if self.cfg.ca_path.is_empty() {
             sb.bind(addr, port)
         } else {
-            let cred = ServerCredentialsBuilder::new()
-                .root_cert(self.ca.clone(), true)
-                .add_cert(self.cert.clone(), self.key.clone())
-                .build();
-            sb.bind_secure(addr, port, cred)
+            let fetcher = Box::new(Fetcher {
+                cfg: self.cfg.clone(),
+            });
+            sb.bind_with_fetcher(
+                addr,
+                port,
+                fetcher,
+                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
+            )
         }
     }
 
     pub fn cipher_file(&self) -> &str {
-        &self.cipher_file
+        &self.cfg.cipher_file
     }
+
+    pub fn cert_allowed_cn(&self) -> &HashSet<String> {
+        &self.cfg.cert_allowed_cn
+    }
+}
+
+struct Fetcher {
+    cfg: Arc<SecurityConfig>,
+}
+
+impl ServerCredentialsFetcher for Fetcher {
+    fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
+        let (ca, cert, key) = self.cfg.load_certs()?;
+        let new_cred = ServerCredentialsBuilder::new()
+            .add_cert(cert, key)
+            .root_cert(
+                ca,
+                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
+            );
+        Ok(Some(new_cred))
+    }
+}
+
+/// Check peer CN with cert-allowed-cn field.
+/// Return true when the match is successful (support wildcard pattern).
+/// Skip the check when cert-allowed-cn is not set or the secure channel is not used.
+pub fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> bool {
+    if cert_allowed_cn.is_empty() {
+        return true;
+    }
+    if let Some(auth_ctx) = ctx.auth_context() {
+        if let Some(auth_property) = auth_ctx
+            .into_iter()
+            .find(|x| x.name() == "x509_common_name")
+        {
+            let peer_cn = auth_property.value_str().unwrap();
+            match_peer_names(cert_allowed_cn, peer_cn)
+        } else {
+            false
+        }
+    } else {
+        true
+    }
+}
+
+/// Check peer CN with a set of allowed CN.
+pub fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
+    for cn in allowed_cn {
+        if cn == name {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -150,13 +215,13 @@ mod tests {
 
     #[test]
     fn test_security() {
-        let mut cfg = SecurityConfig::default();
+        let cfg = SecurityConfig::default();
         // default is disable secure connection.
         cfg.validate().unwrap();
-        let mut mgr = SecurityManager::new(&cfg).unwrap();
-        assert!(mgr.ca.is_empty());
-        assert!(mgr.cert.is_empty());
-        assert!(mgr.key.is_empty());
+        let mgr = SecurityManager::new(&cfg).unwrap();
+        assert!(mgr.cfg.ca_path.is_empty());
+        assert!(mgr.cfg.cert_path.is_empty());
+        assert!(mgr.cfg.key_path.is_empty());
 
         let assert_cfg = |c: fn(&mut SecurityConfig), valid: bool| {
             let mut invalid_cfg = cfg.clone();
@@ -184,6 +249,7 @@ mod tests {
         {
             fs::write(f, &[id as u8]).unwrap();
         }
+
         let mut c = cfg.clone();
         c.cert_path = format!("{}", example_cert.display());
         c.key_path = format!("{}", example_key.display());
@@ -193,9 +259,10 @@ mod tests {
         // data should be loaded from file after validating.
         c.ca_path = format!("{}", example_ca.display());
         c.validate().unwrap();
-        mgr = SecurityManager::new(&c).unwrap();
-        assert_eq!(mgr.ca, vec![0]);
-        assert_eq!(mgr.cert, vec![1]);
-        assert_eq!(mgr.key, vec![2]);
+
+        let (ca, cert, key) = c.load_certs().unwrap_or_default();
+        assert_eq!(ca, vec![0]);
+        assert_eq!(cert, vec![1]);
+        assert_eq!(key, vec![2]);
     }
 }

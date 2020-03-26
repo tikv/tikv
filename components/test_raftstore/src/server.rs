@@ -15,7 +15,7 @@ use tempfile::{Builder, TempDir};
 
 use super::*;
 use engine::Engines;
-use engine_rocks::RocksEngine;
+use engine_rocks::{Compat, RocksEngine};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
@@ -56,7 +56,7 @@ struct ServerMeta {
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter,
+    raw_router: RaftRouter<RocksEngine>,
     raw_apply_router: ApplyRouter,
     worker: Worker<ResolveTask>,
 }
@@ -123,7 +123,7 @@ impl Simulator for ServerCluster {
         node_id: u64,
         mut cfg: TiKvConfig,
         engines: Engines,
-        router: RaftRouter,
+        router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -141,7 +141,8 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader =
+            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
@@ -183,9 +184,11 @@ impl Simulator for ServerCluster {
             &cfg.storage,
             storage_read_pool.handle(),
             Some(lock_mgr.clone()),
+            false,
         )?;
         self.storages.insert(node_id, raft_engine);
 
+        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
@@ -196,6 +199,7 @@ impl Simulator for ServerCluster {
             sim_router.clone(),
             Arc::clone(&engines.kv),
             Arc::clone(&importer),
+            security_mgr.clone(),
         );
         // Create Debug service.
         let pool = futures_cpupool::Builder::new()
@@ -209,16 +213,16 @@ impl Simulator for ServerCluster {
             raft_router,
             gc_worker.get_config_manager(),
             false,
+            security_mgr.clone(),
         );
 
         // Create deadlock service.
-        let deadlock_service = lock_mgr.deadlock_service();
+        let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
-        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
@@ -282,7 +286,7 @@ impl Simulator for ServerCluster {
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
         let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
-        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default());
+        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
@@ -433,7 +437,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }

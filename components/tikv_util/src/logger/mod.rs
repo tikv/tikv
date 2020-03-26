@@ -17,7 +17,10 @@ use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::config::{ReadableDuration, ReadableSize};
 
-pub use slog::Level;
+pub use slog::{FilterFn, Level};
+
+/// The suffix appended to the end of rotated log files by datetime log rotator
+pub const DATETIME_ROTATE_SUFFIX: &str = "%Y-%m-%d-%H:%M:%S%.f";
 
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
@@ -33,6 +36,7 @@ pub fn init_log<D>(
     use_async: bool,
     init_stdlog: bool,
     mut disabled_targets: Vec<String>,
+    slow_threshold: u64,
 ) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
@@ -43,7 +47,7 @@ where
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
 
-    let filtered = drain.filter(move |record| {
+    let filter = move |record: &Record| {
         if !disabled_targets.is_empty() {
             // The format of the returned value from module() would like this:
             // ```
@@ -60,22 +64,40 @@ where
         } else {
             true
         }
-    });
+    };
 
     let logger = if use_async {
-        let drain = Async::new(LogAndFuse(filtered))
+        let drain = Async::new(LogAndFuse(drain))
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
             .build()
             .filter_level(level)
             .fuse();
-        slog::Logger::root(drain, slog_o!())
+        let drain = SlowLogFilter {
+            threshold: slow_threshold,
+            inner: drain,
+        };
+        let filtered = drain.filter(filter).fuse();
+        slog::Logger::root(filtered, slog_o!())
     } else {
-        let drain = LogAndFuse(Mutex::new(filtered).filter_level(level));
-        slog::Logger::root(drain, slog_o!())
+        let drain = LogAndFuse(Mutex::new(drain).filter_level(level));
+        let drain = SlowLogFilter {
+            threshold: slow_threshold,
+            inner: drain,
+        };
+        let filtered = drain.filter(filter).fuse();
+        slog::Logger::root(filtered, slog_o!())
     };
 
+    set_global_logger(level, init_stdlog, logger)
+}
+
+pub fn set_global_logger(
+    level: Level,
+    init_stdlog: bool,
+    logger: slog::Logger,
+) -> Result<(), SetLoggerError> {
     slog_global::set_global(logger);
     if init_stdlog {
         slog_global::redirect_std_log(Some(level))?;
@@ -239,6 +261,96 @@ where
     }
 }
 
+// Filters logs with operation cost lower than threshold. Otherwise output logs to inner drainer
+struct SlowLogFilter<D> {
+    threshold: u64,
+    inner: D,
+}
+
+impl<D> Drain for SlowLogFilter<D>
+where
+    D: Drain<Ok = (), Err = slog::Never>,
+{
+    type Ok = ();
+    type Err = slog::Never;
+
+    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        if record.tag() == "slow_log" {
+            let mut s = SlowCostSerializer { cost: None };
+            let kv = record.kv();
+            let _ = kv.serialize(record, &mut s);
+            if let Some(cost) = s.cost {
+                if cost <= self.threshold {
+                    // Filter slow logs which are actually not that slow
+                    return Ok(());
+                }
+            }
+        }
+        self.inner.log(record, values)
+    }
+}
+
+struct SlowCostSerializer {
+    // None means input record without key `takes`
+    cost: Option<u64>,
+}
+
+impl slog::ser::Serializer for SlowCostSerializer {
+    fn emit_arguments(&mut self, _key: Key, _val: &fmt::Arguments<'_>) -> slog::Result {
+        Ok(())
+    }
+
+    fn emit_u64(&mut self, key: Key, val: u64) -> slog::Result {
+        if key == "takes" {
+            self.cost = Some(val);
+        }
+        Ok(())
+    }
+}
+
+/// Special struct for slow log cost serializing
+pub struct LogCost(pub u64);
+
+impl slog::Value for LogCost {
+    fn serialize(
+        &self,
+        _record: &Record,
+        key: Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_u64(key, self.0)
+    }
+}
+
+/// Dispatches logs to a normal `Drain` or a slow-log specialized `Drain` by tag
+pub struct LogDispatcher<N: Drain, S: Drain> {
+    normal: N,
+    slow: S,
+}
+
+impl<N: Drain, S: Drain> LogDispatcher<N, S> {
+    pub fn new(normal: N, slow: S) -> Self {
+        Self { normal, slow }
+    }
+}
+
+impl<N, S> Drain for LogDispatcher<N, S>
+where
+    N: Drain<Ok = (), Err = io::Error>,
+    S: Drain<Ok = (), Err = io::Error>,
+{
+    type Ok = ();
+    type Err = io::Error;
+
+    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        if record.tag().starts_with("slow_log") {
+            self.slow.log(record, values)
+        } else {
+            self.normal.log(record, values)
+        }
+    }
+}
+
 /// Writes log header to decorator. See [log-header](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-header-section)
 fn write_log_header(decorator: &mut dyn RecordDecorator, record: &Record<'_>) -> io::Result<()> {
     decorator.start_timestamp()?;
@@ -328,7 +440,7 @@ impl<'a> Drop for Serializer<'a> {
     fn drop(&mut self) {}
 }
 
-impl<'a> slog::ser::Serializer for Serializer<'a> {
+impl<'a> slog::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         self.emit_arguments(key, &format_args!("None"))
     }
@@ -359,6 +471,7 @@ impl<'a> slog::ser::Serializer for Serializer<'a> {
 mod tests {
     use super::*;
     use chrono::DateTime;
+    use regex::Regex;
     use slog::{slog_debug, slog_info, slog_warn};
     use slog_term::PlainSyncDecorator;
     use std::cell::RefCell;
@@ -384,7 +497,6 @@ mod tests {
 
     #[test]
     fn test_log_format() {
-        use regex::Regex;
         use std::time::Duration;
         let decorator = PlainSyncDecorator::new(TestWriter);
         let drain = TikvFormat::new(decorator).fuse();
@@ -571,5 +683,79 @@ mod tests {
         assert_eq!("INFO", get_unified_log_level(Level::Info));
         assert_eq!("DEBUG", get_unified_log_level(Level::Debug));
         assert_eq!("TRACE", get_unified_log_level(Level::Trace));
+    }
+
+    thread_local! {
+        static NORMAL_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+        static SLOW_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    }
+
+    struct NormalWriter;
+    impl Write for NormalWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            NORMAL_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            NORMAL_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
+    struct SlowLogWriter;
+    impl Write for SlowLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            SLOW_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            SLOW_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
+    #[test]
+    fn test_slow_log_dispatcher() {
+        let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
+        let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
+        let drain = LogDispatcher::new(normal, slow).fuse();
+        let drain = SlowLogFilter {
+            threshold: 200,
+            inner: drain,
+        }
+        .fuse();
+        let logger = slog::Logger::root_typed(drain, slog_o!());
+        slog_info!(logger, "Hello World");
+        slog_info!(logger, #"slow_log", "nothing");
+        slog_info!(logger, #"slow_log", "🆗"; "takes" => LogCost(30));
+        slog_info!(logger, #"slow_log", "🐢"; "takes" => LogCost(200));
+        slog_info!(logger, #"slow_log", "🐢🐢"; "takes" => LogCost(201));
+        slog_info!(logger, #"slow_log", "without cost"; "a" => "b");
+        slog_info!(logger, #"slow_log_by_timer", "⏰");
+        slog_info!(logger, #"slow_log_by_timer", "⏰"; "takes" => LogCost(1000));
+        let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
+        NORMAL_BUFFER.with(|buffer| {
+            let buffer = buffer.borrow_mut();
+            let output = from_utf8(&*buffer).unwrap();
+            let output_segments = re.captures(output).unwrap();
+            assert_eq!(output_segments["msg"].to_owned(), r#"["Hello World"]"#);
+        });
+        let slow_expect = r#"[nothing]
+[🐢🐢] [takes=201]
+["without cost"] [a=b]
+[⏰]
+[⏰] [takes=1000]
+"#;
+        SLOW_BUFFER.with(|buffer| {
+            let buffer = buffer.borrow_mut();
+            let output = from_utf8(&*buffer).unwrap();
+            let expect_re = Regex::new(r"(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
+            assert_eq!(output.lines().count(), slow_expect.lines().count());
+            for (output, expect) in output.lines().zip(slow_expect.lines()) {
+                let output_segments = re.captures(output).unwrap();
+                let expect_segments = expect_re.captures(expect).unwrap();
+                assert_eq!(&output_segments["msg"], &expect_segments["msg"]);
+                assert_eq!(
+                    expect_segments.name("kvs").map(|s| s.as_str()),
+                    output_segments.name("kvs").map(|s| s.as_str())
+                );
+            }
+        });
     }
 }
