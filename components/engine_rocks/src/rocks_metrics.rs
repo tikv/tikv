@@ -89,6 +89,10 @@ make_auto_flush_static_metric! {
         "db" => TickerName,
         "type" => TickerEnum,
     }
+
+    pub struct SimpleEngineTickerMetrics : LocalIntCounter {
+        "db" => TickerName,
+    }
 }
 
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
@@ -233,7 +237,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .bloom_useful
                 .inc_by(v);
         }
-        //TODO STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC
         TickerType::MemtableHit => {
             STORE_ENGINE_MEMTABLE_EFFICIENCY
                 .get(name_enum)
@@ -352,9 +355,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(v);
         }
         TickerType::StallMicros => {
-            STORE_ENGINE_STALL_MICROS_VEC
-                .with_label_values(&[name])
-                .inc_by(v);
+            STORE_ENGINE_STALL_MICROS.get(name_enum).inc_by(v);
         }
         TickerType::BloomFilterPrefixChecked => {
             STORE_ENGINE_BLOOM_EFFICIENCY
@@ -369,9 +370,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(v);
         }
         TickerType::WalFileSynced => {
-            STORE_ENGINE_WAL_FILE_SYNCED
-                .with_label_values(&[name])
-                .inc_by(v);
+            STORE_ENGINE_WAL_FILE_SYNCED.get(name_enum).inc_by(v);
         }
         TickerType::WalFileBytes => {
             STORE_ENGINE_FLOW.get(name_enum).wal_file_bytes.inc_by(v);
@@ -1053,8 +1052,8 @@ lazy_static! {
         "Stall micros",
         &["db"]
     ).unwrap();
-    pub static ref STORE_ENGINE_STALL_MICROS: EngineTickerMetrics =
-        auto_flush_from!(STORE_ENGINE_STALL_MICROS_VEC, EngineTickerMetrics);
+    pub static ref STORE_ENGINE_STALL_MICROS: SimpleEngineTickerMetrics =
+        auto_flush_from!(STORE_ENGINE_STALL_MICROS_VEC, SimpleEngineTickerMetrics);
 
     pub static ref STORE_ENGINE_COMPACTION_FLOW_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_compaction_flow_bytes",
@@ -1117,11 +1116,14 @@ lazy_static! {
         "Number of iterators currently open",
         &["db"]
     ).unwrap();
-    pub static ref STORE_ENGINE_WAL_FILE_SYNCED: IntCounterVec = register_int_counter_vec!(
+    pub static ref STORE_ENGINE_WAL_FILE_SYNCED_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_wal_file_synced",
         "Number of times WAL sync is done",
         &["db"]
     ).unwrap();
+    pub static ref STORE_ENGINE_WAL_FILE_SYNCED: SimpleEngineTickerMetrics =
+        auto_flush_from!(STORE_ENGINE_WAL_FILE_SYNCED_VEC, SimpleEngineTickerMetrics);
+
     pub static ref STORE_ENGINE_EVENT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_event_total",
         "Number of engine events",
