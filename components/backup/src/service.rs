@@ -61,7 +61,7 @@ impl Backup for Service {
             return;
         };
 
-        let send_resp = sink.send_all(Compat::new(rx.map(|r| Ok(r))).then(
+        let send_resp = sink.send_all(Compat::new(rx.map(Ok)).then(
             |resp: Result<BackupResponse>| match resp {
                 Ok(resp) => Ok((resp, WriteFlags::default())),
                 Err(e) => {

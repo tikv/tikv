@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io::{Error, ErrorKind, Result};
+use std::rc::Rc;
 
 use futures_io::AsyncRead;
 use futures_util::{future::FutureExt, stream::TryStreamExt};
@@ -26,6 +27,10 @@ const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
 pub struct S3Storage {
     config: Config,
     client: S3Client,
+    // The current implementation (rosoto 0.43.0 + hyper 0.13.3) is not `Send`
+    // in practical. See more https://github.com/tikv/tikv/issues/7236.
+    // FIXME: remove it.
+    _not_send: Rc<()>,
 }
 
 impl S3Storage {
@@ -36,6 +41,7 @@ impl S3Storage {
         Ok(S3Storage {
             config: config.clone(),
             client,
+            _not_send: Rc::default(),
         })
     }
 
@@ -48,6 +54,7 @@ impl S3Storage {
         Ok(S3Storage {
             config: config.clone(),
             client,
+            _not_send: Rc::default(),
         })
     }
 

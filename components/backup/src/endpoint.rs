@@ -36,18 +36,24 @@ const BACKUP_BATCH_LIMIT: usize = 1024;
 // if thread pool has been idle for such long time, we will shutdown it.
 const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
 
-/// Backup task.
-pub struct Task {
+#[derive(Clone)]
+struct Request {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     start_ts: TimeStamp,
     end_ts: TimeStamp,
-    storage: LimitedStorage,
-    pub(crate) resp: UnboundedSender<BackupResponse>,
-    concurrency: u32,
+    limiter: Limiter,
+    backend: StorageBackend,
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
     cf: CfName,
+}
+
+/// Backup Task.
+pub struct Task {
+    request: Request,
+    concurrency: u32,
+    pub(crate) resp: UnboundedSender<BackupResponse>,
 }
 
 impl fmt::Display for Task {
@@ -58,12 +64,12 @@ impl fmt::Display for Task {
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BackupTask")
-            .field("start_ts", &self.start_ts)
-            .field("end_ts", &self.end_ts)
-            .field("start_key", &hex::encode_upper(&self.start_key))
-            .field("end_key", &hex::encode_upper(&self.end_key))
-            .field("is_raw_kv", &self.is_raw_kv)
-            .field("cf", &self.cf)
+            .field("start_ts", &self.request.start_ts)
+            .field("end_ts", &self.request.end_ts)
+            .field("start_key", &hex::encode_upper(&self.request.start_key))
+            .field("end_key", &hex::encode_upper(&self.request.end_key))
+            .field("is_raw_kv", &self.request.is_raw_kv)
+            .field("cf", &self.request.cf)
             .finish()
     }
 }
@@ -88,34 +94,34 @@ impl Task {
         } else {
             INFINITY
         });
-        let storage = LimitedStorage {
-            storage: create_storage(req.get_storage_backend())?,
-            limiter,
-        };
         let cf = name_to_cf(req.get_cf()).ok_or_else(|| crate::Error::InvalidCf {
             cf: req.get_cf().to_owned(),
         })?;
 
-        Ok((
-            Task {
+        // Check storage backend eagerly.
+        create_storage(req.get_storage_backend())?;
+
+        let task = Task {
+            request: Request {
                 start_key: req.get_start_key().to_owned(),
                 end_key: req.get_end_key().to_owned(),
                 start_ts: req.get_start_version().into(),
                 end_ts: req.get_end_version().into(),
-                resp,
-                storage,
-                concurrency: req.get_concurrency(),
+                backend: req.get_storage_backend().clone(),
+                limiter,
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
                 cf,
             },
-            cancel,
-        ))
+            concurrency: req.get_concurrency(),
+            resp,
+        };
+        Ok((task, cancel))
     }
 
     /// Check whether the task is canceled.
     pub fn has_canceled(&self) -> bool {
-        self.cancel.load(Ordering::SeqCst)
+        self.request.cancel.load(Ordering::SeqCst)
     }
 }
 
@@ -508,16 +514,15 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     fn spawn_backup_worker(
         &self,
         prs: Arc<Mutex<Progress<R>>>,
-        start_ts: TimeStamp,
-        end_ts: TimeStamp,
-        storage: LimitedStorage,
+        request: Request,
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
-        cancel: Arc<AtomicBool>,
     ) {
-        let backup_ts = end_ts;
+        let start_ts = request.start_ts;
+        let backup_ts = request.end_ts;
         let engine = self.engine.clone();
         let db = self.db.clone();
         let store_id = self.store_id;
+        // TODO: make it async.
         self.pool.borrow_mut().spawn(move || loop {
             let (branges, is_raw_kv, cf) = {
                 // Release lock as soon as possible.
@@ -533,8 +538,15 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             if branges.is_empty() {
                 return;
             }
+            // Storage backend has been checked in `Task::new()`.
+            let backend = create_storage(&request.backend).unwrap();
+            let storage = LimitedStorage {
+                limiter: request.limiter.clone(),
+                storage: backend,
+            };
+
             for brange in branges {
-                if cancel.load(Ordering::SeqCst) {
+                if request.cancel.load(Ordering::SeqCst) {
                     warn!("backup task has canceled"; "range" => ?brange);
                     return;
                 }
@@ -573,24 +585,29 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     }
 
     pub fn handle_backup_task(&self, task: Task) {
+        let Task {
+            request,
+            resp,
+            concurrency,
+        } = task;
         let start = Instant::now();
-        let start_key = if task.start_key.is_empty() {
+        let start_key = if request.start_key.is_empty() {
             None
         } else {
             // TODO: if is_raw_kv is written everywhere. It need to be simplified.
-            if task.is_raw_kv {
-                Some(Key::from_encoded(task.start_key))
+            if request.is_raw_kv {
+                Some(Key::from_encoded(request.start_key.clone()))
             } else {
-                Some(Key::from_raw(&task.start_key.clone()))
+                Some(Key::from_raw(&request.start_key.clone()))
             }
         };
-        let end_key = if task.end_key.is_empty() {
+        let end_key = if request.end_key.is_empty() {
             None
         } else {
-            if task.is_raw_kv {
-                Some(Key::from_encoded(task.end_key))
+            if request.is_raw_kv {
+                Some(Key::from_encoded(request.end_key.clone()))
             } else {
-                Some(Key::from_raw(&task.end_key.clone()))
+                Some(Key::from_raw(&request.end_key.clone()))
             }
         };
 
@@ -600,28 +617,20 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             start_key,
             end_key,
             self.region_info.clone(),
-            task.is_raw_kv,
-            task.cf,
+            request.is_raw_kv,
+            request.cf,
         )));
-        let concurrency = cmp::max(1, task.concurrency) as usize;
+        let concurrency = cmp::max(1, concurrency) as usize;
         self.pool.borrow_mut().adjust_with(concurrency);
         for _ in 0..concurrency {
-            self.spawn_backup_worker(
-                prs.clone(),
-                task.start_ts,
-                task.end_ts,
-                task.storage.clone(),
-                res_tx.clone(),
-                task.cancel.clone(),
-            );
+            self.spawn_backup_worker(prs.clone(), request.clone(), res_tx.clone());
         }
 
         // Drop the extra sender so that for loop does not hang up.
         drop(res_tx);
         let mut summary = Statistics::default();
-        let resp = task.resp;
         for (brange, res) in res_rx {
-            let start_key = if task.is_raw_kv {
+            let start_key = if request.is_raw_kv {
                 brange
                     .start_key
                     .map_or_else(|| vec![], |k| k.into_encoded())
@@ -630,7 +639,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     .start_key
                     .map_or_else(|| vec![], |k| k.into_raw().unwrap())
             };
-            let end_key = if task.is_raw_kv {
+            let end_key = if request.is_raw_kv {
                 brange.end_key.map_or_else(|| vec![], |k| k.into_encoded())
             } else {
                 brange
@@ -650,8 +659,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     for file in files.iter_mut() {
                         file.set_start_key(start_key.clone());
                         file.set_end_key(end_key.clone());
-                        file.set_start_version(task.start_ts.into_inner());
-                        file.set_end_version(task.end_ts.into_inner());
+                        file.set_start_version(request.start_ts.into_inner());
+                        file.set_end_version(request.end_ts.into_inner());
                     }
                     response.set_files(files.into());
                 }
@@ -764,7 +773,7 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use external_storage::{make_local_backend, make_noop_backend, LocalStorage};
+    use external_storage::{make_local_backend, make_noop_backend};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::metapb;
@@ -853,7 +862,8 @@ pub mod tests {
         let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
     }
-
+    // Disable the test as it is diffcult to make StorageBackend in Prost.
+    #[cfg(not(feature = "prost-codec"))]
     #[test]
     fn test_seek_range() {
         let (_tmp, endpoint) = new_endpoint();
@@ -924,23 +934,25 @@ pub mod tests {
         let test_handle_backup_task_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
-                let ls = LocalStorage::new(tmp.path()).unwrap();
-                let storage = LimitedStorage {
-                    storage: Arc::new(ls) as _,
-                    limiter: Limiter::new(INFINITY),
-                };
+                let mut backend = StorageBackend::default();
+                backend
+                    .mut_local()
+                    .set_path(tmp.path().to_str().unwrap().to_owned());
                 let (tx, rx) = unbounded();
                 let task = Task {
-                    start_key: start_key.to_vec(),
-                    end_key: end_key.to_vec(),
-                    start_ts: 1.into(),
-                    end_ts: 1.into(),
+                    request: Request {
+                        start_key: start_key.to_vec(),
+                        end_key: end_key.to_vec(),
+                        start_ts: 1.into(),
+                        end_ts: 1.into(),
+                        backend,
+                        limiter: Limiter::new(INFINITY),
+                        cancel: Arc::default(),
+                        is_raw_kv: false,
+                        cf: engine_traits::CF_DEFAULT,
+                    },
                     resp: tx,
-                    storage,
                     concurrency: 4,
-                    cancel: Arc::default(),
-                    is_raw_kv: false,
-                    cf: engine_traits::CF_DEFAULT,
                 };
                 endpoint.handle_backup_task(task);
                 let resps: Vec<_> = block_on(rx.collect());
@@ -1045,9 +1057,9 @@ pub mod tests {
             let (mut task, _) = Task::new(req, tx).unwrap();
             if len % 2 == 0 {
                 // Make sure the rate limiter is set.
-                assert!(task.storage.limiter.speed_limit().is_finite());
+                assert!(task.request.limiter.speed_limit().is_finite());
                 // Share the same rate limiter.
-                task.storage.limiter = limiter.clone();
+                task.request.limiter = limiter.clone();
             }
             endpoint.handle_backup_task(task);
             let (resp, rx) = block_on(rx.into_future());
