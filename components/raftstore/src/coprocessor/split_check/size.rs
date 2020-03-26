@@ -228,7 +228,7 @@ pub fn get_region_approximate_size_cf(
                 let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
                 let size = props.get_approximate_size_in_range(&start_key, &end_key);
                 format!(
-                    "{} with size {}",
+                    "({} {})",
                     Path::new(&*k)
                         .file_name()
                         .map(|f| f.to_str().unwrap())
