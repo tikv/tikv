@@ -250,7 +250,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                     match value {
                         ScalarValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
-                                extend_states_for_each_row(
+                                handle_scalar_group_each_row(
                                     v,
                                     &entities.each_aggr_fn,
                                     group,
@@ -413,7 +413,7 @@ where
     Ok(())
 }
 
-fn extend_states_for_each_row<T>(
+fn handle_scalar_group_each_row<T>(
     scalar_value: &Option<T>,
     aggr_fns: &[Box<dyn AggrFunction>],
     group: &mut HashMap<Option<T>, usize>,

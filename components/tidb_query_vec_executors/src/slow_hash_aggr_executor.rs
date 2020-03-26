@@ -290,18 +290,22 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
                     RpnStackNode::Scalar { value, field_type } => {
-                        if self.cached_encoded_result[i].is_none() {
-                            let mut cache_result = vec![];
-                            value.as_scalar_value_ref().encode_sort_key(
-                                field_type,
-                                context,
-                                &mut cache_result,
-                            )?;
-                            self.cached_encoded_result[i] = Some(cache_result);
-                        }
+                        match self.cached_encoded_result[i].as_ref() {
+                            Some(b) => {
+                                self.group_key_buffer.extend_from_slice(b);
+                            }
+                            None => {
+                                let mut cache_result = vec![];
+                                value.as_scalar_value_ref().encode_sort_key(
+                                    field_type,
+                                    context,
+                                    &mut cache_result,
+                                )?;
 
-                        let b = self.cached_encoded_result[i].as_ref().unwrap();
-                        self.group_key_buffer.extend_from_slice(b);
+                                self.group_key_buffer.extend_from_slice(&cache_result);
+                                self.cached_encoded_result[i] = Some(cache_result);
+                            }
+                        }
 
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
@@ -330,18 +334,22 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         debug_assert!(value.eval_type() == EvalType::Bytes);
 
                         let i = i + self.group_by_exps.len();
-                        if self.cached_encoded_result[i].is_none() {
-                            let mut cache_result = vec![];
-                            value.as_scalar_value_ref().encode(
-                                field_type,
-                                context,
-                                &mut cache_result,
-                            )?;
-                            self.cached_encoded_result[i] = Some(cache_result);
-                        }
+                        match self.cached_encoded_result[i].as_ref() {
+                            Some(b) => {
+                                self.group_key_buffer.extend_from_slice(b);
+                            }
+                            None => {
+                                let mut cache_result = vec![];
+                                value.as_scalar_value_ref().encode(
+                                    field_type,
+                                    context,
+                                    &mut cache_result,
+                                )?;
 
-                        let b = self.cached_encoded_result[i].as_ref().unwrap();
-                        self.group_key_buffer.extend_from_slice(b);
+                                self.group_key_buffer.extend_from_slice(&cache_result);
+                                self.cached_encoded_result[i] = Some(cache_result);
+                            }
+                        }
 
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
