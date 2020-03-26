@@ -117,7 +117,11 @@ where
     ) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let region_keys = match get_region_approximate_keys(engine, region) {
+        let region_keys = match get_region_approximate_keys(
+            engine,
+            region,
+            host.cfg.region_max_keys * host.cfg.batch_split_limit,
+        ) {
             Ok(keys) => keys,
             Err(e) => {
                 warn!(
@@ -173,9 +177,13 @@ where
 }
 
 /// Get the approximate number of keys in the range.
-pub fn get_region_approximate_keys(db: &impl KvEngine, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys(
+    db: &impl KvEngine,
+    region: &Region,
+    large_threshold: u64,
+) -> Result<u64> {
     // try to get from RangeProperties first.
-    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
+    match get_region_approximate_keys_cf(db, CF_WRITE, region, large_threshold) {
         Ok(v) => {
             return Ok(v);
         }
@@ -196,6 +204,7 @@ pub fn get_region_approximate_keys_cf(
     db: &impl KvEngine,
     cfname: &str,
     region: &Region,
+    large_threshold: u64,
 ) -> Result<u64> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
@@ -210,7 +219,7 @@ pub fn get_region_approximate_keys_cf(
         total_keys += props.get_approximate_keys_in_range(&start_key, &end_key);
     }
 
-    if total_keys > 10000000 {
+    if total_keys > large_threshold && large_threshold != 0 {
         let ssts = collection
             .iter()
             .map(|(k, v)| {
