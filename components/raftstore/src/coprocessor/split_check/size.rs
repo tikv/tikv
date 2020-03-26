@@ -2,6 +2,7 @@
 
 use std::marker::PhantomData;
 use std::mem;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use engine_traits::LARGE_CFS;
@@ -209,8 +210,8 @@ pub fn get_region_approximate_size_cf(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    let total_size = 0;
-    let (_, mut mem_size) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
+    let mut total_size = 0;
+    let (_, mem_size) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
     total_size += mem_size;
 
     let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
@@ -222,16 +223,16 @@ pub fn get_region_approximate_size_cf(
     // when region size exceeds 1GB
     if total_size > 1024 * 1024 * 1024 {
         let ssts = collection
-            .into_iter()
+            .iter()
             .map(|(k, v)| {
-                let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+                let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
                 let size = props.get_approximate_size_in_range(&start_key, &end_key);
                 format!(
                     "{} with size {}",
-                    Path::new(k)
+                    Path::new(&*k)
                         .file_name()
                         .map(|f| f.to_str().unwrap())
-                        .unwrap_or(k),
+                        .unwrap_or(&*k),
                     size
                 )
             })
@@ -245,7 +246,7 @@ pub fn get_region_approximate_size_cf(
             "ssts" => ssts,
         )
     }
-    Ok(size)
+    Ok(total_size)
 }
 
 /// Get region approximate split keys based on default and write cf.

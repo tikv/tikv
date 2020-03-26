@@ -6,6 +6,7 @@ use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection}
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::marker::PhantomData;
 use std::mem;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use super::super::error::Result;
@@ -199,8 +200,8 @@ pub fn get_region_approximate_keys_cf(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    let total_keys = 0;
-    let (mut mem_keys, _) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
+    let mut total_keys = 0;
+    let (mem_keys, _) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
     total_keys += mem_keys;
 
     let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
@@ -211,16 +212,16 @@ pub fn get_region_approximate_keys_cf(
 
     if total_keys > 10000000 {
         let ssts = collection
-            .into_iter()
-            .map(|(k, key)| {
-                let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+            .iter()
+            .map(|(k, v)| {
+                let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
                 let key = props.get_approximate_keys_in_range(&start_key, &end_key);
                 format!(
                     "{} with key {}",
-                    Path::new(k)
+                    Path::new(&*k)
                         .file_name()
                         .map(|f| f.to_str().unwrap())
-                        .unwrap_or(k),
+                        .unwrap_or(&*k),
                     key
                 )
             })
@@ -230,11 +231,11 @@ pub fn get_region_approximate_keys_cf(
             "region key is too many";
             "region_id" => region.get_id(),
             "keys" => total_keys,
-            "memtable" => mem_key,
+            "memtable" => mem_keys,
             "ssts" => ssts,
         )
     }
-    Ok(keys)
+    Ok(total_keys)
 }
 
 #[cfg(test)]
