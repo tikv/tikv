@@ -162,14 +162,14 @@ impl SecurityManager {
 
 struct Fetcher {
     cfg: Arc<SecurityConfig>,
-    last_fetch: Arc<Mutex<std::time::Instant>>,
+    last_fetch: Arc<Mutex<Instant>>,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
         if let Ok(mut last) = self.last_fetch.try_lock() {
             // Reload the certificate every 1 second.
-            if last.elapsed() < std::time::Duration::from_secs(1) {
+            if last.elapsed() < Duration::from_secs(1) {
                 Ok(None)
             } else {
                 let (ca, cert, key) = self.cfg.load_certs()?;
@@ -179,7 +179,7 @@ impl ServerCredentialsFetcher for Fetcher {
                         ca,
                         CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
                     );
-                *last = std::time::Instant::now();
+                *last = Instant::now();
                 Ok(Some(new_cred))
             }
         } else {
