@@ -6,9 +6,7 @@ use std::i64;
 
 use crate::rocks;
 use engine_traits::CF_DEFAULT;
-use rocksdb::{
-    DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
-};
+use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, DB};
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem";

@@ -21,11 +21,16 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 lazy_static = "1.4.0"
 time = "0.1"
+coarsetime = "0.1"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
 features = ["encryption"]
+
+[dependencies.prometheus-static-metric]
+git = "https://github.com/tikv/rust-prometheus.git"
+rev = "4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
 
 [dev-dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }

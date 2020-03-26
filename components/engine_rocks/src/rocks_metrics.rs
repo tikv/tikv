@@ -3,14 +3,93 @@
 use crate::rocks_metrics_defs::*;
 use engine_traits::CF_DEFAULT;
 use lazy_static::lazy_static;
-use prometheus::{
-    exponential_buckets, register_gauge_vec, register_histogram_vec, register_int_counter_vec,
-    register_int_gauge_vec, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec,
-};
+use prometheus::*;
+use prometheus_static_metric::*;
+
 use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
 use std::i64;
+
+make_auto_flush_static_metric! {
+    pub label_enum TickerName {
+        kv,
+        raft,
+    }
+
+    pub label_enum TickerEnum {
+        block_cache_add,
+        block_cache_add_failures,
+        block_cache_byte_read,
+        block_cache_byte_write,
+        block_cache_data_add,
+        block_cache_data_bytes_insert,
+        block_cache_data_hit,
+        block_cache_data_miss,
+        block_cache_filter_add,
+        block_cache_filter_bytes_evict,
+        block_cache_filter_bytes_insert,
+        block_cache_filter_hit,
+        block_cache_filter_miss,
+        block_cache_hit,
+        block_cache_index_add,
+        block_cache_index_bytes_evict,
+        block_cache_index_bytes_insert,
+        block_cache_index_hit,
+        block_cache_index_miss,
+        block_cache_miss,
+        bloom_prefix_checked,
+        bloom_prefix_useful,
+        bloom_useful,
+        bytes_overwritten,
+        bytes_read,
+        bytes_relocated,
+        bytes_written,
+        compaction_key_drop_newer_entry,
+        compaction_key_drop_obsolete,
+        compaction_key_drop_range_del,
+        flush_write_bytes,
+        gc_input_files_count,
+        gc_output_files_count,
+        get_hit_l0,
+        get_hit_l1,
+        get_hit_l2_and_up,
+        iter_bytes_read,
+        keys_overwritten,
+        keys_read,
+        keys_relocated,
+        keys_updated,
+        keys_written,
+        memtable_hit,
+        memtable_miss,
+        no_file_closes,
+        no_file_errors,
+        no_file_opens,
+        number_blob_next,
+        number_blob_prev,
+        number_blob_seek,
+        number_db_next,
+        number_db_next_found,
+        number_db_prev,
+        number_db_prev_found,
+        number_db_seek,
+        number_db_seek_found,
+        optimized_del_drop_obsolete,
+        range_del_drop_obsolete,
+        read_amp_estimate_useful_bytes,
+        read_amp_total_read_bytes,
+        wal_file_bytes,
+        write_done_by_other,
+        write_done_by_self,
+        write_timeout,
+        write_with_wal,
+    }
+
+    pub struct EngineTickerMetrics : LocalIntCounter {
+        "db" => TickerName,
+        "type" => TickerEnum,
+    }
+}
 
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
     let v = value as i64;
@@ -21,97 +100,122 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
         return;
     }
 
+    let name_enum = match name {
+        "kv" => TickerName::kv,
+        "raft" => TickerName::raft,
+        unexpected => panic!(format!("unexpected name {}", unexpected)),
+    };
+
     match t {
         TickerType::BlockCacheMiss => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_miss"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_miss
                 .inc_by(v);
         }
         TickerType::BlockCacheHit => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_hit"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_hit
                 .inc_by(v);
         }
         TickerType::BlockCacheAdd => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_add"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_add
                 .inc_by(v);
         }
         TickerType::BlockCacheAddFailures => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_add_failures"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_add_failures
                 .inc_by(v);
         }
         TickerType::BlockCacheIndexMiss => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_index_miss"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_index_miss
                 .inc_by(v);
         }
         TickerType::BlockCacheIndexHit => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_index_hit"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_index_hit
                 .inc_by(v);
         }
         TickerType::BlockCacheIndexAdd => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_index_add"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_index_add
                 .inc_by(v);
         }
         TickerType::BlockCacheIndexBytesInsert => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_index_bytes_insert"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_index_bytes_insert
                 .inc_by(v);
         }
         TickerType::BlockCacheIndexBytesEvict => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_index_bytes_evict"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_index_bytes_evict
                 .inc_by(v);
         }
         TickerType::BlockCacheFilterMiss => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_filter_miss"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_filter_miss
                 .inc_by(v);
         }
         TickerType::BlockCacheFilterHit => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_filter_hit"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_filter_hit
                 .inc_by(v);
         }
         TickerType::BlockCacheFilterAdd => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_filter_add"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_filter_add
                 .inc_by(v);
         }
         TickerType::BlockCacheFilterBytesInsert => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_filter_bytes_insert"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_filter_bytes_insert
                 .inc_by(v);
         }
         TickerType::BlockCacheFilterBytesEvict => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_filter_bytes_evict"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_filter_bytes_evict
                 .inc_by(v);
         }
         TickerType::BlockCacheDataMiss => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_data_miss"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_data_miss
                 .inc_by(v);
         }
         TickerType::BlockCacheDataHit => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_data_hit"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_data_hit
                 .inc_by(v);
         }
         TickerType::BlockCacheDataAdd => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_data_add"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_data_add
                 .inc_by(v);
         }
         TickerType::BlockCacheDataBytesInsert => {
-            STORE_ENGINE_CACHE_EFFICIENCY_VEC
-                .with_label_values(&[name, "block_cache_data_bytes_insert"])
+            STORE_ENGINE_CACHE_EFFICIENCY
+                .get(name_enum)
+                .block_cache_data_bytes_insert
                 .inc_by(v);
         }
+        //TODO STORE_ENGINE_FLOW_VEC
         TickerType::BlockCacheBytesRead => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "block_cache_byte_read"])
@@ -894,6 +998,8 @@ lazy_static! {
         "Efficiency of rocksdb's block cache",
         &["db", "type"]
     ).unwrap();
+    pub static ref STORE_ENGINE_CACHE_EFFICIENCY: EngineTickerMetrics =
+        auto_flush_from!(STORE_ENGINE_CACHE_EFFICIENCY_VEC, EngineTickerMetrics);
     pub static ref STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_memtable_efficiency",
         "Hit and miss of memtable",
