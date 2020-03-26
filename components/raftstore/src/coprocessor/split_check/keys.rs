@@ -217,7 +217,7 @@ pub fn get_region_approximate_keys_cf(
                 let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
                 let key = props.get_approximate_keys_in_range(&start_key, &end_key);
                 format!(
-                    "{} with key {}",
+                    "({} {})",
                     Path::new(&*k)
                         .file_name()
                         .map(|f| f.to_str().unwrap())
@@ -228,7 +228,7 @@ pub fn get_region_approximate_keys_cf(
             .collect::<Vec<_>>()
             .join(", ");
         info!(
-            "region key is too many";
+            "region contains too many keys";
             "region_id" => region.get_id(),
             "keys" => total_keys,
             "memtable" => mem_keys,
