@@ -9,8 +9,8 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
-use engine::rocks::{self, Env};
-use engine_rocks::{self, metrics_flusher::*, Compat, RocksEngine};
+use engine::rocks;
+use engine_rocks::{encryption::get_env, metrics_flusher::*, Compat, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -322,13 +322,8 @@ impl TiKVServer {
         prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
     }
 
-    fn init_engine_env(&self) -> Arc<Env> {
-        engine_rocks::encryption::get_env(&self.config.storage.data_dir, &self.config.encryption)
-            .unwrap()
-    }
-
     fn init_engines(&mut self) {
-        let env = self.init_engine_env();
+        let env = get_env(&self.config.storage.data_dir, &self.config.encryption).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
