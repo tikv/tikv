@@ -188,10 +188,11 @@ impl LockManager {
     }
 
     /// Creates a `DeadlockService` to handle deadlock detect requests from other nodes.
-    pub fn deadlock_service(&self) -> DeadlockService {
+    pub fn deadlock_service(&self, security_mgr: Arc<SecurityManager>) -> DeadlockService {
         DeadlockService::new(
             self.waiter_mgr_scheduler.clone(),
             self.detector_scheduler.clone(),
+            security_mgr,
         )
     }
 
