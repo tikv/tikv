@@ -290,7 +290,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
                     RpnStackNode::Scalar { value, field_type } => {
-                        if let None = self.cached_encoded_result[i] {
+                        if self.cached_encoded_result[i].is_none() {
                             let mut cache_result = vec![];
                             value.as_scalar_value_ref().encode_sort_key(
                                 field_type,
@@ -330,7 +330,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         debug_assert!(value.eval_type() == EvalType::Bytes);
 
                         let i = i + self.group_by_exps.len();
-                        if let None = self.cached_encoded_result[i] {
+                        if self.cached_encoded_result[i].is_none() {
                             let mut cache_result = vec![];
                             value.as_scalar_value_ref().encode(
                                 field_type,
