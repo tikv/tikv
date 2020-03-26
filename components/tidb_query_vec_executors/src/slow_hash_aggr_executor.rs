@@ -163,6 +163,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             group_key_offsets,
             states_offset_each_logical_row: Vec::with_capacity(crate::runner::BATCH_MAX_SIZE),
             group_by_results_unsafe: Vec::with_capacity(group_by_col_len),
+            cached_encoded_result: vec![None; group_by_col_len],
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -217,6 +218,9 @@ pub struct SlowHashAggregationImpl {
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
     group_by_results_unsafe: Vec<RpnStackNode<'static>>,
+
+    /// Cached encoded results for calculated Scalar results
+    cached_encoded_result: Vec<Option<Vec<u8>>>,
 }
 
 unsafe impl Send for SlowHashAggregationImpl {}
@@ -274,7 +278,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 
             // Always encode group keys to the buffer first
             // we'll then remove them if the group already exists
-            for group_by_result in &self.group_by_results_unsafe {
+            for (i, group_by_result) in self.group_by_results_unsafe.iter().enumerate() {
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
                         value.as_ref().encode_sort_key(
@@ -286,11 +290,19 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
                     RpnStackNode::Scalar { value, field_type } => {
-                        value.as_scalar_value_ref().encode_sort_key(
-                            field_type,
-                            context,
-                            &mut self.group_key_buffer,
-                        )?;
+                        if let None = self.cached_encoded_result[i] {
+                            let mut cache_result = vec![];
+                            value.as_scalar_value_ref().encode_sort_key(
+                                field_type,
+                                context,
+                                &mut cache_result,
+                            )?;
+                            self.cached_encoded_result[i] = Some(cache_result);
+                        }
+
+                        let b = self.cached_encoded_result[i].as_ref().unwrap();
+                        self.group_key_buffer.extend_from_slice(b);
+
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
                 }
@@ -301,7 +313,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 
             // Encode bytes column in original form to extra group by columns, which is to be returned
             // as group by results
-            for col_index in &self.extra_group_by_col_index {
+            for (i, col_index) in self.extra_group_by_col_index.iter().enumerate() {
                 let group_by_result = &self.group_by_results_unsafe[*col_index];
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
@@ -316,11 +328,21 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     }
                     RpnStackNode::Scalar { value, field_type } => {
                         debug_assert!(value.eval_type() == EvalType::Bytes);
-                        value.as_scalar_value_ref().encode(
-                            field_type,
-                            context,
-                            &mut self.group_key_buffer,
-                        )?;
+
+                        let i = i + self.group_by_exps.len();
+                        if let None = self.cached_encoded_result[i] {
+                            let mut cache_result = vec![];
+                            value.as_scalar_value_ref().encode(
+                                field_type,
+                                context,
+                                &mut cache_result,
+                            )?;
+                            self.cached_encoded_result[i] = Some(cache_result);
+                        }
+
+                        let b = self.cached_encoded_result[i].as_ref().unwrap();
+                        self.group_key_buffer.extend_from_slice(b);
+
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
                 }
