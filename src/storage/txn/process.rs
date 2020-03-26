@@ -280,6 +280,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                     };
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
+                        fail_point!("pipelined_txn_write_finished");
                         sched_pool
                             .pool
                             .spawn(move || {
@@ -308,6 +309,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
                     } else if pipelined {
+                        fail_point!("pipelined_txn_return_to_caller");
                         // The write task is scheduled to engine successfully.
                         // Respond to client early.
                         Msg::PipelinedWrite {
