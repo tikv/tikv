@@ -339,7 +339,7 @@ impl TiKVServer {
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env.clone());
+        kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(new_compaction_listener(self.router.clone()));
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
         let db_path = self

@@ -34,13 +34,21 @@ impl Default for EncryptionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 pub enum MasterKeyConfig {
+    // Store encryption metadata as plaintext. Data still get encrypted. Not allowed to use if
+    // encryption is enabled. (i.e. when encryption_config.method != Plaintext).
     Plaintext,
+
+    // Pass master key from a file, with key encoded as a readable hex string. The file should end
+    // with newline.
     #[serde(rename_all = "kebab-case")]
     File {
         #[serde(with = "encryption_method_serde")]
         method: EncryptionMethod,
         path: String,
     },
+
+    #[cfg(test)]
+    Mock,
 }
 
 impl Default for MasterKeyConfig {
@@ -56,6 +64,8 @@ impl MasterKeyConfig {
             MasterKeyConfig::File { method, path } => {
                 Arc::new(FileBackend::new(*method, path)?) as _
             }
+            #[cfg(test)]
+            MasterKeyConfig::Mock => Arc::new(PlaintextBackend {}) as _,
         })
     }
 }
@@ -74,6 +84,7 @@ mod encryption_method_serde {
     const AES192_CTR: &str = "aes192-ctr";
     const AES256_CTR: &str = "aes256-ctr";
 
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(method: &EncryptionMethod, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

@@ -120,7 +120,7 @@ impl Dicts {
         if self.file_dict.files.get(fname).is_none() {
             // Return Plaintext if file not found
             let mut file = FileInfo::default();
-            file.method = EncryptionMethod::Plaintext.into();
+            file.method = EncryptionMethod::Plaintext;
             self.file_dict.files.insert(fname.to_owned(), file);
         }
         self.file_dict.files.get(fname).unwrap()
@@ -130,7 +130,7 @@ impl Dicts {
         let mut file = FileInfo::default();
         file.iv = Iv::new().as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
-        file.method = method.into();
+        file.method = method;
         self.file_dict.files.insert(fname.to_owned(), file);
         self.save_file_dict()?;
         Ok(self.file_dict.files.get(fname).unwrap())
@@ -239,7 +239,7 @@ impl Dicts {
             }
             let mut data_key = DataKey::default();
             data_key.key = key;
-            data_key.method = method.into();
+            data_key.method = method;
             data_key.creation_time = creation_time;
             data_key.was_exposed = false;
 
@@ -319,12 +319,13 @@ impl DataKeyManager {
                             e
                         }
                     })?
-                    .ok_or(Error::Other(
-                        format!(
+                    .ok_or_else(|| {
+                        Error::Other(
                             "Fallback to previous master key but find dictionaries to be empty."
+                                .to_owned()
+                                .into(),
                         )
-                        .into(),
-                    ))?
+                    })?
             }
             // Error.
             (Err(e), _) => return Err(e),
@@ -410,17 +411,20 @@ mod tests {
     use super::*;
 
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
-    use hex::FromHex;
-    use std::thread::sleep;
+    use std::{fs::File, io::Write, thread::sleep};
+    use tempfile::TempDir;
 
     fn new_tmp_key_manager(
         temp: Option<tempfile::TempDir>,
-        backend: Option<Arc<dyn Backend>>,
+        master_key: Option<MasterKeyConfig>,
+        previous_master_key: Option<MasterKeyConfig>,
     ) -> (tempfile::TempDir, DataKeyManager) {
         let tmp = temp.unwrap_or_else(|| tempfile::TempDir::new().unwrap());
-        let master_key = backend.unwrap_or_else(|| Arc::new(PlaintextBackend::default()));
+        let master_key = master_key.unwrap_or(MasterKeyConfig::Mock);
+        let previous_master_key = previous_master_key.unwrap_or(MasterKeyConfig::Mock);
         let manager = DataKeyManager::new(
-            master_key,
+            &master_key,
+            &previous_master_key,
             EncryptionMethod::Aes256Ctr,
             Duration::from_secs(60),
             tmp.path().as_os_str().to_str().unwrap(),
@@ -430,9 +434,18 @@ mod tests {
         (tmp, manager)
     }
 
+    fn create_key_file(name: &str) -> (PathBuf, TempDir) {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join(name);
+        let mut file = File::create(path.clone()).unwrap();
+        file.write(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
+            .unwrap();
+        (path, tmp_dir)
+    }
+
     #[test]
     fn test_key_manager_create_get_delete() {
-        let (_tmp, mut manager) = new_tmp_key_manager(None, None);
+        let (_tmp, mut manager) = new_tmp_key_manager(None, None, None);
 
         let new_file = manager.new_file("foo").unwrap();
         let get_file = manager.get_file("foo").unwrap();
@@ -465,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_link() {
-        let (_tmp, manager) = new_tmp_key_manager(None, None);
+        let (_tmp, manager) = new_tmp_key_manager(None, None, None);
 
         let file = manager.new_file("foo").unwrap();
         manager.link_file("foo", "foo1").unwrap();
@@ -483,9 +496,9 @@ mod tests {
 
     #[test]
     fn test_key_manager_rename() {
-        let (_tmp, mut manager) = new_tmp_key_manager(None, None);
+        let (_tmp, mut manager) = new_tmp_key_manager(None, None, None);
 
-        Arc::get_mut(&mut manager).unwrap().method = EncryptionMethod::Aes192Ctr;
+        manager.method = EncryptionMethod::Aes192Ctr;
         let file = manager.new_file("foo").unwrap();
         manager.rename_file("foo", "foo1").unwrap();
 
@@ -502,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate() {
-        let (_tmp, manager) = new_tmp_key_manager(None, None);
+        let (_tmp, manager) = new_tmp_key_manager(None, None, None);
 
         let (key_id, key) = {
             let dicts = manager.dicts.read().unwrap();
@@ -556,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_persistence() {
-        let (tmp, manager) = new_tmp_key_manager(None, None);
+        let (tmp, manager) = new_tmp_key_manager(None, None, None);
 
         // Create a file and a datakey.
         manager.new_file("foo").unwrap();
@@ -568,7 +581,7 @@ mod tests {
 
         // Close and re-open.
         drop(manager);
-        let (_tmp, manager1) = new_tmp_key_manager(Some(tmp), None);
+        let (_tmp, manager1) = new_tmp_key_manager(Some(tmp), None, None);
 
         let dicts = manager1.dicts.read().unwrap();
         assert_eq!(files, dicts.file_dict);
@@ -577,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_dcit_rotate_key_collides() {
-        let (_tmp, manager) = new_tmp_key_manager(None, None);
+        let (_tmp, manager) = new_tmp_key_manager(None, None, None);
         let mut dict = manager.dicts.write().unwrap();
 
         let ok = dict
@@ -593,11 +606,12 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate_on_key_expose() {
-        let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
-            .unwrap();
-        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key).unwrap();
-
-        let (_tmp, manager) = new_tmp_key_manager(None, Some(Arc::new(backend)));
+        let (key_path, _tmp_key_dir) = create_key_file("key");
+        let master_key = MasterKeyConfig::File {
+            method: EncryptionMethod::Aes256Ctr,
+            path: key_path.to_str().unwrap().to_owned(),
+        };
+        let (_tmp_data_dir, manager) = new_tmp_key_manager(None, Some(master_key), None);
         let mut dicts = manager.dicts.write().unwrap();
 
         let (key_id, key) = {
@@ -636,11 +650,13 @@ mod tests {
 
     #[test]
     fn test_expose_keys_on_insecure_backend() {
-        let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
-            .unwrap();
-        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key).unwrap();
+        let (key_path, _tmp_key_dir) = create_key_file("key");
+        let master_key = MasterKeyConfig::File {
+            method: EncryptionMethod::Aes256Ctr,
+            path: key_path.to_str().unwrap().to_owned(),
+        };
 
-        let (_tmp, manager) = new_tmp_key_manager(None, Some(Arc::new(backend)));
+        let (_tmp_data_dir, manager) = new_tmp_key_manager(None, Some(master_key), None);
         let mut dicts = manager.dicts.write().unwrap();
 
         for i in 0..100 {

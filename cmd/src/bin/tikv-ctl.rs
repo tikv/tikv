@@ -74,7 +74,7 @@ fn new_debug_executor(
                 .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
             let mut raft_db_opts = cfg.raftdb.build_opt();
-            raft_db_opts.set_env(env.clone());
+            raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
             let raft_db =
                 rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
