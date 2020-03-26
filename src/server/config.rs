@@ -7,6 +7,7 @@ use grpcio::CompressionAlgorithms;
 
 use tikv_util::collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
+use tikv_util::sys::sys_quota::SysQuota;
 
 pub use crate::storage::config::Config as StorageConfig;
 pub use raftstore::store::Config as RaftStoreConfig;
@@ -113,7 +114,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = sysinfo::get_logical_cores();
+        let cpu_num = SysQuota::new().cpu_cores_quota();
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),

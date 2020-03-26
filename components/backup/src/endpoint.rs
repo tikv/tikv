@@ -521,9 +521,17 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let store_id = self.store_id;
         // TODO: make it async.
         self.pool.borrow_mut().spawn(lazy(move || loop {
-            let mut progress = prs.lock().unwrap();
-            let branges = progress.forward(WORKER_TAKE_RANGE);
-            let is_raw_kv = progress.is_raw_kv;
+            let (branges, is_raw_kv, cf) = {
+                // Release lock as soon as possible.
+                // It is critical to speed up backup, otherwise workers are
+                // blocked by each other.
+                let mut progress = prs.lock().unwrap();
+                (
+                    progress.forward(WORKER_TAKE_RANGE),
+                    progress.is_raw_kv,
+                    progress.cf,
+                )
+            };
             if branges.is_empty() {
                 return Ok(());
             }
@@ -545,7 +553,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 let name = backup_file_name(store_id, &brange.region, key);
 
                 let res = if is_raw_kv {
-                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, progress.cf)
+                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf)
                 } else {
                     brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts)
                 };
@@ -1277,23 +1285,23 @@ pub mod tests {
         req.set_concurrency(10);
         req.set_storage_backend(make_noop_backend());
 
-        let (tx, _) = futures::sync::mpsc::unbounded();
+        let (tx, resp_rx) = futures::sync::mpsc::unbounded();
         let (task, _) = Task::new(req, tx).unwrap();
 
         // if not task arrive after create the thread pool is empty
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
 
         scheduler.send(Some(task)).unwrap();
-        // wait the task send to worker
-        thread::sleep(Duration::from_millis(10));
+        // wait until the task finish
+        let _ = resp_rx.into_future().wait();
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
 
         // thread pool not yet shutdown
         thread::sleep(Duration::from_millis(50));
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
 
-        // thread pool shutdown if not task arrive for 100ms
-        thread::sleep(Duration::from_millis(50));
+        // thread pool shutdown if not task arrive more than 100ms
+        thread::sleep(Duration::from_millis(100));
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
     }
     // TODO: region err in txn(engine(request))

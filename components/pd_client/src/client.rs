@@ -656,14 +656,6 @@ impl PdClient for RpcClient {
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
-
-    fn spawn(&self, future: PdFuture<()>) {
-        self.leader_client
-            .inner
-            .rl()
-            .client_stub
-            .spawn(future.map_err(|_| ()));
-    }
 }
 
 impl ConfigClient for RpcClient {

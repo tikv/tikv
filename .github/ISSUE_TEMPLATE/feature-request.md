@@ -1,7 +1,7 @@
 ---
 name: "\U0001F680 Feature Request"
-about: I have a suggestion
-label: "T: Enhancement"
+about: As a user, I want to request a New Feature on the product.
+label: type/feature-request
 ---
 
 ## Feature Request

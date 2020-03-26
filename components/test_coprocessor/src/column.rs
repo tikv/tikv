@@ -2,8 +2,8 @@
 
 use super::*;
 
-use tidb_query::codec::{datum, Datum};
-use tidb_query::expr::EvalContext;
+use tidb_query_datatype::codec::{datum, Datum};
+use tidb_query_datatype::expr::EvalContext;
 use tipb::{ColumnInfo, FieldType};
 
 pub const TYPE_VAR_CHAR: i32 = 1;
