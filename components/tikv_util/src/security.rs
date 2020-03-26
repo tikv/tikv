@@ -3,7 +3,8 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::collections::HashSet;
 use grpcio::{
@@ -137,6 +138,9 @@ impl SecurityManager {
         } else {
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
+                last_fetch: Arc::new(Mutex::new(
+                    Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
+                )),
             });
             sb.bind_with_fetcher(
                 addr,
@@ -158,18 +162,29 @@ impl SecurityManager {
 
 struct Fetcher {
     cfg: Arc<SecurityConfig>,
+    last_fetch: Arc<Mutex<std::time::Instant>>,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
-        let (ca, cert, key) = self.cfg.load_certs()?;
-        let new_cred = ServerCredentialsBuilder::new()
-            .add_cert(cert, key)
-            .root_cert(
-                ca,
-                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
-            );
-        Ok(Some(new_cred))
+        if let Ok(mut last) = self.last_fetch.try_lock() {
+            // Reload the certificate every 1 second.
+            if last.elapsed() < std::time::Duration::from_secs(1) {
+                Ok(None)
+            } else {
+                let (ca, cert, key) = self.cfg.load_certs()?;
+                let new_cred = ServerCredentialsBuilder::new()
+                    .add_cert(cert, key)
+                    .root_cert(
+                        ca,
+                        CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
+                    );
+                *last = std::time::Instant::now();
+                Ok(Some(new_cred))
+            }
+        } else {
+            Ok(None)
+        }
     }
 }
 
