@@ -30,7 +30,7 @@ prost-codec = [
   "raft/prost-codec",
   "raftstore/prost-codec",
   "sst_importer/prost-codec",
-  "tidb_query/prost-codec",
+  "tidb_query_datatype/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
   "encryption/prost-codec",
@@ -45,12 +45,16 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "raftstore/protobuf-codec",
   "sst_importer/protobuf-codec",
-  "tidb_query/protobuf-codec",
+  "tidb_query_datatype/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
   "encryption/protobuf-codec"
 ]
 testexport = ["raftstore/testexport"]
+
+# for testing configure propegate to other crates
+# https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
+testing = []
 
 [lib]
 name = "tikv"
@@ -62,6 +66,7 @@ batch-system = { path = "components/batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
 chrono = "0.4"
+coarsetime = "0.1"
 codec = { path = "components/codec" }
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
@@ -119,7 +124,14 @@ prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
 sst_importer = { path = "components/sst_importer" }
 sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tempfile = "3.0"
-tidb_query = { path = "components/tidb_query" }
+tidb_query_datatype = { path = "components/tidb_query_datatype" }
+tidb_query_common = { path = "components/tidb_query_common" }
+tidb_query_shared_expr = { path = "components/tidb_query_shared_expr" }
+tidb_query_normal_expr = { path = "components/tidb_query_normal_expr" }
+tidb_query_normal_executors = { path = "components/tidb_query_normal_executors" }
+tidb_query_vec_expr = { path = "components/tidb_query_vec_expr" }
+tidb_query_vec_aggr = { path = "components/tidb_query_vec_aggr" }
+tidb_query_vec_executors = { path = "components/tidb_query_vec_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
 time = "0.1"
@@ -142,7 +154,7 @@ encryption = { path = "components/encryption" }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+rev = "4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
@@ -161,6 +173,7 @@ raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
+prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
@@ -186,9 +199,14 @@ members = [
   "components/tipb_helper",
   "components/log_wrappers",
   "components/tikv_util",
-  "components/tidb_query",
   "components/tidb_query_datatype",
+  "components/tidb_query_common",
   "components/tidb_query_codegen",
+  "components/tidb_query_normal_expr",
+  "components/tidb_query_normal_executors",
+  "components/tidb_query_vec_expr",
+  "components/tidb_query_vec_aggr",
+  "components/tidb_query_vec_executors",
   "components/pd_client",
   "components/external_storage",
   "components/backup",
