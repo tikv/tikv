@@ -477,6 +477,6 @@ max-write-bytes-per-sec = "10MB"
 [pessimistic-txn]
 enabled = false
 wait-for-lock-timeout = "10ms"
-wake-up-delay-duration = "100ms"
+wake-up-delay-duration = 100 # test backward compatible
 pipelined = true
 

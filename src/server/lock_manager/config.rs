@@ -3,6 +3,7 @@
 use super::deadlock::Scheduler as DeadlockScheduler;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
+use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 
 use std::error::Error;
 use tikv_util::config::ReadableDuration;
@@ -13,9 +14,33 @@ use tikv_util::config::ReadableDuration;
 pub struct Config {
     #[config(skip)]
     pub enabled: bool,
+    #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wait_for_lock_timeout: ReadableDuration,
+    #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wake_up_delay_duration: ReadableDuration,
     pub pipelined: bool,
+}
+
+// u64 is for backward compatibility since v3.x uses it.
+fn readable_duration_or_u64<'de, D>(deserializer: D) -> Result<ReadableDuration, D::Error>
+where
+    D: Deserializer<'de>,
+    D::Error: serde::de::Error,
+{
+    use serde_json::Value;
+
+    let v = Value::deserialize(deserializer)?;
+    match v {
+        Value::String(s) => ReadableDuration::deserialize(s.into_deserializer()),
+        Value::Number(n) => n
+            .as_u64()
+            .map(|n| ReadableDuration::millis(n))
+            .ok_or_else(|| serde::de::Error::custom(format!("expect unsigned integer: {}", n))),
+        other => Err(serde::de::Error::custom(format!(
+            "expect ReadableDuration or unsigned integer: {}",
+            other
+        ))),
+    }
 }
 
 impl Default for Config {
@@ -78,5 +103,27 @@ impl ConfigManager for LockManagerConfigManager {
             (None, None) => {}
         };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use toml;
+
+    #[test]
+    fn test_config_deserialize() {
+        let conf = r#"
+        enabled = false
+        wait-for-lock-timeout = "10ms"
+        wake-up-delay-duration = 100
+        pipelined = true
+        "#;
+
+        let config: Config = toml::from_str(conf).unwrap();
+        assert_eq!(config.enabled, false);
+        assert_eq!(config.wait_for_lock_timeout.as_millis(), 10);
+        assert_eq!(config.wake_up_delay_duration.as_millis(), 100);
+        assert_eq!(config.pipelined, true);
     }
 }
