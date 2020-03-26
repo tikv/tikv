@@ -390,21 +390,35 @@ fn test_read_index_when_transfer_leader_1() {
 
     // Delay all raft messages to peer 1.
     let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let filter = Box::new(
-        RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
-            .direction(Direction::Recv)
-            .skip(MessageType::MsgTransferLeader)
-            .when(Arc::new(AtomicBool::new(true)))
-            .reserve_dropped(Arc::clone(&dropped_msgs)),
+    let (region_id, store_id) = (r1.get_id(), old_leader.get_store_id());
+    let append_resp = Arc::new(AtomicBool::new(true));
+    let filter = |msg: MessageType, when: Option<Arc<AtomicBool>>| {
+        Box::new(
+            RegionPacketFilter::new(region_id, store_id)
+                .direction(Direction::Recv)
+                .skip(msg)
+                .when(when.unwrap_or(Arc::new(AtomicBool::new(true))))
+                .reserve_dropped(Arc::clone(&dropped_msgs)),
+        )
+    };
+    cluster.sim.wl().add_recv_filter(
+        old_leader.get_id(),
+        filter(MessageType::MsgTransferLeader, None),
     );
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(old_leader.get_id(), filter);
+    cluster.sim.wl().add_recv_filter(
+        old_leader.get_id(),
+        filter(
+            MessageType::MsgAppendResponse,
+            Some(Arc::clone(&append_resp)),
+        ),
+    );
 
     let resp1 = read_on_old_leader!();
 
+    // don't drop MsgAppendResponse to ensure transfer leader success
+    append_resp.store(false, Ordering::SeqCst);
     cluster.must_transfer_leader(r1.get_id(), new_peer(3, 3));
+    append_resp.store(true, Ordering::SeqCst);
 
     let resp2 = read_on_old_leader!();
 

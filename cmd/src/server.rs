@@ -56,10 +56,12 @@ use tikv::{
     storage,
 };
 use tikv_util::config::VersionTrack;
+use tikv_util::metrics::ensure_updater;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
     security::SecurityManager,
+    sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
 };
@@ -78,6 +80,9 @@ pub fn run_tikv(config: TiKvConfig) {
     // Print version information.
     tikv::log_tikv_info();
 
+    // Print resource quota.
+    SysQuota::new().log_quota();
+
     // Do some prepare works before start.
     pre_start();
 
@@ -92,6 +97,8 @@ pub fn run_tikv(config: TiKvConfig) {
     let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services(gc_worker);
     tikv.init_metrics_flusher();
+
+    ensure_updater();
 
     tikv.run_server(server_config);
 
@@ -611,6 +618,7 @@ impl TiKVServer {
             engines.raft_router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
+            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -633,6 +641,7 @@ impl TiKVServer {
             engines.raft_router.clone(),
             gc_worker.get_config_manager(),
             self.config.enable_dynamic_config,
+            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -643,7 +652,12 @@ impl TiKVServer {
         }
 
         // Create Diagnostics service
-        let diag_service = DiagnosticsService::new(pool, self.config.log_file.clone());
+        let diag_service = DiagnosticsService::new(
+            pool,
+            self.config.log_file.clone(),
+            self.config.slow_log_file.clone(),
+            self.security_mgr.clone(),
+        );
         if servers
             .server
             .register_service(create_diagnostics(diag_service))
@@ -656,7 +670,9 @@ impl TiKVServer {
         if let Some(lock_mgr) = servers.lock_mgr.as_mut() {
             if servers
                 .server
-                .register_service(create_deadlock(lock_mgr.deadlock_service()))
+                .register_service(create_deadlock(
+                    lock_mgr.deadlock_service(self.security_mgr.clone()),
+                ))
                 .is_some()
             {
                 fatal!("failed to register deadlock service");
@@ -676,7 +692,7 @@ impl TiKVServer {
         // Backup service.
         let mut backup_worker = Box::new(tikv_util::worker::Worker::new("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler);
+        let backup_service = backup::Service::new(backup_scheduler, self.security_mgr.clone());
         if servers
             .server
             .register_service(create_backup(backup_service))
@@ -696,7 +712,8 @@ impl TiKVServer {
             .start_with_timer(backup_endpoint, backup_timer)
             .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
-        let cdc_service = cdc::Service::new(servers.cdc_scheduler.clone());
+        let cdc_service =
+            cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
         if servers
             .server
             .register_service(create_change_data(cdc_service))
