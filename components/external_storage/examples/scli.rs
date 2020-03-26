@@ -75,7 +75,7 @@ subcommands:
         about: load file from storage
 "#;
 
-fn create_s3_storage(matches: &ArgMatches) -> Result<Arc<dyn ExternalStorage>> {
+fn create_s3_storage(matches: &ArgMatches<'_>) -> Result<Arc<dyn ExternalStorage>> {
     let mut config = S3::default();
     match matches.value_of("credential_file") {
         Some(credential_file) => {
