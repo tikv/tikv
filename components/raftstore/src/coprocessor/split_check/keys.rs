@@ -199,12 +199,40 @@ pub fn get_region_approximate_keys_cf(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    let (mut keys, _) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
+    let total_keys = 0;
+    let (mut mem_keys, _) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
+    total_keys += mem_keys;
 
     let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
     for (_, v) in collection.iter() {
         let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
-        keys += props.get_approximate_keys_in_range(&start_key, &end_key);
+        total_keys += props.get_approximate_keys_in_range(&start_key, &end_key);
+    }
+
+    if total_keys > 10000000 {
+        let ssts = collection
+            .into_iter()
+            .map(|(k, key)| {
+                let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+                let key = props.get_approximate_keys_in_range(&start_key, &end_key);
+                format!(
+                    "{} with key {}",
+                    Path::new(k)
+                        .file_name()
+                        .map(|f| f.to_str().unwrap())
+                        .unwrap_or(k),
+                    key
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(
+            "region key is too many";
+            "region_id" => region.get_id(),
+            "keys" => total_keys,
+            "memtable" => mem_key,
+            "ssts" => ssts,
+        )
     }
     Ok(keys)
 }

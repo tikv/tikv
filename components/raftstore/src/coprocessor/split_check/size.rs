@@ -209,12 +209,41 @@ pub fn get_region_approximate_size_cf(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    let (_, mut size) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
+    let total_size = 0;
+    let (_, mut mem_size) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
+    total_size += mem_size;
 
     let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
     for (_, v) in collection.iter() {
         let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
-        size += props.get_approximate_size_in_range(&start_key, &end_key);
+        total_size += props.get_approximate_size_in_range(&start_key, &end_key);
+    }
+
+    // when region size exceeds 1GB
+    if total_size > 1024 * 1024 * 1024 {
+        let ssts = collection
+            .into_iter()
+            .map(|(k, v)| {
+                let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+                let size = props.get_approximate_size_in_range(&start_key, &end_key);
+                format!(
+                    "{} with size {}",
+                    Path::new(k)
+                        .file_name()
+                        .map(|f| f.to_str().unwrap())
+                        .unwrap_or(k),
+                    size
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(
+            "region size is too large";
+            "region_id" => region.get_id(),
+            "size" => total_size,
+            "memtable" => mem_size,
+            "ssts" => ssts,
+        )
     }
     Ok(size)
 }
