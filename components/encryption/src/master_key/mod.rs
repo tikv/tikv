@@ -40,3 +40,53 @@ impl Backend for PlaintextBackend {
         false
     }
 }
+
+// To make MasterKeyConfig able to compile.
+#[cfg(test)]
+impl std::fmt::Debug for dyn Backend {
+    fn fmt(&self, _f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use crate::*;
+
+    use std::sync::Mutex;
+
+    pub(crate) struct MockBackend {
+        pub inner: Box<dyn Backend>,
+        pub is_wrong_master_key: bool,
+        pub decrypt_called: usize,
+    }
+
+    impl Default for MockBackend {
+        fn default() -> MockBackend {
+            MockBackend {
+                inner: Box::new(PlaintextBackend {}),
+                is_wrong_master_key: false,
+                decrypt_called: 0,
+            }
+        }
+    }
+
+    impl Backend for Mutex<MockBackend> {
+        fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
+            let mock = self.lock().unwrap();
+            mock.inner.encrypt(plaintext)
+        }
+        fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
+            let mut mock = self.lock().unwrap();
+            mock.decrypt_called += 1;
+            if mock.is_wrong_master_key {
+                return Err(Error::WrongMasterKey("".to_owned().into()));
+            }
+            mock.inner.decrypt(ciphertext)
+        }
+        fn is_secure(&self) -> bool {
+            true
+        }
+    }
+}

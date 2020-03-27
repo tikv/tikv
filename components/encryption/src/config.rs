@@ -31,7 +31,7 @@ impl Default for EncryptionConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 pub enum MasterKeyConfig {
     // Store encryption metadata as plaintext. Data still get encrypted. Not allowed to use if
@@ -48,12 +48,29 @@ pub enum MasterKeyConfig {
     },
 
     #[cfg(test)]
-    Mock,
+    #[serde(skip)]
+    Mock(Arc<dyn Backend>),
 }
 
 impl Default for MasterKeyConfig {
     fn default() -> Self {
         MasterKeyConfig::Plaintext
+    }
+}
+
+impl PartialEq for MasterKeyConfig {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MasterKeyConfig::Plaintext, MasterKeyConfig::Plaintext) => true,
+            (
+                MasterKeyConfig::File { method, path },
+                MasterKeyConfig::File {
+                    method: other_method,
+                    path: other_path,
+                },
+            ) => method == other_method && path == other_path,
+            _ => false,
+        }
     }
 }
 
@@ -65,7 +82,7 @@ impl MasterKeyConfig {
                 Arc::new(FileBackend::new(*method, path)?) as _
             }
             #[cfg(test)]
-            MasterKeyConfig::Mock => Arc::new(PlaintextBackend {}) as _,
+            MasterKeyConfig::Mock(mock) => mock.clone() as _,
         })
     }
 }

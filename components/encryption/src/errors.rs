@@ -20,13 +20,13 @@ pub enum Error {
     Proto(ProtobufError),
     #[fail(display = "Unknown encryption error")]
     UnknownEncryption,
-    #[fail(display = "Possibly wrong master key error {}", _0)]
-    MasterKey(Box<dyn error::Error + Sync + Send>),
+    #[fail(display = "Wrong master key error {}", _0)]
+    WrongMasterKey(Box<dyn error::Error + Sync + Send>),
     #[fail(
-        display = "Current master key error {}, previous master key error {}.",
+        display = "Both master key failed, current key {}, previous key {}.",
         _0, _1
     )]
-    DictDecrypt(
+    BothMasterKeyFail(
         Box<dyn error::Error + Sync + Send>,
         Box<dyn error::Error + Sync + Send>,
     ),

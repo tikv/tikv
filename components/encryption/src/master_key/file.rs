@@ -106,11 +106,14 @@ impl FileBackend {
         let checksum = content
             .get_metadata()
             .get(MetadataKey::PlaintextSha256.as_str())
-            .ok_or_else(|| Error::MasterKey("sha256 checksum not found".to_owned().into()))?;
+            .ok_or_else(|| Error::WrongMasterKey("sha256 checksum not found".to_owned().into()))?;
         let ciphertext = content.get_content();
+        // For CTR modes, wrong master key would not lead to decrypt error, so we do not convert
+        // the underlying error to a WrongMasterKey error. Need to reconsider if we later support
+        // other encryption types.
         let plaintext = AesCtrCrypter::new(method, key, iv).decrypt(ciphertext)?;
         if *checksum != sha256(&plaintext)? {
-            return Err(Error::MasterKey(
+            return Err(Error::WrongMasterKey(
                 "sha256 checksum mismatch".to_owned().into(),
             ));
         }
@@ -136,7 +139,7 @@ impl Backend for FileBackend {
 #[cfg(test)]
 mod tests {
     use hex::FromHex;
-    use matches::matches;
+    use matches::assert_matches;
     use std::{fs::File, io::Write, path::PathBuf};
     use tempfile::TempDir;
 
@@ -194,19 +197,19 @@ mod tests {
             .mut_metadata()
             .get_mut(MetadataKey::PlaintextSha256.as_str())
             .unwrap()[0] += 1;
-        assert!(matches!(
+        assert_matches!(
             backend.decrypt_content(&encrypted_content1).unwrap_err(),
-            Error::MasterKey(_)
-        ));
+            Error::WrongMasterKey(_)
+        );
 
         // Must checksum not found
         let mut encrypted_content2 = encrypted_content;
         encrypted_content2
             .mut_metadata()
             .remove(MetadataKey::PlaintextSha256.as_str());
-        assert!(matches!(
+        assert_matches!(
             backend.decrypt_content(&encrypted_content2).unwrap_err(),
-            Error::MasterKey(_)
-        ));
+            Error::WrongMasterKey(_)
+        );
     }
 }
