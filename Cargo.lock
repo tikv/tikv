@@ -3367,6 +3367,8 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.0",
+ "slog",
+ "slog-global",
  "tikv_util",
  "txn_types",
 ]

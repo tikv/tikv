@@ -1,5 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[macro_use]
+extern crate slog_global;
+
 use std::cmp;
 use std::collections::BTreeMap;
 use tikv_util::collections::HashSet;
@@ -38,7 +41,13 @@ impl Resolver {
         &self.locks
     }
 
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
+    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, region_id: u64) {
+        debug!(
+            "track lock {}@{}, region {}",
+            hex::encode_upper(key.clone()),
+            start_ts,
+            region_id
+        );
         self.locks.entry(start_ts).or_default().insert(key);
     }
 
@@ -47,23 +56,33 @@ impl Resolver {
         start_ts: TimeStamp,
         commit_ts: Option<TimeStamp>,
         key: Vec<u8>,
+        region_id: u64,
     ) {
+        debug!(
+            "untrack lock {}@{}, commit@{}, region {}",
+            hex::encode_upper(key.clone()),
+            start_ts,
+            commit_ts.clone().unwrap_or_else(TimeStamp::zero),
+            region_id,
+        );
         if let Some(commit_ts) = commit_ts {
             assert!(
                 self.resolved_ts.map_or(true, |rts| commit_ts > rts),
-                "{}@{}, commit@{} > {:?}",
+                "{}@{}, commit@{} > {:?}, region {}",
                 hex::encode_upper(key),
                 start_ts,
                 commit_ts,
-                self.resolved_ts
+                self.resolved_ts,
+                region_id
             );
             assert!(
                 commit_ts > self.min_ts,
-                "{}@{}, commit@{} > {:?}",
+                "{}@{}, commit@{} > {:?}, region {}",
                 hex::encode_upper(key),
                 start_ts,
                 commit_ts,
-                self.min_ts
+                self.min_ts,
+                region_id
             );
         }
 
@@ -71,19 +90,21 @@ impl Resolver {
         // It's possible that rollback happens on a not existing transaction.
         assert!(
             entry.is_some() || commit_ts.is_none(),
-            "{}@{}, commit@{} is not tracked",
+            "{}@{}, commit@{} is not tracked, region {}",
             hex::encode_upper(key),
             start_ts,
             commit_ts.unwrap_or_else(TimeStamp::zero),
+            region_id
         );
         if let Some(locked_keys) = entry {
             assert!(
                 locked_keys.remove(&key) || commit_ts.is_none(),
-                "{}@{}, commit@{} is not tracked, {:?}",
+                "{}@{}, commit@{} is not tracked, region {}, {:?}",
                 hex::encode_upper(key),
                 start_ts,
                 commit_ts.unwrap_or_else(TimeStamp::zero),
-                locked_keys,
+                region_id,
+                locked_keys
             );
             if locked_keys.is_empty() {
                 self.locks.remove(&start_ts);
@@ -193,12 +214,13 @@ mod tests {
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap())
+                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), 0)
                     }
                     Event::Unlock(start_ts, commit_ts, key) => resolver.untrack_lock(
                         start_ts.into(),
                         commit_ts.map(Into::into),
                         key.into_raw().unwrap(),
+                        0,
                     ),
                     Event::Resolve(min_ts, expect) => assert_eq!(
                         resolver.resolve(min_ts.into()).unwrap(),
@@ -213,12 +235,13 @@ mod tests {
             for e in case {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap())
+                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), 0)
                     }
                     Event::Unlock(start_ts, commit_ts, key) => resolver.untrack_lock(
                         start_ts.into(),
                         commit_ts.map(Into::into),
                         key.into_raw().unwrap(),
+                        0,
                     ),
                     Event::Resolve(min_ts, _) => {
                         assert_eq!(resolver.resolve(min_ts.into()), None, "case {}", i)

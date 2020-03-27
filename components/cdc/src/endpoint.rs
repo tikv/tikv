@@ -515,24 +515,28 @@ impl Initializer {
                     .unwrap();
                 let mut done = false;
                 while !done {
-                    let entries =
-                        match Self::scan_batch(&mut scanner, batch_size, resolver.as_mut()) {
-                            Ok(res) => res,
-                            Err(e) => {
-                                error!("cdc scan entries failed"; "error" => ?e);
-                                // TODO: record in metrics.
-                                let deregister = Deregister::Downstream {
-                                    region_id,
-                                    downstream_id,
-                                    conn_id,
-                                    err: Some(e),
-                                };
-                                if let Err(e) = sched.schedule(Task::Deregister(deregister)) {
-                                    error!("schedule cdc task failed"; "error" => ?e);
-                                }
-                                return Ok(());
+                    let entries = match Self::scan_batch(
+                        region_id,
+                        &mut scanner,
+                        batch_size,
+                        resolver.as_mut(),
+                    ) {
+                        Ok(res) => res,
+                        Err(e) => {
+                            error!("cdc scan entries failed"; "error" => ?e);
+                            // TODO: record in metrics.
+                            let deregister = Deregister::Downstream {
+                                region_id,
+                                downstream_id,
+                                conn_id,
+                                err: Some(e),
+                            };
+                            if let Err(e) = sched.schedule(Task::Deregister(deregister)) {
+                                error!("schedule cdc task failed"; "error" => ?e);
                             }
-                        };
+                            return Ok(());
+                        }
+                    };
                     // If the last element is None, it means scanning is finished.
                     if let Some(None) = entries.last() {
                         done = true;
@@ -561,6 +565,7 @@ impl Initializer {
     }
 
     fn scan_batch<S: Snapshot>(
+        region_id: u64,
         scanner: &mut DeltaScanner<S>,
         batch_size: usize,
         resolver: Option<&mut Resolver>,
@@ -585,7 +590,7 @@ impl Initializer {
                     let (encoded_key, value) = lock;
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
-                    resolver.track_lock(lock.ts, key);
+                    resolver.track_lock(lock.ts, key, region_id);
                 }
             }
         }

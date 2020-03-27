@@ -451,6 +451,7 @@ impl Delegate {
                         row.start_ts.into(),
                         commit_ts.map(Into::into),
                         row.key.clone(),
+                        self.region_id,
                     );
 
                     let r = rows.insert(row.key.clone(), row);
@@ -475,7 +476,7 @@ impl Delegate {
                     // we must track inflight txns.
                     assert!(self.resolver.is_some(), "region resolver should be ready");
                     let resolver = self.resolver.as_mut().unwrap();
-                    resolver.track_lock(row.start_ts.into(), row.key.clone());
+                    resolver.track_lock(row.start_ts.into(), row.key.clone(), self.region_id);
 
                     *occupied = row;
                 }
