@@ -525,7 +525,7 @@ impl Peer {
         if self.raft_group.raft.election_elapsed + 1 < cfg.raft_election_timeout_ticks {
             return res;
         }
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
             // Only recent active peer is considerred, so that an isolated follower
@@ -605,11 +605,6 @@ impl Peer {
     #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer.get_id()
-    }
-
-    #[inline]
-    pub fn get_raft_status(&self) -> raft::StatusRef<'_> {
-        self.raft_group.status_ref()
     }
 
     #[inline]
@@ -812,7 +807,7 @@ impl Peer {
     /// Collects all pending peers and update `peers_start_pending_time`.
     pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
         if status.progress.is_none() {
@@ -1818,7 +1813,7 @@ impl Peer {
             return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let total = status.progress.unwrap().voter_ids().len();
         if total == 1 {
             // It's always safe if there is only one node in the cluster.
@@ -1923,7 +1918,7 @@ impl Peer {
         peer: &metapb::Peer,
     ) -> Option<&'static str> {
         let peer_id = peer.get_id();
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let progress = status.progress.unwrap();
 
         if !progress.voter_ids().contains(&peer_id) {
@@ -2143,7 +2138,7 @@ impl Peer {
     // For now, it is only used in merge.
     pub fn get_min_progress(&self) -> Result<u64> {
         let mut min = None;
-        if let Some(progress) = self.raft_group.status_ref().progress {
+        if let Some(progress) = self.raft_group.status().progress {
             for (id, pr) in progress.iter() {
                 // Reject merge if there is any pending request snapshot,
                 // because a target region may merge a source region which is in
