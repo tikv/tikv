@@ -279,6 +279,7 @@ mod tests {
     use self::waiter_manager::tests::*;
     use super::*;
     use raftstore::coprocessor::RegionChangeEvent;
+    use tikv_util::config::ReadableDuration;
     use tikv_util::security::SecurityConfig;
 
     use std::thread;
@@ -293,8 +294,8 @@ mod tests {
 
         let mut lock_mgr = LockManager::new();
         let mut cfg = Config::default();
-        cfg.wait_for_lock_timeout = 3000;
-        cfg.wake_up_delay_duration = 100;
+        cfg.wait_for_lock_timeout = ReadableDuration::millis(3000);
+        cfg.wake_up_delay_duration = ReadableDuration::millis(100);
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
         lock_mgr
             .start(

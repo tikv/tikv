@@ -1130,9 +1130,9 @@ dependencies = [
  "kvproto",
  "rand 0.7.3",
  "rusoto_core",
- "rusoto_credential",
  "rusoto_mock",
  "rusoto_s3",
+ "rusoto_util",
  "rust-ini",
  "slog",
  "slog-global",
@@ -2814,10 +2814,10 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0575e258dab62268e7236d7307caa38848acbda7ec7ab87bd9093791e999d20"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0#4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
 dependencies = [
  "cfg-if",
+ "coarsetime",
  "fnv",
  "lazy_static",
  "libc",
@@ -2826,6 +2826,15 @@ dependencies = [
  "reqwest",
  "spin",
  "thiserror",
+]
+
+[[package]]
+name = "prometheus-static-metric"
+version = "0.3.0"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0#4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
+dependencies = [
+ "proc-macro-hack",
+ "static-metric-proc-macros",
 ]
 
 [[package]]
@@ -3488,6 +3497,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_sts"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e83d166cfb294672db98a60159c4a81a8169c6c91054a275cb812158c73815e5"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "chrono",
+ "futures 0.3.4",
+ "rusoto_core",
+ "serde_urlencoded",
+ "tempfile",
+ "xml-rs",
+]
+
+[[package]]
+name = "rusoto_util"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_sts",
+]
+
+[[package]]
 name = "rust-argon2"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3859,6 +3894,18 @@ name = "standback"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4edf667ea8f60afc06d6aeec079d20d5800351109addec1faea678a8663da4e1"
+
+[[package]]
+name = "static-metric-proc-macros"
+version = "0.1.0"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0#4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
+dependencies = [
+ "lazy_static",
+ "proc-macro-hack",
+ "proc-macro2 1.0.9",
+ "quote 1.0.3",
+ "syn 1.0.5",
+]
 
 [[package]]
 name = "static_assertions"
@@ -4290,7 +4337,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "prometheus",
- "prometheus-static-metric",
+ "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087)",
  "rand 0.6.5",
  "tikv_util",
  "time 0.1.42",
@@ -4441,7 +4488,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "profiler",
- "prometheus-static-metric",
+ "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087)",
  "protobuf",
  "tidb_query_codegen",
  "tidb_query_common",
@@ -4464,6 +4511,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "chrono",
+ "coarsetime",
  "codec",
  "configuration",
  "crc32fast",
@@ -4508,7 +4556,7 @@ dependencies = [
  "pprof",
  "procinfo",
  "prometheus",
- "prometheus-static-metric",
+ "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0)",
  "prost",
  "protobuf",
  "quick-error",
