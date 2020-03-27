@@ -1468,7 +1468,7 @@ mod log {
             let mut file = File::create(&log_file3).unwrap();
             write!(
                 file,
-                r#"[2019/08/23 18:09:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
+                r#"[2019/08/23 18:11:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:54.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:55.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:56.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
@@ -1490,19 +1490,20 @@ mod log {
             .iter()
             .map(|s| timestamp(s))
             .collect::<Vec<i64>>();
-            let mut got = search(log_file, req)
-                .unwrap()
-                .wait()
-                .map(|x| x.unwrap())
-                .collect::<Vec<SearchLogResponse>>()
-                .into_iter()
-                .map(|mut resp| resp.take_messages().into_iter())
-                .into_iter()
-                .flatten()
-                .map(|msg| msg.get_time())
-                .collect::<Vec<i64>>();
-            got.sort();
-            assert_eq!(expected, got);
+            assert_eq!(
+                expected,
+                search(log_file, req)
+                    .unwrap()
+                    .wait()
+                    .map(|x| x.unwrap())
+                    .collect::<Vec<SearchLogResponse>>()
+                    .into_iter()
+                    .map(|mut resp| resp.take_messages().into_iter())
+                    .into_iter()
+                    .flatten()
+                    .map(|msg| msg.get_time())
+                    .collect::<Vec<i64>>()
+            );
         }
     }
 }
