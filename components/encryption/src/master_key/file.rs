@@ -150,7 +150,7 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join(name);
         let mut file = File::create(path.clone()).unwrap();
-        file.write(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
+        file.write_all(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
             .unwrap();
         (path, tmp_dir)
     }

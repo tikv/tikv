@@ -88,6 +88,7 @@ mod tests {
     use super::*;
     use crate::Error;
 
+    use matches::assert_matches;
     use std::io::ErrorKind;
 
     #[test]
@@ -96,10 +97,10 @@ mod tests {
         let file = EncryptedFile::new(tmp.path(), "encrypted");
         assert_eq!(file.base, tmp.path());
         assert_eq!(file.name, "encrypted");
+        let ret = file.read(&PlaintextBackend::default());
+        assert_matches!(ret, Err(Error::Io(_)));
         if let Err(Error::Io(e)) = file.read(&PlaintextBackend::default()) {
             assert_eq!(ErrorKind::NotFound, e.kind());
-        } else {
-            assert!(false);
         }
 
         let content = b"test content";

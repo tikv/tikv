@@ -11,7 +11,7 @@ use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo,
 use protobuf::Message;
 
 use crate::config::MasterKeyConfig;
-use crate::crypter::{self, Iv};
+use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
 use crate::master_key::{Backend, PlaintextBackend};
 use crate::{Error, Result};
@@ -124,7 +124,7 @@ impl Dicts {
         if self.file_dict.files.get(fname).is_none() {
             // Return Plaintext if file not found
             let mut file = FileInfo::default();
-            file.method = EncryptionMethod::Plaintext;
+            file.method = compat(EncryptionMethod::Plaintext);
             self.file_dict.files.insert(fname.to_owned(), file);
         }
         self.file_dict.files.get(fname).unwrap()
@@ -134,7 +134,7 @@ impl Dicts {
         let mut file = FileInfo::default();
         file.iv = Iv::new().as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
-        file.method = method;
+        file.method = compat(method);
         self.file_dict.files.insert(fname.to_owned(), file);
         self.save_file_dict()?;
         Ok(self.file_dict.files.get(fname).unwrap())
@@ -243,7 +243,7 @@ impl Dicts {
             }
             let mut data_key = DataKey::default();
             data_key.key = key;
-            data_key.method = method;
+            data_key.method = compat(method);
             data_key.creation_time = creation_time;
             data_key.was_exposed = false;
 
@@ -440,7 +440,7 @@ mod tests {
     ) -> (tempfile::TempDir, Result<Option<DataKeyManager>>) {
         let tmp = temp.unwrap_or_else(|| tempfile::TempDir::new().unwrap());
         let mock_config = MasterKeyConfig::Mock(Arc::new(Mutex::new(MockBackend::default())));
-        let master_key = master_key.unwrap_or(mock_config.clone());
+        let master_key = master_key.unwrap_or_else(|| mock_config.clone());
         let previous_master_key = previous_master_key.unwrap_or(mock_config);
         let manager = DataKeyManager::new(
             &master_key,
@@ -456,7 +456,7 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join(name);
         let mut file = File::create(path.clone()).unwrap();
-        file.write(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
+        file.write_all(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
             .unwrap();
         (path, tmp_dir)
     }
@@ -548,7 +548,7 @@ mod tests {
             Some(tmp),
             None,
             Some(MasterKeyConfig::Mock(master_key.clone())),
-            Some(MasterKeyConfig::Mock(master_key.clone())),
+            Some(MasterKeyConfig::Mock(master_key)),
         );
         assert_matches!(manager.err(), Some(Error::BothMasterKeyFail(_, _)));
     }
