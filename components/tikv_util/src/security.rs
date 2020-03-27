@@ -1,10 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::SystemTime;
 
 use crate::collections::HashSet;
 use grpcio::{
@@ -98,6 +98,18 @@ impl SecurityConfig {
         }
         Ok((ca, cert, key))
     }
+
+    /// Determine if the cert file has been modified.
+    /// If modified, update the timestamp of this modification.
+    fn is_modified(&self, last: &mut SystemTime) -> Result<bool, Box<dyn Error>> {
+        let this = fs::metadata(&self.cert_path)?.modified()?;
+        if *last == this {
+            Ok(false)
+        } else {
+            *last = this;
+            Ok(true)
+        }
+    }
 }
 
 #[derive(Default)]
@@ -138,9 +150,7 @@ impl SecurityManager {
         } else {
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
-                last_fetch: Arc::new(Mutex::new(
-                    Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
-                )),
+                last_modified_time: Arc::new(Mutex::new(SystemTime::now())),
             });
             sb.bind_with_fetcher(
                 addr,
@@ -162,16 +172,14 @@ impl SecurityManager {
 
 struct Fetcher {
     cfg: Arc<SecurityConfig>,
-    last_fetch: Arc<Mutex<Instant>>,
+    last_modified_time: Arc<Mutex<SystemTime>>,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
-        if let Ok(mut last) = self.last_fetch.try_lock() {
-            // Reload the certificate every 1 second.
-            if last.elapsed() < Duration::from_secs(1) {
-                Ok(None)
-            } else {
+        if let Ok(mut last) = self.last_modified_time.try_lock() {
+            // Reload only when cert is modified.
+            if self.cfg.is_modified(&mut last)? {
                 let (ca, cert, key) = self.cfg.load_certs()?;
                 let new_cred = ServerCredentialsBuilder::new()
                     .add_cert(cert, key)
@@ -179,8 +187,9 @@ impl ServerCredentialsFetcher for Fetcher {
                         ca,
                         CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
                     );
-                *last = Instant::now();
                 Ok(Some(new_cred))
+            } else {
+                Ok(None)
             }
         } else {
             Ok(None)
