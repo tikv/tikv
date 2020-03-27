@@ -828,9 +828,9 @@ mod tests {
                         ]),
                         VectorValue::Int(vec![Some(-1), None, Some(-3)]),
                         VectorValue::Int(vec![
-                            Some(4_294_967_295_u32 as i64),
+                            Some(i64::from(4_294_967_295_u32)),
                             None,
-                            Some(4_294_967_295_u32 as i64),
+                            Some(i64::from(4_294_967_295_u32)),
                         ]),
                     ]),
                     logical_rows: vec![2, 1, 0],
@@ -858,10 +858,10 @@ mod tests {
                             Some(-9_223_372_036_854_775_808),
                         ]),
                         VectorValue::Int(vec![
-                            Some(300_u32 as i64),
-                            Some(2_147_483_647_u32 as i64),
-                            Some(2000_u32 as i64),
-                            Some(2_147_483_648_u32 as i64),
+                            Some(i64::from(300_u32)),
+                            Some(i64::from(2_147_483_647_u32)),
+                            Some(i64::from(2000_u32)),
+                            Some(i64::from(2_147_483_648_u32)),
                         ]),
                     ]),
                     logical_rows: vec![2, 1, 0, 3],
@@ -959,10 +959,10 @@ mod tests {
             false,
             &[
                 None,
-                Some(300_u32 as i64),
-                Some(2000_u32 as i64),
-                Some(2_147_483_647_u32 as i64),
-                Some(2_147_483_648_u32 as i64),
+                Some(i64::from(300_u32)),
+                Some(i64::from(2000_u32)),
+                Some(i64::from(2_147_483_647_u32)),
+                Some(i64::from(2_147_483_648_u32)),
             ],
         );
 
@@ -970,11 +970,11 @@ mod tests {
             2,
             true,
             &[
-                Some(4_294_967_295_u32 as i64),
-                Some(4_294_967_295_u32 as i64),
-                Some(2_147_483_648_u32 as i64),
-                Some(2_147_483_647_u32 as i64),
-                Some(2000_u32 as i64),
+                Some(i64::from(4_294_967_295_u32)),
+                Some(i64::from(4_294_967_295_u32)),
+                Some(i64::from(2_147_483_648_u32)),
+                Some(i64::from(2_147_483_647_u32)),
+                Some(i64::from(2000_u32)),
             ],
         );
     }
