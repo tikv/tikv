@@ -5,8 +5,8 @@ use std::sync::*;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use futures::sync::mpsc as future_mpsc;
-use futures::{Future, Stream};
+use futures::channel::mpsc as future_mpsc;
+use futures::StreamExt;
 use futures_executor::block_on;
 use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
@@ -334,7 +334,7 @@ fn test_backup_and_import() {
         backup_ts,
         &storage_path,
     );
-    let resps1 = rx.collect().wait().unwrap();
+    let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
     let files1 = resps1[0].files.clone();
@@ -353,7 +353,7 @@ fn test_backup_and_import() {
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts + 1)),
     );
-    let resps2 = rx.collect().wait().unwrap();
+    let resps2 = block_on(rx.collect::<Vec<_>>());
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
 
     // Use importer to restore backup files.
@@ -411,7 +411,7 @@ fn test_backup_and_import() {
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts + 2)),
     );
-    let resps3 = rx.collect().wait().unwrap();
+    let resps3 = block_on(rx.collect::<Vec<_>>());
     assert_eq!(files1, resps3[0].files);
 
     suite.stop();
@@ -453,7 +453,7 @@ fn test_backup_meta() {
         backup_ts,
         &storage_path,
     );
-    let resps1 = rx.collect().wait().unwrap();
+    let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
     let files: Vec<_> = resps1[0].files.clone().into_iter().collect();
@@ -500,7 +500,7 @@ fn test_backup_rawkv() {
         cf.clone(),
         &storage_path,
     );
-    let resps1 = rx.collect().wait().unwrap();
+    let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
     let files1 = resps1[0].files.clone();
@@ -516,7 +516,7 @@ fn test_backup_rawkv() {
         cf.clone(),
         &tmp.path().join(format!("{}", backup_ts + 1)),
     );
-    let resps2 = rx.collect().wait().unwrap();
+    let resps2 = block_on(rx.collect::<Vec<_>>());
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
 
     // Use importer to restore backup files.
@@ -574,7 +574,7 @@ fn test_backup_rawkv() {
         cf,
         &tmp.path().join(format!("{}", backup_ts + 2)),
     );
-    let resps3 = rx.collect().wait().unwrap();
+    let resps3 = block_on(rx.collect::<Vec<_>>());
     assert_eq!(files1, resps3[0].files);
 
     suite.stop();
@@ -604,7 +604,7 @@ fn test_backup_raw_meta() {
         cf,
         &storage_path,
     );
-    let resps1 = rx.collect().wait().unwrap();
+    let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
     let files: Vec<_> = resps1[0].files.clone().into_iter().collect();
