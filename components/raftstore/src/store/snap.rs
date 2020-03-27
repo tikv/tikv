@@ -1451,6 +1451,8 @@ pub mod tests {
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
     };
+    use raft::eraftpb::Entry;
+
     use protobuf::Message;
     use std::path::PathBuf;
     use tempfile::{Builder, TempDir};
@@ -1536,10 +1538,15 @@ pub mod tests {
         for &region_id in regions {
             // Put apply state into kv engine.
             let mut apply_state = RaftApplyState::default();
+            let mut apply_entry = Entry::default();
             apply_state.set_applied_index(10);
+            apply_entry.set_index(10);
+            apply_entry.set_term(0);
             apply_state.mut_truncated_state().set_index(10);
             kv.c()
                 .put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
+            raft.c()
+                .put_msg(&keys::raft_log_key(region_id, 10), &apply_entry)?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
