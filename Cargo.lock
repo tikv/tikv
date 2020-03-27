@@ -2876,10 +2876,10 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0575e258dab62268e7236d7307caa38848acbda7ec7ab87bd9093791e999d20"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0#4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
 dependencies = [
  "cfg-if",
+ "coarsetime",
  "fnv",
  "lazy_static",
  "libc",
