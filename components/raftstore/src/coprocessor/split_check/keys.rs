@@ -219,7 +219,7 @@ pub fn get_region_approximate_keys_cf(
         total_keys += props.get_approximate_keys_in_range(&start_key, &end_key);
     }
 
-    if total_keys > large_threshold && large_threshold != 0 {
+    if large_threshold != 0 && total_keys > large_threshold {
         let ssts = collection
             .iter()
             .map(|(k, v)| {

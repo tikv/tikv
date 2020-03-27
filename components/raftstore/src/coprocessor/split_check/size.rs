@@ -229,7 +229,7 @@ pub fn get_region_approximate_size_cf(
         total_size += props.get_approximate_size_in_range(&start_key, &end_key);
     }
 
-    if total_size > large_threshold && large_threshold != 0 {
+    if large_threshold != 0 && total_size > large_threshold {
         let ssts = collection
             .iter()
             .map(|(k, v)| {
