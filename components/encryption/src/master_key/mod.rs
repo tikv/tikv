@@ -17,11 +17,16 @@ pub trait Backend: Sync + Send + 'static {
     fn is_secure(&self) -> bool;
 }
 
+mod mem;
+use self::mem::MemBackend;
+
 mod file;
 pub use self::file::FileBackend;
+
 mod kms;
-mod metadata;
 pub use self::kms::KmsBackend;
+
+mod metadata;
 
 #[derive(Default)]
 pub(crate) struct PlainTextBackend {}

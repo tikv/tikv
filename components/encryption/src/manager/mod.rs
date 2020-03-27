@@ -517,7 +517,10 @@ mod tests {
     fn test_key_manager_rotate_on_key_expose() {
         let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
             .unwrap();
-        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key).unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let key_path = tmp.path().join("key");
+        std::fs::write(&key_path, &key).unwrap();
+        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, &key_path).unwrap();
 
         let (_tmp, manager) = new_tmp_key_manager(None, Some(Arc::new(backend)));
         let mut dicts = manager.dicts.write().unwrap();
@@ -560,7 +563,10 @@ mod tests {
     fn test_expose_keys_on_insecure_backend() {
         let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
             .unwrap();
-        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key).unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let key_path = tmp.path().join("key");
+        std::fs::write(&key_path, &key).unwrap();
+        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, &key_path).unwrap();
 
         let (_tmp, manager) = new_tmp_key_manager(None, Some(Arc::new(backend)));
         let mut dicts = manager.dicts.write().unwrap();

@@ -13,8 +13,9 @@ use rusoto_core::request::HttpClient;
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 use tokio::runtime::{Builder, Runtime};
 
-use super::{metadata::MetadataKey, Backend, FileBackend, PlainTextBackend, WithMetadata};
+use super::{metadata::MetadataKey, Backend, MemBackend, PlainTextBackend, WithMetadata};
 use crate::config::KmsConfig;
+use crate::crypter::Iv;
 use crate::encrypted_file::EncryptedFile;
 use crate::{Error, Result};
 use rusoto_util::new_client;
@@ -130,7 +131,7 @@ where
 }
 
 pub struct KmsBackend {
-    file_backend: FileBackend,
+    mem_backend: MemBackend,
 }
 
 impl KmsBackend {
@@ -173,19 +174,19 @@ impl KmsBackend {
 
         // Always use AES 256 for encrypting master key.
         let method = KMS_DATA_KEY_METHOD;
-        let file_backend = FileBackend::new(method, key)?;
+        let mem_backend = MemBackend::new(method, key)?;
 
-        Ok(KmsBackend { file_backend })
+        Ok(KmsBackend { mem_backend })
     }
 }
 
 impl Backend for KmsBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
-        self.file_backend.encrypt(plaintext)
+        self.mem_backend.encrypt_content(plaintext, Iv::new())
     }
 
     fn decrypt(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
-        self.file_backend.decrypt(content)
+        self.mem_backend.decrypt_content(content)
     }
 
     fn is_secure(&self) -> bool {
