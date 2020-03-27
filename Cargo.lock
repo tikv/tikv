@@ -1091,6 +1091,8 @@ dependencies = [
  "hex 0.4.0",
  "protobuf",
  "quick-error",
+ "slog",
+ "slog-global",
  "tikv_alloc",
  "tikv_util",
 ]
@@ -4148,6 +4150,18 @@ dependencies = [
  "tikv_util",
  "tipb",
  "txn_types",
+]
+
+[[package]]
+name = "test_engine_traits"
+version = "0.1.0"
+dependencies = [
+ "engine_rocks",
+ "engine_traits",
+ "rocksdb",
+ "slog",
+ "slog-global",
+ "tempfile",
 ]
 
 [[package]]
