@@ -169,6 +169,7 @@ impl Runnable<Task> for Runner {
                                 );
                             }
                         }
+                        fail_point!("raftstore::compact:CheckAndCompact");
                     }
                 }
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
