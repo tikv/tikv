@@ -460,12 +460,12 @@ mod tests {
     use crate::util::aggr_executor::tests::*;
     use crate::util::mock_executor::MockExecutor;
     use crate::BatchSlowHashAggregationExecutor;
+    use rustracing::span::Span;
     use tidb_query_datatype::expr::EvalWarnings;
     use tidb_query_vec_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
     use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
     use tipb::ExprType;
     use tipb_helper::ExprDefBuilder;
-    use rustracing::span::Span;
 
     // Test cases also cover BatchSlowHashAggregationExecutor.
 
@@ -660,17 +660,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1,Span::inactive());;
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1,Span::inactive());;
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1,Span::inactive());;
+            let mut r = exec.next_batch(1, Span::inactive());
             assert_eq!(&r.logical_rows, &[0]);
             assert_eq!(r.physical_columns.rows_len(), 1);
             assert_eq!(r.physical_columns.columns_len(), 5); // 4 result column, 1 group by column
@@ -1040,17 +1040,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1,Span::inactive());;
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1,Span::inactive());;
+            let r = exec.next_batch(1, Span::inactive());
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1,Span::inactive());;
+            let mut r = exec.next_batch(1, Span::inactive());
             assert_eq!(&r.logical_rows, &[0]);
             assert_eq!(r.physical_columns.rows_len(), 1);
             assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
