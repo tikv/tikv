@@ -57,6 +57,7 @@ impl Dicts {
         match (file_bytes, key_bytes) {
             // Both files are found.
             (Ok(file_bytes), Ok(key_bytes)) => {
+                info!("encryption: found both of key dictionary and file dictionary.");
                 let mut file_dict = FileDictionary::default();
                 file_dict.merge_from_bytes(&file_bytes)?;
                 let mut key_dict = KeyDictionary::default();
@@ -73,11 +74,19 @@ impl Dicts {
                 if file_err.kind() == ErrorKind::NotFound
                     && key_err.kind() == ErrorKind::NotFound =>
             {
+                info!("encryption: none of key dictionary and file dictionary are found.");
                 Ok(None)
             }
             // ...else, return either error.
-            (_, Err(key_err)) => Err(key_err),
-            (Err(file_err), _) => Err(file_err),
+            (file_bytes, key_bytes) => {
+                if key_bytes.is_err() {
+                    error!("encryption: failed to load key dictionary.");
+                    Err(key_bytes.unwrap_err())
+                } else {
+                    error!("encryption: failed to load file dictionary.");
+                    Err(file_bytes.unwrap_err())
+                }
+            }
         }
     }
 
@@ -322,21 +331,27 @@ impl DataKeyManager {
                     master_key_config, previous_master_key_config
                 );
                 let previous_master_key = previous_master_key_config.create_backend()?;
-                Dicts::open(dict_path, rotation_period, previous_master_key.as_ref())
-                    .map_err(|e| {
-                        if let Error::WrongMasterKey(e_previous) = e {
-                            Error::BothMasterKeyFail(e_current, e_previous)
-                        } else {
-                            e
-                        }
-                    })?
-                    .ok_or_else(|| {
-                        Error::Other(
+                let mut dicts =
+                    Dicts::open(dict_path, rotation_period, previous_master_key.as_ref())
+                        .map_err(|e| {
+                            if let Error::WrongMasterKey(e_previous) = e {
+                                Error::BothMasterKeyFail(e_current, e_previous)
+                            } else {
+                                e
+                            }
+                        })?
+                        .ok_or_else(|| {
+                            Error::Other(
                             "Fallback to previous master key but find dictionaries to be empty."
                                 .to_owned()
                                 .into(),
                         )
-                    })?
+                        })?;
+                // Rewrite key_dict after replace master key.
+                dicts.save_key_dict(master_key.as_ref())?;
+                info!("encryption: persisted result after replace master key.");
+
+                dicts
             }
             // Error.
             (Err(e), _) => return Err(e),
@@ -507,7 +522,7 @@ mod tests {
 
     // If master_key is the wrong key, fallback to previous_master_key.
     #[test]
-    fn test_key_manager_fallback_master_key() {
+    fn test_key_manager_rotate_master_key() {
         // create initial dictionaries.
         let (tmp, manager) = new_tmp_key_manager(None, None, None, None);
         let manager = manager.unwrap().unwrap();
@@ -528,6 +543,33 @@ mod tests {
         let manager = manager.unwrap().unwrap();
         let info2 = manager.get_file("foo").unwrap();
         assert_eq!(info1, info2);
+        assert_eq!(1, current_key.lock().unwrap().encrypt_called);
+        assert_eq!(1, current_key.lock().unwrap().decrypt_called);
+        assert_eq!(1, previous_key.lock().unwrap().decrypt_called);
+    }
+
+    #[test]
+    fn test_key_manager_rotate_master_key_rewrite_failure() {
+        // create initial dictionaries.
+        let (tmp, manager) = new_tmp_key_manager(None, None, None, None);
+        let manager = manager.unwrap().unwrap();
+        manager.new_file("foo").unwrap();
+        drop(manager);
+
+        let current_key = Arc::new(Mutex::new(MockBackend {
+            is_wrong_master_key: true,
+            encrypt_fail: true,
+            ..Default::default()
+        }));
+        let previous_key = Arc::new(Mutex::new(MockBackend::default()));
+        let (_tmp, manager) = new_tmp_key_manager(
+            Some(tmp),
+            None,
+            Some(MasterKeyConfig::Mock(current_key.clone())),
+            Some(MasterKeyConfig::Mock(previous_key.clone())),
+        );
+        assert!(manager.is_err());
+        assert_eq!(1, current_key.lock().unwrap().encrypt_called);
         assert_eq!(1, current_key.lock().unwrap().decrypt_called);
         assert_eq!(1, previous_key.lock().unwrap().decrypt_called);
     }

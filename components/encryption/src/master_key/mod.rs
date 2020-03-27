@@ -59,6 +59,8 @@ pub mod tests {
     pub(crate) struct MockBackend {
         pub inner: Box<dyn Backend>,
         pub is_wrong_master_key: bool,
+        pub encrypt_fail: bool,
+        pub encrypt_called: usize,
         pub decrypt_called: usize,
     }
 
@@ -67,6 +69,8 @@ pub mod tests {
             MockBackend {
                 inner: Box::new(PlaintextBackend {}),
                 is_wrong_master_key: false,
+                encrypt_fail: false,
+                encrypt_called: 0,
                 decrypt_called: 0,
             }
         }
@@ -74,7 +78,11 @@ pub mod tests {
 
     impl Backend for Mutex<MockBackend> {
         fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
-            let mock = self.lock().unwrap();
+            let mut mock = self.lock().unwrap();
+            mock.encrypt_called += 1;
+            if mock.encrypt_fail {
+                return Err(Error::Other("".to_owned().into()));
+            }
             mock.inner.encrypt(plaintext)
         }
         fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
