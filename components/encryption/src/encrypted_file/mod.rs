@@ -31,7 +31,8 @@ impl<'a> EncryptedFile<'a> {
         EncryptedFile { base, name }
     }
 
-    /// Read and decrypt the file. Return none if file doesn't exist.
+    /// Read and decrypt the file. Caller need to handle the NotPrent io error in case file not
+    /// exists.
     pub fn read(&self, master_key: &dyn Backend) -> Result<Vec<u8>> {
         let res = OpenOptions::new()
             .read(true)
