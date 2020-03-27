@@ -22,6 +22,7 @@ Name | Email | Focus
 Name | Email | Focus
 ----|---|---
 [Xiaoguang Sun](https://github.com/sunxiaoguang) | [sunxiaoguang@zhihu.com](mailto:sunxiaoguang@zhihu.com) | Focus Areas: Client, Storage
+[Fu Chen](https://github.com/fredchenbj) | [cfworking1990@gmail.com](mailto:cfworking1990@gmail.com) | Focus Areas: Storage, Performance
 
 # Maintaining Organizations
 
