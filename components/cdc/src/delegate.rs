@@ -31,6 +31,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, TimeStamp};
 
+use crate::metrics::*;
 use crate::{Error, Result};
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
@@ -279,17 +280,17 @@ impl Delegate {
     }
 
     /// Try advance and broadcast resolved ts.
-    pub fn on_min_ts(&mut self, min_ts: TimeStamp) {
+    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
         if self.resolver.is_none() {
             debug!("region resolver not ready";
                 "region_id" => self.region_id, "min_ts" => min_ts);
-            return;
+            return None;
         }
         debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
-            None => return,
+            None => return None,
         };
         debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
@@ -297,6 +298,8 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
         self.broadcast(change_data_event, 0);
+        CDC_RESOLVED_TS_HISTOGRAM.observe(resolved_ts.into_inner() as f64);
+        Some(resolved_ts)
     }
 
     pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {

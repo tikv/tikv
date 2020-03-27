@@ -19,12 +19,14 @@ use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv_util::collections::HashMap;
+use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, Sender as PoolSender, ThreadPool};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID};
+use crate::metrics::*;
 use crate::service::{Conn, ConnID};
 use crate::{CdcObserver, Error, Result};
 
@@ -394,8 +396,18 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn on_min_ts(&mut self, min_ts: TimeStamp) {
-        for delegate in self.capture_regions.values_mut() {
-            delegate.on_min_ts(min_ts);
+        let mut min_resolved_ts = TimeStamp::zero();
+        let mut min_ts_region_id = 0;
+        for (region_id, delegate) in self.capture_regions.iter_mut() {
+            if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
+                if resolved_ts < min_resolved_ts {
+                    min_resolved_ts = resolved_ts;
+                    min_ts_region_id = *region_id;
+                }
+            }
+        }
+        if min_ts_region_id > 0 {
+            CDC_MIN_TS_REGION.set(min_ts_region_id as i64)
         }
         self.register_min_ts_event();
     }
@@ -494,6 +506,7 @@ impl Initializer {
 
                 fail_point!("cdc_incremental_scan_start");
 
+                let start = Instant::now_coarse();
                 // Time range: (checkpoint_ts, current]
                 let current = TimeStamp::max();
                 let mut scanner = ScannerBuilder::new(snap, current, false)
@@ -541,6 +554,7 @@ impl Initializer {
                     Self::finish_building_resolver(resolver, region, sched);
                 }
 
+                CDC_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
                 Ok(())
             }))
             .unwrap();
