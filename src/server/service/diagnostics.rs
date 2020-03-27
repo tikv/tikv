@@ -1484,26 +1484,25 @@ mod log {
             req.set_levels(vec![LogLevel::Warn.into()].into());
             req.set_patterns(vec![".*test-filter.*".to_string()].into());
             let expected = vec![
-                "2019/08/23 18:11:58.387 +08:00",
                 "2019/08/23 18:09:58.387 +08:00",
+                "2019/08/23 18:11:58.387 +08:00",
             ]
             .iter()
             .map(|s| timestamp(s))
             .collect::<Vec<i64>>();
-            assert_eq!(
-                search(log_file, req)
-                    .unwrap()
-                    .wait()
-                    .map(|x| x.unwrap())
-                    .collect::<Vec<SearchLogResponse>>()
-                    .into_iter()
-                    .map(|mut resp| resp.take_messages().into_iter())
-                    .into_iter()
-                    .flatten()
-                    .map(|msg| msg.get_time())
-                    .collect::<Vec<i64>>(),
-                expected
-            );
+            let mut got = search(log_file, req)
+                .unwrap()
+                .wait()
+                .map(|x| x.unwrap())
+                .collect::<Vec<SearchLogResponse>>()
+                .into_iter()
+                .map(|mut resp| resp.take_messages().into_iter())
+                .into_iter()
+                .flatten()
+                .map(|msg| msg.get_time())
+                .collect::<Vec<i64>>();
+            got.sort();
+            assert_eq!(expected, got);
         }
     }
 }
