@@ -200,6 +200,8 @@
 extern crate quick_error;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[macro_use]
+extern crate slog_global;
 
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
