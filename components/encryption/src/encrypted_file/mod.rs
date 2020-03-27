@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs::{rename, File, OpenOptions};
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 
 use kvproto::encryptionpb::EncryptedContent;
@@ -9,7 +9,7 @@ use protobuf::Message;
 use rand::{thread_rng, RngCore};
 
 use crate::master_key::*;
-use crate::{Error, Result};
+use crate::Result;
 
 mod header;
 use header::*;
@@ -32,7 +32,7 @@ impl<'a> EncryptedFile<'a> {
     }
 
     /// Read and decrypt the file. Return none if file doesn't exist.
-    pub fn read(&self, master_key: &dyn Backend) -> Result<Option<Vec<u8>>> {
+    pub fn read(&self, master_key: &dyn Backend) -> Result<Vec<u8>> {
         let res = OpenOptions::new()
             .read(true)
             .open(self.base.join(self.name));
@@ -45,14 +45,9 @@ impl<'a> EncryptedFile<'a> {
                 encrypted_content.merge_from_bytes(content)?;
                 let plaintext = master_key.decrypt(&encrypted_content)?;
 
-                Ok(Some(plaintext))
+                Ok(plaintext)
             }
-            Err(e) => {
-                if e.kind() == ErrorKind::NotFound {
-                    return Ok(None);
-                }
-                Err(Error::Io(e))
-            }
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -91,23 +86,27 @@ impl<'a> EncryptedFile<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Error;
+
+    use std::io::ErrorKind;
 
     #[test]
     fn test_open_write() {
         let tmp = tempfile::TempDir::new().unwrap();
         let file = EncryptedFile::new(tmp.path(), "encrypted");
-        assert!(file.read(&PlaintextBackend::default()).unwrap().is_none());
         assert_eq!(file.base, tmp.path());
         assert_eq!(file.name, "encrypted");
+        if let Err(Error::Io(e)) = file.read(&PlaintextBackend::default()) {
+            assert_eq!(ErrorKind::NotFound, e.kind());
+        } else {
+            assert!(false);
+        }
 
         let content = b"test content";
         file.write(content, &PlaintextBackend::default()).unwrap();
         drop(file);
 
         let file = EncryptedFile::new(tmp.path(), "encrypted");
-        assert_eq!(
-            file.read(&PlaintextBackend::default()).unwrap().unwrap(),
-            content
-        );
+        assert_eq!(file.read(&PlaintextBackend::default()).unwrap(), content);
     }
 }

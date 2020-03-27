@@ -49,20 +49,14 @@ impl Dicts {
         // File dict is saved in plaintext.
         let file_file = EncryptedFile::new(base, FILE_DICT_NAME);
         let plaintext = MasterKeyConfig::Plaintext.create_backend()?;
-        let file_bytes = file_file.read(plaintext.as_ref())?;
+        let file_bytes = file_file.read(plaintext.as_ref());
 
         let key_file = EncryptedFile::new(base, KEY_DICT_NAME);
-        let key_bytes = key_file.read(master_key)?;
+        let key_bytes = key_file.read(master_key);
 
         match (file_bytes, key_bytes) {
-            (None, None) => Ok(None),
-            (None, _) => Err(Error::Other(
-                format!("file dictionary missing, path = {}", path).into(),
-            )),
-            (_, None) => Err(Error::Other(
-                format!("key dictionary missing, path = {}", path).into(),
-            )),
-            (Some(file_bytes), Some(key_bytes)) => {
+            // Both files are found.
+            (Ok(file_bytes), Ok(key_bytes)) => {
                 let mut file_dict = FileDictionary::default();
                 file_dict.merge_from_bytes(&file_bytes)?;
                 let mut key_dict = KeyDictionary::default();
@@ -74,6 +68,16 @@ impl Dicts {
                     base: base.to_owned(),
                 }))
             }
+            // If neither files are found, encryption was never enabled.
+            (Err(Error::Io(file_err)), Err(Error::Io(key_err)))
+                if file_err.kind() == ErrorKind::NotFound
+                    && key_err.kind() == ErrorKind::NotFound =>
+            {
+                Ok(None)
+            }
+            // ...else, return either error.
+            (_, Err(key_err)) => Err(key_err),
+            (Err(file_err), _) => Err(file_err),
         }
     }
 
