@@ -2,15 +2,14 @@
 
 use std::fs::create_dir_all;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::time::Duration;
 
 use futures::future::{self, TryFutureExt};
 use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod};
-use rusoto_core::region;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::HttpClient;
-use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 use tokio::runtime::{Builder, Runtime};
 
@@ -18,6 +17,7 @@ use super::{metadata::MetadataKey, Backend, FileBackend, PlainTextBackend, WithM
 use crate::config::KmsConfig;
 use crate::encrypted_file::EncryptedFile;
 use crate::{Error, Result};
+use rusoto_util::new_client;
 
 const KMS_ENCRYPTION_KEY_NAME: &str = "kms_encryption.key";
 
@@ -29,6 +29,10 @@ const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
 struct AwsKms {
     client: KmsClient,
     current_key_id: String,
+    // The current implementation (rosoto 0.43.0 + hyper 0.13.3) is not `Send`
+    // in practical. See more https://github.com/tikv/tikv/issues/7236.
+    // FIXME: remove it.
+    _not_send: PhantomData<*const ()>,
 }
 
 impl AwsKms {
@@ -38,56 +42,38 @@ impl AwsKms {
         AwsKms::with_request_dispatcher(config, http_dispatcher)
     }
 
-    // TODO following code is almost the same as external_storage s3 client,
-    //      should be wrapped together.
     fn with_request_dispatcher<D>(config: KmsConfig, dispatcher: D) -> Result<AwsKms>
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
+        Self::check_config(&config)?;
+        let client = new_client!(KmsClient, config, dispatcher);
+        Ok(AwsKms {
+            client,
+            current_key_id: config.key_id,
+            _not_send: PhantomData::default(),
+        })
+    }
+
+    fn check_config(config: &KmsConfig) -> Result<()> {
         if config.key_id.is_empty() {
             return Err(Error::Other(
                 "KMS key id can not be empty".to_owned().into(),
             ));
         }
-
-        let region = if config.endpoint.is_empty() {
-            config.region.parse::<region::Region>().map_err(|e| {
-                Error::Other(format!("invalid region format {}: {}", config.region, e).into())
-            })?
-        } else {
-            region::Region::Custom {
-                name: config.region,
-                endpoint: config.endpoint,
-            }
-        };
-
-        let client = if config.access_key.is_empty() || config.secret_access_key.is_empty() {
-            let cred_provider = DefaultCredentialsProvider::new()
-                .map_err(|e| Error::Other(format!("unable to get credentials: {}", e).into()))?;
-            KmsClient::new_with(dispatcher, cred_provider, region)
-        } else {
-            let cred_provider = StaticProvider::new(
-                config.access_key,
-                config.secret_access_key,
-                None, /* token */
-                None, /* valid_for */
-            );
-            KmsClient::new_with(dispatcher, cred_provider, region)
-        };
-
-        Ok(AwsKms {
-            client,
-            current_key_id: config.key_id,
-        })
+        Ok(())
     }
 
     fn decrypt(&self, runtime: &mut Runtime, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
             ciphertext_blob: ciphertext.to_vec().into(),
+            // Use default algorithm SYMMETRIC_DEFAULT.
+            encryption_algorithm: None,
+            // Use key_id encoded in ciphertext.
+            key_id: None,
+            // Encryption context and grant tokens are not used.
             encryption_context: None,
             grant_tokens: None,
-            encryption_algorithm: None,
-            key_id: None,
         };
         let decrypt_response = retry(runtime, || {
             self.client

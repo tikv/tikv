@@ -1033,6 +1033,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kms",
  "rusoto_mock",
+ "rusoto_util",
  "rust-ini",
  "serde",
  "serde_derive",

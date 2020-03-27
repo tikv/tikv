@@ -24,6 +24,7 @@ engine_traits = { path = "../engine_traits" }
 rusoto_core = "0.43.0"
 rusoto_kms = { version = "0.43.0", features = ["serialize_structs"] }
 rusoto_credential = "0.43.0"
+rusoto_util = { path = "../rusoto_util" }
 configuration = { path = "../configuration" }
 serde_derive = "1.0"
 serde = "1.0"
