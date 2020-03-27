@@ -1073,20 +1073,17 @@ impl Time {
             let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
             Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
         } else {
-            Time::new(
-                ctx,
-                TimeArgs {
-                    year,
-                    month,
-                    day,
-                    hour,
-                    minute,
-                    second,
-                    micro,
-                    fsp: fsp as i8,
-                    time_type,
-                },
-            )
+            Ok(Time::unchecked_new(TimeArgs {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                micro,
+                fsp: fsp as i8,
+                time_type,
+            }))
         }
     }
 
