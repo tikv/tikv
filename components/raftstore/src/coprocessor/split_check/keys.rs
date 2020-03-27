@@ -448,7 +448,7 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(db.c(), &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
     }
 
@@ -501,13 +501,13 @@ mod tests {
         region.set_start_key(b"b1".to_vec());
         region.set_end_key(b"b2".to_vec());
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(db.c(), &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
         assert_eq!(range_keys, 0);
 
         // range properties get 1, mvcc properties get 3
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"c".to_vec());
-        let range_keys = get_region_approximate_keys(db.c(), &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
         assert_eq!(range_keys, 1);
     }
 }
