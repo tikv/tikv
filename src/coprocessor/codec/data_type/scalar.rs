@@ -144,7 +144,7 @@ impl<'a> ScalarValueRef<'a> {
 
         ord.or_else(|| {
             match_template! {
-                TT = [Real, Decimal, DateTime, Duration, Json],
+                TT = [Real, Bytes, Decimal, DateTime, Duration, Json],
                 match (self, other) {
                     (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => Some(v1.cmp(v2)),
                     _ => None
