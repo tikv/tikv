@@ -1,9 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::create_dir_all;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use futures::future::{self, TryFutureExt};
@@ -13,14 +12,11 @@ use rusoto_core::request::HttpClient;
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 use tokio::runtime::{Builder, Runtime};
 
-use super::{metadata::MetadataKey, Backend, MemBackend, PlainTextBackend, WithMetadata};
+use super::{metadata::MetadataKey, Backend, MemBackend};
 use crate::config::KmsConfig;
 use crate::crypter::Iv;
-use crate::encrypted_file::EncryptedFile;
 use crate::{Error, Result};
 use rusoto_util::new_client;
-
-const KMS_ENCRYPTION_KEY_NAME: &str = "kms_encryption.key";
 
 // Always use AES 256 for encrypting master key.
 const KMS_DATA_KEY_METHOD: EncryptionMethod = EncryptionMethod::Aes256Ctr;
@@ -30,6 +26,7 @@ const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
 struct AwsKms {
     client: KmsClient,
     current_key_id: String,
+    runtime: Runtime,
     // The current implementation (rosoto 0.43.0 + hyper 0.13.3) is not `Send`
     // in practical. See more https://github.com/tikv/tikv/issues/7236.
     // FIXME: remove it.
@@ -37,21 +34,26 @@ struct AwsKms {
 }
 
 impl AwsKms {
-    fn new(config: KmsConfig) -> Result<AwsKms> {
-        let http_dispatcher = HttpClient::new().unwrap();
-
-        AwsKms::with_request_dispatcher(config, http_dispatcher)
-    }
-
-    fn with_request_dispatcher<D>(config: KmsConfig, dispatcher: D) -> Result<AwsKms>
+    fn with_request_dispatcher<D>(config: &KmsConfig, dispatcher: D) -> Result<AwsKms>
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
-        Self::check_config(&config)?;
+        Self::check_config(config)?;
+
+        // Create and run the client in the same thread.
         let client = new_client!(KmsClient, config, dispatcher);
+        // Basic scheduler executes futures in the current thread.
+        let runtime = Builder::new()
+            .basic_scheduler()
+            .thread_name("kms-runtime")
+            .core_threads(1)
+            .enable_all()
+            .build()?;
+
         Ok(AwsKms {
             client,
-            current_key_id: config.key_id,
+            current_key_id: config.key_id.clone(),
+            runtime,
             _not_send: PhantomData::default(),
         })
     }
@@ -65,7 +67,7 @@ impl AwsKms {
         Ok(())
     }
 
-    fn decrypt(&self, runtime: &mut Runtime, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
             ciphertext_blob: ciphertext.to_vec().into(),
             // Use default algorithm SYMMETRIC_DEFAULT.
@@ -76,8 +78,10 @@ impl AwsKms {
             encryption_context: None,
             grant_tokens: None,
         };
+        let runtime = &mut self.runtime;
+        let client = &self.client;
         let decrypt_response = retry(runtime, || {
-            self.client
+            client
                 .decrypt(decrypt_request.clone())
                 .map_err(|e| Error::Other(e.into()))
         });
@@ -85,7 +89,7 @@ impl AwsKms {
         Ok(plaintext)
     }
 
-    fn generate_data_key(&self, runtime: &mut Runtime) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn generate_data_key(&mut self) -> Result<(Vec<u8>, Vec<u8>)> {
         let generate_request = GenerateDataKeyRequest {
             encryption_context: None,
             grant_tokens: None,
@@ -93,8 +97,10 @@ impl AwsKms {
             key_spec: Some(AWS_KMS_DATA_KEY_SPEC.to_owned()),
             number_of_bytes: None,
         };
+        let runtime = &mut self.runtime;
+        let client = &self.client;
         let generate_response = retry(runtime, || {
-            self.client
+            client
                 .generate_data_key(generate_request.clone())
                 .map_err(|e| Error::Other(e.into()))
         });
@@ -130,63 +136,124 @@ where
     panic!("kms request failed in {} times", retry_limit)
 }
 
-pub struct KmsBackend {
-    mem_backend: MemBackend,
+struct Inner {
+    config: KmsConfig,
+    backend: Option<MemBackend>,
+    cached_ciphertext_key: Vec<u8>,
 }
 
-impl KmsBackend {
-    pub fn new(config: KmsConfig, base: &str) -> Result<KmsBackend> {
-        let kms = AwsKms::new(config)?;
-        KmsBackend::with_kms(kms, base)
+impl Inner {
+    fn maybe_update_backend(&mut self, ciphertext_key: Option<&Vec<u8>>) -> Result<()> {
+        let http_dispatcher = HttpClient::new().unwrap();
+        self.maybe_update_backend_with(ciphertext_key, http_dispatcher)
     }
 
-    fn with_kms(kms: AwsKms, base: &str) -> Result<KmsBackend> {
-        let vendor_backend = WithMetadata {
-            // For now, we only support AWS.
-            metadata: vec![(MetadataKey::KmsVendor, AWS_KMS_VENDOR_NAME.to_vec())],
-            // ciphertext_key has already be ecrypted by KMS.
-            backend: PlainTextBackend::default(),
-        };
+    fn maybe_update_backend_with<D>(
+        &mut self,
+        ciphertext_key: Option<&Vec<u8>>,
+        dispatcher: D,
+    ) -> Result<()>
+    where
+        D: DispatchSignedRequest + Send + Sync + 'static,
+    {
+        if self.backend.is_some()
+            && ciphertext_key.map_or(true, |key| *key == self.cached_ciphertext_key)
+        {
+            return Ok(());
+        }
 
-        // Create base dir if it is missing.
-        create_dir_all(base)?;
-
-        // Read the master key or generate a new master key.
-        let key_path = Path::new(base).join(KMS_ENCRYPTION_KEY_NAME);
-
-        let mut runtime = Builder::new()
-            .basic_scheduler()
-            .thread_name("kms-pool")
-            .core_threads(1)
-            .enable_all()
-            .build()?;
-
-        let key = if !key_path.exists() {
-            let (ciphertext_key, plaintext_key) = kms.generate_data_key(&mut runtime)?;
-            let f = EncryptedFile::new(Path::new(base), KMS_ENCRYPTION_KEY_NAME);
-            f.write(&ciphertext_key, &vendor_backend)?;
-            plaintext_key
+        let mut kms = AwsKms::with_request_dispatcher(&self.config, dispatcher)?;
+        let key = if let Some(ciphertext_key) = ciphertext_key {
+            self.cached_ciphertext_key = ciphertext_key.to_owned();
+            kms.decrypt(ciphertext_key)?
         } else {
-            let f = EncryptedFile::new(Path::new(base), KMS_ENCRYPTION_KEY_NAME);
-            let ciphertext_key = f.read(&vendor_backend)?;
-            kms.decrypt(&mut runtime, &ciphertext_key)?
+            let (ciphertext_key, plaintext_key) = kms.generate_data_key()?;
+            self.cached_ciphertext_key = ciphertext_key;
+            plaintext_key
         };
 
         // Always use AES 256 for encrypting master key.
         let method = KMS_DATA_KEY_METHOD;
-        let mem_backend = MemBackend::new(method, key)?;
+        self.backend = Some(MemBackend::new(method, key)?);
+        Ok(())
+    }
+}
 
-        Ok(KmsBackend { mem_backend })
+pub struct KmsBackend {
+    inner: Mutex<Inner>,
+}
+
+impl KmsBackend {
+    pub fn new(config: KmsConfig) -> Result<KmsBackend> {
+        let inner = Inner {
+            backend: None,
+            config,
+            cached_ciphertext_key: Vec::new(),
+        };
+
+        Ok(KmsBackend {
+            inner: Mutex::new(inner),
+        })
+    }
+
+    fn encrypt_content(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.maybe_update_backend(None)?;
+        let mut content = inner
+            .backend
+            .as_ref()
+            .unwrap()
+            .encrypt_content(plaintext, iv)?;
+
+        // Set extra metadata for KmsBackend.
+        // For now, we only support AWS.
+        content.metadata.insert(
+            MetadataKey::KmsVendor.as_str().to_owned(),
+            AWS_KMS_VENDOR_NAME.to_vec(),
+        );
+        if inner.cached_ciphertext_key.is_empty() {
+            return Err(Error::Other("KMS ciphertext key not found".into()));
+        }
+        content.metadata.insert(
+            MetadataKey::KmsCiphertextKey.as_str().to_owned(),
+            inner.cached_ciphertext_key.clone(),
+        );
+
+        Ok(content)
+    }
+
+    fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
+        match content.metadata.get(MetadataKey::KmsVendor.as_str()) {
+            // For now, we only support AWS.
+            Some(val) if val.as_slice() == AWS_KMS_VENDOR_NAME => (),
+            other => {
+                return Err(Error::Other(
+                    format!(
+                        "KMS vendor mismatch expect {:?} got {:?}",
+                        AWS_KMS_VENDOR_NAME, other
+                    )
+                    .into(),
+                ))
+            }
+        }
+
+        let mut inner = self.inner.lock().unwrap();
+        let ciphertext_key = content.metadata.get(MetadataKey::KmsCiphertextKey.as_str());
+        if ciphertext_key.is_none() {
+            return Err(Error::Other("KMS ciphertext key not found".into()));
+        }
+        inner.maybe_update_backend(ciphertext_key)?;
+        inner.backend.as_ref().unwrap().decrypt_content(content)
     }
 }
 
 impl Backend for KmsBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
-        self.mem_backend.encrypt_content(plaintext, Iv::new())
+        self.encrypt_content(plaintext, Iv::new())
     }
 
     fn decrypt(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
-        self.mem_backend.decrypt_content(content)
+        self.decrypt_content(content)
     }
 
     fn is_secure(&self) -> bool {
@@ -197,18 +264,12 @@ impl Backend for KmsBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex::FromHex;
     use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     use rusoto_mock::MockRequestDispatcher;
 
     #[test]
     fn test_aws_kms() {
-        let mut runtime = Builder::new()
-            .basic_scheduler()
-            .core_threads(1)
-            .enable_all()
-            .build()
-            .unwrap();
-
         let magic_contents = b"5678";
         let config = KmsConfig {
             key_id: "test_key_id".to_string(),
@@ -224,8 +285,8 @@ mod tests {
                 key_id: Some("test_key_id".to_string()),
                 plaintext: Some(magic_contents.as_ref().into()),
             });
-        let aws_kms = AwsKms::with_request_dispatcher(config.clone(), dispatcher).unwrap();
-        let (ciphertext, plaintext) = aws_kms.generate_data_key(&mut runtime).unwrap();
+        let mut aws_kms = AwsKms::with_request_dispatcher(&config.clone(), dispatcher).unwrap();
+        let (ciphertext, plaintext) = aws_kms.generate_data_key().unwrap();
         assert_eq!(ciphertext, magic_contents);
         assert_eq!(plaintext, magic_contents);
 
@@ -234,18 +295,13 @@ mod tests {
             key_id: Some("test_key_id".to_string()),
             encryption_algorithm: None,
         });
-        let aws_kms = AwsKms::with_request_dispatcher(config, dispatcher).unwrap();
-        let plaintext = aws_kms
-            .decrypt(&mut runtime, ciphertext.as_slice())
-            .unwrap();
+        let mut aws_kms = AwsKms::with_request_dispatcher(&config, dispatcher).unwrap();
+        let plaintext = aws_kms.decrypt(ciphertext.as_slice()).unwrap();
         assert_eq!(plaintext, magic_contents);
     }
 
     #[test]
-    fn test_kms_backend() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base_dir = tmp.path().as_os_str().to_str().unwrap();
-
+    fn test_update_backend() {
         let config = KmsConfig {
             key_id: "test_key_id".to_string(),
             region: "ap-southeast-2".to_string(),
@@ -255,39 +311,106 @@ mod tests {
         };
 
         let plaintext_key = vec![5u8; 32]; // 32 * 8 = 256 bits
-        let magic_contents = b"5678";
+        let ciphertext_key = vec![7u8; 32]; // 32 * 8 = 256 bits
 
+        let mut inner = Inner {
+            config,
+            backend: None,
+            cached_ciphertext_key: vec![],
+        };
+
+        // Update mem backend
+        let dispatcher =
+            MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
+                ciphertext_blob: Some(ciphertext_key.to_vec().into()),
+                key_id: Some("test_key_id".to_string()),
+                plaintext: Some(plaintext_key.to_vec().into()),
+            });
+        inner.maybe_update_backend_with(None, dispatcher).unwrap();
+        assert!(inner.backend.is_some());
+        assert_eq!(inner.cached_ciphertext_key, ciphertext_key.to_vec());
+
+        // Do not update mem backend if ciphertext_key is None.
         let dispatcher =
             MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
                 ciphertext_blob: Some(plaintext_key.to_vec().into()),
                 key_id: Some("test_key_id".to_string()),
                 plaintext: Some(plaintext_key.to_vec().into()),
             });
-        let aws_kms = AwsKms::with_request_dispatcher(config.clone(), dispatcher).unwrap();
-        let backend = KmsBackend::with_kms(aws_kms, base_dir).unwrap();
-        let ciphertext = backend.encrypt(magic_contents).unwrap();
-        assert_ne!(ciphertext.get_content(), magic_contents);
+        inner.maybe_update_backend_with(None, dispatcher).unwrap();
+        assert_eq!(inner.cached_ciphertext_key, ciphertext_key.to_vec());
 
-        let key_meta = tmp.path().join(KMS_ENCRYPTION_KEY_NAME).metadata().unwrap();
+        // Do not update mem backend if cached_ciphertext_key equals to ciphertext_key.
+        let dispatcher =
+            MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
+                ciphertext_blob: Some(plaintext_key.to_vec().into()),
+                key_id: Some("test_key_id".to_string()),
+                plaintext: Some(plaintext_key.to_vec().into()),
+            });
+        inner
+            .maybe_update_backend_with(Some(&ciphertext_key.to_vec()), dispatcher)
+            .unwrap();
+        assert_eq!(inner.cached_ciphertext_key, ciphertext_key.to_vec());
 
-        // Reopen kms backup.
-        let dispatcher = MockRequestDispatcher::with_status(200).with_json_body(DecryptResponse {
-            plaintext: Some(plaintext_key.into()),
-            key_id: Some("test_key_id".to_string()),
-            encryption_algorithm: None,
-        });
-        let aws_kms = AwsKms::with_request_dispatcher(config, dispatcher).unwrap();
-        let backend = KmsBackend::with_kms(aws_kms, base_dir).unwrap();
-        let plaintext = backend.decrypt(&ciphertext).unwrap();
-        assert_eq!(plaintext, magic_contents);
+        // Update mem backend if cached_ciphertext_key does not equal to ciphertext_key.
+        let dispatcher =
+            MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
+                ciphertext_blob: Some(plaintext_key.to_vec().into()),
+                key_id: Some("test_key_id".to_string()),
+                plaintext: Some(plaintext_key.to_vec().into()),
+            });
+        inner
+            .maybe_update_backend_with(Some(&plaintext_key.to_vec()), dispatcher)
+            .unwrap();
+        assert!(inner.backend.is_some());
+        assert_eq!(inner.cached_ciphertext_key, plaintext_key.to_vec());
+    }
 
-        // Make sure key file does not change on reopen.
-        let key_meta1 = tmp.path().join(KMS_ENCRYPTION_KEY_NAME).metadata().unwrap();
-        if let Ok(created) = key_meta.created() {
-            assert_eq!(created, key_meta1.created().unwrap());
-        }
-        if let Ok(modified) = key_meta.modified() {
-            assert_eq!(modified, key_meta1.modified().unwrap());
-        }
+    #[test]
+    fn test_kms_backend() {
+        // See more https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf
+        let pt = Vec::from_hex(
+            "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411\
+                  e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710",
+        )
+        .unwrap();
+        let ct = Vec::from_hex(
+            "601ec313775789a5b7a7f504bbf3d228f443e3ca4d62b59aca84e990cacaf5c52b0930daa23de94c\
+                  e87017ba2d84988ddfc9c58db67aada613c2dd08457941a6",
+        )
+        .unwrap();
+        let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
+            .unwrap();
+        let iv = Vec::from_hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff").unwrap();
+
+        let backend = MemBackend::new(EncryptionMethod::Aes256Ctr, key.clone()).unwrap();
+
+        let inner = Inner {
+            config: KmsConfig::default(),
+            backend: Some(backend),
+            cached_ciphertext_key: key,
+        };
+        let backend = KmsBackend {
+            inner: Mutex::new(inner),
+        };
+        let iv = Iv::from(iv.as_slice());
+        let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
+        assert_eq!(encrypted_content.get_content(), ct.as_slice());
+        let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
+        assert_eq!(plaintext, pt);
+
+        let mut vendor_not_found = encrypted_content.clone();
+        vendor_not_found
+            .metadata
+            .remove(MetadataKey::KmsVendor.as_str());
+        backend.decrypt_content(&vendor_not_found).unwrap_err();
+
+        let mut ciphertext_key_not_found = encrypted_content.clone();
+        ciphertext_key_not_found
+            .metadata
+            .remove(MetadataKey::KmsCiphertextKey.as_str());
+        backend
+            .decrypt_content(&ciphertext_key_not_found)
+            .unwrap_err();
     }
 }

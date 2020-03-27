@@ -35,9 +35,6 @@ pub struct Opt {
     /// Credential file path. For KMS, use ~/.aws/credentials.
     #[structopt(short, long)]
     credential_file: Option<String>,
-    /// Encryption base dir where master key is saved.
-    #[structopt(short = "d", long)]
-    key_dir: String,
 
     #[structopt(subcommand)]
     command: Command,
@@ -67,7 +64,6 @@ struct KmsCommand {
 fn create_kms_backend(
     cmd: &KmsCommand,
     credential_file: Option<&String>,
-    key_dir: &str,
 ) -> Result<Arc<dyn Backend>> {
     let mut config = KmsConfig::default();
 
@@ -94,7 +90,7 @@ fn create_kms_backend(
         config.endpoint = endpoint.to_string();
     }
     config.key_id = cmd.key_id.to_owned();
-    Ok(Arc::new(KmsBackend::new(config, key_dir)?))
+    Ok(Arc::new(KmsBackend::new(config)?))
 }
 
 #[allow(irrefutable_let_patterns)]
@@ -107,7 +103,7 @@ fn process() -> Result<()> {
 
     let credential_file = opt.credential_file.as_ref();
     let backend = if let Command::Kms(ref cmd) = opt.command {
-        create_kms_backend(cmd, credential_file, &opt.key_dir)?
+        create_kms_backend(cmd, credential_file)?
     } else {
         unreachable!()
     };
