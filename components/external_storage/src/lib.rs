@@ -128,7 +128,7 @@ pub fn make_s3_backend(config: S3) -> StorageBackend {
 
 /// An abstraction of an external storage.
 // TODO: these should all be returning a future (i.e. async fn).
-pub trait ExternalStorage: Sync + Send + 'static {
+pub trait ExternalStorage: 'static {
     /// Write all contents of the read to the given path.
     fn write(
         &self,
