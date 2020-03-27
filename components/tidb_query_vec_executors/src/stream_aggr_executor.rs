@@ -69,7 +69,6 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
         assert!(!group_by_definitions.is_empty());
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
-            // Works for both vector and scalar. No need to check as other aggregation executor.
         }
 
         let aggr_definitions = descriptor.get_agg_func();

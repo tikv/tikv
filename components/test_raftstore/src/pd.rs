@@ -10,7 +10,6 @@ use std::{cmp, thread};
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
-use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use tokio_timer::timer::Handle;
 
 use kvproto::configpb;
@@ -686,7 +685,6 @@ pub struct TestPdClient {
     timer: Handle,
     is_incompatible: bool,
     tso: AtomicUsize,
-    poller: CpuPool,
     trigger_tso_failure: AtomicBool,
 }
 
@@ -698,7 +696,6 @@ impl TestPdClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             is_incompatible,
             tso: AtomicUsize::new(1),
-            poller: CpuPoolBuilder::new().pool_size(1).create(),
             trigger_tso_failure: AtomicBool::new(false),
         }
     }
@@ -1265,10 +1262,6 @@ impl PdClient for TestPdClient {
         }
         let tso = self.tso.fetch_add(1, Ordering::SeqCst);
         Box::new(futures::future::result(Ok(TimeStamp::new(tso as _))))
-    }
-
-    fn spawn(&self, fut: PdFuture<()>) {
-        self.poller.spawn(fut).forget();
     }
 }
 

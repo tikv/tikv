@@ -79,9 +79,6 @@ impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         assert!(!group_by_definitions.is_empty());
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
-            if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-                return Err(other_err!("Group by expression is not a column"));
-            }
         }
 
         let aggr_definitions = descriptor.get_agg_func();
@@ -174,6 +171,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             group_key_offsets,
             states_offset_each_logical_row: Vec::with_capacity(crate::runner::BATCH_MAX_SIZE),
             group_by_results_unsafe: Vec::with_capacity(group_by_col_len),
+            cached_encoded_result: vec![None; group_by_col_len],
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -228,6 +226,9 @@ pub struct SlowHashAggregationImpl {
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
     group_by_results_unsafe: Vec<RpnStackNode<'static>>,
+
+    /// Cached encoded results for calculated Scalar results
+    cached_encoded_result: Vec<Option<Vec<u8>>>,
 }
 
 unsafe impl Send for SlowHashAggregationImpl {}
@@ -285,7 +286,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 
             // Always encode group keys to the buffer first
             // we'll then remove them if the group already exists
-            for group_by_result in &self.group_by_results_unsafe {
+            for (i, group_by_result) in self.group_by_results_unsafe.iter().enumerate() {
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
                         value.as_ref().encode_sort_key(
@@ -296,8 +297,26 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         )?;
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
-                    // we have checked that group by cannot be a scalar
-                    _ => unreachable!(),
+                    RpnStackNode::Scalar { value, field_type } => {
+                        match self.cached_encoded_result[i].as_ref() {
+                            Some(b) => {
+                                self.group_key_buffer.extend_from_slice(b);
+                            }
+                            None => {
+                                let mut cache_result = vec![];
+                                value.as_scalar_value_ref().encode_sort_key(
+                                    field_type,
+                                    context,
+                                    &mut cache_result,
+                                )?;
+
+                                self.group_key_buffer.extend_from_slice(&cache_result);
+                                self.cached_encoded_result[i] = Some(cache_result);
+                            }
+                        }
+
+                        self.group_key_offsets.push(self.group_key_buffer.len());
+                    }
                 }
             }
 
@@ -306,7 +325,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 
             // Encode bytes column in original form to extra group by columns, which is to be returned
             // as group by results
-            for col_index in &self.extra_group_by_col_index {
+            for (i, col_index) in self.extra_group_by_col_index.iter().enumerate() {
                 let group_by_result = &self.group_by_results_unsafe[*col_index];
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
@@ -319,8 +338,29 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         )?;
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
-                    // we have checked that group by cannot be a scalar
-                    _ => unreachable!(),
+                    RpnStackNode::Scalar { value, field_type } => {
+                        debug_assert!(value.eval_type() == EvalType::Bytes);
+
+                        let i = i + self.group_by_exps.len();
+                        match self.cached_encoded_result[i].as_ref() {
+                            Some(b) => {
+                                self.group_key_buffer.extend_from_slice(b);
+                            }
+                            None => {
+                                let mut cache_result = vec![];
+                                value.as_scalar_value_ref().encode(
+                                    field_type,
+                                    context,
+                                    &mut cache_result,
+                                )?;
+
+                                self.group_key_buffer.extend_from_slice(&cache_result);
+                                self.cached_encoded_result[i] = Some(cache_result);
+                            }
+                        }
+
+                        self.group_key_offsets.push(self.group_key_buffer.len());
+                    }
                 }
             }
 
@@ -479,11 +519,15 @@ mod tests {
         // - AVG(col_0 + 5.0)
         // And group by:
         // - col_4
+        // - 1 (Constant)
         // - col_0 + 1
 
         let group_by_exps = vec![
             RpnExpressionBuilder::new_for_test()
                 .push_column_ref_for_test(4)
+                .build_for_test(),
+            RpnExpressionBuilder::new_for_test()
+                .push_constant_for_test(1)
                 .build_for_test(),
             RpnExpressionBuilder::new_for_test()
                 .push_column_ref_for_test(0)
@@ -525,48 +569,79 @@ mod tests {
 
         let mut r = exec.next_batch(1, Span::inactive());
         // col_4 (sort_key),    col_0 + 1 can result in:
-        // aaa,                 8
-        // aa,                  NULL
-        // ááá,                 2.5
         // NULL,                NULL
-        // Thus there are 4 groups.
+        // aa,                  NULL
+        // aaa,                 8
+        // ááá,                 2.5
         assert_eq!(&r.logical_rows, &[0, 1, 2, 3]);
         assert_eq!(r.physical_columns.rows_len(), 4);
-        assert_eq!(r.physical_columns.columns_len(), 5); // 3 result column, 2 group by column
+        assert_eq!(r.physical_columns.columns_len(), 6); // 3 result column, 3 group by column
 
         let mut ctx = EvalContext::default();
-        // Let's check the two group by column first.
+        // Let's check the three group by column first.
         r.physical_columns[3]
             .ensure_all_decoded_for_test(&mut ctx, &exec.schema()[3])
             .unwrap();
+        r.physical_columns[4]
+            .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[4])
+            .unwrap();
+        r.physical_columns[5]
+            .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[5])
+            .unwrap();
+
+        // The row order is not defined. Let's sort it by the group by column before asserting.
+        let mut sort_column: Vec<(usize, _)> = r.physical_columns[3]
+            .decoded()
+            .as_bytes_slice()
+            .iter()
+            .enumerate()
+            .collect();
+        sort_column.sort_by(|a, b| a.1.cmp(&b.1));
+
+        // Use the order of the sorted column to sort other columns
+        let ordered_column: Vec<_> = sort_column
+            .iter()
+            .map(|(idx, _)| r.physical_columns[3].decoded().as_bytes_slice()[*idx].clone())
+            .collect();
         assert_eq!(
-            r.physical_columns[3].decoded().as_bytes_slice(),
+            &ordered_column,
             &[
-                Some("aaa".as_bytes().to_vec()),
-                Some("aa".as_bytes().to_vec()),
-                Some("ááá".as_bytes().to_vec()),
                 None,
+                Some(b"aa".to_vec()),
+                Some(b"aaa".to_vec()),
+                Some("ááá".as_bytes().to_vec())
             ]
         );
-        r.physical_columns[4]
-            .ensure_all_decoded_for_test(&mut ctx, &exec.schema()[4])
-            .unwrap();
         assert_eq!(
-            r.physical_columns[4].decoded().as_real_slice(),
-            &[Real::new(8.0).ok(), None, Real::new(2.5).ok(), None]
+            r.physical_columns[4].decoded().as_int_slice(),
+            &[Some(1), Some(1), Some(1), Some(1)]
+        );
+        let ordered_column: Vec<_> = sort_column
+            .iter()
+            .map(|(idx, _)| r.physical_columns[5].decoded().as_real_slice()[*idx])
+            .collect();
+        assert_eq!(
+            &ordered_column,
+            &[None, None, Real::new(8.0).ok(), Real::new(2.5).ok()]
         );
 
+        let ordered_column: Vec<_> = sort_column
+            .iter()
+            .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
+            .collect();
+        assert_eq!(&ordered_column, &[Some(1), Some(2), Some(1), Some(1)]);
+        let ordered_column: Vec<_> = sort_column
+            .iter()
+            .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
+            .collect();
+        assert_eq!(&ordered_column, &[Some(0), Some(0), Some(1), Some(1)]);
+        let ordered_column: Vec<_> = sort_column
+            .iter()
+            .map(|(idx, _)| r.physical_columns[2].decoded().as_real_slice()[*idx])
+            .collect();
         assert_eq!(
-            r.physical_columns[0].decoded().as_int_slice(),
-            &[Some(1), Some(2), Some(1), Some(1)]
-        );
-        assert_eq!(
-            r.physical_columns[1].decoded().as_int_slice(),
-            &[Some(1), Some(0), Some(1), Some(0)]
-        );
-        assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
-            &[Real::new(12.0).ok(), None, Real::new(6.5).ok(), None]
+            &ordered_column,
+            &[None, None, Real::new(12.0).ok(), Real::new(6.5).ok()]
         );
     }
 }

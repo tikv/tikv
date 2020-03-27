@@ -10,7 +10,7 @@
 
 use crate::{setup::*, signal_handler};
 use engine::{rocks, rocks::util::security::encrypted_env_from_cipher_file};
-use engine_rocks::{metrics_flusher::*, Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -36,7 +36,6 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::JoinHandle,
-    time::Duration,
 };
 use tikv::{
     config::{CfgError, ConfigController, ConfigHandler, DBConfigManger, DBType, TiKvConfig},
@@ -56,6 +55,7 @@ use tikv::{
     storage,
 };
 use tikv_util::config::VersionTrack;
+use tikv_util::metrics::ensure_updater;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
@@ -96,6 +96,8 @@ pub fn run_tikv(config: TiKvConfig) {
     let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services(gc_worker);
     tikv.init_metrics_flusher();
+
+    ensure_updater();
 
     tikv.run_server(server_config);
 
@@ -443,9 +445,7 @@ impl TiKVServer {
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
-        let is_unified = self.config.readpool.is_unified();
-
-        let unified_read_pool = if is_unified {
+        let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
@@ -455,7 +455,7 @@ impl TiKVServer {
             None
         };
 
-        let storage_read_pool_handle = if is_unified {
+        let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let storage_read_pools = ReadPool::from(storage::build_read_pool(
@@ -492,7 +492,7 @@ impl TiKVServer {
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.
-        let cop_read_pool_handle = if is_unified {
+        let cop_read_pool_handle = if self.config.readpool.coprocessor.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
@@ -733,14 +733,11 @@ impl TiKVServer {
     }
 
     fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(RocksMetricsFlusher::new(
-            KvEngines::new(
-                RocksEngine::from_db(self.engines.as_ref().unwrap().engines.kv.clone()),
-                RocksEngine::from_db(self.engines.as_ref().unwrap().engines.raft.clone()),
-                self.engines.as_ref().unwrap().engines.shared_block_cache,
-            ),
-            Duration::from_millis(DEFAULT_FLUSHER_INTERVAL),
-        ));
+        let mut metrics_flusher = Box::new(MetricsFlusher::new(KvEngines::new(
+            RocksEngine::from_db(self.engines.as_ref().unwrap().engines.kv.clone()),
+            RocksEngine::from_db(self.engines.as_ref().unwrap().engines.raft.clone()),
+            self.engines.as_ref().unwrap().engines.shared_block_cache,
+        )));
 
         // Start metrics flusher
         if let Err(e) = metrics_flusher.start() {
@@ -878,7 +875,7 @@ impl Stop for StatusServer {
     }
 }
 
-impl Stop for RocksMetricsFlusher {
+impl Stop for MetricsFlusher<RocksEngine, RocksEngine> {
     fn stop(mut self: Box<Self>) {
         (*self).stop()
     }
