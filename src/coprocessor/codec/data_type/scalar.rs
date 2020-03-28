@@ -3,6 +3,8 @@
 use std::cmp::Ordering;
 
 use cop_datatype::EvalType;
+use cop_datatype::FieldTypeAccessor;
+use tipb::expression::FieldType;
 
 use super::*;
 
@@ -131,6 +133,34 @@ impl<'a> ScalarValueRef<'a> {
                 ScalarValueRef::TT(_) => EvalType::TT,
             }
         }
+    }
+
+    #[inline]
+    pub fn cmp_sort_key(&self, other: &ScalarValueRef<'_>, field_type: &FieldType) -> Ordering {
+        let ord = match (self, other) {
+            (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => Some(cmp_int(v1, v2, field_type)),
+            _ => None,
+        };
+
+        ord.or_else(|| {
+            match_template! {
+                TT = [Real, Bytes, Decimal, DateTime, Duration, Json],
+                match (self, other) {
+                    (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => Some(v1.cmp(v2)),
+                    _ => None
+                }
+            }
+        })
+        .expect("Cannot compare two ScalarValueRef in different type")
+    }
+}
+
+#[inline]
+fn cmp_int(lhs: &Option<super::Int>, rhs: &Option<super::Int>, field_type: &FieldType) -> Ordering {
+    if field_type.is_unsigned() {
+        lhs.map(|i| i as u64).cmp(&rhs.map(|i| i as u64))
+    } else {
+        lhs.cmp(rhs)
     }
 }
 
