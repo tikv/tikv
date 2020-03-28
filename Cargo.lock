@@ -207,6 +207,7 @@ dependencies = [
  "external_storage",
  "failure",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-executor",
  "futures-util",
  "grpcio",
@@ -229,7 +230,6 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
- "tokio-threadpool",
  "txn_types",
  "uuid",
 ]
@@ -360,9 +360,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.2.0"
+version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f359dc14ff8911330a51ef78022d376f25ed00248912803b58f00cb1c27f742"
+checksum = "12ae9db68ad7fac5fe51304d20f016c911539251075a214f8e663babefa35187"
 
 [[package]]
 name = "byte-tools"
@@ -1091,6 +1091,8 @@ dependencies = [
  "hex 0.4.0",
  "protobuf",
  "quick-error",
+ "slog",
+ "slog-global",
  "tikv_alloc",
  "tikv_util",
 ]
@@ -4148,6 +4150,18 @@ dependencies = [
  "tikv_util",
  "tipb",
  "txn_types",
+]
+
+[[package]]
+name = "test_engine_traits"
+version = "0.1.0"
+dependencies = [
+ "engine_rocks",
+ "engine_traits",
+ "rocksdb",
+ "slog",
+ "slog-global",
+ "tempfile",
 ]
 
 [[package]]
