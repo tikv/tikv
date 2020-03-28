@@ -44,7 +44,7 @@ impl Resolver {
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
-        info!(
+        debug!(
             "track lock {}@{}, region {}",
             hex::encode_upper(key.clone()),
             start_ts,
@@ -59,7 +59,7 @@ impl Resolver {
         commit_ts: Option<TimeStamp>,
         key: Vec<u8>,
     ) {
-        info!(
+        debug!(
             "untrack lock {}@{}, commit@{}, region {}",
             hex::encode_upper(key.clone()),
             start_ts,
