@@ -8,6 +8,7 @@ use std::result;
 use futures::sync::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use kvproto::errorpb;
+use kvproto::import_sstpb;
 use kvproto::metapb::*;
 use uuid::{ParseError, Uuid};
 
@@ -166,3 +167,11 @@ impl From<errorpb::Error> for Error {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl From<Error> for import_sstpb::Error {
+    fn from(e: Error) -> import_sstpb::Error {
+        let mut err = import_sstpb::Error::default();
+        err.set_message(format!("{}", e));
+        err
+    }
+}

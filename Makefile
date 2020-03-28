@@ -60,14 +60,19 @@ pre-clippy: unset-override
 	@rustup component add clippy
 
 clippy: pre-clippy
-	@cargo clippy --all --all-targets -- \
+	@cargo clippy --all --exclude fuzz \
+		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer -- \
+		-A clippy::needless_return -A clippy::redundant_clone -A clippy::try_err -A clippy::suspicious_map \
+		-A clippy::comparison_chain -A clippy::inefficient_to_string -A clippy::inherent_to_string \
+		-A clippy::inherent_to_string_shadow_display -A clippy::uninit_assumed_init \
+		-A clippy::double_must_use -A clippy::unnecessary_unwrap -A clippy::missing_safety_doc \
 		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
 		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
 		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
 		-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
 		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
-		-A clippy::needless_range_loop -D rust-2018-idioms -A clippy::redundant_closure \
-		-A clippy::match_wild_err_arm -A clippy::blacklisted_name
+		-A clippy::needless_range_loop -A clippy::redundant_closure \
+		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -D rust-2018-idioms
 
 dev: format clippy
 	@env FAIL_POINT=1 make test

@@ -193,6 +193,12 @@ pub trait FieldTypeAccessor {
     fn is_non_binary_string_like(&self) -> bool {
         self.collation() != Collation::Binary && self.is_string_like()
     }
+
+    /// Whether the flag contains `FieldTypeFlag::UNSIGNED`
+    #[inline]
+    fn is_unsigned(&self) -> bool {
+        self.flag().contains(FieldTypeFlag::UNSIGNED)
+    }
 }
 
 impl FieldTypeAccessor for FieldType {
