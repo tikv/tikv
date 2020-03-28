@@ -777,9 +777,7 @@ impl PeerStorage {
                 "truncated_index" => self.truncated_index(),
                 "request_index" => request_index,
             );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
-                .with_label_values(&["stale"])
-                .inc();
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.stale.inc();
             return false;
         }
 
@@ -791,9 +789,7 @@ impl PeerStorage {
                 "peer_id" => self.peer_id,
                 "err" => ?e,
             );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
-                .with_label_values(&["decode"])
-                .inc();
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.decode.inc();
             return false;
         }
         let snap_epoch = snap_data.get_region().get_region_epoch();
@@ -806,9 +802,7 @@ impl PeerStorage {
                 "snap_epoch" => ?snap_epoch,
                 "latest_epoch" => ?latest_epoch,
             );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
-                .with_label_values(&["epoch"])
-                .inc();
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.epoch.inc();
             return false;
         }
 

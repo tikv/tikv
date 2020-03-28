@@ -69,6 +69,12 @@ make_auto_flush_static_metric! {
         applying_snap,
     }
 
+    pub label_enum SnapValidationType {
+        stale,
+        decode,
+        epoch,
+    }
+
     pub struct ProposalVec: LocalIntCounter {
         "type" => ProposalType,
     }
@@ -88,6 +94,10 @@ make_auto_flush_static_metric! {
 
     pub struct RaftDropedVec : LocalIntCounter {
         "type" => RaftDroppedMessage,
+    }
+
+    pub struct SnapValidVec : LocalIntCounter {
+        "type" => SnapValidationType
     }
 }
 
@@ -172,12 +182,14 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: IntCounterVec =
+    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_snapshot_validation_failure_total",
             "Total number of raftstore snapshot validation failure.",
             &["type"]
         ).unwrap();
+    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: SnapValidVec =
+        auto_flush_from!(STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER_VEC, SnapValidVec);
 
     pub static ref PEER_RAFT_PROCESS_DURATION: HistogramVec =
         register_histogram_vec!(
