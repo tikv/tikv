@@ -1,6 +1,23 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
+use prometheus_static_metric::*;
+
+make_auto_flush_static_metric! {
+    pub label_enum ProposalType {
+        all,
+        local_read,
+        read_index,
+        unsafe_read_index,
+        normal,
+        transfer_leader,
+        conf_change,
+    }
+
+    pub struct ProposalVec: LocalIntCounter {
+        "type" => ProposalType,
+    }
+}
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -9,6 +26,8 @@ lazy_static! {
             "Total number of proposal made.",
             &["type"]
         ).unwrap();
+    pub static ref PEER_PROPOSAL_COUNTER: ProposalVec =
+        auto_flush_from!(PEER_PROPOSAL_COUNTER_VEC, ProposalVec);
 
     pub static ref PEER_ADMIN_CMD_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(

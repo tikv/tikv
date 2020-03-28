@@ -269,44 +269,40 @@ impl RaftProposeMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.all > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["all"])
-                .inc_by(self.all as i64);
+            PEER_PROPOSAL_COUNTER.all.inc_by(self.all as i64);
             self.all = 0;
         }
         if self.local_read > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["local_read"])
+            PEER_PROPOSAL_COUNTER
+                .local_read
                 .inc_by(self.local_read as i64);
             self.local_read = 0;
         }
         if self.read_index > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["read_index"])
+            PEER_PROPOSAL_COUNTER
+                .read_index
                 .inc_by(self.read_index as i64);
             self.read_index = 0;
         }
         if self.unsafe_read_index > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["unsafe_read_index"])
+            PEER_PROPOSAL_COUNTER
+                .unsafe_read_index
                 .inc_by(self.unsafe_read_index as i64);
             self.unsafe_read_index = 0;
         }
         if self.normal > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["normal"])
-                .inc_by(self.normal as i64);
+            PEER_PROPOSAL_COUNTER.normal.inc_by(self.normal as i64);
             self.normal = 0;
         }
         if self.transfer_leader > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["transfer_leader"])
+            PEER_PROPOSAL_COUNTER
+                .transfer_leader
                 .inc_by(self.transfer_leader as i64);
             self.transfer_leader = 0;
         }
         if self.conf_change > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["conf_change"])
+            PEER_PROPOSAL_COUNTER
+                .conf_change
                 .inc_by(self.conf_change as i64);
             self.conf_change = 0;
         }
