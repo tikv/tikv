@@ -388,7 +388,8 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn on_region_ready(&mut self, downstream_id: DownstreamID, resolver: Resolver, region: Region) {
-        if let Some(delegate) = self.capture_regions.get_mut(&region.get_id()) {
+        let region_id = region.get_id();
+        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate
                 .downstreams
                 .iter()
@@ -397,10 +398,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 if let Err(e) = delegate.on_region_ready(resolver, region) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
-                    let deregister = Deregister::Region {
-                        region_id: region.get_id(),
-                        err: e,
-                    };
+                    let deregister = Deregister::Region { region_id, err: e };
                     if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
                         error!("schedule cdc task failed"; "error" => ?e);
                     }

@@ -575,7 +575,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
         other => {
-            info!("skip lock record";
+            debug!("skip lock record";
                 "type" => ?other,
                 "start_ts" => ?lock.ts,
                 "for_update_ts" => ?lock.for_update_ts);
