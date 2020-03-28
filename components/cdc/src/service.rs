@@ -7,12 +7,13 @@ use std::sync::Arc;
 use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
+use raftstore::store::fsm::DownstreamID;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::worker::*;
 
-use crate::delegate::{Downstream, DownstreamID};
+use crate::delegate::Downstream;
 use crate::endpoint::{Deregister, Task};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);

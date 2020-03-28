@@ -1,4 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+use std::thread;
 use std::time::Duration;
 
 use crate::{new_event_feed, TestSuite};
@@ -162,19 +163,11 @@ fn test_observe_executed_cmd() {
     // Commit
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
-    let mut events = receive_event(false);
-    assert_eq!(events.len(), 1);
-    match events.pop().unwrap().event.unwrap() {
-        Event_oneof_event::Entries(entries) => {
-            assert_eq!(entries.entries.len(), 1);
-            assert_eq!(entries.entries[0].get_type(), EventLogType::Commit);
-        }
-        _ => panic!("unknown event"),
-    }
 
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    thread::sleep(Duration::from_millis(200));
     fail::remove(fp);
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1);

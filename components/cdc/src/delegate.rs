@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "prost-codec")]
@@ -22,6 +22,7 @@ use kvproto::cdcpb::{
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::store::fsm::DownstreamID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
@@ -34,18 +35,7 @@ use txn_types::{Key, TimeStamp};
 use crate::metrics::*;
 use crate::{Error, Result};
 
-static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
-
-/// A unique identifier of a Downstream.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct DownstreamID(usize);
-
-impl DownstreamID {
-    pub fn new() -> DownstreamID {
-        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
-    }
-}
 
 #[derive(Clone)]
 pub struct Downstream {
@@ -229,6 +219,12 @@ impl Delegate {
         }
     }
 
+    pub fn has_downstream(&self, downstream_id: DownstreamID) -> bool {
+        self.downstreams
+            .iter()
+            .any(|downstream| downstream.get_id() == downstream_id)
+    }
+
     pub fn mark_failed(&mut self) {
         self.failed = true;
     }
@@ -318,6 +314,10 @@ impl Delegate {
     pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
         if let Some(pending) = self.pending.as_mut() {
             pending.multi_batch.push(batch);
+            return Ok(());
+        }
+        // Stale CmdBatch, drop it sliently.
+        if !self.has_downstream(batch.downstream_id) {
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {

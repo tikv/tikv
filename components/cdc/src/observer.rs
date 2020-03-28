@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use raft::StateRole;
 use raftstore::coprocessor::*;
+use raftstore::store::fsm::DownstreamID;
 use raftstore::Error as RaftStoreError;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
@@ -69,16 +70,18 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl CmdObserver for CdcObserver {
-    fn on_prepare_for_apply(&self, region_id: u64) {
-        self.cmd_batches.borrow_mut().push(CmdBatch::new(region_id));
+    fn on_prepare_for_apply(&self, downstream_id: DownstreamID, region_id: u64) {
+        self.cmd_batches
+            .borrow_mut()
+            .push(CmdBatch::new(downstream_id, region_id));
     }
 
-    fn on_apply_cmd(&self, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, downstream_id: DownstreamID, region_id: u64, cmd: Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(region_id, cmd);
+            .push(downstream_id, region_id, cmd);
     }
 
     fn on_flush_apply(&self) {
