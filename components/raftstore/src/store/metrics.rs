@@ -98,7 +98,22 @@ make_auto_flush_static_metric! {
         hit,
         miss
     }
+
+    pub label_enum RaftInvalidProposal {
+        mismatch_store_id,
+        region_not_found,
+        not_leader,
+        mismatch_peer_id,
+        stale_command,
+        epoch_not_match,
+        read_index_no_leader,
+        region_not_initialized,
+        is_applying_snapshot,
+    }
     //TODO
+    pub struct RaftInvalidProposalCount : LocalIntCounter {
+        "type" => RaftInvalidProposal
+    }
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
@@ -364,6 +379,8 @@ lazy_static! {
             "Total number of raft invalid proposal.",
             &["type"]
         ).unwrap();
+    pub static ref RAFT_INVALID_PROPOSAL_COUNTER: RaftInvalidProposalCount =
+        auto_flush_from!(RAFT_INVALID_PROPOSAL_COUNTER_VEC, RaftInvalidProposalCount);
 
     pub static ref RAFT_EVENT_DURATION: HistogramVec =
         register_histogram_vec!(

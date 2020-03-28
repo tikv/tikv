@@ -337,56 +337,56 @@ impl Default for RaftInvalidProposeMetrics {
 impl RaftInvalidProposeMetrics {
     fn flush(&mut self) {
         if self.mismatch_store_id > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["mismatch_store_id"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .mismatch_store_id
                 .inc_by(self.mismatch_store_id as i64);
             self.mismatch_store_id = 0;
         }
         if self.region_not_found > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["region_not_found"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .region_not_found
                 .inc_by(self.region_not_found as i64);
             self.region_not_found = 0;
         }
         if self.not_leader > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["not_leader"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .not_leader
                 .inc_by(self.not_leader as i64);
             self.not_leader = 0;
         }
         if self.mismatch_peer_id > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["mismatch_peer_id"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .mismatch_peer_id
                 .inc_by(self.mismatch_peer_id as i64);
             self.mismatch_peer_id = 0;
         }
         if self.stale_command > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["stale_command"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .stale_command
                 .inc_by(self.stale_command as i64);
             self.stale_command = 0;
         }
         if self.epoch_not_match > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["epoch_not_match"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .epoch_not_match
                 .inc_by(self.epoch_not_match as i64);
             self.epoch_not_match = 0;
         }
         if self.read_index_no_leader > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["read_index_no_leader"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .read_index_no_leader
                 .inc_by(self.read_index_no_leader as i64);
             self.read_index_no_leader = 0;
         }
         if self.region_not_initialized > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["region_not_initialized"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .region_not_initialized
                 .inc_by(self.region_not_initialized as i64);
             self.region_not_initialized = 0;
         }
         if self.is_applying_snapshot > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["is_applying_snapshot"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .is_applying_snapshot
                 .inc_by(self.is_applying_snapshot as i64);
             self.is_applying_snapshot = 0;
         }
