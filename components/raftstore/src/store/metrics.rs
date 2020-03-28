@@ -75,6 +75,22 @@ make_auto_flush_static_metric! {
         epoch,
     }
 
+    pub label_enum RegionHashType {
+        verify,
+        compute,
+    }
+
+    pub label_enum RegionHashResult {
+        miss,
+        matched,
+        all,
+        failed,
+    }
+    //TODO
+    pub struct RegionHashCounter: LocalIntCounter {
+        "type" => RegionHashType,
+        "result" => RegionHashResult,
+    }
     pub struct ProposalVec: LocalIntCounter {
         "type" => ProposalType,
     }
@@ -213,6 +229,8 @@ lazy_static! {
             "Total number of hash has been computed.",
             &["type", "result"]
         ).unwrap();
+    pub static ref REGION_HASH_COUNTER: RegionHashCounter =
+        auto_flush_from!(REGION_HASH_COUNTER_VEC, RegionHashCounter);
 
     pub static ref REGION_MAX_LOG_LAG: Histogram =
         register_histogram!(
