@@ -14,6 +14,24 @@ make_auto_flush_static_metric! {
         conf_change,
     }
 
+    pub label_enum AdminCmdType {
+        conf_change,
+        add_peer,
+        remove_peer,
+        add_learner,
+        batch_split : "batch-split",
+        prepare_merge,
+        commit_merge,
+        rollback_merge,
+        compact,
+    }
+
+    pub label_enum AdminCmdStatus {
+        reject_unsafe,
+        all,
+        success,
+    }
+
     pub struct ProposalVec: LocalIntCounter {
         "type" => ProposalType,
     }
