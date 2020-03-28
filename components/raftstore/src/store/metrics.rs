@@ -86,7 +86,20 @@ make_auto_flush_static_metric! {
         all,
         failed,
     }
+
+    pub label_enum CfNames {
+        default,
+        lock,
+        write,
+        raft,
+    }
     //TODO
+    pub struct SnapCf : LocalHistogram {
+        "type" => CfNames,
+    }
+    pub struct SnapCfSize : LocalHistogram {
+        "type" => CfNames,
+    }
     pub struct RegionHashCounter: LocalIntCounter {
         "type" => RegionHashType,
         "result" => RegionHashResult,
@@ -275,22 +288,25 @@ lazy_static! {
             exponential_buckets(1024.0, 2.0, 30).unwrap()
         ).unwrap();
 
-    pub static ref SNAPSHOT_CF_KV_COUNT: HistogramVec =
+    pub static ref SNAPSHOT_CF_KV_COUNT_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_snapshot_cf_kv_count",
             "Total number of kv in each cf file of snapshot",
             &["type"],
             exponential_buckets(100.0, 2.0, 20).unwrap()
         ).unwrap();
+    pub static ref SNAPSHOT_CF_KV_COUNT: SnapCf =
+        auto_flush_from!(SNAPSHOT_CF_KV_COUNT_VEC, SnapCf);
 
-    pub static ref SNAPSHOT_CF_SIZE: HistogramVec =
+    pub static ref SNAPSHOT_CF_SIZE_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_snapshot_cf_size",
             "Total size of each cf file of snapshot",
             &["type"],
             exponential_buckets(1024.0, 2.0, 31).unwrap()
         ).unwrap();
-
+    pub static ref SNAPSHOT_CF_SIZE: SnapCfSize =
+        auto_flush_from!(SNAPSHOT_CF_SIZE_VEC, SnapCfSize);
     pub static ref SNAPSHOT_BUILD_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_build_time_duration_secs",
