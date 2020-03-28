@@ -101,14 +101,13 @@ impl SecurityConfig {
 
     /// Determine if the cert file has been modified.
     /// If modified, update the timestamp of this modification.
-    fn is_modified(&self, last: &mut SystemTime) -> Result<bool, Box<dyn Error>> {
-        let this = fs::metadata(&self.cert_path)?.modified()?;
-        if *last == this {
-            Ok(false)
-        } else {
-            *last = this;
-            Ok(true)
+    fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
+        if let Some(last) = last {
+            if *last == fs::metadata(&self.cert_path)?.modified()? {
+                return Ok(false);
+            }
         }
+        Ok(true)
     }
 }
 
@@ -150,7 +149,7 @@ impl SecurityManager {
         } else {
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
-                last_modified_time: Arc::new(Mutex::new(SystemTime::now())),
+                last_modified_time: Arc::new(Mutex::new(None)),
             });
             sb.bind_with_fetcher(
                 addr,
@@ -172,12 +171,12 @@ impl SecurityManager {
 
 struct Fetcher {
     cfg: Arc<SecurityConfig>,
-    last_modified_time: Arc<Mutex<SystemTime>>,
+    last_modified_time: Arc<Mutex<Option<SystemTime>>>,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
-    // Retrieves updated credentials. When returning `None` or 
-    // error, gRPC will continue to use the previous certificates 
+    // Retrieves updated credentials. When returning `None` or
+    // error, gRPC will continue to use the previous certificates
     // returned by the method.
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
         if let Ok(mut last) = self.last_modified_time.try_lock() {
