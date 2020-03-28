@@ -471,6 +471,7 @@ dependencies = [
  "failure",
  "futures 0.1.29",
  "grpcio",
+ "hex 0.4.0",
  "kvproto",
  "lazy_static",
  "panic_hook",

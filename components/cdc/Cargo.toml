@@ -34,6 +34,7 @@ mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 
 [dependencies]
+hex = "0.4"
 engine_rocks = { path = "../engine_rocks" }
 failure = "0.1"
 futures = "0.1"

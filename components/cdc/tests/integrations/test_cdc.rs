@@ -75,8 +75,6 @@ fn test_cdc_basic() {
         _ => panic!("unknown event"),
     }
 
-    // Commit
-    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut counter = 0;
     loop {
         // Even if there is no write,
@@ -90,6 +88,8 @@ fn test_cdc_basic() {
             break;
         }
     }
+    // Commit
+    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1);

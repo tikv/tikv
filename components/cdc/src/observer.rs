@@ -82,6 +82,7 @@ impl CmdObserver for CdcObserver {
     }
 
     fn on_flush_apply(&self) {
+        fail_point!("before_cdc_flush_apply");
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             if let Err(e) = self.sched.schedule(Task::MultiBatch { multi: batches }) {

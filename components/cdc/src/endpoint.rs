@@ -115,6 +115,7 @@ impl fmt::Display for Task {
         write!(f, "{:?}", self)
     }
 }
+
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("CdcTask");
