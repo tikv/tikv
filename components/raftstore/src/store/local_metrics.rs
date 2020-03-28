@@ -23,38 +23,32 @@ impl RaftReadyMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.message > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["message"])
-                .inc_by(self.message as i64);
+            STORE_RAFT_READY_COUNTER.message.inc_by(self.message as i64);
             self.message = 0;
         }
         if self.commit > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["commit"])
-                .inc_by(self.commit as i64);
+            STORE_RAFT_READY_COUNTER.commit.inc_by(self.commit as i64);
             self.commit = 0;
         }
         if self.append > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["append"])
-                .inc_by(self.append as i64);
+            STORE_RAFT_READY_COUNTER.append.inc_by(self.append as i64);
             self.append = 0;
         }
         if self.snapshot > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["snapshot"])
+            STORE_RAFT_READY_COUNTER
+                .snapshot
                 .inc_by(self.snapshot as i64);
             self.snapshot = 0;
         }
         if self.pending_region > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["pending_region"])
+            STORE_RAFT_READY_COUNTER
+                .pending_region
                 .inc_by(self.pending_region as i64);
             self.pending_region = 0;
         }
         if self.has_ready_region > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["has_ready_region"])
+            STORE_RAFT_READY_COUNTER
+                .has_ready_region
                 .inc_by(self.has_ready_region as i64);
             self.has_ready_region = 0;
         }

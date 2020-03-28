@@ -32,6 +32,15 @@ make_auto_flush_static_metric! {
         success,
     }
 
+    pub label_enum RaftReadyType {
+        message,
+        commit,
+        append,
+        snapshot,
+        pending_region,
+        has_ready_region,
+    }
+
     pub struct ProposalVec: LocalIntCounter {
         "type" => ProposalType,
     }
@@ -39,6 +48,10 @@ make_auto_flush_static_metric! {
     pub struct AdminCmdVec : LocalIntCounter {
         "type" => AdminCmdType,
         "status" => AdminCmdStatus,
+    }
+
+    pub struct RaftReadyVec : LocalIntCounter {
+        "type" => RaftReadyType,
     }
 }
 
@@ -95,6 +108,8 @@ lazy_static! {
             "Total number of raft ready handled.",
             &["type"]
         ).unwrap();
+    pub static ref STORE_RAFT_READY_COUNTER: RaftReadyVec =
+        auto_flush_from!(STORE_RAFT_READY_COUNTER_VEC, RaftReadyVec);
 
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
