@@ -41,6 +41,23 @@ make_auto_flush_static_metric! {
         has_ready_region,
     }
 
+    pub label_enum MessageCounterType {
+        append,
+        append_resp,
+        prevote,
+        prevote_resp,
+        vote,
+        vote_resp,
+        snapshot,
+        request_snapshot,
+        heartbeat,
+        heartbeat_resp,
+        transfer_leader,
+        timeout_now,
+        read_index,
+        read_index_resp,
+    }
+
     pub struct ProposalVec: LocalIntCounter {
         "type" => ProposalType,
     }
@@ -52,6 +69,10 @@ make_auto_flush_static_metric! {
 
     pub struct RaftReadyVec : LocalIntCounter {
         "type" => RaftReadyType,
+    }
+
+    pub struct MessageCounterVec : LocalIntCounter {
+        "type" => MessageCounterType,
     }
 }
 
@@ -117,6 +138,8 @@ lazy_static! {
             "Total number of raft ready sent messages.",
             &["type"]
         ).unwrap();
+    pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER: MessageCounterVec =
+        auto_flush_from!(STORE_RAFT_SENT_MESSAGE_COUNTER_VEC, MessageCounterVec);
 
     pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(

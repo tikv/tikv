@@ -79,86 +79,86 @@ impl RaftMessageMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.append > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["append"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .append
                 .inc_by(self.append as i64);
             self.append = 0;
         }
         if self.append_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["append_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .append_resp
                 .inc_by(self.append_resp as i64);
             self.append_resp = 0;
         }
         if self.prevote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["prevote"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .prevote
                 .inc_by(self.prevote as i64);
             self.prevote = 0;
         }
         if self.prevote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["prevote_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .prevote_resp
                 .inc_by(self.prevote_resp as i64);
             self.prevote_resp = 0;
         }
         if self.vote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["vote"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .vote
                 .inc_by(self.vote as i64);
             self.vote = 0;
         }
         if self.vote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["vote_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .vote_resp
                 .inc_by(self.vote_resp as i64);
             self.vote_resp = 0;
         }
         if self.snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["snapshot"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .snapshot
                 .inc_by(self.snapshot as i64);
             self.snapshot = 0;
         }
         if self.request_snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["request_snapshot"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .request_snapshot
                 .inc_by(self.request_snapshot as i64);
             self.request_snapshot = 0;
         }
         if self.heartbeat > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["heartbeat"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .heartbeat
                 .inc_by(self.heartbeat as i64);
             self.heartbeat = 0;
         }
         if self.heartbeat_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["heartbeat_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .heartbeat_resp
                 .inc_by(self.heartbeat_resp as i64);
             self.heartbeat_resp = 0;
         }
         if self.transfer_leader > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["transfer_leader"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .transfer_leader
                 .inc_by(self.transfer_leader as i64);
             self.transfer_leader = 0;
         }
         if self.timeout_now > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["timeout_now"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .timeout_now
                 .inc_by(self.timeout_now as i64);
             self.timeout_now = 0;
         }
         if self.read_index > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["read_index"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .read_index
                 .inc_by(self.read_index as i64);
             self.read_index = 0;
         }
         if self.read_index_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["read_index_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .read_index_resp
                 .inc_by(self.read_index_resp as i64);
             self.read_index_resp = 0;
         }
