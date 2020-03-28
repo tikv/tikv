@@ -125,9 +125,11 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
+        let downstream_id = DownstreamID::new();
 
-        observer.on_prepare_for_apply(0);
+        observer.on_prepare_for_apply(downstream_id, 0);
         observer.on_apply_cmd(
+            downstream_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );

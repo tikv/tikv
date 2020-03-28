@@ -173,12 +173,33 @@ fn test_observe_executed_cmd() {
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
+            assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            let e = &es.entries[1];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         _ => panic!("unknown event"),
+    }
+
+    // Make sure resolved ts can be advanced normally even with few tso failures.
+    let mut counter = 0;
+    loop {
+        // Even if there is no write,
+        // resolved ts should be advanced regularly.
+        for e in receive_event(true) {
+            match e.event.unwrap() {
+                Event_oneof_event::ResolvedTs(ts) => {
+                    assert_ne!(0, ts);
+                    counter += 1;
+                }
+                _ => panic!("unknown event"),
+            }
+        }
+        if counter > 5 {
+            break;
+        }
     }
 
     event_feed_wrap.as_ref().replace(None);
