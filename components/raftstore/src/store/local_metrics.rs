@@ -180,50 +180,50 @@ pub struct RaftMessageDropMetrics {
 impl RaftMessageDropMetrics {
     fn flush(&mut self) {
         if self.mismatch_store_id > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["mismatch_store_id"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .mismatch_store_id
                 .inc_by(self.mismatch_store_id as i64);
             self.mismatch_store_id = 0;
         }
         if self.mismatch_region_epoch > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["mismatch_region_epoch"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .mismatch_region_epoch
                 .inc_by(self.mismatch_region_epoch as i64);
             self.mismatch_region_epoch = 0;
         }
         if self.stale_msg > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["stale_msg"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .stale_msg
                 .inc_by(self.stale_msg as i64);
             self.stale_msg = 0;
         }
         if self.region_overlap > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["region_overlap"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .region_overlap
                 .inc_by(self.region_overlap as i64);
             self.region_overlap = 0;
         }
         if self.region_no_peer > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["region_no_peer"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .region_no_peer
                 .inc_by(self.region_no_peer as i64);
             self.region_no_peer = 0;
         }
         if self.region_tombstone_peer > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["region_tombstone_peer"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .region_tombstone_peer
                 .inc_by(self.region_tombstone_peer as i64);
             self.region_tombstone_peer = 0;
         }
         if self.region_nonexistent > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["region_nonexistent"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .region_nonexistent
                 .inc_by(self.region_nonexistent as i64);
             self.region_nonexistent = 0;
         }
         if self.applying_snap > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["applying_snap"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .applying_snap
                 .inc_by(self.applying_snap as i64);
             self.applying_snap = 0;
         }

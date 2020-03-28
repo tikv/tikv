@@ -58,6 +58,17 @@ make_auto_flush_static_metric! {
         read_index_resp,
     }
 
+    pub label_enum RaftDroppedMessage {
+        mismatch_store_id,
+        mismatch_region_epoch,
+        stale_msg,
+        region_overlap,
+        region_no_peer,
+        region_tombstone_peer,
+        region_nonexistent,
+        applying_snap,
+    }
+
     pub struct ProposalVec: LocalIntCounter {
         "type" => ProposalType,
     }
@@ -73,6 +84,10 @@ make_auto_flush_static_metric! {
 
     pub struct MessageCounterVec : LocalIntCounter {
         "type" => MessageCounterType,
+    }
+
+    pub struct RaftDropedVec : LocalIntCounter {
+        "type" => RaftDroppedMessage,
     }
 }
 
@@ -147,6 +162,8 @@ lazy_static! {
             "Total number of raft dropped messages.",
             &["type"]
         ).unwrap();
+    pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER: RaftDropedVec =
+        auto_flush_from!(STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC, RaftDropedVec);
 
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
         register_int_gauge_vec!(
