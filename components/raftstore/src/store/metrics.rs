@@ -35,6 +35,11 @@ make_auto_flush_static_metric! {
     pub struct ProposalVec: LocalIntCounter {
         "type" => ProposalType,
     }
+
+    pub struct AdminCmdVec : LocalIntCounter {
+        "type" => AdminCmdType,
+        "status" => AdminCmdStatus,
+    }
 }
 
 lazy_static! {
@@ -53,6 +58,8 @@ lazy_static! {
             "Total number of admin cmd processed.",
             &["type", "status"]
         ).unwrap();
+    pub static ref PEER_ADMIN_CMD_COUNTER: AdminCmdVec =
+        auto_flush_from!(PEER_ADMIN_CMD_COUNTER_VEC, AdminCmdVec);
 
     pub static ref PEER_APPEND_LOG_HISTOGRAM: Histogram =
         register_histogram!(
