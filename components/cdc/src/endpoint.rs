@@ -98,7 +98,7 @@ pub enum Task {
         min_ts: TimeStamp,
     },
     ResolverReady {
-        downstream_id: u64,
+        downstream_id: DownstreamID,
         region: Region,
         resolver: Resolver,
     },
@@ -140,7 +140,7 @@ impl fmt::Debug for Task {
                 ..
             } => de
                 .field("downstream_id", &downstream_id)
-                .field("region_id", region.get_id())
+                .field("region_id", &region.get_id())
                 .finish(),
             Task::IncrementalScan {
                 ref region_id,
