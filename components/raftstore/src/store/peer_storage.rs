@@ -225,14 +225,10 @@ pub struct CacheQueryStats {
 impl CacheQueryStats {
     pub fn flush(&mut self) {
         if self.hit.get() > 0 {
-            RAFT_ENTRY_FETCHES
-                .with_label_values(&["hit"])
-                .inc_by(self.hit.replace(0) as i64);
+            RAFT_ENTRY_FETCHES.hit.inc_by(self.hit.replace(0) as i64);
         }
         if self.miss.get() > 0 {
-            RAFT_ENTRY_FETCHES
-                .with_label_values(&["miss"])
-                .inc_by(self.miss.replace(0) as i64);
+            RAFT_ENTRY_FETCHES.miss.inc_by(self.miss.replace(0) as i64);
         }
     }
 }

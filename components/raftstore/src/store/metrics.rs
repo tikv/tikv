@@ -93,7 +93,15 @@ make_auto_flush_static_metric! {
         write,
         raft,
     }
+
+    pub label_enum RaftEntryType {
+        hit,
+        miss
+    }
     //TODO
+    pub struct RaftEntryFetches : LocalIntCounter {
+        "type" => RaftEntryType
+    }
     pub struct SnapCf : LocalHistogram {
         "type" => CfNames,
     }
@@ -328,12 +336,14 @@ lazy_static! {
             exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
-    pub static ref RAFT_ENTRY_FETCHES: IntCounterVec =
+    pub static ref RAFT_ENTRY_FETCHES_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_entry_fetches",
             "Total number of raft entry fetches",
             &["type"]
         ).unwrap();
+    pub static ref RAFT_ENTRY_FETCHES: RaftEntryFetches =
+        auto_flush_from!(RAFT_ENTRY_FETCHES_VEC, RaftEntryFetches);
 
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
