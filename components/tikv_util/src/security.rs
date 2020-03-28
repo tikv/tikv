@@ -176,6 +176,9 @@ struct Fetcher {
 }
 
 impl ServerCredentialsFetcher for Fetcher {
+    // Retrieves updated credentials. When returning `None` or 
+    // error, gRPC will continue to use the previous certificates 
+    // returned by the method.
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
         if let Ok(mut last) = self.last_modified_time.try_lock() {
             // Reload only when cert is modified.
