@@ -98,7 +98,7 @@ pub enum Task {
         min_ts: TimeStamp,
     },
     ResolverReady {
-        region_id: u64,
+        downstream_id: u64,
         region: Region,
         resolver: Resolver,
     },
@@ -134,7 +134,14 @@ impl fmt::Debug for Task {
             Task::OpenConn { ref conn } => de.field("conn_id", &conn.get_id()).finish(),
             Task::MultiBatch { multi } => de.field("multibatch", &multi.len()).finish(),
             Task::MinTS { ref min_ts } => de.field("min_ts", min_ts).finish(),
-            Task::ResolverReady { ref region_id, .. } => de.field("region_id", region_id).finish(),
+            Task::ResolverReady {
+                ref downstream_id,
+                ref region,
+                ..
+            } => de
+                .field("downstream_id", &downstream_id)
+                .field("region_id", region.get_id())
+                .finish(),
             Task::IncrementalScan {
                 ref region_id,
                 ref downstream_id,
@@ -380,18 +387,29 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
         }
     }
 
-    fn on_region_ready(&mut self, region_id: u64, resolver: Resolver, region: Region) {
-        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if let Err(e) = delegate.on_region_ready(resolver, region) {
-                assert!(delegate.has_failed());
-                // Delegate has error, deregister the corresponding region.
-                let deregister = Deregister::Region { region_id, err: e };
-                if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
-                    error!("schedule cdc task failed"; "error" => ?e);
+    fn on_region_ready(&mut self, downstream_id: DownstreamID, resolver: Resolver, region: Region) {
+        if let Some(delegate) = self.capture_regions.get_mut(&region.get_id()) {
+            if delegate
+                .downstreams
+                .iter()
+                .any(|downstream| downstream.get_id() == downstream_id)
+            {
+                if let Err(e) = delegate.on_region_ready(resolver, region) {
+                    assert!(delegate.has_failed());
+                    // Delegate has error, deregister the corresponding region.
+                    let deregister = Deregister::Region {
+                        region_id: region.get_id(),
+                        err: e,
+                    };
+                    if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
+                        error!("schedule cdc task failed"; "error" => ?e);
+                    }
                 }
+            } else {
+                debug!("downstream not found on region ready"; "region_id" => region.get_id(), "downstream_id" => ?downstream_id);
             }
         } else {
-            warn!("region not found on region ready (finish building resolver)"; "region_id" => region_id);
+            debug!("region not found on region ready (finish building resolver)"; "region_id" => region.get_id());
         }
     }
 
@@ -499,7 +517,7 @@ impl Initializer {
         self.workers
             .spawn(lazy(move || {
                 let mut resolver = if build_resolver {
-                    Some(Resolver::new())
+                    Some(Resolver::new(region_id))
                 } else {
                     None
                 };
@@ -515,28 +533,24 @@ impl Initializer {
                     .unwrap();
                 let mut done = false;
                 while !done {
-                    let entries = match Self::scan_batch(
-                        region_id,
-                        &mut scanner,
-                        batch_size,
-                        resolver.as_mut(),
-                    ) {
-                        Ok(res) => res,
-                        Err(e) => {
-                            error!("cdc scan entries failed"; "error" => ?e);
-                            // TODO: record in metrics.
-                            let deregister = Deregister::Downstream {
-                                region_id,
-                                downstream_id,
-                                conn_id,
-                                err: Some(e),
-                            };
-                            if let Err(e) = sched.schedule(Task::Deregister(deregister)) {
-                                error!("schedule cdc task failed"; "error" => ?e);
+                    let entries =
+                        match Self::scan_batch(&mut scanner, batch_size, resolver.as_mut()) {
+                            Ok(res) => res,
+                            Err(e) => {
+                                error!("cdc scan entries failed"; "error" => ?e);
+                                // TODO: record in metrics.
+                                let deregister = Deregister::Downstream {
+                                    region_id,
+                                    downstream_id,
+                                    conn_id,
+                                    err: Some(e),
+                                };
+                                if let Err(e) = sched.schedule(Task::Deregister(deregister)) {
+                                    error!("schedule cdc task failed"; "error" => ?e);
+                                }
+                                return Ok(());
                             }
-                            return Ok(());
-                        }
-                    };
+                        };
                     // If the last element is None, it means scanning is finished.
                     if let Some(None) = entries.last() {
                         done = true;
@@ -555,7 +569,7 @@ impl Initializer {
                 }
 
                 if let Some(resolver) = resolver {
-                    Self::finish_building_resolver(resolver, region, sched);
+                    Self::finish_building_resolver(downstream_id, resolver, region, sched);
                 }
 
                 CDC_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
@@ -565,7 +579,6 @@ impl Initializer {
     }
 
     fn scan_batch<S: Snapshot>(
-        region_id: u64,
         scanner: &mut DeltaScanner<S>,
         batch_size: usize,
         resolver: Option<&mut Resolver>,
@@ -590,7 +603,7 @@ impl Initializer {
                     let (encoded_key, value) = lock;
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
-                    resolver.track_lock(lock.ts, key, region_id);
+                    resolver.track_lock(lock.ts, key);
                 }
             }
         }
@@ -598,7 +611,12 @@ impl Initializer {
         Ok(entries)
     }
 
-    fn finish_building_resolver(mut resolver: Resolver, region: Region, sched: Scheduler<Task>) {
+    fn finish_building_resolver(
+        downstream_id: DownstreamID,
+        mut resolver: Resolver,
+        region: Region,
+        sched: Scheduler<Task>,
+    ) {
         resolver.init();
         if resolver.locks().is_empty() {
             info!(
@@ -617,7 +635,7 @@ impl Initializer {
 
         info!("schedule resolver ready"; "region_id" => region.get_id());
         if let Err(e) = sched.schedule(Task::ResolverReady {
-            region_id: region.get_id(),
+            downstream_id,
             resolver,
             region,
         }) {
@@ -637,10 +655,10 @@ impl<T: CasualRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
                 conn_id,
             } => self.on_register(request, downstream, conn_id),
             Task::ResolverReady {
-                region_id,
+                downstream_id,
                 resolver,
                 region,
-            } => self.on_region_ready(region_id, resolver, region),
+            } => self.on_region_ready(downstream_id, resolver, region),
             Task::Deregister(deregister) => self.on_deregister(deregister),
             Task::IncrementalScan {
                 region_id,

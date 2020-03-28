@@ -259,7 +259,8 @@ impl Delegate {
     pub fn on_region_ready(&mut self, resolver: Resolver, region: Region) -> Result<()> {
         assert!(
             self.resolver.is_none(),
-            "region resolver should not be ready"
+            "region {} resolver should not be ready",
+            self.region_id,
         );
         self.resolver = Some(resolver);
         self.region = Some(region);
@@ -451,7 +452,6 @@ impl Delegate {
                         row.start_ts.into(),
                         commit_ts.map(Into::into),
                         row.key.clone(),
-                        self.region_id,
                     );
 
                     let r = rows.insert(row.key.clone(), row);
@@ -476,7 +476,7 @@ impl Delegate {
                     // we must track inflight txns.
                     assert!(self.resolver.is_some(), "region resolver should be ready");
                     let resolver = self.resolver.as_mut().unwrap();
-                    resolver.track_lock(row.start_ts.into(), row.key.clone(), self.region_id);
+                    resolver.track_lock(row.start_ts.into(), row.key.clone());
 
                     *occupied = row;
                 }
@@ -628,7 +628,7 @@ mod tests {
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
-        let mut resolver = Resolver::new();
+        let mut resolver = Resolver::new(region_id);
         resolver.init();
         delegate.on_region_ready(resolver, region).unwrap();
 
@@ -810,7 +810,7 @@ mod tests {
         delegate.on_scan(downstream_id, entries);
         assert_eq!(delegate.pending.as_ref().unwrap().scan.len(), 1);
 
-        let mut resolver = Resolver::new();
+        let mut resolver = Resolver::new(region_id);
         resolver.init();
         delegate.on_region_ready(resolver, region).unwrap();
 
