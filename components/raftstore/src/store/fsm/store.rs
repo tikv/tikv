@@ -406,7 +406,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
         let elapsed = t.elapsed();
         RAFT_EVENT_DURATION
-            .with_label_values(&[tick.tag()])
+            .get(tick.tag())
             .observe(duration_to_sec(elapsed) as f64);
         slow_log!(
             elapsed,

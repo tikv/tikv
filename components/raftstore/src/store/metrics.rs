@@ -110,7 +110,18 @@ make_auto_flush_static_metric! {
         region_not_initialized,
         is_applying_snapshot,
     }
-    //TODO
+    pub label_enum RaftEventDurationType {
+        compact_check,
+        pd_store_heartbeat,
+        snap_gc,
+        compact_lock_cf,
+        consistency_check,
+        cleanup_import_sst,
+    }
+
+    pub struct RaftEventDuration : LocalHistogram {
+        "type" => RaftEventDurationType
+    }
     pub struct RaftInvalidProposalCount : LocalIntCounter {
         "type" => RaftInvalidProposal
     }
@@ -382,13 +393,15 @@ lazy_static! {
     pub static ref RAFT_INVALID_PROPOSAL_COUNTER: RaftInvalidProposalCount =
         auto_flush_from!(RAFT_INVALID_PROPOSAL_COUNTER_VEC, RaftInvalidProposalCount);
 
-    pub static ref RAFT_EVENT_DURATION: HistogramVec =
+    pub static ref RAFT_EVENT_DURATION_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_event_duration",
             "Duration of raft store events.",
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
+    pub static ref RAFT_EVENT_DURATION: RaftEventDuration =
+        auto_flush_from!(RAFT_EVENT_DURATION_VEC, RaftEventDuration);
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(
