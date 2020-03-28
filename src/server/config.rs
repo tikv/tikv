@@ -110,6 +110,8 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub end_point_max_tasks: Option<usize>,
+
+    pub enable_tracing: bool,
 }
 
 impl Default for Config {
@@ -157,6 +159,7 @@ impl Default for Config {
             enable_request_batch: true,
             request_batch_enable_cross_command: true,
             request_batch_wait_duration: ReadableDuration::millis(1),
+            enable_tracing: true,
         }
     }
 }

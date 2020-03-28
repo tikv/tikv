@@ -73,10 +73,10 @@ mod tests {
     use tidb_query_datatype::FieldTypeTp;
 
     use crate::util::mock_executor::MockExecutor;
+    use rustracing::span::Span;
     use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
     use tidb_query_datatype::codec::data_type::VectorValue;
     use tidb_query_datatype::expr::EvalWarnings;
-    use rustracing::span::Span;
 
     #[test]
     fn test_limit_0() {

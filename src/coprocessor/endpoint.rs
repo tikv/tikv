@@ -33,7 +33,7 @@ use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
-use rustracing::span::FinishedSpan;
+use rustracing::span::{FinishedSpan, Span};
 use rustracing_jaeger::reporter::JaegerBinaryReporter;
 use rustracing_jaeger::span::SpanContextState;
 use tikv_util::jaegerencoder::encode_spans_in_jaeger_binary;
@@ -62,7 +62,7 @@ pub struct Endpoint<E: Engine> {
 
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
-
+    enable_tracing: bool,
     _phantom: PhantomData<E>,
 }
 
@@ -98,6 +98,7 @@ impl<E: Engine> Endpoint<E> {
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            enable_tracing: cfg.enable_tracing,
             _phantom: Default::default(),
         }
     }
@@ -436,7 +437,13 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         let (span_tx, span_rx) = crossbeam::channel::unbounded();
         let tracer = Tracer::with_sender(AllSampler, span_tx);
-        let entry_span = tracer.span("coprocessor endpoint").start();
+
+        let entry_span = if self.enable_tracing {
+            tracer.span("coprocessor endpoint").start()
+        } else {
+            Span::inactive()
+        };
+
         let parse_request_span =
             entry_span.child("coprocessor parse request", |options| options.start());
 
