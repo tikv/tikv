@@ -390,11 +390,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
     fn on_region_ready(&mut self, downstream_id: DownstreamID, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if delegate
-                .downstreams
-                .iter()
-                .any(|downstream| downstream.get_id() == downstream_id)
-            {
+            if delegate.downstream_pending(downstream_id) {
                 if let Err(e) = delegate.on_region_ready(resolver, region) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.

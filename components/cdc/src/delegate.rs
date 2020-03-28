@@ -110,7 +110,7 @@ impl Downstream {
 struct Pending {
     // Batch of RaftCommand observed from raftstore
     multi_batch: Vec<CmdBatch>,
-    downstreams: Vec<Downstream>,
+    pub downstreams: Vec<Downstream>,
     scan: Vec<(DownstreamID, Vec<Option<TxnEntry>>)>,
 }
 
@@ -215,6 +215,18 @@ impl Delegate {
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = self.region_id;
         change_data_event
+    }
+
+    // Return whether the downstream is pending.
+    pub fn downstream_pending(&self, downstream_id: DownstreamID) -> bool {
+        if let Some(pending) = self.pending.as_ref() {
+            pending
+                .downstreams
+                .iter()
+                .any(|downstream| downstream.get_id() == downstream_id)
+        } else {
+            false
+        }
     }
 
     pub fn mark_failed(&mut self) {
@@ -547,7 +559,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            debug!("skip write record"; "write" => ?other);
+            info!("skip write record"; "write" => ?other);
             return true;
         }
     };
@@ -575,7 +587,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
         other => {
-            debug!("skip lock record";
+            info!("skip lock record";
                 "type" => ?other,
                 "start_ts" => ?lock.ts,
                 "for_update_ts" => ?lock.for_update_ts);
