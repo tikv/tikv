@@ -79,9 +79,9 @@ impl Dicts {
             }
             // ...else, return either error.
             (file_bytes, key_bytes) => {
-                if key_bytes.is_err() {
+                if let Err(key_err) = key_bytes {
                     error!("encryption: failed to load key dictionary.");
-                    Err(key_bytes.unwrap_err())
+                    Err(key_err)
                 } else {
                     error!("encryption: failed to load file dictionary.");
                     Err(file_bytes.unwrap_err())
