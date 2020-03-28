@@ -20,7 +20,6 @@ use test_raftstore::sleep_ms;
 
 #[test]
 fn test_failed_pending_batch() {
-    let _guard = super::setup_fail();
     let mut suite = TestSuite::new(3);
 
     let fp = "before_schedule_incremental_scan";
@@ -84,7 +83,6 @@ fn test_failed_pending_batch() {
 
 #[test]
 fn test_region_ready_after_deregister() {
-    let _guard = super::setup_fail();
     let mut suite = TestSuite::new(1);
 
     let fp = "cdc_incremental_scan_start";
@@ -118,11 +116,9 @@ fn test_region_ready_after_deregister() {
 
 #[test]
 fn test_observe_executed_cmd() {
-    let _guard = super::setup_fail();
     let mut suite = TestSuite::new(3);
 
     let region = suite.cluster.get_region(&[]);
-    let leader = suite.cluster.leader_of_region(region.get_id());
     let mut req = ChangeDataRequest::default();
     req.region_id = region.get_id();
     req.set_region_epoch(region.get_region_epoch().clone());
