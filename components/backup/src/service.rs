@@ -1,9 +1,10 @@
 use std::sync::atomic::*;
 use std::sync::Arc;
 
-use futures::future::*;
-use futures::prelude::*;
-use futures::sync::mpsc;
+use futures::channel::mpsc;
+use futures::compat::Compat;
+use futures::StreamExt;
+use futures_01::{future::Future, sink::Sink, stream::Stream};
 use grpcio::{self, *};
 use kvproto::backup::*;
 use tikv_util::security::{check_common_name, SecurityManager};
@@ -60,16 +61,18 @@ impl Backup for Service {
             return;
         };
 
-        let send_resp = sink.send_all(rx.then(|resp| match resp {
-            Ok(resp) => Ok((resp, WriteFlags::default())),
-            Err(e) => {
-                error!("backup send failed"; "error" => ?e);
-                Err(grpcio::Error::RpcFailure(RpcStatus::new(
-                    RpcStatusCode::UNKNOWN,
-                    Some(format!("{:?}", e)),
-                )))
-            }
-        }));
+        let send_resp = sink.send_all(Compat::new(rx.map(Ok)).then(
+            |resp: Result<BackupResponse>| match resp {
+                Ok(resp) => Ok((resp, WriteFlags::default())),
+                Err(e) => {
+                    error!("backup send failed"; "error" => ?e);
+                    Err(grpcio::Error::RpcFailure(RpcStatus::new(
+                        RpcStatusCode::UNKNOWN,
+                        Some(format!("{:?}", e)),
+                    )))
+                }
+            },
+        ));
         ctx.spawn(
             send_resp
                 .map(|_s /* the sink */| {
