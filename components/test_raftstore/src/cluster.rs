@@ -1078,6 +1078,16 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn wait_region_split(&mut self, region: &metapb::Region) {
+        self.wait_region_split_max_cnt(region, 20, 250, true);
+    }
+
+    pub fn wait_region_split_max_cnt(
+        &mut self,
+        region: &metapb::Region,
+        itvl_ms: u64,
+        max_try_cnt: u64,
+        is_panic: bool,
+    ) {
         let mut try_cnt = 0;
         let split_count = self.pd_client.get_split_count();
         loop {
@@ -1092,11 +1102,19 @@ impl<T: Simulator> Cluster<T> {
                 };
             }
 
-            if try_cnt > 250 {
-                panic!("region {:?} has not been split after 5000ms", region);
+            if try_cnt > max_try_cnt {
+                if is_panic {
+                    panic!(
+                        "region {:?} has not been split after {}ms",
+                        region,
+                        max_try_cnt * itvl_ms
+                    );
+                } else {
+                    return;
+                }
             }
             try_cnt += 1;
-            sleep_ms(20);
+            sleep_ms(itvl_ms);
         }
     }
 

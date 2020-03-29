@@ -1097,6 +1097,7 @@ impl PeerStorage {
 
     #[inline]
     pub fn is_generating_snapshot(&self) -> bool {
+        fail_point!("is_generating_snapshot", |_| { true });
         match *self.snap_state.borrow() {
             SnapState::Generating(_) => true,
             _ => false,

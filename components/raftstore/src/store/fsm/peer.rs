@@ -2532,6 +2532,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         )
     }
 
+    #[inline]
+    fn region_split_skip_max_count(&self) -> u8 {
+        fail_point!("region_split_skip_max_count", |_| { u8::max_value() });
+        2
+    }
+
     fn on_split_region_check_tick(&mut self) {
         if !self.ctx.cfg.hibernate_regions {
             self.register_split_region_check_tick();
@@ -2566,7 +2572,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // triggered every 10 seconds. If a snapshot can't be generated in 30 seconds, it might be
         // just too large to be generated. Split it into smaller size can help generation. check
         // issue 330 for more info.
-        if self.fsm.peer.get_store().is_generating_snapshot() && self.fsm.skip_split_count < 2 {
+        if self.fsm.peer.get_store().is_generating_snapshot()
+            && self.fsm.skip_split_count < self.region_split_skip_max_count()
+        {
             self.fsm.skip_split_count += 1;
             return;
         }
