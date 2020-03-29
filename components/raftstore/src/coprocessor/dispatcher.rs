@@ -417,6 +417,10 @@ impl CoprocessorHost {
     }
 
     pub fn on_apply_cmd(&self, downstream_id: DownstreamID, region_id: u64, cmd: Cmd) {
+        assert!(
+            self.registry.cmd_observers.len() == 0,
+            "CmdObserver is not registered"
+        );
         for i in 0..self.registry.cmd_observers.len() - 1 {
             self.registry
                 .cmd_observers

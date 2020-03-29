@@ -69,7 +69,7 @@ impl Resolver {
         if let Some(commit_ts) = commit_ts {
             assert!(
                 self.resolved_ts.map_or(true, |rts| commit_ts > rts),
-                "{}@{}, commit@{} > {:?}, region {}",
+                "{}@{}, commit@{} < {:?}, region {}",
                 hex::encode_upper(key),
                 start_ts,
                 commit_ts,
@@ -78,7 +78,7 @@ impl Resolver {
             );
             assert!(
                 commit_ts > self.min_ts,
-                "{}@{}, commit@{} > {:?}, region {}",
+                "{}@{}, commit@{} < {:?}, region {}",
                 hex::encode_upper(key),
                 start_ts,
                 commit_ts,

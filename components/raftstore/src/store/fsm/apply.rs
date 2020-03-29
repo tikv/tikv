@@ -423,6 +423,9 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
+        // Must call this before invoking callback.
+        self.host.on_flush_apply();
+
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
         }
@@ -488,8 +491,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
                 );
             }
         }
-
-        self.host.on_flush_apply();
 
         let elapsed = t.elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);

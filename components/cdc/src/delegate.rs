@@ -254,6 +254,11 @@ impl Delegate {
         } else {
             &self.downstreams
         };
+        assert!(
+            downstreams.len() == 0,
+            "region {} miss downstream",
+            self.region_id
+        );
         for i in 0..downstreams.len() - 1 {
             downstreams[i].sink_event(change_data_event.clone(), size);
         }
@@ -349,7 +354,7 @@ impl Delegate {
         let d = if let Some(d) = self.downstreams.iter_mut().find(|d| d.id == downstream_id) {
             d
         } else {
-            warn!("downstream not found"; "downstream_id" => ?downstream_id);
+            warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
             return;
         };
 
