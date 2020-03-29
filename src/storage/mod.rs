@@ -3874,15 +3874,17 @@ mod tests {
             return_values: bool,
         ) -> PessimisticLockCommand {
             let primary = keys[0].0.clone().to_raw().unwrap();
+            let for_update_ts: TimeStamp = for_update_ts.into();
             commands::AcquirePessimisticLock::new(
                 keys,
                 primary,
                 start_ts.into(),
                 3000,
                 false,
-                for_update_ts.into(),
+                for_update_ts,
                 None,
                 return_values,
+                for_update_ts.next(),
                 Context::default(),
             )
         }
