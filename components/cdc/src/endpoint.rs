@@ -49,9 +49,10 @@ impl fmt::Display for Deregister {
         write!(f, "{:?}", self)
     }
 }
+
 impl fmt::Debug for Deregister {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut de = f.debug_struct("CdcTask");
+        let mut de = f.debug_struct("Deregister");
         match self {
             Deregister::Downstream {
                 ref region_id,
@@ -126,20 +127,33 @@ impl fmt::Debug for Task {
                 ref conn_id,
                 ..
             } => de
+                .field("type", &"register")
                 .field("register request", request)
                 .field("request", request)
                 .field("id", &downstream.get_id())
                 .field("conn_id", conn_id)
                 .finish(),
-            Task::Deregister(deregister) => de.field("deregister", deregister).finish(),
-            Task::OpenConn { ref conn } => de.field("conn_id", &conn.get_id()).finish(),
-            Task::MultiBatch { multi } => de.field("multibatch", &multi.len()).finish(),
-            Task::MinTS { ref min_ts } => de.field("min_ts", min_ts).finish(),
+            Task::Deregister(deregister) => de
+                .field("type", &"deregister")
+                .field("deregister", deregister)
+                .finish(),
+            Task::OpenConn { ref conn } => de
+                .field("type", &"open_conn")
+                .field("conn_id", &conn.get_id())
+                .finish(),
+            Task::MultiBatch { multi } => de
+                .field("type", &"multibatch")
+                .field("multibatch", &multi.len())
+                .finish(),
+            Task::MinTS { ref min_ts } => {
+                de.field("type", &"mit_ts").field("min_ts", min_ts).finish()
+            }
             Task::ResolverReady {
                 ref downstream_id,
                 ref region,
                 ..
             } => de
+                .field("type", &"resolver_ready")
                 .field("downstream_id", &downstream_id)
                 .field("region_id", &region.get_id())
                 .finish(),
@@ -148,6 +162,7 @@ impl fmt::Debug for Task {
                 ref downstream_id,
                 ref entries,
             } => de
+                .field("type", &"incremental_scan")
                 .field("region_id", &region_id)
                 .field("downstream", &downstream_id)
                 .field("scan_entries", &entries.len())
@@ -553,7 +568,6 @@ impl Initializer {
                         done = true;
                     }
                     debug!("cdc scan entries"; "len" => entries.len());
-                    fail_point!("before_schedule_incremental_scan");
                     let scanned = Task::IncrementalScan {
                         region_id,
                         downstream_id,

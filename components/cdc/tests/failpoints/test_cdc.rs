@@ -23,7 +23,7 @@ use test_raftstore::sleep_ms;
 fn test_failed_pending_batch() {
     let mut suite = TestSuite::new(3);
 
-    let fp = "before_schedule_incremental_scan";
+    let fp = "cdc_incremental_scan_start";
     fail::cfg(fp, "pause").unwrap();
 
     let region = suite.cluster.get_region(&[]);
@@ -116,14 +116,15 @@ fn test_region_ready_after_deregister() {
 }
 
 #[test]
-fn test_observe_executed_cmd() {
+fn test_observe_duplicate_cmd() {
     let mut suite = TestSuite::new(3);
 
     let region = suite.cluster.get_region(&[]);
     let mut req = ChangeDataRequest::default();
     req.region_id = region.get_id();
     req.set_region_epoch(region.get_region_epoch().clone());
-    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let (req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region.get_id()));
     let _req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
@@ -147,7 +148,12 @@ fn test_observe_executed_cmd() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone().into_bytes();
     mutation.value = v.into_bytes();
-    suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
+    suite.must_kv_prewrite(
+        region.get_id(),
+        vec![mutation],
+        k.clone().into_bytes(),
+        start_ts,
+    );
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -162,9 +168,12 @@ fn test_observe_executed_cmd() {
 
     // Commit
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
+    suite.must_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
 
-    let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    let (req_tx, resp_rx) = suite
+        .get_region_cdc_client(region.get_id())
+        .event_feed()
+        .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     thread::sleep(Duration::from_millis(200));
@@ -200,6 +209,106 @@ fn test_observe_executed_cmd() {
         if counter > 5 {
             break;
         }
+    }
+
+    event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_connections_register() {
+    let mut suite = TestSuite::new(3);
+
+    let fp = "cdc_incremental_scan_start";
+    fail::cfg(fp, "pause").unwrap();
+
+    let (k, v) = ("key1".to_owned(), "value".to_owned());
+    // Prewrite
+    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.clone().into_bytes();
+    mutation.value = v.into_bytes();
+    suite.must_kv_prewrite(
+        region.get_id(),
+        vec![mutation],
+        k.clone().into_bytes(),
+        start_ts,
+    );
+    // Region info
+    let region = suite.cluster.get_region(&[]);
+    let mut req = ChangeDataRequest::default();
+    req.region_id = region.get_id();
+    req.set_region_epoch(region.get_region_epoch().clone());
+    // Conn 1
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+    // Conn 2
+    let (req_tx, resp_rx) = suite
+        .get_region_cdc_client(region.get_id())
+        .event_feed()
+        .unwrap();
+    let _req_tx1 = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    // Commit
+    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
+    // Receive events from conn 1
+    let mut events = receive_event(false);
+    while events.len() < 2 {
+        events.extend(receive_event(false).into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events.len());
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 2, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
+    }
+    match events.pop().unwrap().event.unwrap() {
+        // Then it outputs Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
+    }
+    // Receive events from conn 2
+    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    let mut events = receive_event(false);
+    while events.len() < 2 {
+        events.extend(receive_event(false).into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events.len());
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 2, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
+    }
+    match events.pop().unwrap().event.unwrap() {
+        // Then it outputs Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        _ => panic!("unknown event"),
     }
 
     event_feed_wrap.as_ref().replace(None);
