@@ -4,6 +4,9 @@ use engine::rocks::util::get_cf_handle;
 use engine::rocks::Range;
 use engine_traits::CF_WRITE;
 use keys::{data_key, DATA_MAX_KEY};
+use std::sync::mpsc;
+use std::sync::Mutex;
+use std::time::Duration;
 use test_raftstore::*;
 use tikv::storage::mvcc::{TimeStamp, Write, WriteType};
 use tikv_util::config::*;
@@ -43,7 +46,16 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
         let cf = get_cf_handle(&engines.kv, CF_WRITE).unwrap();
         engines.kv.flush_cf(cf, true).unwrap();
     }
-
+    let (sender, receiver) = mpsc::channel();
+    let sync_sender = Mutex::new(sender);
+    fail::cfg_callback(
+        "raftstore::compact::CheckAndCompact:AfterCompact",
+        move || {
+            let sender = sync_sender.lock().unwrap();
+            sender.send(true).unwrap();
+        },
+    )
+    .unwrap();
     for i in 0..1000 {
         let k = format!("k{}", i);
         let k = gen_delete_k(k.as_bytes(), 2.into());
@@ -55,7 +67,7 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     // wait for compaction.
-    sleep_ms(300);
+    receiver.recv_timeout(Duration::from_millis(5000)).unwrap();
 
     for engines in cluster.engines.values() {
         let cf_handle = get_cf_handle(&engines.kv, CF_WRITE).unwrap();
