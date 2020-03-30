@@ -113,8 +113,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ) = crossbeam::channel::unbounded();
         let span_name = "storage root";
         let tracer = Tracer::with_sender(AllSampler, span_tx);
+        let root_span = tracer.span(span_name).start();
         if self.enable_tracing {
-            (span_rx, tracer.span(span_name).start())
+            (span_rx, root_span)
         } else {
             (span_rx, Span::inactive())
         }
@@ -1355,7 +1356,12 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 100.into(),Span::inactive())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    100.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         storage
