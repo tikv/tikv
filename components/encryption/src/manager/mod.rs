@@ -195,6 +195,7 @@ impl Dicts {
     }
 
     fn rotate_key(&mut self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
+        info!("encryption: rotate data key."; "key_id" => key_id);
         match self.key_dict.keys.entry(key_id) {
             // key id collides
             Entry::Occupied(_) => return Ok(false),
@@ -294,7 +295,10 @@ impl DataKeyManager {
         rotation_period: Duration,
         dict_path: &str,
     ) -> Result<Option<DataKeyManager>> {
-        let master_key = master_key_config.create_backend()?;
+        let master_key = master_key_config.create_backend().map_err(|e| {
+            error!("failed to access master key, {}", e);
+            e
+        })?;
         if method != EncryptionMethod::Plaintext && !master_key.is_secure() {
             return Err(Error::Other(
                 "encryption is to enable but master key is either absent or insecure."
