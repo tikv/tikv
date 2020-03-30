@@ -363,9 +363,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             self.deadline.check()?;
 
-            let grand_child_span = child_span.child("coprocessor next batch", |options| options.start());
-            let mut result = self.out_most_executor.next_batch(batch_size, grand_child_span);
-
+            let grand_child_span =
+                child_span.child("coprocessor next batch", |options| options.start());
+            let mut result = self
+                .out_most_executor
+                .next_batch(batch_size, grand_child_span);
 
             let is_drained;
 
@@ -375,7 +377,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 Ok(f) => is_drained = f,
             }
 
-            let _fill_chunk_span = child_span.child("coprocessor fill chunk", |options| options.start());
+            let _fill_chunk_span =
+                child_span.child("coprocessor fill chunk", |options| options.start());
 
             // We will only get warnings limited by max_warning_count. Note that in future we
             // further want to ignore warnings from unused rows. See TODOs in the `result.warnings`
@@ -480,7 +483,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 }
             }
 
-            let next_child_span = child_span.follower("coprocessor next batch", |options| options.start());
+            let next_child_span =
+                child_span.follower("coprocessor next batch", |options| options.start());
             child_span = next_child_span;
         }
     }

@@ -304,6 +304,7 @@ mod tests {
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tipb::ColumnInfo;
 
+    use rustracing::span::Span;
     use tidb_query_common::storage::test_fixture::FixtureStorage;
     use tidb_query_common::util::convert_to_prefix_next;
     use tidb_query_datatype::codec::data_type::*;
