@@ -3,39 +3,31 @@
 //! This module is a subset of rust-prometheus's process collector, without the fd collector
 //! to avoid memory fragmentation issues when open fd is large.
 
-use std::fs;
-use std::io::Read;
-use std::sync::Mutex;
+use std::io::{Error, ErrorKind, Result};
 
 use libc;
 use procinfo::pid as pid_info;
 
-use counter::Counter;
-use desc::Desc;
-use errors::{Error, Result};
-use gauge::Gauge;
-use libc::pid_t;
-use metrics::{Collector, Opts};
-use proto;
+use prometheus::core::{Collector, Desc};
+use prometheus::{proto, Gauge, Opts};
 
 /// Monitors threads of the current process.
 pub fn monitor_memory<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
     let tc = MemoryCollector::new(pid, namespace);
-    prometheus::register(Box::new(tc)).map_err(|e| to_io_err(format!("{:?}", e)))
+    prometheus::register(Box::new(tc)).map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
 }
 
 /// A collector to collect memory metrics.
 pub struct MemoryCollector {
-    pid: pid_t,
+    pid: libc::pid_t,
     descs: Vec<Desc>,
     vsize: Gauge,
     rss: Gauge,
 }
 
 impl MemoryCollector {
-    /// Create a `ProcessCollector` with the given process id and namespace.
-    pub fn new<S: Into<String>>(pid: pid_t, namespace: S) -> ProcessCollector {
+    pub fn new<S: Into<String>>(pid: libc::pid_t, namespace: S) -> Self {
         let namespace = namespace.into();
         let mut descs = Vec::new();
 
@@ -59,7 +51,7 @@ impl MemoryCollector {
         .unwrap();
         descs.extend(rss.desc().into_iter().cloned());
 
-        ProcessCollector {
+        Self {
             pid,
             descs,
             vsize,
@@ -68,7 +60,7 @@ impl MemoryCollector {
     }
 }
 
-impl Collector for ProcessCollector {
+impl Collector for MemoryCollector {
     fn desc(&self) -> Vec<&Desc> {
         self.descs.iter().collect()
     }
