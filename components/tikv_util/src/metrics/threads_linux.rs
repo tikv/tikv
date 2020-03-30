@@ -195,6 +195,7 @@ impl Collector for ThreadsCollector {
 }
 
 /// Gets thread ids of the given process id.
+/// WARN: Don't call this function frequently. Otherwise there will be a lot of memory fragments.
 pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
     Ok(fs::read_dir(format!("/proc/{}/task", pid))?
         .filter_map(|task| {

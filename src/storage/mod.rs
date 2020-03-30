@@ -148,18 +148,6 @@ macro_rules! check_key_size {
 }
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
-    /// Get concurrency of normal readpool.
-    pub fn readpool_normal_concurrency(&self) -> usize {
-        if let ReadPoolHandle::FuturePools {
-            read_pool_normal, ..
-        } = &self.read_pool
-        {
-            read_pool_normal.get_pool_size()
-        } else {
-            0
-        }
-    }
-
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,

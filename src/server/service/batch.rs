@@ -325,7 +325,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
     pub fn new(
         tx: Sender<(u64, batch_commands_response::Response)>,
         timeout: Option<Duration>,
-        readpool_thread_load: Arc<ThreadLoad>,
+        grpc_thread_load: Arc<ThreadLoad>,
     ) -> Self {
         let mut inners = BTreeMap::<BatchableRequestKind, ReqBatcherInner<E, L>>::default();
         inners.insert(
@@ -335,7 +335,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
                     BatchableRequestKind::PointGet,
                     timeout,
                     HistogramReader::new(GRPC_MSG_HISTOGRAM_GLOBAL.kv_get.clone()),
-                    readpool_thread_load,
+                    grpc_thread_load,
                 ),
                 Box::new(ReadBatcher::new()),
             ),
