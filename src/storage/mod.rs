@@ -1355,7 +1355,7 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 100.into())
+                .get(Context::default(), Key::from_raw(b"x"), 100.into(),Span::inactive())
                 .wait(),
         );
         storage
