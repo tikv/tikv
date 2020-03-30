@@ -62,6 +62,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     stats_pool: Option<ThreadPool>,
     grpc_thread_load: Arc<ThreadLoad>,
     yatp_read_pool: Option<ReadPool>,
+    readpool_normal_thread_load: Arc<ThreadLoad>,
     timer: Handle,
 }
 
@@ -90,6 +91,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             None
         };
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
+        let readpool_normal_thread_load =
+            Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
         let env = Arc::new(
             EnvBuilder::new()
@@ -106,6 +109,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
+            Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
             if cfg.enable_request_batch && cfg.request_batch_enable_cross_command {
                 Some(Duration::from(cfg.request_batch_wait_duration))
@@ -164,6 +168,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             stats_pool,
             grpc_thread_load,
             yatp_read_pool,
+            readpool_normal_thread_load,
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
@@ -223,6 +228,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             let tl = Arc::clone(&self.grpc_thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
+        let mut readpool_normal_load_stats = {
+            let tl = Arc::clone(&self.readpool_normal_thread_load);
+            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, READPOOL_NORMAL_THREAD_PREFIX, tl)
+        };
         if let Some(ref p) = self.stats_pool {
             p.spawn(
                 self.timer
@@ -230,6 +239,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                     .map_err(|_| ())
                     .for_each(move |i| {
                         grpc_load_stats.record(i);
+                        readpool_normal_load_stats.record(i);
                         Ok(())
                     }),
             )

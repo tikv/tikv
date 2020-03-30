@@ -67,6 +67,8 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
 
     grpc_thread_load: Arc<ThreadLoad>,
 
+    readpool_normal_thread_load: Arc<ThreadLoad>,
+
     security_mgr: Arc<SecurityManager>,
 }
 
@@ -79,6 +81,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         grpc_thread_load: Arc<ThreadLoad>,
+        readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         req_batch_wait_duration: Option<Duration>,
         security_mgr: Arc<SecurityManager>,
@@ -96,6 +99,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
             ch,
             snap_scheduler,
             grpc_thread_load,
+            readpool_normal_thread_load,
             timer_pool,
             enable_req_batch,
             req_batch_wait_duration,
@@ -828,7 +832,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             let req_batcher = ReqBatcher::new(
                 tx.clone(),
                 self.req_batch_wait_duration,
-                Arc::clone(&self.grpc_thread_load),
+                Arc::clone(&self.readpool_normal_thread_load),
             );
             let req_batcher = Arc::new(Mutex::new(req_batcher));
             if let Some(duration) = self.req_batch_wait_duration {
