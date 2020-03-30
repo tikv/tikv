@@ -12,9 +12,9 @@ use prometheus::core::{Collector, Desc};
 use prometheus::{proto, Gauge, Opts};
 
 /// Monitors threads of the current process.
-pub fn monitor_memory<S: Into<String>>(namespace: S) -> Result<()> {
+pub fn monitor_memory() -> Result<()> {
     let pid = unsafe { libc::getpid() };
-    let tc = MemoryCollector::new(pid, namespace);
+    let tc = MemoryCollector::new(pid);
     prometheus::register(Box::new(tc)).map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
 }
 
@@ -27,27 +27,20 @@ pub struct MemoryCollector {
 }
 
 impl MemoryCollector {
-    pub fn new<S: Into<String>>(pid: libc::pid_t, namespace: S) -> Self {
-        let namespace = namespace.into();
+    pub fn new(pid: libc::pid_t) -> Self {
         let mut descs = Vec::new();
 
-        let vsize = Gauge::with_opts(
-            Opts::new(
-                "memory_virtual_memory_bytes",
-                "Virtual memory size in bytes.",
-            )
-            .namespace(namespace.clone()),
-        )
+        let vsize = Gauge::with_opts(Opts::new(
+            "process_virtual_memory_bytes",
+            "Virtual memory size in bytes.",
+        ))
         .unwrap();
         descs.extend(vsize.desc().into_iter().cloned());
 
-        let rss = Gauge::with_opts(
-            Opts::new(
-                "memory_resident_memory_bytes",
-                "Resident memory size in bytes.",
-            )
-            .namespace(namespace),
-        )
+        let rss = Gauge::with_opts(Opts::new(
+            "process_resident_memory_bytes",
+            "Resident memory size in bytes.",
+        ))
         .unwrap();
         descs.extend(rss.desc().into_iter().cloned());
 
