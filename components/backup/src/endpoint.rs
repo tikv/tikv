@@ -934,7 +934,7 @@ pub mod tests {
                         limiter: Limiter::new(INFINITY),
                         cancel: Arc::default(),
                         is_raw_kv: false,
-                        cf: engine_traits::CF_DEFAULT,
+                        cf: engine::CF_DEFAULT,
                     },
                     resp: tx,
                     concurrency: 4,

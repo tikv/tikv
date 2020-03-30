@@ -148,17 +148,12 @@ mod tests {
     fn test_s3_config() {
         let mut config = Config::default();
         config.set_region("ap-southeast-2".to_string());
-        config.set_bucket("mybucket".to_string());
         config.set_prefix("myprefix".to_string());
         config.set_access_key("abc".to_string());
         config.set_secret_access_key("xyz".to_string());
-        let cases = vec![
-            // bucket is empty
-            Config {
-                bucket: "".to_owned(),
-                ..config.clone()
-            },
-        ];
+        // bucket is empty
+        config.set_bucket("".to_string());
+        let cases = vec![config.clone()];
         for case in cases {
             let r = S3Storage::new(&case);
             assert!(r.is_err());
