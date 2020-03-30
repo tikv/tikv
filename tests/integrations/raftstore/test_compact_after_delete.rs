@@ -48,10 +48,13 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     }
     let (sender, receiver) = mpsc::channel();
     let sync_sender = Mutex::new(sender);
-    fail::cfg_callback("raftstore::compact::CheckAndCompact:AfterCompact", move || {
-        let sender = sync_sender.lock().unwrap();
-        sender.send(true).unwrap();
-    })
+    fail::cfg_callback(
+        "raftstore::compact::CheckAndCompact:AfterCompact",
+        move || {
+            let sender = sync_sender.lock().unwrap();
+            sender.send(true).unwrap();
+        },
+    )
     .unwrap();
     for i in 0..1000 {
         let k = format!("k{}", i);
