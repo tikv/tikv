@@ -35,6 +35,7 @@ pub struct Config {
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
     pub reserve_space: ReadableSize,
     pub block_cache: BlockCacheConfig,
+    pub enable_tracing: bool,
 }
 
 impl Default for Config {
@@ -49,6 +50,7 @@ impl Default for Config {
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVER_SPACE_SIZE),
             block_cache: BlockCacheConfig::default(),
+            enable_tracing: true,
         }
     }
 }

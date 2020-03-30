@@ -93,6 +93,8 @@ pub struct Storage<E: Engine, L: LockManager> {
     max_key_size: usize,
 
     pessimistic_txn_enabled: bool,
+
+    enable_tracing : bool,
 }
 
 impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
@@ -111,6 +113,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             pessimistic_txn_enabled: self.pessimistic_txn_enabled,
+            enable_tracing: self.enable_tracing,
         }
     }
 }
@@ -187,6 +190,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             pessimistic_txn_enabled,
+            enable_tracing : config.enable_tracing,
         })
     }
 
