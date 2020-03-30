@@ -4,6 +4,7 @@ use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 use raftstore::coprocessor::RegionInfoProvider;
+use rustracing_jaeger::Span;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
@@ -104,7 +105,9 @@ impl<E: Engine> SyncTestStorage<E> {
         key: &Key,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Option<Value>> {
-        self.store.get(ctx, key.to_owned(), start_ts.into()).wait()
+        self.store
+            .get(ctx, key.to_owned(), start_ts.into(), Span::inactive())
+            .wait()
     }
 
     #[allow(dead_code)]

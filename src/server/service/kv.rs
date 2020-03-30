@@ -1079,6 +1079,7 @@ fn future_get<E: Engine, L: LockManager>(
             req.take_context(),
             Key::from_raw(req.get_key()),
             req.get_version().into(),
+            Span::inactive(),
         )
         .then(|v| {
             let mut resp = GetResponse::default();
@@ -1658,6 +1659,7 @@ pub mod batch_commands_request {
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
+use rustracing_jaeger::Span;
 
 struct BatchRespCollector;
 impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>

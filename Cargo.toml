@@ -175,7 +175,6 @@ raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-rustracing_jaeger = { git = "https://github.com/renkai/rustracing_jaeger", rev = "c48883fe2ad3153a5fc1fe26a79690f59930d3ed" }
 prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0" }
 
 [patch.'https://github.com/pingcap/kvproto.git']

@@ -4299,6 +4299,7 @@ dependencies = [
  "futures 0.1.29",
  "kvproto",
  "raftstore",
+ "rustracing_jaeger",
  "test_raftstore",
  "tikv",
  "tikv_util",
@@ -5617,8 +5618,3 @@ dependencies = [
  "glob",
  "libc",
 ]
-
-[[patch.unused]]
-name = "rustracing_jaeger"
-version = "0.4.0"
-source = "git+https://github.com/renkai/rustracing_jaeger?rev=c48883fe2ad3153a5fc1fe26a79690f59930d3ed#c48883fe2ad3153a5fc1fe26a79690f59930d3ed"

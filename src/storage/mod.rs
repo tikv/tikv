@@ -257,9 +257,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
+        root_span: Span,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
-        let (span_rx, root_span) = self.root_span(CMD);
+        // let (span_rx, root_span) = self.root_span(CMD);
 
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -287,7 +288,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                     );
-                    let get_span = root_span.child("get key", |options| options.start());
+                    let _get_span = root_span
+                        .child(format!("executing command {}", CMD), |options| {
+                            options.start()
+                        });
                     let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
@@ -1354,7 +1358,12 @@ mod tests {
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 101.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    101.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         storage
@@ -1371,13 +1380,23 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 100.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    100.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 101.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    101.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
     }
@@ -1418,7 +1437,12 @@ mod tests {
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 1.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    1.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_error(
@@ -1910,13 +1934,23 @@ mod tests {
         expect_value(
             b"100".to_vec(),
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 120.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    120.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_value(
             b"101".to_vec(),
             storage
-                .get(Context::default(), Key::from_raw(b"y"), 120.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"y"),
+                    120.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         storage
@@ -1945,7 +1979,12 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 100.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    100.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         storage
@@ -2008,7 +2047,12 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 105.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    105.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
     }
@@ -2064,7 +2108,12 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"x"), ts(230, 0))
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    ts(230, 0),
+                    Span::inactive(),
+                )
                 .wait(),
         );
     }
@@ -2075,7 +2124,11 @@ mod tests {
         let (tx, rx) = channel();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(storage.get(ctx, Key::from_raw(b"x"), 100.into()).wait());
+        expect_none(
+            storage
+                .get(ctx, Key::from_raw(b"x"), 100.into(), Span::inactive())
+                .wait(),
+        );
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
@@ -2101,12 +2154,18 @@ mod tests {
         rx.recv().unwrap();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(storage.get(ctx, Key::from_raw(b"x"), 100.into()).wait());
+        expect_none(
+            storage
+                .get(ctx, Key::from_raw(b"x"), 100.into(), Span::inactive())
+                .wait(),
+        );
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            storage.get(ctx, Key::from_raw(b"x"), 101.into()).wait(),
+            storage
+                .get(ctx, Key::from_raw(b"x"), 101.into(), Span::inactive())
+                .wait(),
         );
     }
 
@@ -2118,7 +2177,12 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 100.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    100.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         storage
@@ -2155,7 +2219,9 @@ mod tests {
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            storage.get(ctx, Key::from_raw(b"x"), 101.into()).wait(),
+            storage
+                .get(ctx, Key::from_raw(b"x"), 101.into(), Span::inactive())
+                .wait(),
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
@@ -2200,19 +2266,34 @@ mod tests {
         expect_value(
             b"100".to_vec(),
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 101.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    101.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .get(Context::default(), Key::from_raw(b"y"), 101.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"y"),
+                    101.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .get(Context::default(), Key::from_raw(b"z"), 101.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"z"),
+                    101.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
 
@@ -2229,18 +2310,33 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"x"), 101.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"x"),
+                    101.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"y"), 101.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"y"),
+                    101.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .get(Context::default(), Key::from_raw(b"z"), 101.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"z"),
+                    101.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
 
@@ -2256,7 +2352,12 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .get(Context::default(), Key::from_raw(b"z"), 101.into())
+                .get(
+                    Context::default(),
+                    Key::from_raw(b"z"),
+                    101.into(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
     }

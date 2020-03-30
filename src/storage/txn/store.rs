@@ -10,8 +10,6 @@ use crate::storage::mvcc::{
     PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
-use rustracing_jaeger::Span;
-
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -175,7 +173,7 @@ impl EntryBatch {
         self.entries.len() == 0
     }
 
-    pub fn iter(&self) -> impl Iterator<Item=&TxnEntry> {
+    pub fn iter(&self) -> impl Iterator<Item = &TxnEntry> {
         self.entries.iter()
     }
 
@@ -197,7 +195,7 @@ pub struct SnapshotStore<S: Snapshot> {
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
-    fn get(&self, key: &Key, _get_span: Span, statistics: &mut Statistics) -> Result<Option<Value>> {
+    fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
@@ -583,7 +581,7 @@ mod tests {
                         0,
                         TimeStamp::default(),
                     )
-                        .unwrap();
+                    .unwrap();
                 }
                 self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }
