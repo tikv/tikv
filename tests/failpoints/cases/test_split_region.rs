@@ -89,7 +89,7 @@ fn gen_split_region() -> (Region, Region, Region) {
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
     if left == right {
-        cluster.wait_region_split_max_cnt(&region, 20, 250, false);
+        cluster.wait_region_split_max_cnt(&region, 20, 50, false);
     }
 
     let left = pd_client.get_region(b"").unwrap();

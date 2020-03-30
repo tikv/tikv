@@ -2535,7 +2535,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     #[inline]
     fn region_split_skip_max_count(&self) -> u8 {
         fail_point!("region_split_skip_max_count", |_| { u8::max_value() });
-        2
+        3
     }
 
     fn on_split_region_check_tick(&mut self) {
