@@ -342,7 +342,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     self.pool.spawn(sink.fail(status)).forget();
                     return;
                 }
-                SNAP_TASK_COUNTER.with_label_values(&["recv"]).inc();
+                SNAP_TASK_COUNTER_STATIC.recv.inc();
 
                 let snap_mgr = self.snap_mgr.clone();
                 let raft_router = self.raft_router.clone();
@@ -368,7 +368,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     cb(Err(Error::Other("Too many sending snapshot tasks".into())));
                     return;
                 }
-                SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
+                SNAP_TASK_COUNTER_STATIC.send.inc();
 
                 let env = Arc::clone(&self.env);
                 let mgr = self.snap_mgr.clone();

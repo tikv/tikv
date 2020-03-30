@@ -4,6 +4,7 @@ use crate::db_options::RocksTitanDBOptions;
 use engine_traits::ColumnFamilyOptions;
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
 
+#[derive(Clone)]
 pub struct RocksColumnFamilyOptions(RawCFOptions);
 
 impl RocksColumnFamilyOptions {

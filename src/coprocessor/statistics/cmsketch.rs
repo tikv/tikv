@@ -68,9 +68,9 @@ mod tests {
     use rand::SeedableRng;
     use zipf::ZipfDistribution;
 
-    use tidb_query::codec::datum;
-    use tidb_query::codec::datum::Datum;
-    use tidb_query::expr::EvalContext;
+    use tidb_query_datatype::codec::datum;
+    use tidb_query_datatype::codec::datum::Datum;
+    use tidb_query_datatype::expr::EvalContext;
     use tikv_util::collections::HashMap;
 
     impl CmSketch {
