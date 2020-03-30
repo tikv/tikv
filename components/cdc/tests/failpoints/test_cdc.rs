@@ -14,6 +14,7 @@ use kvproto::cdcpb::{
     ChangeDataRequest,
 };
 use kvproto::kvrpcpb::*;
+use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::coprocessor::{ObserverContext, RoleObserver};
@@ -223,6 +224,8 @@ fn test_connections_register() {
     fail::cfg(fp, "pause").unwrap();
 
     let (k, v) = ("key1".to_owned(), "value".to_owned());
+    // Region info
+    let region = suite.cluster.get_region(&[]);
     // Prewrite
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
@@ -235,61 +238,50 @@ fn test_connections_register() {
         k.clone().into_bytes(),
         start_ts,
     );
-    // Region info
-    let region = suite.cluster.get_region(&[]);
+
     let mut req = ChangeDataRequest::default();
     req.region_id = region.get_id();
-    req.set_region_epoch(region.get_region_epoch().clone());
-    // Conn 1
+    req.set_region_epoch(RegionEpoch::default());
+
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = req_tx
+    let req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
+    let mut events = receive_event(false);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_epoch_not_match(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    // Conn 1
+    req.set_region_epoch(region.get_region_epoch().clone());
+    let _req_tx1 = req_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+    thread::sleep(Duration::from_secs(1));
+    // Close conn 1
+    event_feed_wrap.as_ref().replace(None);
     // Conn 2
     let (req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
     let _req_tx1 = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    // Commit
-    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
-    // Receive events from conn 1
-    let mut events = receive_event(false);
-    while events.len() < 2 {
-        events.extend(receive_event(false).into_iter());
-    }
-    assert_eq!(events.len(), 2, "{:?}", events.len());
-    match events.pop().unwrap().event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 2, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
-            let e = &es.entries[1];
-            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
-        }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
-    }
-    match events.pop().unwrap().event.unwrap() {
-        // Then it outputs Initialized event.
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
-        }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
-    }
-    // Receive events from conn 2
     event_feed_wrap.as_ref().replace(Some(resp_rx));
+    // Split region.
+    suite.cluster.must_split(&region, b"k0");
+    fail::remove(fp);
+    // Receive events from conn 2
     let mut events = receive_event(false);
     while events.len() < 2 {
         events.extend(receive_event(false).into_iter());
     }
     assert_eq!(events.len(), 2, "{:?}", events.len());
-    match events.pop().unwrap().event.unwrap() {
+    match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
@@ -301,13 +293,9 @@ fn test_connections_register() {
         _ => panic!("unknown event"),
     }
     match events.pop().unwrap().event.unwrap() {
-        // Then it outputs Initialized event.
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_epoch_not_match(), "{:?}", err);
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
         _ => panic!("unknown event"),
     }
 

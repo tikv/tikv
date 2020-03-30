@@ -255,9 +255,10 @@ impl Delegate {
             &self.downstreams
         };
         assert!(
-            downstreams.len() == 0,
-            "region {} miss downstream",
-            self.region_id
+            downstreams.len() != 0,
+            "region {} miss downstream, event: {:?}",
+            self.region_id,
+            change_data_event,
         );
         for i in 0..downstreams.len() - 1 {
             downstreams[i].sink_event(change_data_event.clone(), size);
