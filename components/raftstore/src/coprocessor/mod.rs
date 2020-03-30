@@ -185,7 +185,7 @@ impl Cmd {
 pub struct CmdBatch {
     pub downstream_id: DownstreamID,
     pub region_id: u64,
-    cmds: Vec<Cmd>,
+    pub cmds: Vec<Cmd>,
 }
 
 impl CmdBatch {

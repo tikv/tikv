@@ -100,8 +100,10 @@ impl Downstream {
 struct Pending {
     // Batch of RaftCommand observed from raftstore
     multi_batch: Vec<CmdBatch>,
+    cmd_bytes: usize,
     pub downstreams: Vec<Downstream>,
     scan: Vec<(DownstreamID, Vec<Option<TxnEntry>>)>,
+    scan_bytes: usize,
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -286,9 +288,11 @@ impl Delegate {
             for (downstream_id, entries) in pending.scan {
                 self.on_scan(downstream_id, entries);
             }
+            CDC_PENDING_SCAN_BYTES.inc_by(-(pending.scan_bytes as i64));
             for batch in pending.multi_batch {
                 self.on_batch(batch)?;
             }
+            CDC_PENDING_CMD_BYTES.inc_by(-(pending.cmd_bytes as i64));
         }
         info!("region is ready"; "region_id" => self.region_id);
         Ok(())
@@ -319,7 +323,26 @@ impl Delegate {
 
     pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
         if let Some(pending) = self.pending.as_mut() {
+            let mut cmd_bytes = 0;
+            for cmd in batch.cmds.iter() {
+                let Cmd {
+                    ref index,
+                    ref request,
+                    ref response,
+                } = cmd;
+                if !response.get_header().has_error() {
+                    if !request.has_admin_request() {
+                        for req in request.requests.iter() {
+                            let put = req.get_put();
+                            cmd_bytes += put.get_key().len();
+                            cmd_bytes += put.get_value().len();
+                        }
+                    }
+                }
+            }
             pending.multi_batch.push(batch);
+            pending.cmd_bytes += cmd_bytes;
+            CDC_PENDING_CMD_BYTES.inc_by(cmd_bytes as i64);
             return Ok(());
         }
         // Stale CmdBatch, drop it sliently.
@@ -350,6 +373,27 @@ impl Delegate {
     pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
         if let Some(pending) = self.pending.as_mut() {
             pending.scan.push((downstream_id, entries));
+            let mut scan_bytes = 0;
+            for entry in entries.iter() {
+                match entry.as_ref() {
+                    Some(TxnEntry::Prewrite {
+                        ref default,
+                        ref lock,
+                    }) => {
+                        scan_bytes += default.0.len() + default.1.len();
+                        scan_bytes += lock.0.len() + lock.1.len();
+                    }
+                    Some(TxnEntry::Commit {
+                        ref default,
+                        ref write,
+                    }) => {
+                        scan_bytes += default.0.len() + default.1.len();
+                        scan_bytes += write.0.len() + write.1.len();
+                    }
+                }
+            }
+            pending.scan_bytes += scan_bytes;
+            CDC_PENDING_SCAN_BYTES.inc_by(scan_bytes as i64);
             return;
         }
         let d = if let Some(d) = self.downstreams.iter_mut().find(|d| d.id == downstream_id) {
