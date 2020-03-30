@@ -13,7 +13,7 @@ use protobuf::Message;
 use crate::config::MasterKeyConfig;
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
-use crate::master_key::{Backend, PlaintextBackend};
+use crate::master_key::{create_backend, Backend, PlaintextBackend};
 use crate::{Error, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
@@ -48,7 +48,8 @@ impl Dicts {
 
         // File dict is saved in plaintext.
         let file_file = EncryptedFile::new(base, FILE_DICT_NAME);
-        let plaintext = MasterKeyConfig::Plaintext.create_backend()?;
+        let plaintext_config = MasterKeyConfig::Plaintext;
+        let plaintext = create_backend(&plaintext_config)?;
         let file_bytes = file_file.read(plaintext.as_ref());
 
         let key_file = EncryptedFile::new(base, KEY_DICT_NAME);
@@ -295,7 +296,7 @@ impl DataKeyManager {
         rotation_period: Duration,
         dict_path: &str,
     ) -> Result<Option<DataKeyManager>> {
-        let master_key = master_key_config.create_backend().map_err(|e| {
+        let master_key = create_backend(master_key_config).map_err(|e| {
             error!("failed to access master key, {}", e);
             e
         })?;
@@ -334,7 +335,7 @@ impl DataKeyManager {
                       current master key: {:?}, previous master key: {:?}",
                     master_key_config, previous_master_key_config
                 );
-                let previous_master_key = previous_master_key_config.create_backend()?;
+                let previous_master_key = create_backend(previous_master_key_config)?;
                 let mut dicts =
                     Dicts::open(dict_path, rotation_period, previous_master_key.as_ref())
                         .map_err(|e| {

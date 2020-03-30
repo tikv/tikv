@@ -41,7 +41,7 @@ impl FileBackend {
                 if read_len != file_len {
                     return Err(Error::Other(
                         format!(
-                            "mismatch master key file size read, expected {}, actual{}",
+                            "mismatch master key file size read, expected {}, actual {}",
                             file_len, read_len
                         )
                         .into(),

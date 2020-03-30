@@ -2,7 +2,9 @@
 
 use kvproto::encryptionpb::EncryptedContent;
 
-use crate::Result;
+use crate::{MasterKeyConfig, Result};
+
+use std::sync::Arc;
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///
@@ -39,6 +41,15 @@ impl Backend for PlaintextBackend {
         // plain text backend is insecure.
         false
     }
+}
+
+pub(crate) fn create_backend(config: &MasterKeyConfig) -> Result<Arc<dyn Backend>> {
+    Ok(match config {
+        MasterKeyConfig::Plaintext => Arc::new(PlaintextBackend {}) as _,
+        MasterKeyConfig::File { method, path } => Arc::new(FileBackend::new(*method, path)?) as _,
+        #[cfg(test)]
+        MasterKeyConfig::Mock(mock) => mock.clone() as _,
+    })
 }
 
 // To make MasterKeyConfig able to compile.

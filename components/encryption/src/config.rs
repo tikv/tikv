@@ -1,12 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::master_key::{Backend, FileBackend, PlaintextBackend};
-use crate::Result;
-
-use std::sync::Arc;
-
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::config::ReadableDuration;
+
+#[cfg(test)]
+use crate::master_key::Backend;
+#[cfg(test)]
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -58,6 +58,7 @@ impl Default for MasterKeyConfig {
     }
 }
 
+// Derive directive does not work, since MasterKeyConfig::Mock cannot implement PartialEq.
 impl PartialEq for MasterKeyConfig {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -74,25 +75,11 @@ impl PartialEq for MasterKeyConfig {
     }
 }
 
-impl MasterKeyConfig {
-    pub fn create_backend(&self) -> Result<Arc<dyn Backend>> {
-        Ok(match &self {
-            MasterKeyConfig::Plaintext => Arc::new(PlaintextBackend {}) as _,
-            MasterKeyConfig::File { method, path } => {
-                Arc::new(FileBackend::new(*method, path)?) as _
-            }
-            #[cfg(test)]
-            MasterKeyConfig::Mock(mock) => mock.clone() as _,
-        })
-    }
-}
-
 mod encryption_method_serde {
     use super::EncryptionMethod;
     use std::fmt;
 
     use serde::de::{self, Unexpected, Visitor};
-    use serde::ser::Error;
     use serde::{Deserializer, Serializer};
 
     const UNKNOWN: &str = "unknown";
@@ -107,11 +94,11 @@ mod encryption_method_serde {
         S: Serializer,
     {
         match method {
+            EncryptionMethod::Unknown => serializer.serialize_str(UNKNOWN),
             EncryptionMethod::Plaintext => serializer.serialize_str(PLAINTEXT),
             EncryptionMethod::Aes128Ctr => serializer.serialize_str(AES128_CTR),
             EncryptionMethod::Aes192Ctr => serializer.serialize_str(AES192_CTR),
             EncryptionMethod::Aes256Ctr => serializer.serialize_str(AES256_CTR),
-            _ => Err(Error::custom("unknown encryption method")),
         }
     }
 
