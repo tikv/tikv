@@ -6,7 +6,7 @@ If you haven't already, please read TiKV's [CONTRIBUTING](https://github.com/tik
 If you're unsure about anything, just ask; somebody should be along to answer within a day or two.
 
 PR Title Format:
-1. pkg [, pkg2, pkg3]: what's changed
+1. module [, module2, module3]: what's changed
 2. *: what's changed
 -->
 
@@ -21,8 +21,6 @@ Problem Summary:
 Proposal: [xxx](url) <!-- REMOVE this line if not applicable -->
 
 What's Changed:
-
-How it Works:
 
 ### Related changes
 

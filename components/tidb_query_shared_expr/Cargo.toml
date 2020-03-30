@@ -1,0 +1,12 @@
+[package]
+name = "tidb_query_shared_expr"
+version = "0.0.1"
+edition = "2018"
+publish = false
+description = "Shared utility of expression used by tidb_query_normal_expr and tidb_query_vec_expr"
+
+[dependencies]
+rand = "0.6.5"
+time = "0.1"
+tidb_query_datatype = { path = "../tidb_query_datatype" }
+
