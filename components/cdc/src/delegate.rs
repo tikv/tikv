@@ -286,7 +286,6 @@ impl Delegate {
             for batch in pending.multi_batch {
                 self.on_batch(batch)?;
             }
-            CDC_PENDING_CMD_BYTES.inc_by(-(pending.cmd_bytes as i64));
         }
         info!("region is ready"; "region_id" => self.region_id);
         Ok(())
@@ -366,12 +365,12 @@ impl Delegate {
     }
 
     pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
-        if let Some(pending) = self.pending.as_mut() {
-            pending
-                .downstreams
-                .iter_mut()
-                .find(|d| d.id == downstream_id)
-        } else if let Some(d) = self.downstreams.iter_mut().find(|d| d.id == downstream_id) {
+        let downstreams = if let Some(pending) = self.pending.as_mut() {
+            &pending.downstreams
+        } else {
+            &self.downstreams
+        };
+        let d = if let Some(d) = downstreams.iter_mut().find(|d| d.id == downstream_id) {
             d
         } else {
             warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
