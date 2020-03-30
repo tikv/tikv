@@ -102,11 +102,13 @@ impl SecurityConfig {
     /// Determine if the cert file has been modified.
     /// If modified, update the timestamp of this modification.
     fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
+        let this = fs::metadata(&self.cert_path)?.modified()?;
         if let Some(last) = last {
-            if *last == fs::metadata(&self.cert_path)?.modified()? {
+            if *last == this {
                 return Ok(false);
             }
         }
+        *last = Some(this);
         Ok(true)
     }
 }
@@ -236,7 +238,7 @@ mod tests {
     use super::*;
 
     use std::fs;
-
+    use std::io::Write;
     use tempfile::Builder;
 
     #[test]
@@ -290,5 +292,21 @@ mod tests {
         assert_eq!(ca, vec![0]);
         assert_eq!(cert, vec![1]);
         assert_eq!(key, vec![2]);
+    }
+
+    #[test]
+    fn test_modify_file() {
+        let mut file = Builder::new().prefix("test_modify").tempfile().unwrap();
+        let mut cfg = SecurityConfig::default();
+        cfg.cert_path = file.path().to_str().unwrap().to_owned();
+
+        let mut last = None;
+        assert!(cfg.is_modified(&mut last).unwrap());
+        assert!(!cfg.is_modified(&mut last).unwrap());
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        writeln!(file, "something").unwrap();
+        assert!(cfg.is_modified(&mut last).unwrap());
+        assert!(!cfg.is_modified(&mut last).unwrap());
     }
 }
