@@ -109,15 +109,17 @@ fn calc_cpu_load(elapsed_millis: usize, start_usage: f64, end_usage: f64) -> usi
 fn poll_task(pid: pid_t, prefix: &str) -> (Vec<pid_t>, f64) {
     let tids = get_thread_ids(pid).unwrap();
     let mut cpu_total_count = 0f64;
+    let mut tids_match_prefix = Vec::with_capacity(tids.len());
     for tid in &tids {
         if let Ok(stat) = pid::stat_task(pid, *tid) {
             if !stat.command.starts_with(prefix) {
                 continue;
             }
+            tids_match_prefix.push(*tid);
             cpu_total_count += cpu_total(&stat);
         }
     }
-    (tids, cpu_total_count)
+    (tids_match_prefix, cpu_total_count)
 }
 
 #[cfg(test)]
