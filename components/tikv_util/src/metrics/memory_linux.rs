@@ -46,7 +46,7 @@ impl MemoryCollector {
                 "memory_resident_memory_bytes",
                 "Resident memory size in bytes.",
             )
-            .namespace(namespace.clone()),
+            .namespace(namespace),
         )
         .unwrap();
         descs.extend(rss.desc().into_iter().cloned());
