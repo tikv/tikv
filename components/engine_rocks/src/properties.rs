@@ -403,6 +403,7 @@ const PROP_MIN_TS: &str = "tikv.min_ts";
 const PROP_MAX_TS: &str = "tikv.max_ts";
 const PROP_NUM_ROWS: &str = "tikv.num_rows";
 const PROP_NUM_PUTS: &str = "tikv.num_puts";
+const PROP_NUM_DELETES: &str = "tikv.num_deletes";
 const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
 const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
 const PROP_ROWS_INDEX: &str = "tikv.rows_index";
@@ -414,6 +415,7 @@ pub struct MvccProperties {
     pub max_ts: TimeStamp,     // The maximal timestamp.
     pub num_rows: u64,         // The number of rows.
     pub num_puts: u64,         // The number of MVCC puts of all rows.
+    pub num_deletes: u64,      // The number of MVCC deletes of all rows.
     pub num_versions: u64,     // The number of MVCC versions of all rows.
     pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
 }
@@ -425,6 +427,7 @@ impl MvccProperties {
             max_ts: TimeStamp::zero(),
             num_rows: 0,
             num_puts: 0,
+            num_deletes: 0,
             num_versions: 0,
             max_row_versions: 0,
         }
@@ -435,6 +438,7 @@ impl MvccProperties {
         self.max_ts = cmp::max(self.max_ts, other.max_ts);
         self.num_rows += other.num_rows;
         self.num_puts += other.num_puts;
+        self.num_deletes += other.num_deletes;
         self.num_versions += other.num_versions;
         self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
     }
@@ -445,6 +449,7 @@ impl MvccProperties {
         props.encode_u64(PROP_MAX_TS, self.max_ts.into_inner());
         props.encode_u64(PROP_NUM_ROWS, self.num_rows);
         props.encode_u64(PROP_NUM_PUTS, self.num_puts);
+        props.encode_u64(PROP_NUM_DELETES, self.num_deletes);
         props.encode_u64(PROP_NUM_VERSIONS, self.num_versions);
         props.encode_u64(PROP_MAX_ROW_VERSIONS, self.max_row_versions);
         props
@@ -457,6 +462,10 @@ impl MvccProperties {
         res.num_rows = props.decode_u64(PROP_NUM_ROWS)?;
         res.num_puts = props.decode_u64(PROP_NUM_PUTS)?;
         res.num_versions = props.decode_u64(PROP_NUM_VERSIONS)?;
+        // To be compatible with old versions.
+        res.num_deletes = props
+            .decode_u64(PROP_NUM_DELETES)
+            .unwrap_or_else(|_| res.num_versions - res.num_puts);
         res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
         Ok(res)
     }
@@ -527,8 +536,10 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             }
         };
 
-        if write_type == WriteType::Put {
-            self.props.num_puts += 1;
+        match write_type {
+            WriteType::Put => self.props.num_puts += 1,
+            WriteType::Delete => self.props.num_deletes += 1,
+            _ => {}
         }
 
         // Add new row.
