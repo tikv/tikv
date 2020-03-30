@@ -43,12 +43,17 @@ use crate::storage::{
     },
     types::StorageCallbackType,
 };
+use crossbeam::channel::{Receiver, Sender};
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use futures::Future;
 use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
 use rand::prelude::*;
+use rustracing::sampler::AllSampler;
+use rustracing::span::FinishedSpan;
+use rustracing_jaeger::span::SpanContextState;
+use rustracing_jaeger::{Span, Tracer};
 use std::sync::{atomic, Arc};
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
@@ -94,7 +99,24 @@ pub struct Storage<E: Engine, L: LockManager> {
 
     pessimistic_txn_enabled: bool,
 
-    enable_tracing : bool,
+    enable_tracing: bool,
+}
+
+impl<E: Engine, L: LockManager> Storage<E, L> {
+    #[inline]
+    fn root_span(&self) -> (Receiver<FinishedSpan<SpanContextState>>, Span) {
+        let (span_tx, span_rx): (
+            Sender<FinishedSpan<SpanContextState>>,
+            Receiver<FinishedSpan<SpanContextState>>,
+        ) = crossbeam::channel::unbounded();
+
+        let tracer = Tracer::with_sender(AllSampler, span_tx);
+        if self.enable_tracing {
+            (span_rx, tracer.span("coprocessor endpoint").start())
+        } else {
+            (span_rx, Span::inactive())
+        }
+    }
 }
 
 impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
@@ -190,7 +212,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             pessimistic_txn_enabled,
-            enable_tracing : config.enable_tracing,
+            enable_tracing: config.enable_tracing,
         })
     }
 
@@ -226,6 +248,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get value of the given key from a snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
+    /// //TODO 糊 tracing
     pub fn get(
         &self,
         mut ctx: Context,
@@ -283,6 +306,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get values of a set of keys with seperate context from a snapshot, return a list of `Result`s.
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
+    ///  //TODO 糊 tracing
     pub fn batch_get_command(
         &self,
         gets: Vec<PointGetCommand>,
@@ -337,6 +361,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get values of a set of keys in a batch from the snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
+    /// //TODO 糊 tracing
     pub fn batch_get(
         &self,
         mut ctx: Context,
@@ -548,6 +573,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Get the value of a raw key.
+    /// TODO 糊 tracing
     pub fn raw_get(
         &self,
         ctx: Context,
@@ -590,6 +616,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Get the values of a set of raw keys, return a list of `Result`s.
+    /// //TODO 糊tracing
     pub fn raw_batch_get_command(
         &self,
         cf: String,
@@ -625,6 +652,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Get the values of some raw keys in a batch.
+    /// //todo 糊 tracing
     pub fn raw_batch_get(
         &self,
         ctx: Context,

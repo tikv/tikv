@@ -3643,8 +3643,9 @@ dependencies = [
 
 [[package]]
 name = "rustracing_jaeger"
-version = "0.4.0"
-source = "git+https://github.com/renkai/rustracing_jaeger?rev=c48883fe2ad3153a5fc1fe26a79690f59930d3ed#c48883fe2ad3153a5fc1fe26a79690f59930d3ed"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00922bb65157afaa775d0cf4fc9d962bcc3c56e7a9544004674c40af826e9dd9"
 dependencies = [
  "crossbeam-channel",
  "hostname",
@@ -5616,3 +5617,8 @@ dependencies = [
  "glob",
  "libc",
 ]
+
+[[patch.unused]]
+name = "rustracing_jaeger"
+version = "0.4.0"
+source = "git+https://github.com/renkai/rustracing_jaeger?rev=c48883fe2ad3153a5fc1fe26a79690f59930d3ed#c48883fe2ad3153a5fc1fe26a79690f59930d3ed"

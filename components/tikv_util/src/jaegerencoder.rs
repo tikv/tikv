@@ -1,6 +1,6 @@
 use rustracing::span::FinishedSpan;
-use rustracing_jaeger::jaeger::{Batch, Process};
 use rustracing_jaeger::span::SpanContextState;
+use rustracing_jaeger::thrift::jaeger::{Batch, Process};
 use rustracing_jaeger::{Error, ErrorKind};
 use thrift_codec::message::Message;
 use thrift_codec::BinaryEncode;
@@ -22,7 +22,7 @@ pub fn encode_spans_in_jaeger_binary(
         },
         spans: spans.iter().map(From::from).collect(),
     };
-    let message = Message::from(rustracing_jaeger::agent::EmitBatchNotification { batch });
+    let message = Message::from(rustracing_jaeger::thrift::agent::EmitBatchNotification { batch });
     let mut bytes = Vec::new();
     message
         .binary_encode(&mut bytes)
