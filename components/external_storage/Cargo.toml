@@ -27,7 +27,7 @@ prost-codec = ["kvproto/prost-codec"]
 protobuf-codec = ["kvproto/protobuf-codec"]
 
 [dev-dependencies]
+structopt = "0.3"
 rusoto_mock = "0.42.0"
 tempfile = "3.0"
-clap = { version = "2.32", features = ["yaml"] }
 rust-ini = "0.14.0"

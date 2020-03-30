@@ -467,7 +467,6 @@ dependencies = [
  "textwrap",
  "unicode-width",
  "vec_map",
- "yaml-rust",
 ]
 
 [[package]]
@@ -1013,7 +1012,6 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
- "clap",
  "futures 0.1.29",
  "futures 0.3.1",
  "futures-executor",
@@ -1028,6 +1026,7 @@ dependencies = [
  "rust-ini",
  "slog",
  "slog-global",
+ "structopt 0.3.4",
  "tempfile",
  "tikv_alloc",
  "tokio",
@@ -4798,12 +4797,6 @@ name = "xml-rs"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
-
-[[package]]
-name = "yaml-rust"
-version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e66366e18dc58b46801afbf2ca7661a9f59cc8c5962c29892b6039b4f86fa992"
 
 [[package]]
 name = "zipf"
