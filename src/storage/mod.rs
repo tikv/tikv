@@ -104,15 +104,15 @@ pub struct Storage<E: Engine, L: LockManager> {
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
     #[inline]
-    fn root_span(&self) -> (Receiver<FinishedSpan<SpanContextState>>, Span) {
+    fn root_span(&self, cmd_name: &str) -> (Receiver<FinishedSpan<SpanContextState>>, Span) {
         let (span_tx, span_rx): (
             Sender<FinishedSpan<SpanContextState>>,
             Receiver<FinishedSpan<SpanContextState>>,
         ) = crossbeam::channel::unbounded();
-
+        let span_name = format!("storage root command: {}", cmd_name);
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         if self.enable_tracing {
-            (span_rx, tracer.span("coprocessor endpoint").start())
+            (span_rx, tracer.span(span_name).start())
         } else {
             (span_rx, Span::inactive())
         }
@@ -222,7 +222,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Get a snapshot of `engine`.
-    fn snapshot(engine: &E, ctx: &Context) -> impl std::future::Future<Output = Result<E::Snap>> {
+    fn snapshot(
+        engine: &E,
+        _span: Span,
+        ctx: &Context,
+    ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let (callback, future) = tikv_util::future::paired_std_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         // make engine not cross yield point
@@ -248,7 +252,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get value of the given key from a snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
-    /// //TODO 糊 tracing
     pub fn get(
         &self,
         mut ctx: Context,
@@ -256,19 +259,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         start_ts: TimeStamp,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
+        let (span_rx, root_span) = self.root_span(CMD);
+
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let waiting_pool_span = root_span.child("waiting executor pool", |options| options.start());
 
         let res = self.read_pool.spawn_handle(
             async move {
+                std::mem::drop(waiting_pool_span);
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-
+                let snapshot_span = root_span.child("take snapshot", |options| options.start());
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snapshot_span, &ctx))
+                        .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -278,6 +287,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                     );
+                    let get_span = root_span.child("get key", |options| options.start());
                     let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
@@ -321,7 +331,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                        .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     let mut snap_store = SnapshotStore::new(
@@ -378,7 +390,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                        .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -449,7 +463,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                        .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -588,7 +604,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                        .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
@@ -631,7 +649,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                        .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let cf = Self::rawkv_cf(&cf)?;
                     let mut results = vec![];
@@ -667,7 +687,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                        .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
                     let cf = Self::rawkv_cf(&cf)?;
@@ -937,7 +959,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                        .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let end_key = end_key.map(Key::from_encoded);
 
@@ -1040,7 +1064,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                        .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     if !Self::check_key_ranges(&ranges, reverse) {
@@ -2821,8 +2847,12 @@ mod tests {
         expect_multi_values(
             results.clone().collect(),
             block_on(async {
-                let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, &ctx).await?;
+                let snapshot = <Storage<RocksEngine, DummyLockManager>>::snapshot(
+                    &engine,
+                    Span::inactive(),
+                    &ctx,
+                )
+                .await?;
                 <Storage<RocksEngine, DummyLockManager>>::forward_raw_scan(
                     &snapshot,
                     &"".to_string(),
@@ -2837,8 +2867,12 @@ mod tests {
         expect_multi_values(
             results.rev().collect(),
             block_on(async move {
-                let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, &ctx).await?;
+                let snapshot = <Storage<RocksEngine, DummyLockManager>>::snapshot(
+                    &engine,
+                    Span::inactive(),
+                    &ctx,
+                )
+                .await?;
                 <Storage<RocksEngine, DummyLockManager>>::reverse_raw_scan(
                     &snapshot,
                     &"".to_string(),
