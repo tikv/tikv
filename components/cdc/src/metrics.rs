@@ -19,11 +19,6 @@ lazy_static! {
         "The region which has minimal resolved ts"
     )
     .unwrap();
-    pub static ref CDC_PENDING_SCAN_BYTES: IntCounter = register_int_counter!(
-        "tikv_cdc_pending_scan_bytes",
-        "Bytes of pending scan result"
-    )
-    .unwrap();
-    pub static ref CDC_PENDING_CMD_BYTES: IntCounter =
-        register_int_counter!("tikv_cdc_pending_cmd_bytes", "Bytes of pending cmds").unwrap();
+    pub static ref CDC_PENDING_CMD_BYTES_GAUGE: IntGauge =
+        register_int_gauge!("tikv_cdc_pending_cmd_bytes", "Bytes of pending cdc cmds").unwrap();
 }
