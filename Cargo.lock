@@ -207,6 +207,7 @@ dependencies = [
  "external_storage",
  "failure",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-executor",
  "futures-util",
  "grpcio",
@@ -229,7 +230,6 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
- "tokio-threadpool",
  "txn_types",
  "uuid",
 ]
@@ -360,9 +360,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.2.0"
+version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f359dc14ff8911330a51ef78022d376f25ed00248912803b58f00cb1c27f742"
+checksum = "12ae9db68ad7fac5fe51304d20f016c911539251075a214f8e663babefa35187"
 
 [[package]]
 name = "byte-tools"
@@ -1091,6 +1091,8 @@ dependencies = [
  "hex 0.4.0",
  "protobuf",
  "quick-error",
+ "slog",
+ "slog-global",
  "tikv_alloc",
  "tikv_util",
 ]
@@ -2813,10 +2815,9 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0#4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=a626d449eaebd5e8ce337f95c1d6dc9800f25df7#a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
 dependencies = [
  "cfg-if",
- "coarsetime",
  "fnv",
  "lazy_static",
  "libc",
@@ -2830,21 +2831,10 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0#4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=a626d449eaebd5e8ce337f95c1d6dc9800f25df7#a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
 dependencies = [
  "proc-macro-hack",
  "static-metric-proc-macros",
-]
-
-[[package]]
-name = "prometheus-static-metric"
-version = "0.3.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087#d919ccd35976b9b84b8d03c07138c1cc05a36087"
-dependencies = [
- "lazy_static",
- "proc-macro2 1.0.9",
- "quote 1.0.3",
- "syn 1.0.5",
 ]
 
 [[package]]
@@ -3897,7 +3887,7 @@ checksum = "4edf667ea8f60afc06d6aeec079d20d5800351109addec1faea678a8663da4e1"
 [[package]]
 name = "static-metric-proc-macros"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0#4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=a626d449eaebd5e8ce337f95c1d6dc9800f25df7#a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
 dependencies = [
  "lazy_static",
  "proc-macro-hack",
@@ -4150,6 +4140,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_engine_traits"
+version = "0.1.0"
+dependencies = [
+ "engine_rocks",
+ "engine_traits",
+ "rocksdb",
+ "slog",
+ "slog-global",
+ "tempfile",
+]
+
+[[package]]
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
@@ -4336,7 +4338,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "prometheus",
- "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087)",
+ "prometheus-static-metric",
  "rand 0.6.5",
  "tikv_util",
  "time 0.1.42",
@@ -4487,7 +4489,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "profiler",
- "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087)",
+ "prometheus-static-metric",
  "protobuf",
  "tidb_query_codegen",
  "tidb_query_common",
@@ -4555,7 +4557,7 @@ dependencies = [
  "pprof",
  "procinfo",
  "prometheus",
- "prometheus-static-metric 0.3.0 (git+https://github.com/tikv/rust-prometheus.git?rev=4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0)",
+ "prometheus-static-metric",
  "prost",
  "protobuf",
  "quick-error",
