@@ -361,8 +361,8 @@ impl Scheduler {
         self.notify_scheduler(Task::ChangeRole(role));
     }
 
-    pub fn change_ttl(&self, t: u64) {
-        self.notify_scheduler(Task::ChangeTTL(Duration::from_millis(t)));
+    pub fn change_ttl(&self, t: Duration) {
+        self.notify_scheduler(Task::ChangeTTL(t));
     }
 
     #[cfg(any(test, feature = "testexport"))]
@@ -532,7 +532,7 @@ where
             waiter_mgr_scheduler,
             inner: Rc::new(RefCell::new(Inner {
                 role: Role::Follower,
-                detect_table: DetectTable::new(Duration::from_millis(cfg.wait_for_lock_timeout)),
+                detect_table: DetectTable::new(cfg.wait_for_lock_timeout.into()),
             })),
         }
     }

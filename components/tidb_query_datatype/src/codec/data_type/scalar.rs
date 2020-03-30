@@ -178,6 +178,127 @@ impl<'a> ScalarValueRef<'a> {
         }
     }
 
+    /// Encodes into binary format.
+    pub fn encode(
+        &self,
+        field_type: &FieldType,
+        ctx: &mut EvalContext,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        use crate::codec::datum_codec::EvaluableDatumEncoder;
+
+        match self {
+            ScalarValueRef::Int(val) => {
+                match val {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(val) => {
+                        // Always encode to INT / UINT instead of VAR INT to be efficient.
+                        let is_unsigned = field_type.is_unsigned();
+                        output.write_evaluable_datum_int(*val, is_unsigned)?;
+                    }
+                }
+                Ok(())
+            }
+            ScalarValueRef::Real(val) => {
+                match val {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(val) => {
+                        output.write_evaluable_datum_real(val.into_inner())?;
+                    }
+                }
+                Ok(())
+            }
+            ScalarValueRef::Decimal(val) => {
+                match val {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(val) => {
+                        output.write_evaluable_datum_decimal(val)?;
+                    }
+                }
+                Ok(())
+            }
+            ScalarValueRef::Bytes(val) => {
+                match val {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(ref val) => {
+                        output.write_evaluable_datum_bytes(val)?;
+                    }
+                }
+                Ok(())
+            }
+            ScalarValueRef::DateTime(val) => {
+                match val {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(val) => {
+                        output.write_evaluable_datum_date_time(*val, ctx)?;
+                    }
+                }
+                Ok(())
+            }
+            ScalarValueRef::Duration(val) => {
+                match val {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(val) => {
+                        output.write_evaluable_datum_duration(*val)?;
+                    }
+                }
+                Ok(())
+            }
+            ScalarValueRef::Json(val) => {
+                match val {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(ref val) => {
+                        output.write_evaluable_datum_json(val)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn encode_sort_key(
+        &self,
+        field_type: &FieldType,
+        ctx: &mut EvalContext,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        use crate::codec::datum_codec::EvaluableDatumEncoder;
+
+        match self {
+            ScalarValueRef::Bytes(val) => {
+                match val {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(val) => {
+                        let sort_key = match_template_collator! {
+                            TT, match field_type.collation().map_err(crate::codec::Error::from)? {
+                                Collation::TT => TT::sort_key(val)?
+                            }
+                        };
+                        output.write_evaluable_datum_bytes(&sort_key)?;
+                    }
+                }
+                Ok(())
+            }
+            _ => self.encode(field_type, ctx, output),
+        }
+    }
+
     #[inline]
     pub fn cmp_sort_key(
         &self,
