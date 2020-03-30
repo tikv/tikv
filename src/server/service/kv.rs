@@ -44,7 +44,7 @@ use txn_types::{self, Key};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
-
+//TODO 糊 add tracing to kv
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
