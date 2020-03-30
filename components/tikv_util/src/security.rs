@@ -1,9 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Read;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder,
@@ -94,6 +95,19 @@ impl SecurityConfig {
         }
         Ok((ca, cert, key))
     }
+
+    /// Determine if the cert file has been modified.
+    /// If modified, update the timestamp of this modification.
+    fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
+        let this = fs::metadata(&self.cert_path)?.modified()?;
+        if let Some(last) = last {
+            if *last == this {
+                return Ok(false);
+            }
+        }
+        *last = Some(this);
+        Ok(true)
+    }
 }
 
 #[derive(Default)]
@@ -134,6 +148,7 @@ impl SecurityManager {
         } else {
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
+                last_modified_time: Arc::new(Mutex::new(None)),
             });
             sb.bind_with_fetcher(
                 addr,
@@ -151,18 +166,31 @@ impl SecurityManager {
 
 struct Fetcher {
     cfg: Arc<SecurityConfig>,
+    last_modified_time: Arc<Mutex<Option<SystemTime>>>,
 }
 
 impl ServerCredentialsFetcher for Fetcher {
+    // Retrieves updated credentials. When returning `None` or
+    // error, gRPC will continue to use the previous certificates
+    // returned by the method.
     fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
-        let (ca, cert, key) = self.cfg.load_certs()?;
-        let new_cred = ServerCredentialsBuilder::new()
-            .add_cert(cert, key)
-            .root_cert(
-                ca,
-                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
-            );
-        Ok(Some(new_cred))
+        if let Ok(mut last) = self.last_modified_time.try_lock() {
+            // Reload only when cert is modified.
+            if self.cfg.is_modified(&mut last)? {
+                let (ca, cert, key) = self.cfg.load_certs()?;
+                let new_cred = ServerCredentialsBuilder::new()
+                    .add_cert(cert, key)
+                    .root_cert(
+                        ca,
+                        CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
+                    );
+                Ok(Some(new_cred))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -171,7 +199,7 @@ mod tests {
     use super::*;
 
     use std::fs;
-
+    use std::io::Write;
     use tempfile::Builder;
 
     #[test]
@@ -225,5 +253,21 @@ mod tests {
         assert_eq!(ca, vec![0]);
         assert_eq!(cert, vec![1]);
         assert_eq!(key, vec![2]);
+    }
+
+    #[test]
+    fn test_modify_file() {
+        let mut file = Builder::new().prefix("test_modify").tempfile().unwrap();
+        let mut cfg = SecurityConfig::default();
+        cfg.cert_path = file.path().to_str().unwrap().to_owned();
+
+        let mut last = None;
+        assert!(cfg.is_modified(&mut last).unwrap());
+        assert!(!cfg.is_modified(&mut last).unwrap());
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        writeln!(file, "something").unwrap();
+        assert!(cfg.is_modified(&mut last).unwrap());
+        assert!(!cfg.is_modified(&mut last).unwrap());
     }
 }
