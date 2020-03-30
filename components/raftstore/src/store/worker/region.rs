@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine::rocks;
-use engine::{Engines, Peekable};
+use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{MiscExt, Mutable, WriteBatchExt};
+use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -51,7 +51,8 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 pub enum Task {
     Gen {
         region_id: u64,
-        raft_snap: RocksSnapshot,
+        last_applied_index_term: u64,
+        last_applied_state: RaftApplyState,
         kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     },
@@ -223,16 +224,18 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     fn generate_snap(
         &self,
         region_id: u64,
-        raft_snap: RocksSnapshot,
+        last_applied_index_term: u64,
+        last_applied_state: RaftApplyState,
         kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) -> Result<()> {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<RocksEngine>(
             self.mgr.clone(),
-            raft_snap,
             kv_snap,
-            region_id
+            region_id,
+            last_applied_index_term,
+            last_applied_state,
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
@@ -255,7 +258,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     fn handle_gen(
         &self,
         region_id: u64,
-        raft_snap: RocksSnapshot,
+        last_applied_index_term: u64,
+        last_applied_state: RaftApplyState,
         kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) {
@@ -265,7 +269,13 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
         let timer = gen_histogram.start_coarse_timer();
 
-        if let Err(e) = self.generate_snap(region_id, raft_snap, kv_snap, notifier) {
+        if let Err(e) = self.generate_snap(
+            region_id,
+            last_applied_index_term,
+            last_applied_state,
+            kv_snap,
+            notifier,
+        ) {
             error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
             return;
         }
@@ -283,7 +293,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -309,7 +319,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -340,7 +350,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let wb = self.engines.kv.c().write_batch();
+        let mut wb = self.engines.kv.c().write_batch();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
@@ -597,7 +607,8 @@ where
         match task {
             Task::Gen {
                 region_id,
-                raft_snap,
+                last_applied_index_term,
+                last_applied_state,
                 kv_snap,
                 notifier,
             } => {
@@ -606,7 +617,13 @@ where
                 let ctx = self.ctx.clone();
 
                 self.pool.spawn(async move {
-                    ctx.handle_gen(region_id, raft_snap, kv_snap, notifier);
+                    ctx.handle_gen(
+                        region_id,
+                        last_applied_index_term,
+                        last_applied_state,
+                        kv_snap,
+                        notifier,
+                    );
                 });
             }
             task @ Task::Apply { .. } => {
@@ -690,11 +707,11 @@ mod tests {
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine::Peekable;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, WriteBatchExt};
+    use engine_traits::{Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
-    use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+    use raft::eraftpb::Entry;
     use tempfile::Builder;
     use tikv_util::time;
     use tikv_util::timer::Timer;
@@ -821,7 +838,7 @@ mod tests {
         let shared_block_cache = false;
         let engines = Engines::new(
             Arc::clone(&engine.kv),
-            Arc::clone(&engine.kv),
+            Arc::clone(&engine.raft),
             shared_block_cache,
         );
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
@@ -845,11 +862,25 @@ mod tests {
         let gen_and_apply_snap = |id: u64| {
             // construct snapshot
             let (tx, rx) = mpsc::sync_channel(1);
+            let apply_state: RaftApplyState = engines
+                .kv
+                .c()
+                .get_msg_cf(CF_RAFT, &keys::apply_state_key(id))
+                .unwrap()
+                .unwrap();
+            let idx = apply_state.get_applied_index();
+            let entry = engines
+                .raft
+                .c()
+                .get_msg::<Entry>(&keys::raft_log_key(id, idx))
+                .unwrap()
+                .unwrap();
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    raft_snap: RocksSnapshot::new(engines.raft.clone()),
                     kv_snap: RocksSnapshot::new(engines.kv.clone()),
+                    last_applied_index_term: entry.get_term(),
+                    last_applied_state: apply_state,
                     notifier: tx,
                 })
                 .unwrap();
@@ -869,10 +900,11 @@ mod tests {
             s3.save().unwrap();
 
             // set applying state
-            let wb = engine.kv.c().write_batch();
+            let mut wb = engine.kv.c().write_batch();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
                 .kv
+                .c()
                 .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                 .unwrap()
                 .unwrap();
@@ -895,6 +927,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(100));
                 if engine
                     .kv
+                    .c()
                     .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                     .unwrap()
                     .unwrap()

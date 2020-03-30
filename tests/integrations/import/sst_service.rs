@@ -108,6 +108,16 @@ fn test_ingest_sst() {
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
 
+    // Set crc32 == 0 and length != 0 still ingest success
+    send_upload_sst(&import, &meta, &data).unwrap();
+    let crc32 = meta.get_crc32();
+    meta.set_crc32(0);
+    meta.set_length(data.len() as u64);
+    ingest.set_sst(meta.clone());
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error());
+    meta.set_crc32(crc32);
+
     // Check ingested kvs
     check_ingested_kvs(&tikv, &ctx, sst_range);
 
@@ -117,8 +127,6 @@ fn test_ingest_sst() {
 
 #[test]
 fn test_download_sst() {
-    use grpcio::{Error, RpcStatus};
-
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
     let temp_dir = Builder::new()
         .prefix("test_download_sst")
@@ -137,13 +145,12 @@ fn test_download_sst() {
     download.set_storage_backend(external_storage::make_local_backend(temp_dir.path()));
     download.set_name("missing.sst".to_owned());
 
-    let result = import.download(&download);
-    match &result {
-        Err(Error::RpcFailure(RpcStatus {
-            details: Some(msg), ..
-        })) if msg.contains("CannotReadExternalStorage") => {}
-        _ => panic!("unexpected download reply: {:?}", result),
-    }
+    let result = import.download(&download).unwrap();
+    assert!(
+        result.has_error(),
+        "unexpected download reply: {:?}",
+        result
+    );
 
     // Checks that downloading an empty SST returns OK (but cannot be ingested)
     download.set_name("test.sst".to_owned());
@@ -214,6 +221,29 @@ fn test_cleanup_sst() {
     assert!(res.wait().unwrap().is_none());
 
     check_sst_deleted(&import, &meta, &data);
+}
+
+#[test]
+fn test_ingest_sst_region_not_found() {
+    let (_cluster, mut ctx_not_found, _, import) = new_cluster_and_tikv_import_client();
+
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_sst_errors")
+        .tempdir()
+        .unwrap();
+
+    ctx_not_found.set_region_id(1 << 31); // A large region id that must no exists.
+    let sst_path = temp_dir.path().join("test_split.sst");
+    let sst_range = (0, 100);
+    let (mut meta, _data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx_not_found.get_region_id());
+    meta.set_region_epoch(ctx_not_found.get_region_epoch().clone());
+
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx_not_found);
+    ingest.set_sst(meta);
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(resp.get_error().has_region_not_found());
 }
 
 fn new_sst_meta(crc32: u32, length: u64) -> SstMeta {

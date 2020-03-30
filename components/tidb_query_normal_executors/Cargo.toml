@@ -1,0 +1,19 @@
+[package]
+name = "tidb_query_normal_executors"
+version = "0.0.1"
+edition = "2018"
+publish = false
+description = "A scalar query engine to run TiDB pushed down executors"
+
+[dependencies]
+byteorder = "1.2"
+codec = { path = "../codec" }
+failure = "0.1"
+indexmap = { version = "1.0", features = ["serde-1"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+protobuf = "2"
+tidb_query_datatype = { path = "../tidb_query_datatype" }
+tidb_query_common = { path = "../tidb_query_common" }
+tidb_query_normal_expr = { path = "../tidb_query_normal_expr" }
+tikv_util = { path = "../tikv_util" }
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }

@@ -7,12 +7,14 @@ use std::result;
 
 use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
+use openssl::error::ErrorStack as OpenSSLError;
 use protobuf::ProtobufError;
 use tokio_sync::oneshot::error::RecvError;
 
 use super::snap::Task as SnapTask;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::Error as StorageError;
+use engine_traits::Error as EngineTraitError;
 use pd_client::Error as PdError;
 use raftstore::Error as RaftServerError;
 use tikv_util::codec::Error as CodecError;
@@ -69,6 +71,12 @@ quick_error! {
             display("{:?}", err)
             description(err.description())
         }
+        EngineTrait(err: EngineTraitError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
         Storage(err: StorageError) {
             from()
             cause(err)
@@ -101,6 +109,12 @@ quick_error! {
             description(err.description())
         }
         Http(err: HttpError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
+        OpenSSL(err: OpenSSLError) {
             from()
             cause(err)
             display("{:?}", err)

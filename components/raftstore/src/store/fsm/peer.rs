@@ -8,10 +8,9 @@ use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
-use engine::Peekable;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::KvEngine;
 use engine_traits::CF_RAFT;
+use engine_traits::{KvEngine, Peekable};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -97,6 +96,7 @@ pub struct PeerFsm<E: KvEngine> {
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
+    early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<E>>>,
     pub receiver: Receiver<PeerMsg<E>>,
 }
@@ -155,6 +155,7 @@ impl<E: KvEngine> PeerFsm<E> {
         Ok((
             tx,
             Box::new(PeerFsm {
+                early_apply: cfg.early_apply,
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer, trans)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
@@ -193,6 +194,7 @@ impl<E: KvEngine> PeerFsm<E> {
         Ok((
             tx,
             Box::new(PeerFsm {
+                early_apply: cfg.early_apply,
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer, trans)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
@@ -604,13 +606,35 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
+    #[inline]
+    pub fn handle_raft_ready_apply(&mut self, ready: &mut Ready, invoke_ctx: &InvokeContext) {
+        self.fsm.early_apply = ready
+            .committed_entries
+            .as_ref()
+            .and_then(|e| e.last())
+            .map_or(false, |e| {
+                self.fsm.peer.can_early_apply(e.get_term(), e.get_index())
+            });
+        if !self.fsm.early_apply {
+            return;
+        }
+        self.fsm
+            .peer
+            .handle_raft_ready_apply(self.ctx, ready, invoke_ctx);
+    }
+
     pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
+        if !self.fsm.early_apply {
+            self.fsm
+                .peer
+                .handle_raft_ready_apply(self.ctx, &mut ready, &invoke_ctx);
+        }
         let res = self
             .fsm
             .peer
             .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
-        self.fsm.peer.handle_raft_ready_apply(self.ctx, ready);
+        self.fsm.peer.handle_raft_ready_advance(ready);
         let mut has_snapshot = false;
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
@@ -1084,6 +1108,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .ctx
             .engines
             .kv
+            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
             debug!(
@@ -1724,7 +1749,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let state_key = keys::region_state_key(region_id);
-        let state: RegionLocalState = match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key) {
+        let state: RegionLocalState = match self.ctx.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)
+        {
             Err(e) => {
                 error!(
                     "failed to load region state, ignore";
@@ -2305,7 +2331,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         // If the peer is applying snapshot, it may drop some sending messages, that could
         // make clients wait for response until timeout.
-        if self.fsm.peer.mut_store().check_applying_snap() {
+        if self.fsm.peer.is_applying_snapshot() {
             self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
             // TODO: replace to a more suitable error.
             return Err(Error::Other(box_err!(

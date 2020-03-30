@@ -61,9 +61,6 @@ pub use compact_listener::*;
 mod properties;
 pub use properties::*;
 
-pub mod metrics_flusher;
-pub use metrics_flusher::*;
-
 pub mod rocks_metrics;
 pub use rocks_metrics::*;
 
@@ -72,3 +69,6 @@ pub use rocks_metrics_defs::*;
 
 pub mod event_listener;
 pub use event_listener::*;
+
+pub mod encryption;
+pub use encryption::WrappedEncryptionKeyManager;

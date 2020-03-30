@@ -29,6 +29,8 @@ mod noop;
 pub use noop::NoopStorage;
 mod s3;
 pub use s3::S3Storage;
+mod util;
+pub use util::block_on_external_io;
 
 /// Create a new storage from the given storage backend description.
 pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalStorage>> {
@@ -126,7 +128,7 @@ pub fn make_s3_backend(config: S3) -> StorageBackend {
 
 /// An abstraction of an external storage.
 // TODO: these should all be returning a future (i.e. async fn).
-pub trait ExternalStorage: Sync + Send + 'static {
+pub trait ExternalStorage: 'static {
     /// Write all contents of the read to the given path.
     fn write(
         &self,
@@ -135,7 +137,7 @@ pub trait ExternalStorage: Sync + Send + 'static {
         content_length: u64,
     ) -> io::Result<()>;
     /// Read all contents of the given path.
-    fn read(&self, name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>>;
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
 }
 
 impl ExternalStorage for Arc<dyn ExternalStorage> {
@@ -147,7 +149,7 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
     ) -> io::Result<()> {
         (**self).write(name, reader, content_length)
     }
-    fn read(&self, name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>> {
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         (**self).read(name)
     }
 }

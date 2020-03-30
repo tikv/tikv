@@ -85,9 +85,7 @@ impl<T: PdClient> Runner<T> {
             }
         }
         if s.get_state() == metapb::StoreState::Tombstone {
-            RESOLVE_STORE_COUNTER
-                .with_label_values(&["tombstone"])
-                .inc();
+            RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
             return Err(box_err!("store {} has been removed", store_id));
         }
         let addr = take_peer_address(&mut s);
