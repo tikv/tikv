@@ -65,27 +65,26 @@ enum Command {
 
 fn create_s3_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
     let mut config = S3::default();
-    let ini = match &opt.credential_file {
-        Some(credential_file) => Ini::load_from_file(credential_file).map_err(|e| {
+
+    if let Some(credential_file) = &opt.credential_file {
+        let ini = Ini::load_from_file(credential_file).map_err(|e| {
             Error::new(
                 ErrorKind::Other,
                 format!("Failed to parse credential file as ini: {}", e),
             )
-        })?,
-        _ => return Err(Error::new(ErrorKind::Other, "missing credential_file")),
-    };
-
-    let props = ini
-        .section(Some("default"))
-        .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse section"))?;
-    config.access_key = props
-        .get("aws_access_key_id")
-        .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
-        .clone();
-    config.secret_access_key = props
-        .get("aws_secret_access_key")
-        .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
-        .clone();
+        })?;
+        let props = ini
+            .section(Some("default"))
+            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse section"))?;
+        config.access_key = props
+            .get("aws_access_key_id")
+            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
+            .clone();
+        config.secret_access_key = props
+            .get("aws_secret_access_key")
+            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
+            .clone();
+    }
 
     if let Some(region) = opt.region {
         config.region = format!("{}", region);
