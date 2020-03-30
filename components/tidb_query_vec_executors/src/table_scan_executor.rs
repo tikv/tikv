@@ -358,6 +358,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 mod tests {
     use super::*;
 
+    use rustracing_jaeger::Span;
     use std::iter;
     use std::sync::Arc;
 

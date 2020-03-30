@@ -467,6 +467,7 @@ impl Eq for HeapItemUnsafe {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustracing_jaeger::Span;
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
