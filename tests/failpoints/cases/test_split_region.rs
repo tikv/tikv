@@ -71,7 +71,7 @@ fn gen_split_region() -> (Region, Region, Region) {
     let mut cluster = new_server_cluster(0, 2);
     let region_max_size = 50000;
     let region_split_size = 30000;
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.coprocessor.region_max_size = ReadableSize(region_max_size);
     cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
 
@@ -89,7 +89,7 @@ fn gen_split_region() -> (Region, Region, Region) {
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
     if left == right {
-        cluster.wait_region_split_max_cnt(&region, 20, 50, false);
+        cluster.wait_region_split_max_cnt(&region, 20, 10, false);
     }
 
     let left = pd_client.get_region(b"").unwrap();
