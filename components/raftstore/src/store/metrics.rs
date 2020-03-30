@@ -3,7 +3,7 @@
 use prometheus::*;
 use prometheus_static_metric::*;
 
-make_static_metric! {
+make_auto_flush_static_metric! {
     pub label_enum ProposalType {
         all,
         local_read,
@@ -119,47 +119,47 @@ make_static_metric! {
         cleanup_import_sst,
     }
 
-    pub struct RaftEventDuration : Histogram {
+    pub struct RaftEventDuration : LocalHistogram {
         "type" => RaftEventDurationType
     }
-    pub struct RaftInvalidProposalCount : IntCounter {
+    pub struct RaftInvalidProposalCount : LocalIntCounter {
         "type" => RaftInvalidProposal
     }
-    pub struct RaftEntryFetches : IntCounter {
+    pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
-    pub struct SnapCf : Histogram {
+    pub struct SnapCf : LocalHistogram {
         "type" => CfNames,
     }
-    pub struct SnapCfSize : Histogram {
+    pub struct SnapCfSize : LocalHistogram {
         "type" => CfNames,
     }
-    pub struct RegionHashCounter: IntCounter {
+    pub struct RegionHashCounter: LocalIntCounter {
         "type" => RegionHashType,
         "result" => RegionHashResult,
     }
-    pub struct ProposalVec: IntCounter {
+    pub struct ProposalVec: LocalIntCounter {
         "type" => ProposalType,
     }
 
-    pub struct AdminCmdVec : IntCounter {
+    pub struct AdminCmdVec : LocalIntCounter {
         "type" => AdminCmdType,
         "status" => AdminCmdStatus,
     }
 
-    pub struct RaftReadyVec : IntCounter {
+    pub struct RaftReadyVec : LocalIntCounter {
         "type" => RaftReadyType,
     }
 
-    pub struct MessageCounterVec : IntCounter {
+    pub struct MessageCounterVec : LocalIntCounter {
         "type" => MessageCounterType,
     }
 
-    pub struct RaftDropedVec : IntCounter {
+    pub struct RaftDropedVec : LocalIntCounter {
         "type" => RaftDroppedMessage,
     }
 
-    pub struct SnapValidVec : IntCounter {
+    pub struct SnapValidVec : LocalIntCounter {
         "type" => SnapValidationType
     }
 }
@@ -172,7 +172,7 @@ lazy_static! {
             &["type"]
         ).unwrap();
     pub static ref PEER_PROPOSAL_COUNTER: ProposalVec =
-        ProposalVec::from(&PEER_PROPOSAL_COUNTER_VEC);
+        auto_flush_from!(PEER_PROPOSAL_COUNTER_VEC, ProposalVec);
 
     pub static ref PEER_ADMIN_CMD_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -181,7 +181,7 @@ lazy_static! {
             &["type", "status"]
         ).unwrap();
     pub static ref PEER_ADMIN_CMD_COUNTER: AdminCmdVec =
-        AdminCmdVec::from(&PEER_ADMIN_CMD_COUNTER_VEC);
+        auto_flush_from!(PEER_ADMIN_CMD_COUNTER_VEC, AdminCmdVec);
 
     pub static ref PEER_APPEND_LOG_HISTOGRAM: Histogram =
         register_histogram!(
@@ -218,7 +218,7 @@ lazy_static! {
             &["type"]
         ).unwrap();
     pub static ref STORE_RAFT_READY_COUNTER: RaftReadyVec =
-        RaftReadyVec::from(&STORE_RAFT_READY_COUNTER_VEC);
+        auto_flush_from!(STORE_RAFT_READY_COUNTER_VEC, RaftReadyVec);
 
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -227,7 +227,7 @@ lazy_static! {
             &["type"]
         ).unwrap();
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER: MessageCounterVec =
-        MessageCounterVec::from(&STORE_RAFT_SENT_MESSAGE_COUNTER_VEC);
+        auto_flush_from!(STORE_RAFT_SENT_MESSAGE_COUNTER_VEC, MessageCounterVec);
 
     pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -236,7 +236,7 @@ lazy_static! {
             &["type"]
         ).unwrap();
     pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER: RaftDropedVec =
-        RaftDropedVec::from(&STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC);
+        auto_flush_from!(STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC, RaftDropedVec);
 
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
         register_int_gauge_vec!(
@@ -252,7 +252,7 @@ lazy_static! {
             &["type"]
         ).unwrap();
     pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: SnapValidVec =
-        SnapValidVec::from(&STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER_VEC);
+        auto_flush_from!(STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER_VEC, SnapValidVec);
 
     pub static ref PEER_RAFT_PROCESS_DURATION: HistogramVec =
         register_histogram_vec!(
@@ -277,7 +277,7 @@ lazy_static! {
             &["type", "result"]
         ).unwrap();
     pub static ref REGION_HASH_COUNTER: RegionHashCounter =
-        RegionHashCounter::from(&REGION_HASH_COUNTER_VEC);
+        auto_flush_from!(REGION_HASH_COUNTER_VEC, RegionHashCounter);
 
     pub static ref REGION_MAX_LOG_LAG: Histogram =
         register_histogram!(
@@ -330,7 +330,7 @@ lazy_static! {
             exponential_buckets(100.0, 2.0, 20).unwrap()
         ).unwrap();
     pub static ref SNAPSHOT_CF_KV_COUNT: SnapCf =
-        SnapCf::from(&SNAPSHOT_CF_KV_COUNT_VEC);
+        auto_flush_from!(SNAPSHOT_CF_KV_COUNT_VEC, SnapCf);
 
     pub static ref SNAPSHOT_CF_SIZE_VEC: HistogramVec =
         register_histogram_vec!(
@@ -340,7 +340,7 @@ lazy_static! {
             exponential_buckets(1024.0, 2.0, 31).unwrap()
         ).unwrap();
     pub static ref SNAPSHOT_CF_SIZE: SnapCfSize =
-        SnapCfSize::from(&SNAPSHOT_CF_SIZE_VEC);
+        auto_flush_from!(SNAPSHOT_CF_SIZE_VEC, SnapCfSize);
     pub static ref SNAPSHOT_BUILD_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_build_time_duration_secs",
@@ -369,7 +369,7 @@ lazy_static! {
             &["type"]
         ).unwrap();
     pub static ref RAFT_ENTRY_FETCHES: RaftEntryFetches =
-        RaftEntryFetches::from(&RAFT_ENTRY_FETCHES_VEC);
+        auto_flush_from!(RAFT_ENTRY_FETCHES_VEC, RaftEntryFetches);
 
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
@@ -391,7 +391,7 @@ lazy_static! {
             &["type"]
         ).unwrap();
     pub static ref RAFT_INVALID_PROPOSAL_COUNTER: RaftInvalidProposalCount =
-        RaftInvalidProposalCount::from(&RAFT_INVALID_PROPOSAL_COUNTER_VEC);
+        auto_flush_from!(RAFT_INVALID_PROPOSAL_COUNTER_VEC, RaftInvalidProposalCount);
 
     pub static ref RAFT_EVENT_DURATION_VEC: HistogramVec =
         register_histogram_vec!(
@@ -401,7 +401,7 @@ lazy_static! {
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
     pub static ref RAFT_EVENT_DURATION: RaftEventDuration =
-        RaftEventDuration::from(&RAFT_EVENT_DURATION_VEC);
+        auto_flush_from!(RAFT_EVENT_DURATION_VEC, RaftEventDuration);
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(
