@@ -109,6 +109,16 @@ fn test_ingest_sst() {
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
 
+    // Set crc32 == 0 and length != 0 still ingest success
+    send_upload_sst(&import, &meta, &data).unwrap();
+    let crc32 = meta.get_crc32();
+    meta.set_crc32(0);
+    meta.set_length(data.len() as u64);
+    ingest.set_sst(meta.clone());
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error());
+    meta.set_crc32(crc32);
+
     // Check ingested kvs
     check_ingested_kvs(&tikv, &ctx, sst_range);
 
