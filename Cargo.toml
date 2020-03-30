@@ -178,7 +178,7 @@ protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b6
 prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0" }
 
 [patch.'https://github.com/pingcap/kvproto.git']
-kvproto = {git = "https://github.com/renkai/kvproto.git",branch = "add_tracing",default-features = false}
+kvproto = {git = "https://github.com/renkai/kvproto.git",rev = "b046148f81a7f6460d2faa53aefd1ea664177ab6",default-features = false}
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

@@ -44,6 +44,7 @@ use txn_types::{self, Key};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
+
 //TODO 糊 add tracing to kv
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -961,11 +962,13 @@ fn response_batch_commands_request<F>(
 
 // BatchCommandsNotify is used to make business pool notifiy completion queues directly.
 struct BatchCommandsNotify<F>(Arc<Mutex<Option<Spawn<F>>>>);
+
 impl<F> Clone for BatchCommandsNotify<F> {
     fn clone(&self) -> BatchCommandsNotify<F> {
         BatchCommandsNotify(Arc::clone(&self.0))
     }
 }
+
 impl<F> Notify for BatchCommandsNotify<F>
 where
     F: Future<Item = (), Error = ()> + Send + 'static,
@@ -1075,11 +1078,10 @@ fn future_get<E: Engine, L: LockManager>(
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
     storage
-        .get(
+        .get_with_trace(
             req.take_context(),
             Key::from_raw(req.get_key()),
             req.get_version().into(),
-            Span::inactive(),
         )
         .then(|v| {
             let mut resp = GetResponse::default();
@@ -1087,8 +1089,14 @@ fn future_get<E: Engine, L: LockManager>(
                 resp.set_region_error(err);
             } else {
                 match v {
-                    Ok(Some(val)) => resp.set_value(val),
-                    Ok(None) => resp.set_not_found(true),
+                    Ok((trace, Some(val))) => {
+                        resp.set_value(val);
+                        resp.set_trace_spans(trace);
+                    }
+                    Ok((trace, None)) => {
+                        resp.set_not_found(true);
+                        resp.set_trace_spans(trace);
+                    }
                     Err(e) => resp.set_error(extract_key_error(&e)),
                 }
             }
@@ -1662,6 +1670,7 @@ pub use kvproto::tikvpb::batch_commands_response;
 use rustracing_jaeger::Span;
 
 struct BatchRespCollector;
+
 impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
     for BatchRespCollector
 {

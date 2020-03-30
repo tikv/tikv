@@ -52,9 +52,11 @@ use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest}
 use rand::prelude::*;
 use rustracing::sampler::AllSampler;
 use rustracing::span::FinishedSpan;
+use rustracing_jaeger::reporter::JaegerBinaryReporter;
 use rustracing_jaeger::span::SpanContextState;
 use rustracing_jaeger::{Span, Tracer};
 use std::sync::{atomic, Arc};
+use tikv_util::jaegerencoder::encode_spans_in_jaeger_binary;
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -104,12 +106,12 @@ pub struct Storage<E: Engine, L: LockManager> {
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
     #[inline]
-    fn root_span(&self, cmd_name: &str) -> (Receiver<FinishedSpan<SpanContextState>>, Span) {
+    fn root_span(&self) -> (Receiver<FinishedSpan<SpanContextState>>, Span) {
         let (span_tx, span_rx): (
             Sender<FinishedSpan<SpanContextState>>,
             Receiver<FinishedSpan<SpanContextState>>,
         ) = crossbeam::channel::unbounded();
-        let span_name = format!("storage root command: {}", cmd_name);
+        let span_name = "storage root";
         let tracer = Tracer::with_sender(AllSampler, span_tx);
         if self.enable_tracing {
             (span_rx, tracer.span(span_name).start())
@@ -247,6 +249,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     {
         // Safety: the read pools ensure that a TLS engine exists.
         unsafe { with_tls_engine(f) }
+    }
+
+    pub fn get_with_trace(
+        &self,
+        ctx: Context,
+        key: Key,
+        start_ts: TimeStamp,
+    ) -> impl Future<Item = (Vec<u8>, Option<Value>), Error = Error> {
+        let (rx, root_span) = self.root_span();
+
+        self.get(ctx, key, start_ts, root_span).map(move |res| {
+            let spans = rx.iter().collect::<Vec<_>>();
+            let encoded_spans = encode_spans_in_jaeger_binary(&spans).unwrap();
+            let reporter = JaegerBinaryReporter::new("tikv").unwrap();
+            reporter.report(&spans).unwrap();
+            (encoded_spans, res)
+        })
     }
 
     /// Get value of the given key from a snapshot.
