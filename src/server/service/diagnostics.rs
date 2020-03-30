@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{Future, Sink, Stream};
@@ -9,6 +10,13 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
+
+#[cfg(feature = "prost-codec")]
+use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget;
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::diagnosticspb::SearchLogRequestTarget;
+
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
@@ -18,11 +26,23 @@ use crate::server::{Error, Result};
 pub struct Service {
     pool: CpuPool,
     log_file: String,
+    slow_log_file: String,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(pool: CpuPool, log_file: String) -> Self {
-        Service { pool, log_file }
+    pub fn new(
+        pool: CpuPool,
+        log_file: String,
+        slow_log_file: String,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Self {
+        Service {
+            pool,
+            log_file,
+            slow_log_file,
+            security_mgr,
+        }
     }
 }
 
@@ -33,7 +53,14 @@ impl Diagnostics for Service {
         req: SearchLogRequest,
         sink: ServerStreamingSink<SearchLogResponse>,
     ) {
-        let log_file = self.log_file.to_owned();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let log_file = if req.get_target() == SearchLogRequestTarget::Normal {
+            self.log_file.to_owned()
+        } else {
+            self.slow_log_file.to_owned()
+        };
         let stream = self
             .pool
             .spawn_fn(move || log::search(log_file, req))
@@ -70,6 +97,9 @@ impl Diagnostics for Service {
         req: ServerInfoRequest,
         sink: UnarySink<ServerInfoResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let tp = req.get_tp();
         let collect = self
             .pool
@@ -124,6 +154,8 @@ mod sys {
 
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
     use sysinfo::{DiskExt, ProcessExt, SystemExt};
+    use tikv_util::config::KB;
+    use tikv_util::sys::sys_quota::SysQuota;
 
     fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
         // CPU load
@@ -192,12 +224,12 @@ mod sys {
     fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
         system.refresh_all();
-        let total_memory = system.get_total_memory();
-        let used_memory = system.get_used_memory();
-        let free_memory = system.get_free_memory();
-        let total_swap = system.get_total_swap();
-        let used_swap = system.get_used_swap();
-        let free_swap = system.get_free_swap();
+        let total_memory = SysQuota::new().memory_limit_in_bytes();
+        let used_memory = system.get_used_memory() * KB;
+        let free_memory = system.get_free_memory() * KB;
+        let total_swap = system.get_total_swap() * KB;
+        let used_swap = system.get_used_swap() * KB;
+        let free_swap = system.get_free_swap() * KB;
         let used_memory_pct = (used_memory as f64) / (total_memory as f64);
         let free_memory_pct = (free_memory as f64) / (total_memory as f64);
         let used_swap_pct = (used_swap as f64) / (total_swap as f64);
@@ -344,7 +376,7 @@ mod sys {
         let mut infos = vec![
             (
                 "cpu-logical-cores",
-                sysinfo::get_logical_cores().to_string(),
+                SysQuota::new().cpu_cores_quota().to_string(),
             ),
             (
                 "cpu-physical-cores",
@@ -389,7 +421,7 @@ mod sys {
         system.refresh_all();
         let mut pair = ServerInfoPair::default();
         pair.set_key("capacity".to_string());
-        pair.set_value(system.get_total_memory().to_string());
+        pair.set_value((system.get_total_memory() * KB).to_string());
         let mut item = ServerInfoItem::default();
         item.set_tp("memory".to_string());
         item.set_name("memory".to_string());
@@ -762,7 +794,7 @@ mod log {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     use std::path::Path;
 
-    use chrono::DateTime;
+    use chrono::{DateTime, NaiveDateTime};
     use futures::stream::{iter_ok, Stream};
     use itertools::Itertools;
     use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
@@ -771,6 +803,7 @@ mod log {
     use nom::sequence::tuple;
     use nom::*;
     use rev_lines;
+    use tikv_util::logger::DATETIME_ROTATE_SUFFIX;
 
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
@@ -853,7 +886,7 @@ mod log {
                     None => continue,
                 };
                 // Rotated file name have the same prefix with the original
-                if !file_name.starts_with(log_name) {
+                if !is_log_file(file_name, log_name) {
                     continue;
                 }
                 // Open the file
@@ -956,6 +989,22 @@ mod log {
             }
             None
         }
+    }
+
+    // Returns true if target 'filename' is part of given 'log_file'
+    fn is_log_file(filename: &str, log_file: &str) -> bool {
+        // for not rotated nomral file
+        if filename == log_file {
+            return true;
+        }
+
+        // for rotated *.<rotated-datetime> file
+        if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
+            if NaiveDateTime::parse_from_str(res, DATETIME_ROTATE_SUFFIX).is_ok() {
+                return true;
+            }
+        }
+        false
     }
 
     fn parse_time(input: &str) -> IResult<&str, &str> {
@@ -1239,7 +1288,7 @@ mod log {
             )
             .unwrap();
 
-            let log_file2 = dir.path().join("tikv.log.2");
+            let log_file2 = dir.path().join("tikv.log.2019-08-23-18:10:00.387000");
             let mut file = File::create(&log_file2).unwrap();
             write!(
                 file,
@@ -1411,7 +1460,21 @@ mod log {
 [2019/08/23 18:10:03.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:10:04.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:10:05.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
-[2019/08/23 18:10:06.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val]"#
+[2019/08/23 18:10:06.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter"#
+            )
+            .unwrap();
+
+            let log_file3 = dir.path().join("tikv.log.2019-08-23-18:11:02.123456789");
+            let mut file = File::create(&log_file3).unwrap();
+            write!(
+                file,
+                r#"[2019/08/23 18:09:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:54.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:55.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:56.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:57.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:58.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter
+[2019/08/23 18:11:59.387 +08:00] [warning] [foo.rs:100] [some message] [key=val]"#
             )
             .unwrap();
 
@@ -1420,10 +1483,13 @@ mod log {
             req.set_end_time(std::i64::MAX);
             req.set_levels(vec![LogLevel::Warn.into()].into());
             req.set_patterns(vec![".*test-filter.*".to_string()].into());
-            let expected = vec!["2019/08/23 18:09:58.387 +08:00"]
-                .iter()
-                .map(|s| timestamp(s))
-                .collect::<Vec<i64>>();
+            let expected = vec![
+                "2019/08/23 18:11:58.387 +08:00",
+                "2019/08/23 18:09:58.387 +08:00",
+            ]
+            .iter()
+            .map(|s| timestamp(s))
+            .collect::<Vec<i64>>();
             assert_eq!(
                 search(log_file, req)
                     .unwrap()

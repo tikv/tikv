@@ -5,9 +5,6 @@ slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 
-[readpool]
-unify-read-pool = true
-
 [readpool.unified]
 min-thread-count = 5
 max-thread-count = 10
@@ -15,6 +12,7 @@ stack-size = "20MB"
 max-tasks-per-worker = 2200
 
 [readpool.storage]
+use-unified-pool = true
 high-concurrency = 1
 normal-concurrency = 3
 low-concurrency = 7
@@ -24,6 +22,7 @@ max-tasks-per-worker-low = 2500
 stack-size = "20MB"
 
 [readpool.coprocessor]
+use-unified-pool = false
 high-concurrency = 2
 normal-concurrency = 4
 low-concurrency = 6
@@ -186,6 +185,7 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 enable-unordered-write = true
+enable-multi-batch-write = false
 
 [rocksdb.titan]
 enabled = true
@@ -247,6 +247,10 @@ discardable-ratio = 0.00156
 sample-ratio = 0.982
 merge-small-file-threshold = "21KB"
 blob-run-mode = "fallback"
+level-merge = true
+range-merge = true
+max-sorted-runs = 100
+gc-merge-rewrite = true
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -458,12 +462,19 @@ discardable-ratio = 0.00156
 sample-ratio = 0.982
 merge-small-file-threshold = "21KB"
 blob-run-mode = "fallback"
+level-merge = true
+range-merge = true
+max-sorted-runs = 100
+gc-merge-rewrite = true
 
 [security]
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
 cipher-file = "invalid path"
+cert-allowed-cn = [
+    "example.tikv.com",
+]
 
 [import]
 num-threads = 123
@@ -477,6 +488,6 @@ enable-compaction-filter = true
 
 [pessimistic-txn]
 enabled = false
-wait-for-lock-timeout = 10
-wake-up-delay-duration = 100
+wait-for-lock-timeout = "10ms"
+wake-up-delay-duration = 100 # test backward compatible
 pipelined = true
