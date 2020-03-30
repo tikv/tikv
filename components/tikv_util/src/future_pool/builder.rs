@@ -111,11 +111,75 @@ impl Builder {
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
         });
         let pool = Arc::new(self.inner_builder.build());
+        bootstrap_worker_threads(&pool, self.pool_size, name);
         super::FuturePool {
             pool,
             env,
-            pool_size: self.pool_size,
             max_tasks: self.max_tasks,
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn get_bootstrapped_num_threads(name: &str) -> Option<usize> {
+    const THREAD_NAME_MAX_LEN: usize = 15;
+    let prefix = if name.len() > THREAD_NAME_MAX_LEN {
+        &name[0..THREAD_NAME_MAX_LEN]
+    } else {
+        name
+    };
+    let mut n = 0;
+    let pid = unsafe { libc::getpid() };
+    for tid in crate::metrics::get_thread_ids(pid).unwrap() {
+        if let Ok(stat) = procinfo::pid::stat_task(pid, tid) {
+            if !stat.command.starts_with(prefix) {
+                continue;
+            }
+            n += 1;
+        }
+    }
+    Some(n)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_bootstrapped_num_threads(_prefix: &str) -> Option<usize> {
+    None
+}
+
+/// Tokio Threadpool starts threads lazily. This function ensure that all worker threads are
+/// started.
+fn bootstrap_worker_threads(pool: &tokio_threadpool::ThreadPool, size: usize, name: &str) {
+    let actual_pool_size = if size > 0 {
+        size
+    } else {
+        // According to https://docs.rs/tokio-threadpool/0.1.18/tokio_threadpool/struct.Builder.html#method.pool_size
+        // by default the pool size is number of cpu cores.
+        sysinfo::get_logical_cores()
+    };
+
+    let (sx, rx) = std::sync::mpsc::channel();
+    let num_tasks = actual_pool_size * 2;
+
+    info!("Bootstrapping worker threads"; "name" => name);
+
+    for _ in 0..num_tasks {
+        let sx2 = sx.clone();
+        pool.spawn(futures::lazy(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            sx2.send(()).unwrap();
+            Ok(())
+        }))
+    }
+
+    for _ in 0..num_tasks {
+        rx.recv().unwrap();
+    }
+
+    let current_size = get_bootstrapped_num_threads(name);
+    info!(
+        "Bootstrap worker threads finished";
+        "name" => name,
+        "current_threads" => ?current_size,
+        "target_threads" => size
+    );
 }
