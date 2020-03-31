@@ -19,6 +19,12 @@ use tidb_query_shared_expr::string::{
 use tikv_util::try_opt_or;
 
 use crate::ScalarFunc;
+use safemem;
+use tidb_query_common::string::strip_whitespace;
+use tidb_query_common::string::{
+    BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH, BASE64_LINE_WRAP,
+    BASE64_LINE_WRAP_LENGTH,
+};
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::{EvalContext, Result};
 
