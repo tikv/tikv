@@ -576,14 +576,14 @@ mod tests {
 
     #[test]
     fn test_thread_io_statistics() {
-        let mut thread_info = ThreadInfoStatistics::new();
-
         let s1 = "testio123";
         let s2 = "test45678";
 
         let (tx, rx1) = write_two_string(s1.to_owned(), s2.to_owned());
         // Wait for thread creation
         rx1.recv().unwrap();
+
+        let mut thread_info = ThreadInfoStatistics::new();
 
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as u64 };
         let pid = unsafe { libc::getpid() };
@@ -633,6 +633,8 @@ mod tests {
         thread::Builder::new()
             .name(name)
             .spawn(move || {
+                tx1.send(()).unwrap();
+
                 let start = Instant::now();
                 loop {
                     if (Instant::now() - start).as_millis() > duration_ms.into() {
@@ -651,8 +653,12 @@ mod tests {
     #[test]
     fn test_thread_cpu_statistics() {
         let tn = "testcpu123";
-        let mut thread_info = ThreadInfoStatistics::new();
+
         let (tx, rx) = high_cpu_thread(tn.to_owned(), 200);
+        // Wait for thread creation
+        rx.recv().unwrap();
+
+        let mut thread_info = ThreadInfoStatistics::new();
 
         let pid = unsafe { libc::getpid() };
         let tids = get_thread_ids(pid).unwrap();
