@@ -33,6 +33,7 @@ struct ThreadsCollector {
     pid: pid_t,
     descs: Vec<Desc>,
     metrics: Mutex<Metrics>,
+    tid_retriever: Mutex<TidRetriever>,
 }
 
 impl ThreadsCollector {
@@ -94,6 +95,7 @@ impl ThreadsCollector {
                 voluntary_ctxt_switches,
                 nonvoluntary_ctxt_switches,
             }),
+            tid_retriever: Mutex::new(TidRetriever::new(pid)),
         }
     }
 }
@@ -109,8 +111,9 @@ impl Collector for ThreadsCollector {
         // Clean previous threads state.
         metrics.threads_state.reset();
 
-        let tids = get_thread_ids(self.pid).unwrap();
-        for tid in tids {
+        let mut tid_retriever = self.tid_retriever.lock().unwrap();
+        let tids = tid_retriever.get_tids();
+        for &tid in tids {
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 // Threads CPU time.
                 let total = cpu_total(&stat);
@@ -347,17 +350,12 @@ impl ThreadMetrics {
     }
 }
 
-const TID_MIN_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
-const TID_MAX_UPDATE_INTERVAL: Duration = Duration::from_secs(10 * 60);
-
 /// Use to collect cpu usages and disk I/O rates
 pub struct ThreadInfoStatistics {
     pid: pid_t,
     last_instant: Instant,
     tid_names: HashMap<i32, String>,
-    tid_buffer: Vec<i32>,
-    tid_buffer_last_update: Instant,
-    tid_buffer_update_interval: Duration,
+    tid_retriever: TidRetriever,
     metrics_rate: ThreadMetrics,
     metrics_total: ThreadMetrics,
 }
@@ -370,9 +368,7 @@ impl ThreadInfoStatistics {
             pid,
             last_instant: Instant::now(),
             tid_names: HashMap::default(),
-            tid_buffer: get_thread_ids(pid).unwrap(),
-            tid_buffer_last_update: Instant::now(),
-            tid_buffer_update_interval: TID_MIN_UPDATE_INTERVAL,
+            tid_retriever: TidRetriever::new(pid),
             metrics_rate: ThreadMetrics::default(),
             metrics_total: ThreadMetrics::default(),
         };
@@ -385,42 +381,11 @@ impl ThreadInfoStatistics {
         let current_instant = Instant::now();
         let time_delta = (current_instant - self.last_instant).as_millis() as f64 / 1000.0;
         self.last_instant = current_instant;
-
-        info!(
-            "ThreadInfoStatistics record, buffer_update_interval = {}",
-            self.tid_buffer_update_interval.as_secs(),
-        );
-
-        // Update the tid list according to tid_buffer_update_interval.
-        // If tid is not changed, update the tid list less frequently.
-        if self.tid_buffer_last_update.elapsed() >= self.tid_buffer_update_interval {
-            info!("ThreadInfoStatistics record, updating tid buffer");
-
-            let new_tid_buffer = get_thread_ids(self.pid).unwrap();
-            if new_tid_buffer == self.tid_buffer {
-                self.tid_buffer_update_interval *= 2;
-                if self.tid_buffer_update_interval > TID_MAX_UPDATE_INTERVAL {
-                    self.tid_buffer_update_interval = TID_MAX_UPDATE_INTERVAL;
-                }
-                info!(
-                    "ThreadInfoStatistics tid buffer is unchanged, new_buffer_update_interval = {}",
-                    self.tid_buffer_update_interval.as_secs(),
-                );
-            } else {
-                self.tid_buffer = new_tid_buffer;
-                self.tid_buffer_update_interval = TID_MIN_UPDATE_INTERVAL;
-                info!(
-                    "ThreadInfoStatistics tid buffer is changed, new_buffer_update_interval = {}",
-                    self.tid_buffer_update_interval.as_secs(),
-                );
-            }
-        } else {
-            info!("ThreadInfoStatistics record, reuse tid buffer");
-        }
-
         self.metrics_rate.clear();
 
-        for &tid in &self.tid_buffer {
+        let tids = self.tid_retriever.get_tids();
+
+        for &tid in tids {
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 let name = get_name(&stat.command);
                 self.tid_names.entry(tid).or_insert(name);
@@ -469,6 +434,60 @@ impl ThreadInfoStatistics {
 
     pub fn get_write_io_rates(&self) -> HashMap<String, u64> {
         collect_metrics_by_name(&self.tid_names, &self.metrics_rate.write_ios)
+    }
+}
+
+const TID_MIN_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
+const TID_MAX_UPDATE_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+/// A helper that buffers the thread id list internally.
+struct TidRetriever {
+    pid: pid_t,
+    tid_buffer: Vec<i32>,
+    tid_buffer_last_update: Instant,
+    tid_buffer_update_interval: Duration,
+}
+
+impl TidRetriever {
+    pub fn new(pid: pid_t) -> Self {
+        Self {
+            pid,
+            tid_buffer: get_thread_ids(pid).unwrap(),
+            tid_buffer_last_update: Instant::now(),
+            tid_buffer_update_interval: TID_MIN_UPDATE_INTERVAL,
+        }
+    }
+
+    pub fn get_tids(&mut self) -> &[pid_t] {
+        // Update the tid list according to tid_buffer_update_interval.
+        // If tid is not changed, update the tid list less frequently.
+        if self.tid_buffer_last_update.elapsed() >= self.tid_buffer_update_interval {
+            info!("TidRetriever, updating tid buffer");
+
+            let new_tid_buffer = get_thread_ids(self.pid).unwrap();
+            if new_tid_buffer == self.tid_buffer {
+                self.tid_buffer_update_interval *= 2;
+                if self.tid_buffer_update_interval > TID_MAX_UPDATE_INTERVAL {
+                    self.tid_buffer_update_interval = TID_MAX_UPDATE_INTERVAL;
+                }
+                info!(
+                    "TidRetriever tid is unchanged, new_buffer_update_interval = {}",
+                    self.tid_buffer_update_interval.as_secs(),
+                );
+            } else {
+                self.tid_buffer = new_tid_buffer;
+                self.tid_buffer_update_interval = TID_MIN_UPDATE_INTERVAL;
+                self.tid_buffer_last_update = Instant::now();
+                info!(
+                    "TidRetriever tid is changed, new_buffer_update_interval = {}",
+                    self.tid_buffer_update_interval.as_secs(),
+                );
+            }
+        } else {
+            info!("TidRetriever retrieve from tid buffer");
+        }
+
+        &self.tid_buffer
     }
 }
 
