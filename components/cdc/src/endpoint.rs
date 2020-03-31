@@ -99,7 +99,7 @@ pub enum Task {
         min_ts: TimeStamp,
     },
     ResolverReady {
-        downstream_id: DownstreamID,
+        observe_id: ObserveID,
         region: Region,
         resolver: Resolver,
     },
@@ -149,12 +149,12 @@ impl fmt::Debug for Task {
                 de.field("type", &"mit_ts").field("min_ts", min_ts).finish()
             }
             Task::ResolverReady {
-                ref downstream_id,
+                ref observe_id,
                 ref region,
                 ..
             } => de
                 .field("type", &"resolver_ready")
-                .field("downstream_id", &downstream_id)
+                .field("observe_id", &observe_id)
                 .field("region_id", &region.get_id())
                 .finish(),
             Task::IncrementalScan {
@@ -319,10 +319,11 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             workers,
             sched,
             region_id,
-            downstream_id,
             conn_id,
-            checkpoint_ts: checkpoint_ts.into(),
+            downstream_id,
             batch_size,
+            observe_id: delegate.id,
+            checkpoint_ts: checkpoint_ts.into(),
             build_resolver: enabled.is_some(),
         };
         if !delegate.subscribe(downstream) {
@@ -405,10 +406,10 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
         }
     }
 
-    fn on_region_ready(&mut self, downstream_id: DownstreamID, resolver: Resolver, region: Region) {
+    fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if delegate.downstream_pending(downstream_id) {
+            if delegate.id == observe_id {
                 if let Err(e) = delegate.on_region_ready(resolver, region) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
@@ -418,7 +419,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                     }
                 }
             } else {
-                debug!("downstream not found on region ready"; "region_id" => region.get_id(), "downstream_id" => ?downstream_id);
+                debug!("stale region ready"; "region_id" => region.get_id(), "observe_id" => ?observe_id, "current_id" => ?delegate.id);
             }
         } else {
             debug!("region not found on region ready (finish building resolver)"; "region_id" => region.get_id());
@@ -478,6 +479,7 @@ struct Initializer {
     sched: Scheduler<Task>,
 
     region_id: u64,
+    observe_id: ObserveID,
     downstream_id: DownstreamID,
     conn_id: ConnID,
     checkpoint_ts: TimeStamp,
@@ -514,6 +516,7 @@ impl Initializer {
     fn async_incremental_scan<S: Snapshot + 'static>(&self, snap: S, region: Region) {
         let downstream_id = self.downstream_id;
         let conn_id = self.conn_id;
+        let observe_id = self.observe_id;
         let sched = self.sched.clone();
         let batch_size = self.batch_size;
         let checkpoint_ts = self.checkpoint_ts;
@@ -580,7 +583,7 @@ impl Initializer {
                 }
 
                 if let Some(resolver) = resolver {
-                    Self::finish_building_resolver(downstream_id, resolver, region, sched);
+                    Self::finish_building_resolver(observe_id, resolver, region, sched);
                 }
 
                 CDC_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
@@ -623,7 +626,7 @@ impl Initializer {
     }
 
     fn finish_building_resolver(
-        downstream_id: DownstreamID,
+        observe_id: ObserveID,
         mut resolver: Resolver,
         region: Region,
         sched: Scheduler<Task>,
@@ -646,7 +649,7 @@ impl Initializer {
 
         info!("schedule resolver ready"; "region_id" => region.get_id());
         if let Err(e) = sched.schedule(Task::ResolverReady {
-            downstream_id,
+            observe_id,
             resolver,
             region,
         }) {
@@ -666,10 +669,10 @@ impl<T: CasualRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
                 conn_id,
             } => self.on_register(request, downstream, conn_id),
             Task::ResolverReady {
-                downstream_id,
+                observe_id,
                 resolver,
                 region,
-            } => self.on_region_ready(downstream_id, resolver, region),
+            } => self.on_region_ready(observe_id, resolver, region),
             Task::Deregister(deregister) => self.on_deregister(deregister),
             Task::IncrementalScan {
                 region_id,
@@ -739,6 +742,7 @@ mod tests {
             sched: receiver_worker.scheduler(),
 
             region_id: 1,
+            observe_id: ObserveID::new(),
             downstream_id: DownstreamID::new(),
             conn_id: ConnID::new(),
             checkpoint_ts: 1.into(),

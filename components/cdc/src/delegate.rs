@@ -220,18 +220,6 @@ impl Delegate {
         change_data_event
     }
 
-    // Return whether the downstream is pending.
-    pub fn downstream_pending(&self, downstream_id: DownstreamID) -> bool {
-        if let Some(pending) = self.pending.as_ref() {
-            pending
-                .downstreams
-                .iter()
-                .any(|downstream| downstream.get_id() == downstream_id)
-        } else {
-            false
-        }
-    }
-
     pub fn mark_failed(&mut self) {
         self.failed = true;
     }
@@ -327,7 +315,7 @@ impl Delegate {
             let mut cmd_bytes = 0;
             for cmd in batch.cmds.iter() {
                 let Cmd {
-                    ref index,
+                    index: _,
                     ref request,
                     ref response,
                 } = cmd;
@@ -853,12 +841,6 @@ mod tests {
             None,
         ];
         delegate.on_scan(downstream_id, entries);
-        assert_eq!(delegate.pending.as_ref().unwrap().scan.len(), 1);
-
-        let mut resolver = Resolver::new(region_id);
-        resolver.init();
-        delegate.on_region_ready(resolver, region).unwrap();
-
         // Flush all pending entries.
         let mut row1 = EventRow::default();
         row1.start_ts = 1;
@@ -877,5 +859,9 @@ mod tests {
         let mut row3 = EventRow::default();
         set_event_row_type(&mut row3, EventLogType::Initialized);
         check_event(vec![row1, row2, row3]);
+
+        let mut resolver = Resolver::new(region_id);
+        resolver.init();
+        delegate.on_region_ready(resolver, region).unwrap();
     }
 }

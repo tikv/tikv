@@ -389,6 +389,9 @@ fn test_cdc_scan() {
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut events = receive_event(false);
+    if events.len() == 1 {
+        events.extend(receive_event(false).into_iter());
+    }
     assert_eq!(events.len(), 2, "{:?}", events);
     match events.remove(0).event.unwrap() {
         // Batch size is set to 2.

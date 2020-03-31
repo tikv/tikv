@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use raftstore::store::fsm::DownstreamID;
+use raftstore::store::fsm::ObserveID;
 use raftstore::Error as RaftStoreError;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
@@ -70,18 +70,18 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl CmdObserver for CdcObserver {
-    fn on_prepare_for_apply(&self, downstream_id: DownstreamID, region_id: u64) {
+    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
         self.cmd_batches
             .borrow_mut()
-            .push(CmdBatch::new(downstream_id, region_id));
+            .push(CmdBatch::new(observe_id, region_id));
     }
 
-    fn on_apply_cmd(&self, downstream_id: DownstreamID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(downstream_id, region_id, cmd);
+            .push(observe_id, region_id, cmd);
     }
 
     fn on_flush_apply(&self) {
@@ -125,11 +125,11 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
-        let downstream_id = DownstreamID::new();
+        let observe_id = ObserveID::new();
 
-        observer.on_prepare_for_apply(downstream_id, 0);
+        observer.on_prepare_for_apply(observe_id, 0);
         observer.on_apply_cmd(
-            downstream_id,
+            observe_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
