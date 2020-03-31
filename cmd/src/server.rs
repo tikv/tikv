@@ -515,7 +515,7 @@ impl TiKVServer {
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            engines.engines.kv.clone(),
+            engines.engines.kv.c().clone(),
             self.router.clone(),
             coprocessor_host.clone(),
             self.config.coprocessor.clone(),
