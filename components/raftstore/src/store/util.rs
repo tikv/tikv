@@ -5,16 +5,18 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+use super::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
+use engine::rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
+use tikv_util::time::{monotonic_raw_now, Instant};
 use time::{Duration, Timespec};
 
 use super::peer_storage;
 use crate::{Error, Result};
-use tikv_util::time::monotonic_raw_now;
 use tikv_util::Either;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -627,6 +629,73 @@ impl<
 
 pub fn integration_on_half_fail_quorum_fn(voters: usize) -> usize {
     (voters + 1) / 2 + 1
+}
+
+pub struct PerfContextStatistics {
+    start_time: Instant,
+    report_count: usize,
+    perf_level: PerfLevel,
+}
+
+impl PerfContextStatistics {
+    /// Create an instance which stores instant statistics values, retrieved at creation.
+    pub fn new(perf_level: PerfLevel) -> Self {
+        PerfContextStatistics {
+            start_time: Instant::now(),
+            report_count: 0,
+            perf_level,
+        }
+    }
+
+    pub fn start(&mut self) {
+        if self.perf_level == PerfLevel::Disable {
+            return;
+        }
+        PerfContext::get().reset();
+        set_perf_level(self.perf_level);
+        self.start_time = Instant::now();
+        self.report_count = 0;
+    }
+
+    pub fn report(&mut self) {
+        if self.perf_level == PerfLevel::Disable {
+            return;
+        }
+        self.report_count += 1;
+    }
+
+    pub fn flush(&mut self) {
+        if self.perf_level == PerfLevel::Disable || self.report_count == 0 {
+            return;
+        }
+        let report_unit = self.report_count as f64 * 1_000_000_000.0;
+        let perf_context = PerfContext::get();
+        let wal = perf_context.write_wal_time() as f64 / report_unit;
+        let pre_and_post_process =
+            perf_context.write_pre_and_post_process_time() as f64 / report_unit;
+        let memtable = perf_context.write_memtable_time() as f64 / report_unit;
+        let write_thread_wait = perf_context.write_thread_wait_nanos() as f64 / report_unit;
+        let wait_mutex = perf_context.db_mutex_lock_nanos() as f64 / report_unit;
+        let report_time = self.start_time.elapsed_secs();
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC.wal.observe(wal);
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            .memtable
+            .observe(memtable);
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            .pre_and_post_process
+            .observe(pre_and_post_process);
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            .write_thread_wait
+            .observe(write_thread_wait);
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            .wait_mutex
+            .observe(wait_mutex);
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            .report_time
+            .observe(report_time);
+        self.start_time = Instant::now();
+        self.report_count = 0;
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
+use prometheus_static_metric::*;
+
+make_auto_flush_static_metric! {
+    pub label_enum PerfContextType {
+        wal,
+        memtable,
+        pre_and_post_process,
+        write_thread_wait,
+        wait_mutex,
+        report_time,
+    }
+    pub struct PerfContextTimeDuration : LocalHistogram {
+        "type" => PerfContextType
+    }
+}
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -230,4 +245,15 @@ lazy_static! {
             "tikv_raftstore_read_index_pending",
             "pending read index count"
         ).unwrap();
+
+    pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_apply_perf_context_time_duration_secs",
+            "Bucketed histogram of request wait time duration",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration=
+        auto_flush_from!(APPLY_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
 }

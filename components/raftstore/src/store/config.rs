@@ -9,6 +9,8 @@ use crate::{coprocessor, Result};
 use configuration::{
     rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, RollbackCollector,
 };
+use engine::rocks::util::config as rocks_config;
+use engine::rocks::PerfLevel;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 lazy_static! {
@@ -183,6 +185,10 @@ pub struct Config {
 
     #[config(skip)]
     pub quorum_algorithm: QuorumAlgorithm,
+
+    #[serde(with = "rocks_config::perf_level_serde")]
+    #[config(skip)]
+    pub perf_level: PerfLevel,
 }
 
 impl Default for Config {
@@ -254,6 +260,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
 
             quorum_algorithm: QuorumAlgorithm::Majority,
+            perf_level: PerfLevel::Disable,
         }
     }
 }

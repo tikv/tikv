@@ -9,6 +9,7 @@ use slog::Level;
 use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+    PerfLevel,
 };
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -183,6 +184,7 @@ fn test_serde_custom_tikv_config() {
         hibernate_regions: false,
         early_apply: false,
         quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
+        perf_level: PerfLevel::EnableTime,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

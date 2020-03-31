@@ -251,6 +251,16 @@ numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     SkipAnyCorruptedRecords = 3,
 }}
 
+numeric_enum_mod! {perf_level_serde PerfLevel {
+    Uninitialized = 0,
+    Disable = 1,
+    EnableCount = 2,
+    EnableTimeExceptForMutex = 3,
+    EnableTimeAndCPUTimeExceptForMutex = 4,
+    EnableTime = 5,
+    OutOfBounds = 6,
+}}
+
 #[cfg(test)]
 mod tests {
     use super::*;
