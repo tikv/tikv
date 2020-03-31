@@ -20,7 +20,7 @@ use protobuf::Message;
 use kvproto::coprocessor::Response;
 use kvproto::kvrpcpb::Context;
 use tipb::expression::{Expr, ExprType, ScalarFuncSig};
-use tipb::select::{Chunk, EncodeType};
+use tipb::select::Chunk;
 
 use test_coprocessor::*;
 use test_storage::*;
@@ -149,8 +149,6 @@ fn test_stream_batch_row_limit() {
     assert_eq!(resps.len(), 3);
     let expected_output_counts = vec![vec![2 as i64], vec![2 as i64], vec![1 as i64]];
     for (i, resp) in resps.into_iter().enumerate() {
-        // For now, we only support default encode type.
-        assert_eq!(resp.get_encode_type(), EncodeType::TypeDefault);
         let mut chunk = Chunk::new();
         chunk.merge_from_bytes(resp.get_data()).unwrap();
         assert_eq!(

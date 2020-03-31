@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
-use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
+use tipb::select::{Chunk, DAGRequest, SelectResponse, StreamResponse};
 
 use coprocessor::dag::expr::EvalConfig;
 use coprocessor::*;
@@ -81,7 +81,6 @@ impl DAGContext {
 
     fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
         let mut s_resp = StreamResponse::new();
-        s_resp.set_encode_type(EncodeType::TypeDefault);
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
         if let Some(eval_warnings) = self.exec.take_eval_warnings() {
             s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
