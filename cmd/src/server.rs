@@ -9,8 +9,8 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
-use engine::{rocks, rocks::util::security::encrypted_env_from_cipher_file};
-use engine_rocks::{Compat, RocksEngine};
+use engine::rocks;
+use engine_rocks::{encryption::get_env, Compat, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -322,25 +322,12 @@ impl TiKVServer {
     }
 
     fn init_engines(&mut self) {
+        let env = get_env(&self.config.storage.data_dir, &self.config.encryption).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
         let mut raft_db_opts = self.config.raftdb.build_opt();
-        // Create encrypted env from cipher file
-        let encrypted_env = if !self.security_mgr.cipher_file().is_empty() {
-            match encrypted_env_from_cipher_file(&self.security_mgr.cipher_file(), None) {
-                Err(e) => fatal!(
-                    "failed to create encrypted env from cipher file, err {:?}",
-                    e
-                ),
-                Ok(env) => Some(env),
-            }
-        } else {
-            None
-        };
-        if let Some(ref encrypted_env) = encrypted_env {
-            raft_db_opts.set_env(encrypted_env.clone());
-        }
+        raft_db_opts.set_env(env.clone());
         let raft_db_cf_opts = self.config.raftdb.build_cf_opts(&block_cache);
         let raft_engine = rocks::util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
@@ -351,10 +338,8 @@ impl TiKVServer {
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
+        kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(new_compaction_listener(self.router.clone()));
-        if let Some(encrypted_env) = encrypted_env {
-            kv_db_opts.set_env(encrypted_env);
-        }
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
         let db_path = self
             .store_path
