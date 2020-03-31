@@ -6,12 +6,14 @@ use prometheus::*;
 lazy_static! {
     pub static ref CDC_RESOLVED_TS_GAP_HISTOGRAM: Histogram = register_histogram!(
         "tikv_cdc_resolved_ts_gap",
-        "Bucketed histogram of the gap between cdc resolved ts and current tso"
+        "Bucketed histogram of the gap between cdc resolved ts and current tso",
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref CDC_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_cdc_scan_duration_seconds",
-        "Bucketed histogram of cdc async scan duration"
+        "Bucketed histogram of cdc async scan duration",
+        exponential_buckets(0.0001, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref CDC_MIN_TS_REGION: IntGauge = register_int_gauge!(

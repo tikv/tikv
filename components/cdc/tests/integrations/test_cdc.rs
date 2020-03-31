@@ -140,6 +140,8 @@ fn test_cdc_basic() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         _ => panic!("unknown event"),
     }
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(200);
     scheduler
         .schedule(Task::Validate(
             1,
@@ -210,7 +212,8 @@ fn test_cdc_not_leader() {
         }
         _ => panic!("unknown event"),
     }
-
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(200);
     // There must be a delegate.
     let scheduler = suite
         .endpoints
