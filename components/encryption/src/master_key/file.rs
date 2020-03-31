@@ -4,8 +4,12 @@ use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod};
 
 use super::metadata::*;
 use super::Backend;
-use crate::crypter::*;
-use crate::{AesCtrCrypter, Error, Iv, Result};
+use crate::crypter::{self, AesCtrCrypter, Iv};
+use crate::{Error, Result};
+
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 
 pub struct FileBackend {
     method: EncryptionMethod,
@@ -13,18 +17,47 @@ pub struct FileBackend {
 }
 
 impl FileBackend {
-    pub fn new(method: EncryptionMethod, key: Vec<u8>) -> Result<FileBackend> {
-        if key.len() != get_method_key_length(method) {
-            return Err(Error::Other(
-                format!(
-                    "encryption method and key length mismatch, expect {} get {}",
-                    get_method_key_length(method),
-                    key.len()
-                )
-                .into(),
-            ));
-        }
-        Ok(FileBackend { key, method })
+    pub fn new<P: AsRef<Path>>(method: EncryptionMethod, path: P) -> Result<FileBackend> {
+        let key = match method {
+            EncryptionMethod::Unknown => return Err(Error::UnknownEncryption),
+            EncryptionMethod::Plaintext => vec![],
+            _ => {
+                let key_len = crypter::get_method_key_length(method);
+                let mut file = File::open(path)?;
+                // Check file size to avoid reading a gigantic file accidentally.
+                let file_len = file.metadata()?.len() as usize;
+                if file_len != key_len * 2 + 1 {
+                    return Err(Error::Other(
+                        format!(
+                            "mismatch master key file size, expected {}, actual {}.",
+                            key_len * 2 + 1,
+                            file_len,
+                        )
+                        .into(),
+                    ));
+                }
+                let mut content = vec![];
+                let read_len = file.read_to_end(&mut content)?;
+                if read_len != file_len {
+                    return Err(Error::Other(
+                        format!(
+                            "mismatch master key file size read, expected {}, actual {}",
+                            file_len, read_len
+                        )
+                        .into(),
+                    ));
+                }
+                if content.last() != Some(&b'\n') {
+                    return Err(Error::Other(
+                        "master key file should end with newline.".to_owned().into(),
+                    ));
+                }
+                hex::decode(&content[..file_len - 1]).map_err(|e| {
+                    Error::Other(format!("failed to decode master key from file: {}", e).into())
+                })?
+            }
+        };
+        Ok(FileBackend { method, key })
     }
 
     fn encrypt_content(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {
@@ -73,11 +106,16 @@ impl FileBackend {
         let checksum = content
             .get_metadata()
             .get(MetadataKey::PlaintextSha256.as_str())
-            .ok_or_else(|| Error::Other("sha256 checksum not found".to_owned().into()))?;
+            .ok_or_else(|| Error::WrongMasterKey("sha256 checksum not found".to_owned().into()))?;
         let ciphertext = content.get_content();
+        // For CTR modes, wrong master key would not lead to decrypt error, so we do not convert
+        // the underlying error to a WrongMasterKey error. Need to reconsider if we later support
+        // other encryption types.
         let plaintext = AesCtrCrypter::new(method, key, iv).decrypt(ciphertext)?;
         if *checksum != sha256(&plaintext)? {
-            return Err(Error::Other("sha256 checksum mismatch".to_owned().into()));
+            return Err(Error::WrongMasterKey(
+                "sha256 checksum mismatch".to_owned().into(),
+            ));
         }
         Ok(plaintext)
     }
@@ -101,8 +139,21 @@ impl Backend for FileBackend {
 #[cfg(test)]
 mod tests {
     use hex::FromHex;
+    use matches::assert_matches;
+    use std::{fs::File, io::Write, path::PathBuf};
+    use tempfile::TempDir;
 
     use super::*;
+    use crate::*;
+
+    fn create_key_file(name: &str) -> (PathBuf, TempDir) {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join(name);
+        let mut file = File::create(path.clone()).unwrap();
+        file.write_all(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
+            .unwrap();
+        (path, tmp_dir)
+    }
 
     #[test]
     fn test_file_backend_ase_256_ctr() {
@@ -117,11 +168,11 @@ mod tests {
                   e87017ba2d84988ddfc9c58db67aada613c2dd08457941a6",
         )
         .unwrap();
-        let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
-            .unwrap();
-        let iv = Vec::from_hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff").unwrap();
 
-        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key).unwrap();
+        let (key_path, _tmp_key_dir) = create_key_file("key");
+        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key_path).unwrap();
+
+        let iv = Vec::from_hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff").unwrap();
         let iv = Iv::from(iv.as_slice());
         let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
         assert_eq!(encrypted_content.get_content(), ct.as_slice());
@@ -132,10 +183,10 @@ mod tests {
     #[test]
     fn test_file_backend_sha256() {
         let pt = vec![1u8, 2, 3];
-        let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
-            .unwrap();
 
-        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key).unwrap();
+        let (key_path, _tmp_key_dir) = create_key_file("key");
+        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key_path).unwrap();
+
         let encrypted_content = backend.encrypt(&pt).unwrap();
         let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
         assert_eq!(plaintext, pt);
@@ -146,13 +197,19 @@ mod tests {
             .mut_metadata()
             .get_mut(MetadataKey::PlaintextSha256.as_str())
             .unwrap()[0] += 1;
-        backend.decrypt_content(&encrypted_content1).unwrap_err();
+        assert_matches!(
+            backend.decrypt_content(&encrypted_content1).unwrap_err(),
+            Error::WrongMasterKey(_)
+        );
 
         // Must checksum not found
         let mut encrypted_content2 = encrypted_content;
         encrypted_content2
             .mut_metadata()
             .remove(MetadataKey::PlaintextSha256.as_str());
-        backend.decrypt_content(&encrypted_content2).unwrap_err();
+        assert_matches!(
+            backend.decrypt_content(&encrypted_content2).unwrap_err(),
+            Error::WrongMasterKey(_)
+        );
     }
 }
