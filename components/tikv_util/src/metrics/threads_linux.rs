@@ -462,29 +462,17 @@ impl TidRetriever {
         // Update the tid list according to tid_buffer_update_interval.
         // If tid is not changed, update the tid list less frequently.
         if self.tid_buffer_last_update.elapsed() >= self.tid_buffer_update_interval {
-            info!("TidRetriever, updating tid buffer");
-
             let new_tid_buffer = get_thread_ids(self.pid).unwrap();
             if new_tid_buffer == self.tid_buffer {
                 self.tid_buffer_update_interval *= 2;
                 if self.tid_buffer_update_interval > TID_MAX_UPDATE_INTERVAL {
                     self.tid_buffer_update_interval = TID_MAX_UPDATE_INTERVAL;
                 }
-                info!(
-                    "TidRetriever tid is unchanged, new_buffer_update_interval = {}",
-                    self.tid_buffer_update_interval.as_secs(),
-                );
             } else {
                 self.tid_buffer = new_tid_buffer;
                 self.tid_buffer_update_interval = TID_MIN_UPDATE_INTERVAL;
                 self.tid_buffer_last_update = Instant::now();
-                info!(
-                    "TidRetriever tid is changed, new_buffer_update_interval = {}",
-                    self.tid_buffer_update_interval.as_secs(),
-                );
             }
-        } else {
-            info!("TidRetriever retrieve from tid buffer");
         }
 
         &self.tid_buffer
