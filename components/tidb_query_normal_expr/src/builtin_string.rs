@@ -19,9 +19,10 @@ use tidb_query_shared_expr::string::{
 use tikv_util::try_opt_or;
 
 use crate::ScalarFunc;
+use safemem;
+use tidb_query_common::string::{trim, TrimDirection};
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::{EvalContext, Result};
-use tidb_query_common::string::{trim, TrimDirection};
 
 const SPACE: u8 = 0o40u8;
 
