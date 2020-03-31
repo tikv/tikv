@@ -77,7 +77,13 @@ fn test_stale_observe_cmd() {
     let commit_resp =
         suite.async_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
     thread::sleep(Duration::from_millis(200));
-    // Close previous connection and open a new one
+    // Close previous connection and open a new one twice time
+    let (req_tx, resp_rx) = suite
+        .get_region_cdc_client(region.get_id())
+        .event_feed()
+        .unwrap();
+    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let (req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()

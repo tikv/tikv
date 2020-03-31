@@ -647,6 +647,7 @@ impl Initializer {
             );
         }
 
+        fail_point!("before_schedule_resolver_ready");
         info!("schedule resolver ready"; "region_id" => region.get_id());
         if let Err(e) = sched.schedule(Task::ResolverReady {
             observe_id,
