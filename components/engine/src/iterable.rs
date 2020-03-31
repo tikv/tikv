@@ -1,11 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::DATA_KEY_PREFIX_LEN;
 pub use crate::rocks::{DBIterator, ReadOptions, TableFilter, DB};
-use crate::Result;
 use rocksdb::TableProperties;
 use tikv_util::codec::number;
-use tikv_util::keybuilder::KeyBuilder;
 
 use engine_traits::IterOptions as IterOption;
 
@@ -91,72 +88,4 @@ impl IterOptionsExt for IterOption {
 
         opts
     }
-}
-
-// TODO: refactor this trait into rocksdb trait.
-pub trait Iterable {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB>;
-    fn new_iterator_cf(&self, _: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
-    // scan scans database using an iterator in range [start_key, end_key), calls function f for
-    // each iteration, if f returns false, terminates this scan.
-    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> Result<bool>,
-    {
-        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
-        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
-        scan_impl(self.new_iterator(iter_opt), start_key, f)
-    }
-
-    // like `scan`, only on a specific column family.
-    fn scan_cf<F>(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        fill_cache: bool,
-        f: F,
-    ) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> Result<bool>,
-    {
-        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
-        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
-        scan_impl(self.new_iterator_cf(cf, iter_opt)?, start_key, f)
-    }
-
-    // Seek the first key >= given key, if not found, return None.
-    // TODO: Make it zero-copy.
-    fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = self.new_iterator(IterOption::default());
-        if iter.seek(key.into())? {
-            let (k, v) = (iter.key().to_vec(), iter.value().to_vec());
-            return Ok(Some((k, v)));
-        }
-        Ok(None)
-    }
-
-    // Seek the first key >= given key, if not found, return None.
-    // TODO: Make it zero-copy.
-    fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = self.new_iterator_cf(cf, IterOption::default())?;
-        if iter.seek(key.into())? {
-            let (k, v) = (iter.key().to_vec(), iter.value().to_vec());
-            return Ok(Some((k, v)));
-        }
-        Ok(None)
-    }
-}
-
-fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], mut f: F) -> Result<()>
-where
-    F: FnMut(&[u8], &[u8]) -> Result<bool>,
-{
-    let mut remained = it.seek(start_key.into())?;
-    while remained {
-        remained = f(it.key(), it.value())? && it.next()?;
-    }
-    Ok(())
 }
