@@ -1078,16 +1078,10 @@ fn future_get<E: Engine, L: LockManager>(
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
     storage
-        // .get_with_trace(
-        //     req.take_context(),
-        //     Key::from_raw(req.get_key()),
-        //     req.get_version().into(),
-        // )
-        .get(
+        .get_with_trace(
             req.take_context(),
             Key::from_raw(req.get_key()),
             req.get_version().into(),
-            Span::inactive(),
         )
         .then(|v| {
             let mut resp = GetResponse::default();
@@ -1095,19 +1089,13 @@ fn future_get<E: Engine, L: LockManager>(
                 resp.set_region_error(err);
             } else {
                 match v {
-                    // Ok((trace, Some(val))) => {
-                    //     resp.set_value(val);
-                    //     resp.set_trace_spans(trace);
-                    // }
-                    // Ok((trace, None)) => {
-                    //     resp.set_not_found(true);
-                    //     resp.set_trace_spans(trace);
-                    // }
-                    Ok(Some(val)) => {
+                    Ok((trace, Some(val))) => {
                         resp.set_value(val);
+                        resp.set_trace_spans(trace);
                     }
-                    Ok(None) => {
+                    Ok((trace, None)) => {
                         resp.set_not_found(true);
+                        resp.set_trace_spans(trace);
                     }
                     Err(e) => resp.set_error(extract_key_error(&e)),
                 }
@@ -1679,7 +1667,6 @@ pub mod batch_commands_request {
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
-use rustracing_jaeger::Span;
 
 struct BatchRespCollector;
 
