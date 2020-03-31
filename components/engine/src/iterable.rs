@@ -7,7 +7,7 @@ use rocksdb::TableProperties;
 use tikv_util::codec::number;
 use tikv_util::keybuilder::KeyBuilder;
 
-pub use engine_traits::IterOptions as IterOption;
+use engine_traits::IterOptions as IterOption;
 pub use engine_traits::SeekMode;
 
 pub trait IterOptionsExt {
