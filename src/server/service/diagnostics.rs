@@ -1479,7 +1479,7 @@ mod log {
             let mut file = File::create(&log_file3).unwrap();
             write!(
                 file,
-                r#"[2019/08/23 18:09:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
+                r#"[2019/08/23 18:11:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:54.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:55.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:56.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
@@ -1495,13 +1495,14 @@ mod log {
             req.set_levels(vec![LogLevel::Warn.into()].into());
             req.set_patterns(vec![".*test-filter.*".to_string()].into());
             let expected = vec![
-                "2019/08/23 18:11:58.387 +08:00",
                 "2019/08/23 18:09:58.387 +08:00",
+                "2019/08/23 18:11:58.387 +08:00",
             ]
             .iter()
             .map(|s| timestamp(s))
             .collect::<Vec<i64>>();
             assert_eq!(
+                expected,
                 search(log_file, req)
                     .unwrap()
                     .wait()
@@ -1512,8 +1513,7 @@ mod log {
                     .into_iter()
                     .flatten()
                     .map(|msg| msg.get_time())
-                    .collect::<Vec<i64>>(),
-                expected
+                    .collect::<Vec<i64>>()
             );
         }
     }
