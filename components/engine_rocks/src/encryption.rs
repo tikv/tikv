@@ -1,12 +1,33 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io::Result;
+use std::sync::Arc;
 
+use encryption::{self, DataKeyManager, EncryptionConfig};
+use engine::Env;
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
     DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
     FileEncryptionInfo as DBFileEncryptionInfo,
 };
+
+// Use engine::Env directly since Env is not abstracted.
+pub fn get_env(path: &str, config: &EncryptionConfig) -> encryption::Result<Arc<Env>> {
+    if let Some(manager) = DataKeyManager::new(
+        &config.master_key,
+        &config.previous_master_key,
+        config.method,
+        config.data_key_rotation_period.into(),
+        path,
+    )? {
+        Ok(Arc::new(Env::new_key_managed_encrypted_env(
+            Arc::new(Env::default()),
+            Arc::new(WrappedEncryptionKeyManager { manager }),
+        )?))
+    } else {
+        Ok(Arc::new(Env::default()))
+    }
+}
 
 pub struct WrappedEncryptionKeyManager<T: EncryptionKeyManager> {
     manager: T,

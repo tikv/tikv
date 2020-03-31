@@ -210,7 +210,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -461,7 +461,7 @@ dependencies = [
  "failure",
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "panic_hook",
@@ -578,7 +578,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "libc",
@@ -997,15 +997,19 @@ dependencies = [
  "crc32fast",
  "engine_traits",
  "failure",
- "hex 0.3.2",
+ "hex 0.4.2",
  "kvproto",
+ "matches",
  "openssl",
  "protobuf",
  "rand 0.7.3",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -1013,8 +1017,9 @@ name = "engine"
 version = "0.0.1"
 dependencies = [
  "configuration",
+ "encryption",
  "engine_traits",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -1048,6 +1053,7 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine",
  "engine_traits",
  "kvproto",
@@ -1067,7 +1073,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.0",
+ "hex 0.4.2",
  "protobuf",
  "quick-error",
  "tikv_alloc",
@@ -1578,9 +1584,9 @@ checksum = "805026a5d0141ffc30abb3be3173848ad46a1b1664fe632428479619a3644d77"
 
 [[package]]
 name = "hex"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "023b39be39e3a2da62a94feb433e91e8bcd37676fbc8bea371daf52b7a769a3e"
+checksum = "644f9158b2f133fd50f5fb3242878846d9eb792e445c893805ff0e3824006e35"
 
 [[package]]
 name = "hmac"
@@ -1900,7 +1906,7 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "panic_hook",
  "tikv_alloc",
@@ -2058,7 +2064,7 @@ dependencies = [
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.0",
+ "hex 0.4.2",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2560,7 +2566,7 @@ version = "0.1.0"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
@@ -2753,7 +2759,7 @@ checksum = "e767ab205e4b292ea2c8e9fa454efe7e66e35026432eef34fed7daa763136d09"
 dependencies = [
  "bitflags",
  "byteorder",
- "hex 0.4.0",
+ "hex 0.4.2",
  "lazy_static",
  "libc",
  "libflate",
@@ -2961,7 +2967,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-executor",
  "futures-util",
- "hex 0.4.0",
+ "hex 0.4.2",
  "into_other",
  "keys",
  "kvproto",
@@ -3314,7 +3320,7 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.0",
+ "hex 0.4.2",
  "slog",
  "slog-global",
  "tikv_util",
@@ -3434,7 +3440,7 @@ dependencies = [
  "base64 0.12.0",
  "bytes 0.5.3",
  "futures 0.3.4",
- "hex 0.4.0",
+ "hex 0.4.2",
  "hmac",
  "http 0.2.0",
  "hyper 0.13.3",
@@ -3818,7 +3824,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4090,7 +4096,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "pd_client",
@@ -4160,6 +4166,7 @@ dependencies = [
  "criterion-cpu-time",
  "criterion-papi",
  "crossbeam",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -4169,7 +4176,7 @@ dependencies = [
  "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "panic_hook",
@@ -4256,7 +4263,7 @@ dependencies = [
  "failure",
  "flate2",
  "futures 0.3.4",
- "hex 0.4.0",
+ "hex 0.4.2",
  "indexmap",
  "kvproto",
  "lazy_static",
@@ -4346,7 +4353,7 @@ dependencies = [
  "futures-locks",
  "futures-util",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "hyper 0.12.35",
  "hyper-openssl",
  "into_other",
@@ -4446,7 +4453,7 @@ dependencies = [
  "futures-cpupool",
  "fxhash",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "lazy_static",
  "libc",
  "log",
@@ -4890,7 +4897,7 @@ dependencies = [
  "codec",
  "derive-new",
  "farmhash",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "quick-error",
  "slog",

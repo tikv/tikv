@@ -12,6 +12,7 @@ portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 
 [dependencies]
+encryption = { path = "../encryption" }
 engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
 prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
