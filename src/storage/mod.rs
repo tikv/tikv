@@ -280,7 +280,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         root_span: Span,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
-        // let (span_rx, root_span) = self.root_span(CMD);
 
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
