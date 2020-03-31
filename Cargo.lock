@@ -1023,7 +1023,6 @@ dependencies = [
  "engine_traits",
  "failure",
  "futures 0.3.4",
- "hex 0.3.2",
  "hex 0.4.2",
  "kvproto",
  "matches",

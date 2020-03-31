@@ -50,7 +50,7 @@ pub struct Mock(pub Arc<dyn Backend>);
 #[cfg(test)]
 impl PartialEq for Mock {
     fn eq(&self, _: &Self) -> bool {
-        return false;
+        false
     }
 }
 #[cfg(test)]

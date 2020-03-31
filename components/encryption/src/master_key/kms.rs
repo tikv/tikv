@@ -412,7 +412,7 @@ mod tests {
             .remove(MetadataKey::KmsVendor.as_str());
         backend.decrypt_content(&vendor_not_found).unwrap_err();
 
-        let mut ciphertext_key_not_found = encrypted_content.clone();
+        let mut ciphertext_key_not_found = encrypted_content;
         ciphertext_key_not_found
             .metadata
             .remove(MetadataKey::KmsCiphertextKey.as_str());
