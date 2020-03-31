@@ -482,7 +482,6 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
                 "backtrace" => format_args!("{:?}", bt),
             );
-            std::thread::sleep_ms(1000);
         } else {
             orig_hook(info);
         }

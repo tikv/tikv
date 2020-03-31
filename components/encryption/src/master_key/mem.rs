@@ -73,11 +73,13 @@ impl MemBackend {
         let checksum = content
             .get_metadata()
             .get(MetadataKey::PlaintextSha256.as_str())
-            .ok_or_else(|| Error::Other("sha256 checksum not found".to_owned().into()))?;
+            .ok_or_else(|| Error::WrongMasterKey("sha256 checksum not found".to_owned().into()))?;
         let ciphertext = content.get_content();
         let plaintext = AesCtrCrypter::new(method, key, iv).decrypt(ciphertext)?;
         if *checksum != sha256(&plaintext)? {
-            return Err(Error::Other("sha256 checksum mismatch".to_owned().into()));
+            return Err(Error::WrongMasterKey(
+                "sha256 checksum mismatch".to_owned().into(),
+            ));
         }
         Ok(plaintext)
     }
