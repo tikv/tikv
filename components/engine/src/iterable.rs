@@ -8,7 +8,6 @@ use tikv_util::codec::number;
 use tikv_util::keybuilder::KeyBuilder;
 
 use engine_traits::IterOptions as IterOption;
-pub use engine_traits::SeekMode;
 
 pub trait IterOptionsExt {
     fn build_read_opts(self) -> ReadOptions;
