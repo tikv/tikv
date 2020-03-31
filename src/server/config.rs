@@ -88,6 +88,7 @@ pub struct Config {
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
+    pub enable_tracing: bool,
     // Whether to collect batch across commands under heavy workload.
     pub request_batch_enable_cross_command: bool,
     // Wait duration before each request batch is processed.
@@ -110,8 +111,6 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub end_point_max_tasks: Option<usize>,
-
-    pub enable_tracing: bool,
 }
 
 impl Default for Config {

@@ -28,6 +28,7 @@ pub struct Config {
     pub data_dir: String,
     // Replaced by `GcConfig.ratio_threshold`. Keep it for backward compatibility.
     pub gc_ratio_threshold: f64,
+    pub enable_tracing: bool,
     pub max_key_size: usize,
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
@@ -35,7 +36,6 @@ pub struct Config {
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
     pub reserve_space: ReadableSize,
     pub block_cache: BlockCacheConfig,
-    pub enable_tracing: bool,
 }
 
 impl Default for Config {
