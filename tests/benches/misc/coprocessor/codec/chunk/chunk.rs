@@ -6,7 +6,7 @@ use arrow::array;
 use arrow::datatypes::{self, DataType, Field};
 use arrow::record_batch::RecordBatch;
 
-use tidb_query::codec::Datum;
+use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 use tipb::FieldType;
