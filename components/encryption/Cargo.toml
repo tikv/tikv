@@ -36,6 +36,7 @@ futures = "0.3"
 [dev-dependencies]
 matches = "0.1.8"
 tempfile = "3.1"
+toml = "0.4"
 hex =  "0.3"
 rusoto_mock = "0.43.0"
 rust-ini = "0.14.0"

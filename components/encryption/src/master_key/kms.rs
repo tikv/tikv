@@ -171,6 +171,12 @@ impl Inner {
             self.cached_ciphertext_key = ciphertext_key;
             plaintext_key
         };
+        if self.cached_ciphertext_key == key {
+            panic!(
+                "ciphertext key should not be the same as master key, \
+                otherwise it leaks master key!"
+            );
+        }
 
         // Always use AES 256 for encrypting master key.
         let method = KMS_DATA_KEY_METHOD;
@@ -311,7 +317,8 @@ mod tests {
         };
 
         let plaintext_key = vec![5u8; 32]; // 32 * 8 = 256 bits
-        let ciphertext_key = vec![7u8; 32]; // 32 * 8 = 256 bits
+        let ciphertext_key1 = vec![7u8; 32]; // 32 * 8 = 256 bits
+        let ciphertext_key2 = vec![8u8; 32]; // 32 * 8 = 256 bits
 
         let mut inner = Inner {
             config,
@@ -322,13 +329,13 @@ mod tests {
         // Update mem backend
         let dispatcher =
             MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
-                ciphertext_blob: Some(ciphertext_key.to_vec().into()),
+                ciphertext_blob: Some(ciphertext_key1.to_vec().into()),
                 key_id: Some("test_key_id".to_string()),
                 plaintext: Some(plaintext_key.to_vec().into()),
             });
         inner.maybe_update_backend_with(None, dispatcher).unwrap();
         assert!(inner.backend.is_some());
-        assert_eq!(inner.cached_ciphertext_key, ciphertext_key.to_vec());
+        assert_eq!(inner.cached_ciphertext_key, ciphertext_key1.to_vec());
 
         // Do not update mem backend if ciphertext_key is None.
         let dispatcher =
@@ -338,32 +345,32 @@ mod tests {
                 plaintext: Some(plaintext_key.to_vec().into()),
             });
         inner.maybe_update_backend_with(None, dispatcher).unwrap();
-        assert_eq!(inner.cached_ciphertext_key, ciphertext_key.to_vec());
+        assert_eq!(inner.cached_ciphertext_key, ciphertext_key1.to_vec());
 
         // Do not update mem backend if cached_ciphertext_key equals to ciphertext_key.
         let dispatcher =
             MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
-                ciphertext_blob: Some(plaintext_key.to_vec().into()),
+                ciphertext_blob: Some(ciphertext_key2.to_vec().into()),
                 key_id: Some("test_key_id".to_string()),
                 plaintext: Some(plaintext_key.to_vec().into()),
             });
         inner
-            .maybe_update_backend_with(Some(&ciphertext_key.to_vec()), dispatcher)
+            .maybe_update_backend_with(Some(&ciphertext_key1.to_vec()), dispatcher)
             .unwrap();
-        assert_eq!(inner.cached_ciphertext_key, ciphertext_key.to_vec());
+        assert_eq!(inner.cached_ciphertext_key, ciphertext_key1.to_vec());
 
         // Update mem backend if cached_ciphertext_key does not equal to ciphertext_key.
         let dispatcher =
             MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
-                ciphertext_blob: Some(plaintext_key.to_vec().into()),
+                ciphertext_blob: Some(ciphertext_key2.to_vec().into()),
                 key_id: Some("test_key_id".to_string()),
                 plaintext: Some(plaintext_key.to_vec().into()),
             });
         inner
-            .maybe_update_backend_with(Some(&plaintext_key.to_vec()), dispatcher)
+            .maybe_update_backend_with(Some(&ciphertext_key2.to_vec()), dispatcher)
             .unwrap();
         assert!(inner.backend.is_some());
-        assert_eq!(inner.cached_ciphertext_key, plaintext_key.to_vec());
+        assert_eq!(inner.cached_ciphertext_key, ciphertext_key2.to_vec());
     }
 
     #[test]

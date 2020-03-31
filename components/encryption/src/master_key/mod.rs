@@ -2,6 +2,8 @@
 
 use kvproto::encryptionpb::EncryptedContent;
 
+#[cfg(test)]
+use crate::config::Mock;
 use crate::{MasterKeyConfig, Result};
 
 use std::path::Path;
@@ -57,7 +59,7 @@ pub(crate) fn create_backend(config: &MasterKeyConfig) -> Result<Arc<dyn Backend
         }
         MasterKeyConfig::Kms { config } => Arc::new(KmsBackend::new(config.clone())?) as _,
         #[cfg(test)]
-        MasterKeyConfig::Mock(mock) => mock.clone() as _,
+        MasterKeyConfig::Mock(Mock(mock)) => mock.clone() as _,
     })
 }
 

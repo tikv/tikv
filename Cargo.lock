@@ -1045,6 +1045,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio 0.2.13",
+ "toml",
 ]
 
 [[package]]

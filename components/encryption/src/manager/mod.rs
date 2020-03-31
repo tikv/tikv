@@ -440,6 +440,7 @@ impl EncryptionKeyManager for DataKeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Mock;
     use crate::master_key::tests::MockBackend;
 
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
@@ -459,7 +460,7 @@ mod tests {
         previous_master_key: Option<MasterKeyConfig>,
     ) -> (tempfile::TempDir, Result<Option<DataKeyManager>>) {
         let tmp = temp.unwrap_or_else(|| tempfile::TempDir::new().unwrap());
-        let mock_config = MasterKeyConfig::Mock(Arc::new(Mutex::new(MockBackend::default())));
+        let mock_config = MasterKeyConfig::Mock(Mock(Arc::new(Mutex::new(MockBackend::default()))));
         let master_key = master_key.unwrap_or_else(|| mock_config.clone());
         let previous_master_key = previous_master_key.unwrap_or(mock_config);
         let manager = DataKeyManager::new(
@@ -542,8 +543,8 @@ mod tests {
         let (_tmp, manager) = new_tmp_key_manager(
             Some(tmp),
             None,
-            Some(MasterKeyConfig::Mock(current_key.clone())),
-            Some(MasterKeyConfig::Mock(previous_key.clone())),
+            Some(MasterKeyConfig::Mock(Mock(current_key.clone()))),
+            Some(MasterKeyConfig::Mock(Mock(previous_key.clone()))),
         );
         let manager = manager.unwrap().unwrap();
         let info2 = manager.get_file("foo").unwrap();
@@ -570,8 +571,8 @@ mod tests {
         let (_tmp, manager) = new_tmp_key_manager(
             Some(tmp),
             None,
-            Some(MasterKeyConfig::Mock(current_key.clone())),
-            Some(MasterKeyConfig::Mock(previous_key.clone())),
+            Some(MasterKeyConfig::Mock(Mock(current_key.clone()))),
+            Some(MasterKeyConfig::Mock(Mock(previous_key.clone()))),
         );
         assert!(manager.is_err());
         assert_eq!(1, current_key.lock().unwrap().encrypt_called);
@@ -594,8 +595,8 @@ mod tests {
         let (_tmp, manager) = new_tmp_key_manager(
             Some(tmp),
             None,
-            Some(MasterKeyConfig::Mock(master_key.clone())),
-            Some(MasterKeyConfig::Mock(master_key)),
+            Some(MasterKeyConfig::Mock(Mock(master_key.clone()))),
+            Some(MasterKeyConfig::Mock(Mock(master_key))),
         );
         assert_matches!(manager.err(), Some(Error::BothMasterKeyFail(_, _)));
     }
