@@ -351,8 +351,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
         if let Some(observe_cmd) = &delegate.observe_cmd {
             let region_id = delegate.region_id();
             if observe_cmd.enabled.load(Ordering::Acquire) {
-                self.host
-                    .prepare_for_apply(observe_cmd.downstream_id, region_id);
+                self.host.prepare_for_apply(observe_cmd.id, region_id);
             } else {
                 info!("region is no longer observerd";
                     "region_id" => region_id);
@@ -983,7 +982,7 @@ impl ApplyDelegate {
             let cmd = Cmd::new(index, cmd, resp.clone());
             apply_ctx
                 .host
-                .on_apply_cmd(observe_cmd.downstream_id, self.region_id(), cmd);
+                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd);
         }
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
@@ -2361,40 +2360,38 @@ impl Debug for GenSnapTask {
     }
 }
 
-static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
-/// A unique identifier of a Downstream.
+/// A unique identifier for checking stale observed commands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct DownstreamID(usize);
+pub struct ObserveID(usize);
 
-impl DownstreamID {
-    pub fn new() -> DownstreamID {
-        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+impl ObserveID {
+    pub fn new() -> ObserveID {
+        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
     }
 }
 
 struct ObserveCmd {
-    downstream_id: DownstreamID,
+    id: ObserveID,
     enabled: Arc<AtomicBool>,
 }
 
 impl Debug for ObserveCmd {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ObserveCmd")
-            .field("downstream_id", &self.downstream_id)
-            .finish()
+        f.debug_struct("ObserveCmd").field("id", &self.id).finish()
     }
 }
 
 pub enum ChangeCmd {
     RegisterObserver {
-        downstream_id: DownstreamID,
+        observe_id: ObserveID,
         region_id: u64,
         region_epoch: RegionEpoch,
         enabled: Arc<AtomicBool>,
     },
     Snapshot {
-        downstream_id: DownstreamID,
+        observe_id: ObserveID,
         region_id: u64,
         region_epoch: RegionEpoch,
     },
@@ -2803,9 +2800,9 @@ impl ApplyFsm {
         cmd: ChangeCmd,
         cb: Callback<RocksEngine>,
     ) {
-        let (downstream_id, region_id, region_epoch, enabled) = match cmd {
+        let (observe_id, region_id, region_epoch, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
-                downstream_id,
+                observe_id,
                 region_id,
                 region_epoch,
                 enabled,
@@ -2815,13 +2812,13 @@ impl ApplyFsm {
                     .observe_cmd
                     .as_ref()
                     .map_or(false, |o| o.enabled.load(Ordering::SeqCst)));
-                (downstream_id, region_id, region_epoch, Some(enabled))
+                (observe_id, region_id, region_epoch, Some(enabled))
             }
             ChangeCmd::Snapshot {
-                downstream_id,
+                observe_id,
                 region_id,
                 region_epoch,
-            } => (downstream_id, region_id, region_epoch, None),
+            } => (observe_id, region_id, region_epoch, None),
         };
 
         assert_eq!(self.delegate.region_id(), region_id);
@@ -2853,11 +2850,11 @@ impl ApplyFsm {
         if let Some(enabled) = enabled {
             // TODO(cdc): take observe_cmd when enabled is false.
             self.delegate.observe_cmd = Some(ObserveCmd {
-                downstream_id,
+                id: observe_id,
                 enabled,
             });
         } else if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
-            observe_cmd.downstream_id = downstream_id;
+            observe_cmd.id = observe_id;
         }
 
         cb.invoke_read(resp);
@@ -3706,18 +3703,18 @@ mod tests {
     }
 
     impl CmdObserver for ApplyObserver {
-        fn on_prepare_for_apply(&self, downstream_id: DownstreamID, region_id: u64) {
+        fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
-                .push(CmdBatch::new(downstream_id, region_id));
+                .push(CmdBatch::new(observe_id, region_id));
         }
 
-        fn on_apply_cmd(&self, downstream_id: DownstreamID, region_id: u64, cmd: Cmd) {
+        fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
             self.cmd_batches
                 .borrow_mut()
                 .last_mut()
                 .expect("should exist some cmd batch")
-                .push(downstream_id, region_id, cmd);
+                .push(observe_id, region_id, cmd);
         }
 
         fn on_flush_apply(&self) {
@@ -4058,12 +4055,12 @@ mod tests {
         router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 1, 2, 2)));
         // Register cmd observer to region 1.
         let enabled = Arc::new(AtomicBool::new(true));
-        let downstream_id = DownstreamID::new();
+        let observe_id = ObserveID::new();
         router.schedule_task(
             1,
             Msg::Change {
                 cmd: ChangeCmd::RegisterObserver {
-                    downstream_id,
+                    observe_id,
                     region_id: 1,
                     region_epoch: region_epoch.clone(),
                     enabled: enabled.clone(),
@@ -4125,7 +4122,7 @@ mod tests {
             2,
             Msg::Change {
                 cmd: ChangeCmd::RegisterObserver {
-                    downstream_id,
+                    observe_id,
                     region_id: 2,
                     region_epoch,
                     enabled,
@@ -4285,12 +4282,12 @@ mod tests {
 
         router.schedule_task(1, Msg::Registration(reg.clone()));
         let enabled = Arc::new(AtomicBool::new(true));
-        let downstream_id = DownstreamID::new();
+        let observe_id = ObserveID::new();
         router.schedule_task(
             1,
             Msg::Change {
                 cmd: ChangeCmd::RegisterObserver {
-                    downstream_id,
+                    observe_id,
                     region_id: 1,
                     region_epoch: region_epoch.clone(),
                     enabled: enabled.clone(),
@@ -4444,7 +4441,7 @@ mod tests {
             1,
             Msg::Change {
                 cmd: ChangeCmd::RegisterObserver {
-                    downstream_id,
+                    observe_id,
                     region_id: 1,
                     region_epoch,
                     enabled: Arc::new(AtomicBool::new(true)),

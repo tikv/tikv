@@ -4,9 +4,9 @@ use lazy_static::*;
 use prometheus::*;
 
 lazy_static! {
-    pub static ref CDC_RESOLVED_TS_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_cdc_resolved_ts",
-        "Bucketed histogram of cdc resolved ts"
+    pub static ref CDC_RESOLVED_TS_GAP_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_cdc_resolved_ts_gap",
+        "Bucketed histogram of the gap between cdc resolved ts and current tso"
     )
     .unwrap();
     pub static ref CDC_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram!(

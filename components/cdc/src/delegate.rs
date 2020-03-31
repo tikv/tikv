@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "prost-codec")]
@@ -22,7 +22,7 @@ use kvproto::cdcpb::{
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
-use raftstore::store::fsm::DownstreamID;
+use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
@@ -36,6 +36,17 @@ use crate::metrics::*;
 use crate::{Error, Result};
 
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
+static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+
+/// A unique identifier of a Downstream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct DownstreamID(usize);
+
+impl DownstreamID {
+    pub fn new() -> DownstreamID {
+        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 #[derive(Clone)]
 pub struct Downstream {
@@ -109,6 +120,7 @@ struct Pending {
 /// It converts raft commands into CDC events and broadcast to downstreams.
 /// It also track trancation on the fly in order to compute resolved ts.
 pub struct Delegate {
+    pub id: ObserveID,
     pub region_id: u64,
     region: Option<Region>,
     pub downstreams: Vec<Downstream>,
@@ -123,6 +135,7 @@ impl Delegate {
     pub fn new(region_id: u64) -> Delegate {
         Delegate {
             region_id,
+            id: ObserveID::new(),
             downstreams: Vec::new(),
             resolver: None,
             region: None,
@@ -219,12 +232,6 @@ impl Delegate {
         }
     }
 
-    pub fn has_downstream(&self, downstream_id: DownstreamID) -> bool {
-        self.downstreams
-            .iter()
-            .any(|downstream| downstream.get_id() == downstream_id)
-    }
-
     pub fn mark_failed(&mut self) {
         self.failed = true;
     }
@@ -310,7 +317,8 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
         self.broadcast(change_data_event, 0);
-        CDC_RESOLVED_TS_HISTOGRAM.observe(resolved_ts.into_inner() as f64);
+        CDC_RESOLVED_TS_GAP_HISTOGRAM
+            .observe((min_ts.into_inner() - resolved_ts.into_inner()) as f64);
         Some(resolved_ts)
     }
 
@@ -339,7 +347,7 @@ impl Delegate {
             return Ok(());
         }
         // Stale CmdBatch, drop it sliently.
-        if !self.has_downstream(batch.downstream_id) {
+        if batch.observe_id != self.id {
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
@@ -370,7 +378,7 @@ impl Delegate {
         } else {
             &self.downstreams
         };
-        let d = if let Some(d) = downstreams.iter_mut().find(|d| d.id == downstream_id) {
+        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
             d
         } else {
             warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
@@ -444,7 +452,7 @@ impl Delegate {
                 let mut change_data_event = Event::default();
                 change_data_event.region_id = self.region_id;
                 change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-                d.sink_event(change_data_event, s);
+                downstream.sink_event(change_data_event, s);
             }
         }
     }

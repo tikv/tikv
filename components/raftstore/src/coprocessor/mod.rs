@@ -35,7 +35,7 @@ pub use self::split_check::{
     Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver, TableCheckObserver,
 };
 
-use crate::store::fsm::DownstreamID;
+use crate::store::fsm::ObserveID;
 pub use crate::store::KeyEntry;
 
 /// Coprocessor is used to provide a convenient way to inject code to
@@ -183,23 +183,23 @@ impl Cmd {
 
 #[derive(Clone, Debug)]
 pub struct CmdBatch {
-    pub downstream_id: DownstreamID,
+    pub observe_id: ObserveID,
     pub region_id: u64,
     pub cmds: Vec<Cmd>,
 }
 
 impl CmdBatch {
-    pub fn new(downstream_id: DownstreamID, region_id: u64) -> CmdBatch {
+    pub fn new(observe_id: ObserveID, region_id: u64) -> CmdBatch {
         CmdBatch {
-            downstream_id,
+            observe_id,
             region_id,
             cmds: Vec::new(),
         }
     }
 
-    pub fn push(&mut self, downstream_id: DownstreamID, region_id: u64, cmd: Cmd) {
+    pub fn push(&mut self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
         assert_eq!(region_id, self.region_id);
-        assert_eq!(downstream_id, self.downstream_id);
+        assert_eq!(observe_id, self.observe_id);
         self.cmds.push(cmd)
     }
 
@@ -219,9 +219,9 @@ impl CmdBatch {
 
 pub trait CmdObserver: Coprocessor {
     /// Hook to call after preparing for applying write requests.
-    fn on_prepare_for_apply(&self, downstream_id: DownstreamID, region_id: u64);
+    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64);
     /// Hook to call after applying a write request.
-    fn on_apply_cmd(&self, downstream_id: DownstreamID, region_id: u64, cmd: Cmd);
+    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
     fn on_flush_apply(&self);
 }

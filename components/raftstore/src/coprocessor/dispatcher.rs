@@ -407,16 +407,16 @@ impl CoprocessorHost {
         );
     }
 
-    pub fn prepare_for_apply(&self, downstream_id: DownstreamID, region_id: u64) {
+    pub fn prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
         for cmd_ob in &self.registry.cmd_observers {
             cmd_ob
                 .observer
                 .inner()
-                .on_prepare_for_apply(downstream_id, region_id);
+                .on_prepare_for_apply(observe_id, region_id);
         }
     }
 
-    pub fn on_apply_cmd(&self, downstream_id: DownstreamID, region_id: u64, cmd: Cmd) {
+    pub fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
         assert!(
             self.registry.cmd_observers.len() != 0,
             "CmdObserver is not registered"
@@ -428,7 +428,7 @@ impl CoprocessorHost {
                 .unwrap()
                 .observer
                 .inner()
-                .on_apply_cmd(downstream_id, region_id, cmd.clone())
+                .on_apply_cmd(observe_id, region_id, cmd.clone())
         }
         self.registry
             .cmd_observers
@@ -436,7 +436,7 @@ impl CoprocessorHost {
             .unwrap()
             .observer
             .inner()
-            .on_apply_cmd(downstream_id, region_id, cmd)
+            .on_apply_cmd(observe_id, region_id, cmd)
     }
 
     pub fn on_flush_apply(&self) {
@@ -568,10 +568,10 @@ mod tests {
     }
 
     impl CmdObserver for TestCoprocessor {
-        fn on_prepare_for_apply(&self, _: DownstreamID, _: u64) {
+        fn on_prepare_for_apply(&self, _: ObserveID, _: u64) {
             self.called.fetch_add(11, Ordering::SeqCst);
         }
-        fn on_apply_cmd(&self, _: DownstreamID, _: u64, _: Cmd) {
+        fn on_apply_cmd(&self, _: ObserveID, _: u64, _: Cmd) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
         fn on_flush_apply(&self) {
@@ -644,11 +644,11 @@ mod tests {
         assert_all!(&[&ob.called], &[45]);
         host.pre_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
-        let downstream_id = DownstreamID::new();
-        host.prepare_for_apply(downstream_id, 0);
+        let observe_id = ObserveID::new();
+        host.prepare_for_apply(observe_id, 0);
         assert_all!(&[&ob.called], &[66]);
         host.on_apply_cmd(
-            downstream_id,
+            observe_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), query_resp),
         );

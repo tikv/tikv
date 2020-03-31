@@ -10,7 +10,7 @@ use kvproto::cdcpb::*;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
-use raftstore::store::fsm::{ChangeCmd, DownstreamID};
+use raftstore::store::fsm::{ChangeCmd, ObserveID};
 use raftstore::store::msg::{Callback, CasualMessage, ReadResponse};
 use raftstore::store::transport::CasualRouter;
 use resolved_ts::Resolver;
@@ -25,7 +25,7 @@ use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, Sender as PoolSender, ThreadPool};
 use txn_types::{Key, Lock, TimeStamp};
 
-use crate::delegate::{Delegate, Downstream};
+use crate::delegate::{Delegate, Downstream, DownstreamID};
 use crate::metrics::*;
 use crate::service::{Conn, ConnID};
 use crate::{CdcObserver, Error, Result};
@@ -338,14 +338,14 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             self.observer.subscribe_region(region_id);
 
             ChangeCmd::RegisterObserver {
-                downstream_id,
+                observe_id: delegate.id,
                 region_id,
                 region_epoch: request.take_region_epoch(),
                 enabled,
             }
         } else {
             ChangeCmd::Snapshot {
-                downstream_id,
+                observe_id: delegate.id,
                 region_id,
                 region_epoch: request.take_region_epoch(),
             }
