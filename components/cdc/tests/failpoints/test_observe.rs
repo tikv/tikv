@@ -1,4 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -45,7 +46,6 @@ fn test_stale_observe_cmd() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         _ => panic!("unknown event"),
     }
-    println!("1");
 
     let (k, v) = ("key1".to_owned(), "value".to_owned());
     // Prewrite
@@ -60,7 +60,6 @@ fn test_stale_observe_cmd() {
         k.clone().into_bytes(),
         start_ts,
     );
-    println!("2");
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -73,19 +72,21 @@ fn test_stale_observe_cmd() {
     let fp = "before_cdc_flush_apply";
     fail::cfg(fp, "pause").unwrap();
 
-    // Commit
+    // Async commit
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
-
+    let commit_resp =
+        suite.async_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
+    thread::sleep(Duration::from_millis(200));
+    // Close previous connection and open a new one
     let (req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    thread::sleep(Duration::from_millis(200));
     fail::remove(fp);
-    println!("3");
+    // Receive Commit response
+    commit_resp.wait().unwrap();
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -100,7 +101,6 @@ fn test_stale_observe_cmd() {
         _ => panic!("unknown event"),
     }
 
-    println!("4");
     // Make sure resolved ts can be advanced normally even with few tso failures.
     let mut counter = 0;
     loop {
