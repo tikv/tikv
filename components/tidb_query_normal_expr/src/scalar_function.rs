@@ -308,7 +308,8 @@ impl ScalarFunc {
             | ScalarFuncSig::OctInt
             | ScalarFuncSig::JsonDepthSig
             | ScalarFuncSig::RandomBytes
-            | ScalarFuncSig::JsonKeysSig => (1, 1),
+            | ScalarFuncSig::JsonKeysSig
+            | ScalarFuncSig::JsonValidJsonSig => (1, 1),
 
             ScalarFuncSig::JsonKeys2ArgsSig | ScalarFuncSig::JsonLengthSig => (1, 2),
 
@@ -741,6 +742,7 @@ dispatch_call! {
         Strcmp => strcmp,
         Instr => instr,
         JsonLengthSig => json_length,
+        JsonValidJsonSig => json_valid_json,
         Ord => ord,
         InstrUtf8 => instr_utf8,
         JsonDepthSig => json_depth,

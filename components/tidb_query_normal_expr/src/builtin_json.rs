@@ -171,6 +171,18 @@ impl ScalarFunc {
         Json::merge(refs).map(|j| Some(Cow::Owned(j)))
     }
 
+    pub fn json_valid_json<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        match self.children[0].eval_json(ctx, row) {
+            Ok(Some(_)) => Ok(Some(1)),
+            Ok(None) => Ok(None),
+            Err(_) => Ok(Some(0)),
+        }
+    }
+
     fn json_modify<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -778,6 +790,36 @@ mod tests {
             let args: Vec<_> = args.into_iter().map(datum_expr).collect();
             let op = Expression::build(&mut ctx, scalar_func_expr(sig, &args));
             assert!(op.is_err());
+        }
+    }
+
+    #[test]
+    fn test_json_valid_json() {
+        let cases = vec![
+            (Datum::Json(r#""3""#.parse().unwrap()), Some(1)),
+            (
+                Datum::Bytes(r#""hello world""#.to_string().into_bytes()),
+                Some(0),
+            ),
+            (Datum::F64(1.0), Some(0)),
+            (Datum::I64(-123), Some(0)),
+            (Datum::U64(123), Some(0)),
+            (Datum::Null, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (input, exp) in cases {
+            let exp = match exp {
+                None => Datum::Null,
+                Some(s) => Datum::I64(s),
+            };
+
+            let arg = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::JsonValidJsonSig, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
