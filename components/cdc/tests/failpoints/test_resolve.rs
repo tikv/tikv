@@ -65,7 +65,7 @@ fn test_stale_resolver() {
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let _req_tx = req_tx.send((req.clone(), WriteFlags::default())).wait().unwrap();
     let (req_tx1, resp_rx1) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
@@ -89,7 +89,7 @@ fn test_stale_resolver() {
         events.extend(receive_event(false).into_iter());
     }
     assert_eq!(events.len(), 2);
-    match events.remove(0).unwrap().event.unwrap() {
+    match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
@@ -117,7 +117,7 @@ fn test_stale_resolver() {
         events.extend(receive_event(false).into_iter());
     }
     assert_eq!(events.len(), 2);
-    match events.remove(0).unwrap().event.unwrap() {
+    match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];

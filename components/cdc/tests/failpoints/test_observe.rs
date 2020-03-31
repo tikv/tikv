@@ -83,7 +83,7 @@ fn test_stale_observe_cmd() {
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let _req_tx = req_tx.send((req.clone(), WriteFlags::default())).wait().unwrap();
     let (req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
