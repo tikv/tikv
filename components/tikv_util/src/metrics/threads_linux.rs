@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::collections::HashMap;
 use libc::{self, pid_t};
@@ -197,7 +197,7 @@ impl Collector for ThreadsCollector {
 /// Gets thread ids of the given process id.
 /// WARN: Don't call this function frequently. Otherwise there will be a lot of memory fragments.
 pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
-    Ok(fs::read_dir(format!("/proc/{}/task", pid))?
+    let mut tids: Vec<i32> = fs::read_dir(format!("/proc/{}/task", pid))?
         .filter_map(|task| {
             let file_name = match task {
                 Ok(t) => t.file_name(),
@@ -221,7 +221,9 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
                 }
             }
         })
-        .collect())
+        .collect();
+    tids.sort();
+    Ok(tids)
 }
 
 /// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the others.
@@ -345,11 +347,17 @@ impl ThreadMetrics {
     }
 }
 
+const TID_MIN_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
+const TID_MAX_UPDATE_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
 /// Use to collect cpu usages and disk I/O rates
 pub struct ThreadInfoStatistics {
     pid: pid_t,
     last_instant: Instant,
     tid_names: HashMap<i32, String>,
+    tid_buffer: Vec<i32>,
+    tid_buffer_last_update: Instant,
+    tid_buffer_update_interval: Duration,
     metrics_rate: ThreadMetrics,
     metrics_total: ThreadMetrics,
 }
@@ -358,13 +366,17 @@ impl ThreadInfoStatistics {
     pub fn new() -> Self {
         let pid = unsafe { libc::getpid() };
 
-        let mut thread_stats = ThreadInfoStatistics {
+        let mut thread_stats = Self {
             pid,
             last_instant: Instant::now(),
             tid_names: HashMap::default(),
+            tid_buffer: get_thread_ids(pid).unwrap(),
+            tid_buffer_last_update: Instant::now(),
+            tid_buffer_update_interval: TID_MIN_UPDATE_INTERVAL,
             metrics_rate: ThreadMetrics::default(),
             metrics_total: ThreadMetrics::default(),
         };
+
         thread_stats.record();
         thread_stats
     }
@@ -374,10 +386,41 @@ impl ThreadInfoStatistics {
         let time_delta = (current_instant - self.last_instant).as_millis() as f64 / 1000.0;
         self.last_instant = current_instant;
 
+        info!(
+            "ThreadInfoStatistics record, buffer_update_interval = {}",
+            self.tid_buffer_update_interval.as_secs(),
+        );
+
+        // Update the tid list according to tid_buffer_update_interval.
+        // If tid is not changed, update the tid list less frequently.
+        if self.tid_buffer_last_update.elapsed() >= self.tid_buffer_update_interval {
+            info!("ThreadInfoStatistics record, updating tid buffer");
+
+            let new_tid_buffer = get_thread_ids(self.pid).unwrap();
+            if new_tid_buffer == self.tid_buffer {
+                self.tid_buffer_update_interval *= 2;
+                if self.tid_buffer_update_interval > TID_MAX_UPDATE_INTERVAL {
+                    self.tid_buffer_update_interval = TID_MAX_UPDATE_INTERVAL;
+                }
+                info!(
+                    "ThreadInfoStatistics tid buffer is unchanged, new_buffer_update_interval = {}",
+                    self.tid_buffer_update_interval.as_secs(),
+                );
+            } else {
+                self.tid_buffer = new_tid_buffer;
+                self.tid_buffer_update_interval = TID_MIN_UPDATE_INTERVAL;
+                info!(
+                    "ThreadInfoStatistics tid buffer is changed, new_buffer_update_interval = {}",
+                    self.tid_buffer_update_interval.as_secs(),
+                );
+            }
+        } else {
+            info!("ThreadInfoStatistics record, reuse tid buffer");
+        }
+
         self.metrics_rate.clear();
 
-        let tids = get_thread_ids(self.pid).unwrap();
-        for tid in tids {
+        for &tid in &self.tid_buffer {
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 let name = get_name(&stat.command);
                 self.tid_names.entry(tid).or_insert(name);
