@@ -15,7 +15,7 @@ use engine::rocks::{
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption};
-use engine_rocks::{Compat, RocksWriteBatch};
+use engine_rocks::{CloneCompat, Compat, RocksWriteBatch};
 use engine_traits::{
     Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection, TablePropertiesExt,
     WriteBatch, WriteOptions,
@@ -32,8 +32,8 @@ use raft::{self, RawNode};
 use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::Iterator as EngineIterator;
+use engine_rocks::properties::MvccProperties;
 use engine_rocks::RangeProperties;
-use raftstore::coprocessor::properties::MvccProperties;
 use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
@@ -510,7 +510,7 @@ impl Debugger {
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::new(
-                self.engines.clone(),
+                self.engines.c(),
                 region,
                 fake_snap_worker.scheduler(),
                 peer_id,

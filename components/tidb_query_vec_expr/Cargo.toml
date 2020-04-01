@@ -26,7 +26,7 @@ uuid = { version = "0.8.1", features = ["v4"] }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
 
 [dev-dependencies]
 bstr = "0.2.8"
