@@ -342,28 +342,41 @@ fn test_lease_read_callback_destroy() {
     cluster.must_put(b"k2", b"v2");
 }
 
+/// A read index request will be appended to waiting list when there is an on-going request
+/// to reduce heartbeat messages. But when leader is in suspect lease, requests should not
+/// be batched because lease can be expired at anytime.
 #[test]
-fn test_read_index_when_transfer_leader_1() {
+fn test_read_index_stale_in_suspect_lease() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 5;
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
-    cluster.must_put(b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
-    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
-    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
+    let r1 = cluster.get_region(b"k1");
     // Put and test again to ensure that peer 3 get the latest writes by message append
     // instead of snapshot, so that transfer leader to peer 3 can 100% success.
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    let r1 = cluster.get_region(b"k1");
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    // Ensure peer 3 is ready to become leader.
+    let rx = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
+    let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    assert_eq!(
+        resp.get_responses()[0].get_get().get_value(),
+        b"v2",
+        "{:?}",
+        resp
+    );
     let old_leader = cluster.leader_of_region(r1.get_id()).unwrap();
 
     // Use a macro instead of a closure to avoid any capture of local variables.
@@ -390,35 +403,20 @@ fn test_read_index_when_transfer_leader_1() {
 
     // Delay all raft messages to peer 1.
     let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let (region_id, store_id) = (r1.get_id(), old_leader.get_store_id());
-    let append_resp = Arc::new(AtomicBool::new(true));
-    let filter = |msg: MessageType, when: Option<Arc<AtomicBool>>| {
-        Box::new(
-            RegionPacketFilter::new(region_id, store_id)
-                .direction(Direction::Recv)
-                .skip(msg)
-                .when(when.unwrap_or(Arc::new(AtomicBool::new(true))))
-                .reserve_dropped(Arc::clone(&dropped_msgs)),
-        )
-    };
-    cluster.sim.wl().add_recv_filter(
-        old_leader.get_id(),
-        filter(MessageType::MsgTransferLeader, None),
+    let filter = Box::new(
+        RegionPacketFilter::new(r1.id, old_leader.store_id)
+            .direction(Direction::Recv)
+            .skip(MessageType::MsgTransferLeader)
+            .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
-    cluster.sim.wl().add_recv_filter(
-        old_leader.get_id(),
-        filter(
-            MessageType::MsgAppendResponse,
-            Some(Arc::clone(&append_resp)),
-        ),
-    );
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(old_leader.get_id(), filter);
 
     let resp1 = read_on_old_leader!();
 
-    // don't drop MsgAppendResponse to ensure transfer leader success
-    append_resp.store(false, Ordering::SeqCst);
     cluster.must_transfer_leader(r1.get_id(), new_peer(3, 3));
-    append_resp.store(true, Ordering::SeqCst);
 
     let resp2 = read_on_old_leader!();
 
