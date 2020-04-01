@@ -72,9 +72,7 @@ impl<C: CasualRouter<RocksEngine>> Runner<C> {
             "region_id" => region_id,
             "index" => index,
         );
-        REGION_HASH_COUNTER_VEC
-            .with_label_values(&["compute", "all"])
-            .inc();
+        REGION_HASH_COUNTER.compute.all.inc();
 
         let timer = REGION_HASH_HISTOGRAM.start_coarse_timer();
         let mut digest = crc32fast::Hasher::new();
@@ -91,9 +89,7 @@ impl<C: CasualRouter<RocksEngine>> Runner<C> {
                 Ok(true)
             });
             if let Err(e) = res {
-                REGION_HASH_COUNTER_VEC
-                    .with_label_values(&["compute", "failed"])
-                    .inc();
+                REGION_HASH_COUNTER.compute.failed.inc();
                 error!(
                     "failed to calculate hash";
                     "region_id" => region_id,
@@ -108,9 +104,7 @@ impl<C: CasualRouter<RocksEngine>> Runner<C> {
         digest.update(&region_state_key);
         match snap.get_value_cf(CF_RAFT, &region_state_key) {
             Err(e) => {
-                REGION_HASH_COUNTER_VEC
-                    .with_label_values(&["compute", "failed"])
-                    .inc();
+                REGION_HASH_COUNTER.compute.failed.inc();
                 error!(
                     "failed to get region state";
                     "region_id" => region_id,
