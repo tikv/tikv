@@ -5,11 +5,11 @@ use prometheus_static_metric::*;
 
 make_auto_flush_static_metric! {
     pub label_enum PerfContextType {
-        wal,
-        memtable,
+        write_wal_time,
+        write_memtable_time,
         pre_and_post_process,
         write_thread_wait,
-        wait_mutex,
+        db_mutex_lock_nanos,
         report_time,
     }
     pub struct PerfContextTimeDuration : LocalHistogram {

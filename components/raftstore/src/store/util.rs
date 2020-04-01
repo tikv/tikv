@@ -631,10 +631,32 @@ pub fn integration_on_half_fail_quorum_fn(voters: usize) -> usize {
     (voters + 1) / 2 + 1
 }
 
+#[feature(concat_idents)]
+#[macro_use]
+macro_rules! report_perf_context {
+    ($s:ident, $v:ident) => {
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            .$v
+            .observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
+        $s.$v = $v;
+    };
+    ($s:ident, $context: expr, $v:ident) => {
+        let $v = $context.$v();
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            .$v
+            .observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
+        $s.$v = $v;
+    };
+}
+
 pub struct PerfContextStatistics {
     start_time: Instant,
-    report_count: usize,
     perf_level: PerfLevel,
+    write_wal_time: u64,
+    pre_and_post_process: u64,
+    write_memtable_time: u64,
+    write_thread_wait: u64,
+    db_mutex_lock_nanos: u64,
 }
 
 impl PerfContextStatistics {
@@ -642,8 +664,12 @@ impl PerfContextStatistics {
     pub fn new(perf_level: PerfLevel) -> Self {
         PerfContextStatistics {
             start_time: Instant::now(),
-            report_count: 0,
             perf_level,
+            write_wal_time: 0,
+            pre_and_post_process: 0,
+            write_thread_wait: 0,
+            write_memtable_time: 0,
+            db_mutex_lock_nanos: 0,
         }
     }
 
@@ -654,47 +680,35 @@ impl PerfContextStatistics {
         PerfContext::get().reset();
         set_perf_level(self.perf_level);
         self.start_time = Instant::now();
-        self.report_count = 0;
+        self.write_wal_time = 0;
+        self.pre_and_post_process = 0;
+        self.db_mutex_lock_nanos = 0;
+        self.write_thread_wait = 0;
+        self.write_memtable_time = 0;
     }
 
     pub fn report(&mut self) {
         if self.perf_level == PerfLevel::Disable {
             return;
         }
-        self.report_count += 1;
+        let perf_context = PerfContext::get();
+        let pre_and_post_process = perf_context.write_pre_and_post_process_time();
+        let write_thread_wait = perf_context.write_thread_wait_nanos();
+        report_perf_context!(self, perf_context, write_wal_time);
+        report_perf_context!(self, perf_context, write_memtable_time);
+        report_perf_context!(self, perf_context, db_mutex_lock_nanos);
+        report_perf_context!(self, pre_and_post_process);
+        report_perf_context!(self, write_thread_wait);
     }
 
     pub fn flush(&mut self) {
-        if self.perf_level == PerfLevel::Disable || self.report_count == 0 {
+        if self.perf_level == PerfLevel::Disable {
             return;
         }
-        let report_unit = self.report_count as f64 * 1_000_000_000.0;
-        let perf_context = PerfContext::get();
-        let wal = perf_context.write_wal_time() as f64 / report_unit;
-        let pre_and_post_process =
-            perf_context.write_pre_and_post_process_time() as f64 / report_unit;
-        let memtable = perf_context.write_memtable_time() as f64 / report_unit;
-        let write_thread_wait = perf_context.write_thread_wait_nanos() as f64 / report_unit;
-        let wait_mutex = perf_context.db_mutex_lock_nanos() as f64 / report_unit;
         let report_time = self.start_time.elapsed_secs();
-        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC.wal.observe(wal);
-        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-            .memtable
-            .observe(memtable);
-        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-            .pre_and_post_process
-            .observe(pre_and_post_process);
-        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-            .write_thread_wait
-            .observe(write_thread_wait);
-        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-            .wait_mutex
-            .observe(wait_mutex);
         APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
             .report_time
             .observe(report_time);
-        self.start_time = Instant::now();
-        self.report_count = 0;
     }
 }
 
