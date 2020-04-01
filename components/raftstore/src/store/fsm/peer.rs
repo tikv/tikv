@@ -2930,9 +2930,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
     fn verify_and_store_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) -> bool {
         if expected_index < self.fsm.peer.consistency_state.index {
-            REGION_HASH_COUNTER_VEC
-                .with_label_values(&["verify", "miss"])
-                .inc();
+            REGION_HASH_COUNTER.verify.miss.inc();
             warn!(
                 "has scheduled a new hash, skip.";
                 "region_id" => self.fsm.region_id(),
@@ -2966,9 +2964,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "peer_id" => self.fsm.peer_id(),
                 "index" => self.fsm.peer.consistency_state.index
             );
-            REGION_HASH_COUNTER_VEC
-                .with_label_values(&["verify", "matched"])
-                .inc();
+            REGION_HASH_COUNTER.verify.matched.inc();
             self.fsm.peer.consistency_state.hash = vec![];
             return false;
         }
@@ -2977,9 +2973,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             // Maybe computing is too slow or computed result is dropped due to channel full.
             // If computing is too slow, miss count will be increased twice.
-            REGION_HASH_COUNTER_VEC
-                .with_label_values(&["verify", "miss"])
-                .inc();
+            REGION_HASH_COUNTER.verify.miss.inc();
             warn!(
                 "hash belongs to wrong index, skip.";
                 "region_id" => self.fsm.region_id(),
