@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use engine_traits::{IterOptions, Iterator, KvEngine, SeekKey, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use tidb_query::codec::table as table_codec;
+use tidb_query_datatype::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
 use txn_types::Key;
 
@@ -237,7 +237,7 @@ mod tests {
     use engine::rocks::Writable;
     use engine_rocks::Compat;
     use engine_traits::ALL_CFS;
-    use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
+    use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
@@ -341,7 +341,7 @@ mod tests {
         cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(stx);
-        let mut runnable = SplitCheckRunner::new(Arc::clone(&engine), tx, coprocessor, cfg);
+        let mut runnable = SplitCheckRunner::new(engine.c().clone(), tx, coprocessor, cfg);
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {

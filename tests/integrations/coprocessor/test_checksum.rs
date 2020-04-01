@@ -8,8 +8,8 @@ use protobuf::Message;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
 use test_coprocessor::*;
-use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query::storage::Range;
+use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query_common::storage::Range;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};

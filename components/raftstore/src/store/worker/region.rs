@@ -9,11 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine::rocks;
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt};
+use engine_traits::{KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -51,7 +49,8 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 pub enum Task {
     Gen {
         region_id: u64,
-        raft_snap: RocksSnapshot,
+        last_applied_index_term: u64,
+        last_applied_state: RaftApplyState,
         kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     },
@@ -208,7 +207,7 @@ impl PendingDeleteRanges {
 
 #[derive(Clone)]
 struct SnapContext<R> {
-    engines: Engines,
+    engines: KvEngines<RocksEngine, RocksEngine>,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -223,16 +222,18 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     fn generate_snap(
         &self,
         region_id: u64,
-        raft_snap: RocksSnapshot,
+        last_applied_index_term: u64,
+        last_applied_state: RaftApplyState,
         kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) -> Result<()> {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<RocksEngine>(
             self.mgr.clone(),
-            raft_snap,
             kv_snap,
-            region_id
+            region_id,
+            last_applied_index_term,
+            last_applied_state,
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
@@ -255,7 +256,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     fn handle_gen(
         &self,
         region_id: u64,
-        raft_snap: RocksSnapshot,
+        last_applied_index_term: u64,
+        last_applied_state: RaftApplyState,
         kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) {
@@ -265,7 +267,13 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
         let timer = gen_histogram.start_coarse_timer();
 
-        if let Err(e) = self.generate_snap(region_id, raft_snap, kv_snap, notifier) {
+        if let Err(e) = self.generate_snap(
+            region_id,
+            last_applied_index_term,
+            last_applied_state,
+            kv_snap,
+            notifier,
+        ) {
             error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
             return;
         }
@@ -283,7 +291,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -299,17 +307,16 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(self.engines.kv.c().delete_all_in_range(
-            &start_key,
-            &end_key,
-            self.use_delete_range
-        ));
+        box_try!(self
+            .engines
+            .kv
+            .delete_all_in_range(&start_key, &end_key, self.use_delete_range));
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -332,7 +339,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.engines.kv.c().clone(),
+            db: self.engines.kv.clone(),
             region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -340,11 +347,11 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let mut wb = self.engines.kv.c().write_batch();
+        let mut wb = self.engines.kv.write_batch();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.c().write(&wb).unwrap_or_else(|e| {
+        self.engines.kv.write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -401,7 +408,6 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             if let Err(e) = self
                 .engines
                 .kv
-                .c()
                 .delete_all_files_in_range(start_key, end_key)
             {
                 error!(
@@ -417,7 +423,6 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         if let Err(e) =
             self.engines
                 .kv
-                .c()
                 .delete_all_in_range(start_key, end_key, self.use_delete_range)
         {
             error!(
@@ -515,7 +520,12 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             if plain_file_used(cf) {
                 continue;
             }
-            if rocks::util::ingest_maybe_slowdown_writes(&self.engines.kv, cf) {
+            if self
+                .engines
+                .kv
+                .ingest_maybe_slowdown_writes(cf)
+                .expect("cf")
+            {
                 return true;
             }
         }
@@ -533,7 +543,7 @@ pub struct Runner<R> {
 
 impl<R: CasualRouter<RocksEngine>> Runner<R> {
     pub fn new(
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -597,7 +607,8 @@ where
         match task {
             Task::Gen {
                 region_id,
-                raft_snap,
+                last_applied_index_term,
+                last_applied_state,
                 kv_snap,
                 notifier,
             } => {
@@ -606,7 +617,13 @@ where
                 let ctx = self.ctx.clone();
 
                 self.pool.spawn(async move {
-                    ctx.handle_gen(region_id, raft_snap, kv_snap, notifier);
+                    ctx.handle_gen(
+                        region_id,
+                        last_applied_index_term,
+                        last_applied_state,
+                        kv_snap,
+                        notifier,
+                    );
                 });
             }
             task @ Task::Apply { .. } => {
@@ -690,10 +707,11 @@ mod tests {
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, Peekable, WriteBatchExt};
+    use engine_rocks::{CloneCompat, Compat, RocksSnapshot};
+    use engine_traits::{CompactExt, Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
-    use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+    use raft::eraftpb::Entry;
     use tempfile::Builder;
     use tikv_util::time;
     use tikv_util::timer::Timer;
@@ -820,7 +838,7 @@ mod tests {
         let shared_block_cache = false;
         let engines = Engines::new(
             Arc::clone(&engine.kv),
-            Arc::clone(&engine.kv),
+            Arc::clone(&engine.raft),
             shared_block_cache,
         );
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
@@ -829,7 +847,7 @@ mod tests {
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
-            engines.clone(),
+            engines.c(),
             mgr,
             0,
             true,
@@ -844,11 +862,25 @@ mod tests {
         let gen_and_apply_snap = |id: u64| {
             // construct snapshot
             let (tx, rx) = mpsc::sync_channel(1);
+            let apply_state: RaftApplyState = engines
+                .kv
+                .c()
+                .get_msg_cf(CF_RAFT, &keys::apply_state_key(id))
+                .unwrap()
+                .unwrap();
+            let idx = apply_state.get_applied_index();
+            let entry = engines
+                .raft
+                .c()
+                .get_msg::<Entry>(&keys::raft_log_key(id, idx))
+                .unwrap()
+                .unwrap();
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    raft_snap: RocksSnapshot::new(engines.raft.clone()),
                     kv_snap: RocksSnapshot::new(engines.kv.clone()),
+                    last_applied_index_term: entry.get_term(),
+                    last_applied_state: apply_state,
                     notifier: tx,
                 })
                 .unwrap();
@@ -916,7 +948,11 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
+        engine
+            .kv
+            .c()
+            .compact_files_in_range(None, None, None)
+            .unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
@@ -958,7 +994,11 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
+        engine
+            .kv
+            .c()
+            .compact_files_in_range(None, None, None)
+            .unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
@@ -975,7 +1015,11 @@ mod tests {
         );
 
         // make sure have checked pending applies
-        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
+        engine
+            .kv
+            .c()
+            .compact_files_in_range(None, None, None)
+            .unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0

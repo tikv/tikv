@@ -1,16 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use std::{cmp, thread};
 
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
-use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use tokio_timer::timer::Handle;
 
 use kvproto::configpb;
@@ -288,17 +287,28 @@ impl Cluster {
     }
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
-        let mut s = Store::default();
         let store_id = store.get_id();
-        s.store = store;
-        self.stores.insert(store_id, s);
+        // There is a race between put_store and handle_region_heartbeat_response. If store id is
+        // 0, it means it's a placeholder created by latter, we just need to update the meta.
+        // Otherwise we should overwrite it.
+        if self
+            .stores
+            .get(&store_id)
+            .map_or(true, |s| s.store.get_id() != 0)
+        {
+            let mut s = Store::default();
+            s.store = store;
+            self.stores.insert(store_id, s);
+        } else {
+            self.stores.get_mut(&store_id).unwrap().store = store;
+        }
         Ok(())
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
         match self.stores.get(&store_id) {
-            None => Err(box_err!("store {} not found", store_id)),
-            Some(s) => Ok(s.store.clone()),
+            Some(s) if s.store.get_id() != 0 => Ok(s.store.clone()),
+            _ => Err(box_err!("store {} not found", store_id)),
         }
     }
 
@@ -333,7 +343,11 @@ impl Cluster {
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
-        self.stores.values().map(|s| s.store.clone()).collect()
+        self.stores
+            .values()
+            .filter(|s| s.store.get_id() != 0)
+            .map(|s| s.store.clone())
+            .collect()
     }
 
     fn get_regions_number(&self) -> usize {
@@ -671,7 +685,6 @@ pub struct TestPdClient {
     timer: Handle,
     is_incompatible: bool,
     tso: AtomicUsize,
-    poller: CpuPool,
     trigger_tso_failure: AtomicBool,
 }
 
@@ -683,7 +696,6 @@ impl TestPdClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             is_incompatible,
             tso: AtomicUsize::new(1),
-            poller: CpuPoolBuilder::new().pool_size(1).create(),
             trigger_tso_failure: AtomicBool::new(false),
         }
     }
@@ -981,6 +993,19 @@ impl TestPdClient {
     pub fn trigger_tso_failure(&self) {
         self.trigger_tso_failure.store(true, Ordering::SeqCst);
     }
+
+    pub fn shutdown_store(&self, store_id: u64) {
+        match self.cluster.write() {
+            Ok(mut c) => {
+                c.stores.remove(&store_id);
+            }
+            Err(e) => {
+                if !thread::panicking() {
+                    panic!("failed to acquire write lock: {:?}", e)
+                }
+            }
+        }
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1087,7 +1112,10 @@ impl PdClient for TestPdClient {
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
         let mut cluster = self.cluster.wl();
-        let store = cluster.stores.get_mut(&store_id).unwrap();
+        let store = cluster
+            .stores
+            .entry(store_id)
+            .or_insert_with(Store::default);
         let rx = store.receiver.take().unwrap();
         Box::new(
             rx.map(|resp| vec![resp])
@@ -1234,10 +1262,6 @@ impl PdClient for TestPdClient {
         }
         let tso = self.tso.fetch_add(1, Ordering::SeqCst);
         Box::new(futures::future::result(Ok(TimeStamp::new(tso as _))))
-    }
-
-    fn spawn(&self, fut: PdFuture<()>) {
-        self.poller.spawn(fut).forget();
     }
 }
 

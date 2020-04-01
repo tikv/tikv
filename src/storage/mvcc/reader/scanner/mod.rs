@@ -3,8 +3,7 @@
 mod backward;
 mod forward;
 
-use engine::IterOption;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, TimeStamp, TsSet, Value};
 
@@ -345,7 +344,7 @@ pub fn has_data_in_range<S: Snapshot>(
     right: &Key,
     statistic: &mut CfStatistics,
 ) -> Result<bool> {
-    let iter_opt = IterOption::new(None, None, true);
+    let iter_opt = IterOptions::new(None, None, true);
     let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
     if iter.seek(left, statistic)? {
         if iter.key(statistic) < right.as_encoded().as_slice() {

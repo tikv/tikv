@@ -158,6 +158,7 @@ pub struct Endpoint<T> {
     timer: SteadyTimer,
     min_ts_interval: Duration,
     scan_batch_size: usize,
+    tso_worker: ThreadPool,
 
     workers: ThreadPool,
 }
@@ -170,11 +171,13 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
         observer: CdcObserver,
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
+        let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
         let ep = Endpoint {
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
             scheduler,
             pd_client,
+            tso_worker,
             timer: SteadyTimer::default(),
             workers,
             raft_router,
@@ -416,7 +419,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 }
             },
         );
-        self.pd_client.spawn(Box::new(fut) as _);
+        self.tso_worker.spawn(fut);
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
@@ -781,7 +784,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone());
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
         let downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -807,7 +810,7 @@ mod tests {
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
-        let downstream = Downstream::new("".to_string(), region_epoch);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0);
         let new_downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req,

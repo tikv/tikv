@@ -10,7 +10,6 @@ publish = false
 failpoints = ["fail/failpoints"]
 prost-codec = [
   "prost",
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "into_other/prost-codec",
   "keys/prost-codec",
@@ -18,11 +17,10 @@ prost-codec = [
   "raft/prost-codec",
   "pd_client/prost-codec",
   "sst_importer/prost-codec",
-  "tidb_query/prost-codec",
+  "tidb_query_datatype/prost-codec",
   "txn_types/prost-codec",
 ]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "into_other/protobuf-codec",
   "keys/protobuf-codec",
@@ -30,7 +28,7 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "pd_client/protobuf-codec",
   "sst_importer/protobuf-codec",
-  "tidb_query/protobuf-codec",
+  "tidb_query_datatype/protobuf-codec",
   "txn_types/protobuf-codec",
 ]
 testexport = []
@@ -42,7 +40,6 @@ byteorder = "1.2"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.7.2"
-engine = { path = "../engine" }
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
 fail = "0.3"
@@ -69,7 +66,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 sst_importer = { path = "../sst_importer" }
 tempfile = "3.0"
-tidb_query = { path = "../tidb_query" }
+tidb_query_datatype = { path = "../tidb_query_datatype" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
 tokio = { version = "0.2", features = ["sync"] }
@@ -79,9 +76,14 @@ tokio-timer = "0.2"
 txn_types = { path = "../txn_types"}
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
+[dependencies.prometheus-static-metric]
+git = "https://github.com/tikv/rust-prometheus.git"
+rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
+
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
+engine = { path = "../engine" }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer" }
