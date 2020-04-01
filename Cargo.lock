@@ -1077,6 +1077,7 @@ dependencies = [
  "encryption",
  "engine",
  "engine_traits",
+ "keys",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -1084,10 +1085,12 @@ dependencies = [
  "rocksdb",
  "slog",
  "slog-global",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
+ "txn_types",
 ]
 
 [[package]]
