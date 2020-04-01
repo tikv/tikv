@@ -861,8 +861,10 @@ impl<S: Snapshot> MvccTxn<S> {
                     return Ok((TxnStatus::TtlExpire, is_pessimistic_txn));
                 }
 
+                // If lock.minCommitTS is 0, it's not a large transaction and we can't push forward
+                // its minCommitTS otherwise the transaction can't be committed by old version TiDB
+                // during rolling update.
                 // If this is a large transaction and the lock is active, push forward the minCommitTS.
-                // lock.minCommitTS == 0 may be a secondary lock, or not a large transaction.
                 if !lock.min_commit_ts.is_zero() && caller_start_ts >= lock.min_commit_ts {
                     lock.min_commit_ts = caller_start_ts.next();
 
