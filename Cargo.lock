@@ -211,7 +211,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -578,6 +578,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -585,7 +586,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "libc",
@@ -1018,15 +1019,19 @@ dependencies = [
  "crc32fast",
  "engine_traits",
  "failure",
- "hex 0.3.2",
+ "hex 0.4.2",
  "kvproto",
+ "matches",
  "openssl",
  "protobuf",
  "rand 0.7.3",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -1034,8 +1039,9 @@ name = "engine"
 version = "0.0.1"
 dependencies = [
  "configuration",
+ "encryption",
  "engine_traits",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -1069,8 +1075,10 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine",
  "engine_traits",
+ "keys",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -1078,17 +1086,19 @@ dependencies = [
  "rocksdb",
  "slog",
  "slog-global",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
+ "txn_types",
 ]
 
 [[package]]
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.0",
+ "hex 0.4.2",
  "protobuf",
  "quick-error",
  "slog",
@@ -1600,9 +1610,9 @@ checksum = "805026a5d0141ffc30abb3be3173848ad46a1b1664fe632428479619a3644d77"
 
 [[package]]
 name = "hex"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "023b39be39e3a2da62a94feb433e91e8bcd37676fbc8bea371daf52b7a769a3e"
+checksum = "644f9158b2f133fd50f5fb3242878846d9eb792e445c893805ff0e3824006e35"
 
 [[package]]
 name = "hmac"
@@ -1922,7 +1932,7 @@ dependencies = [
  "byteorder",
  "derive_more 0.99.3",
  "failure",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "panic_hook",
  "tikv_alloc",
@@ -1931,7 +1941,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#78042b285b75c1e427ac3dcf5559e1f8bcd340c9"
+source = "git+https://github.com/pingcap/kvproto.git#98f910b71904ff7190e26a483b242ad5d7330c31"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2000,7 +2010,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c79d2c2ac68f9ec40fa03faac3882baac38db314"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2019,7 +2029,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c79d2c2ac68f9ec40fa03faac3882baac38db314"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2080,7 +2090,7 @@ dependencies = [
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.0",
+ "hex 0.4.2",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2582,7 +2592,7 @@ version = "0.1.0"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
@@ -2784,7 +2794,7 @@ checksum = "e767ab205e4b292ea2c8e9fa454efe7e66e35026432eef34fed7daa763136d09"
 dependencies = [
  "bitflags",
  "byteorder",
- "hex 0.4.0",
+ "hex 0.4.2",
  "lazy_static",
  "libc",
  "libflate",
@@ -2998,7 +3008,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-executor",
  "futures-util",
- "hex 0.4.0",
+ "hex 0.4.2",
  "into_other",
  "keys",
  "kvproto",
@@ -3008,6 +3018,7 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
+ "prometheus-static-metric",
  "prost",
  "protobuf",
  "quick-error",
@@ -3351,7 +3362,7 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.0",
+ "hex 0.4.2",
  "tikv_util",
  "txn_types",
 ]
@@ -3377,7 +3388,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c79d2c2ac68f9ec40fa03faac3882baac38db314"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3469,7 +3480,7 @@ dependencies = [
  "base64 0.12.0",
  "bytes 0.5.3",
  "futures 0.3.4",
- "hex 0.4.0",
+ "hex 0.4.2",
  "hmac",
  "http 0.2.0",
  "hyper 0.13.3",
@@ -3853,7 +3864,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4161,7 +4172,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "pd_client",
@@ -4232,6 +4243,7 @@ dependencies = [
  "criterion-cpu-time",
  "criterion-papi",
  "crossbeam",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -4241,7 +4253,7 @@ dependencies = [
  "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "panic_hook",
@@ -4512,7 +4524,6 @@ dependencies = [
  "bitflags",
  "byteorder",
  "chrono",
- "coarsetime",
  "codec",
  "configuration",
  "crc32fast",
@@ -4534,7 +4545,7 @@ dependencies = [
  "futures-locks",
  "futures-util",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "hyper 0.12.35",
  "hyper-openssl",
  "into_other",
@@ -4641,7 +4652,7 @@ dependencies = [
  "futures-cpupool",
  "fxhash",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "lazy_static",
  "libc",
  "log",
@@ -5085,7 +5096,7 @@ dependencies = [
  "codec",
  "derive-new",
  "farmhash",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "quick-error",
  "slog",

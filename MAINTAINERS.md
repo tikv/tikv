@@ -1,34 +1,17 @@
-# The TiKV Maintainers
+# TiKV Maintainers
 
-This file lists who are the maintainers of the TiKV project.
+This file lists who are the maintainers of the TiKV project and their focused areas of expertise. This can be used for routing PRs, questions, etc. to the right place.
 
-The responsibilities for maintainers are listed in the [`GOVERNANCE.md`](GOVERNANCE.md) file.
+Maintainers are people who are in charge of the maintenance of the TiKV project. This includes everything from day-to-day tasks such as issue triage to completing development epics. Maintainers should be the first point of contact for security issues or other critical issues that require privacy not offered by the issue tracker. The Maintainer role is defined in the [TiKV Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md#maintainer).
 
-In short, maintainers are people who are in charge of the maintenance of the TiKV project. This includes everything from day-to-day tasks such as issue triage to completing epics. Maintainers should be the first point of contact for security issues or other critical issues that require privacy not offered by the issue tracker.
+The maintainers of TiKV, along with their email and focus areas, are listed below:
 
-The maintainers of TiKV, along with their email and focus area, are listed below:
-
-## Senior Maintainers
-
-Name | Email | Focus
-----|---|---
-[Siddon Tang](https://github.com/siddontang) | [tl@pingcap.com](mailto:tl@pingcap.com) | Project Lead
-[Jay Li](https://github.com/busyjay) | [jay@pingcap.com](mailto:jay@pingcap.com) | Raft, Coprocessor
-[Jinpeng Zhang](https://github.com/zhangjinpeng1987) | [zhangjinpeng@pingcap.com](mailto:zhangjinpeng@pingcap.com) | Storage, Transaction
-[Wink Yao](https://github.com/winkyao) | [wink@pingcap.com](mailto:wink@pingcap.com) | Community, Transaction
-
-# Maintainers
-
-Name | Email | Focus
-----|---|---
-[Xiaoguang Sun](https://github.com/sunxiaoguang) | [sunxiaoguang@zhihu.com](mailto:sunxiaoguang@zhihu.com) | Focus Areas: Client, Storage
-[Daobing Li](https://github.com/lidaobing) | [lidaobing@gmail.com](mailto:lidaobing@gmail.com) | Focus Areas: Cloud, Scheduling
-[Fu Chen](https://github.com/fredchenbj) | [cfworking1990@gmail.com](mailto:cfworking1990@gmail.com) | Focus Areas: Storage, Performance
-
-# Maintaining Organizations
-
-Company | Point of Contact
-----|---
-[PingCAP](http://github.com/pingcap/) | [Siddon Tang](http://github.com/siddontang)
-
-> *Please do not contact the maintainers listed above for any reason not directly related to the TiKV project. For issues, questions, or support, you are asked to **use the issue tracker whenever possible.***
+Name | Email | Focus | Org
+----|---|---|---
+Siddon Tang ([@siddontang](https://github.com/siddontang))| [tl@pingcap.com](mailto:tl@pingcap.com) | Architecture, General TiKV | [PingCAP](https://www.pingcap.com/)
+Jay Li ([@busyjay](https://github.com/busyjay))| [jay@pingcap.com](mailto:jay@pingcap.com) | Raft, Coprocessor | [PingCAP](https://www.pingcap.com/)
+Jinpeng Zhang ([zhangjinpeng1987](https://github.com/zhangjinpeng1987)) | [zhangjinpeng@pingcap.com](mailto:zhangjinpeng@pingcap.com) | Storage, Transaction | [PingCAP](https://www.pingcap.com/)
+Wink Yao ([@winkyao](https://github.com/winkyao)) | [wink@pingcap.com](mailto:wink@pingcap.com) | Community, Transaction | [PingCAP](https://www.pingcap.com/)
+Xiaoguang Sun ([@sunxiaoguang](https://github.com/sunxiaoguang)) | [sunxiaoguang@zhihu.com](mailto:sunxiaoguang@zhihu.com) | Client, Storage | [Zhihu](https://www.zhihu.com/)
+Daobing Li ([@lidaobing](https://github.com/lidaobing)) | [lidaobing@gmail.com](mailto:lidaobing@gmail.com) | Cloud, Scheduling | [JD Cloud & AI](https://www.jdcloud.com/en/)
+Fu Chen ([@fredchenbj](https://github.com/fredchenbj)) | [cfworking1990@gmail.com](mailto:cfworking1990@gmail.com) | Storage, Performance  | [Yidian Zixun](https://www.yidianzixun.com/)
