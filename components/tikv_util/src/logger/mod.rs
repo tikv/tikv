@@ -8,6 +8,7 @@ use std::fmt;
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::fs::OpenOptions;
 
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
@@ -163,6 +164,26 @@ pub fn get_string_by_level(lv: Level) -> &'static str {
         Level::Trace => "trace",
         Level::Info => "info",
     }
+}
+
+pub fn redirect_panic_log(panic_log_file: &str) {
+    let tikv_err_log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(panic_log_file)
+        .unwrap();
+
+    let decorator = slog_term::PlainDecorator::new(tikv_err_log_file);
+    let drainer = TikvFormat::new(decorator);
+    let _ = init_log(
+        drainer,
+        slog::Level::Error,
+        false,
+        false,
+        vec![],
+        0,
+    );
 }
 
 // Converts `slog::Level` to unified log level format.
