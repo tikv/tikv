@@ -578,6 +578,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
