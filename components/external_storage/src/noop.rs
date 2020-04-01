@@ -25,8 +25,8 @@ impl ExternalStorage for NoopStorage {
         block_on(copy(reader, &mut AllowStdIo::new(io::sink()))).map(drop)
     }
 
-    fn read(&self, _name: &str) -> io::Result<Box<dyn AsyncRead + Unpin>> {
-        Ok(Box::new(AllowStdIo::new(io::empty())) as _)
+    fn read(&self, _name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+        Box::new(AllowStdIo::new(io::empty()))
     }
 }
 
@@ -47,7 +47,7 @@ mod tests {
             magic_contents.len() as u64,
         )
         .unwrap();
-        let mut reader = noop.read("a.log").unwrap();
+        let mut reader = noop.read("a.log");
         let mut buf = vec![];
         block_on(reader.read_to_end(&mut buf)).unwrap();
         assert!(buf.is_empty());

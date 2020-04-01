@@ -3,7 +3,6 @@ use std::io::{Error, ErrorKind, Result};
 use std::path::Path;
 use std::sync::Arc;
 
-use clap::{App, ArgMatches};
 use external_storage::{
     create_storage, make_local_backend, make_noop_backend, make_s3_backend, ExternalStorage,
 };
@@ -11,139 +10,117 @@ use futures::executor::block_on;
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
 use kvproto::backup::S3;
+use structopt::clap::arg_enum;
+use structopt::StructOpt;
 
-static CMD: &str = r#"
-name: storagecli
-version: "0.1"
-about: an example using storage to save and load a file
-
-settings:
-    - ArgRequiredElseHelp
-    - SubcommandRequiredElseHelp
-
-args:
-    - storage:
-        help: storage backend
-        short: s
-        long: storage
-        takes_value: true
-        case_insensitive: true
-        possible_values: ["noop", "local", "s3"]
-        required: true
-    - file:
-        help: local file to load from or save to
-        short: f
-        long: file
-        takes_value: true
-        required: true
-    - name:
-        help: remote name of the file to load from or save to
-        short: n
-        long: name
-        takes_value: true
-        required: true
-    - path:
-        help: path to use for local storage
-        short: p
-        long: path
-        takes_value: true
-    - credential_file:
-        help: credential file path. For S3, use ~/.aws/credentials
-        short: c
-        long: credential_file
-        takes_value: true
-    - region:
-        help: remote region
-        short: r
-        long: region
-        takes_value: true
-    - bucket:
-        help: remote bucket name
-        short: b
-        long: bucket
-        takes_value: true
-    - prefix:
-        help: remote path prefix
-        short: x
-        long: prefix
-        takes_value: true
-
-subcommands:
-    - save:
-        about: save file to storage
-    - load:
-        about: load file from storage
-"#;
-
-fn create_s3_storage(matches: &ArgMatches<'_>) -> Result<Arc<dyn ExternalStorage>> {
-    let mut config = S3::default();
-    match matches.value_of("credential_file") {
-        Some(credential_file) => {
-            let ini = Ini::load_from_file(credential_file).map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("Failed to parse credential file as ini: {}", e),
-                )
-            })?;
-            let props = ini
-                .section(Some("default"))
-                .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse section"))?;
-            config.access_key = props
-                .get("aws_access_key_id")
-                .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
-                .clone();
-            config.secret_access_key = props
-                .get("aws_secret_access_key")
-                .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
-                .clone();
-        }
-        _ => return Err(Error::new(ErrorKind::Other, "missing credential_file")),
+arg_enum! {
+    #[derive(Debug)]
+    enum StorageType {
+        Noop,
+        Local,
+        S3,
     }
-    if let Some(region) = matches.value_of("region") {
-        config.region = region.to_string();
+}
+
+#[derive(StructOpt)]
+#[structopt(rename_all = "kebab-case", name = "scli", version = "0.1")]
+/// An example using storage to save and load a file.
+pub struct Opt {
+    /// Storage backend.
+    #[structopt(short, long, possible_values = &StorageType::variants(), case_insensitive = true)]
+    storage: StorageType,
+    /// Local file to load from or save to.
+    #[structopt(short, long)]
+    file: String,
+    /// Remote name of the file to load from or save to.
+    #[structopt(short, long)]
+    name: String,
+    /// Path to use for local storage.
+    #[structopt(short, long)]
+    path: String,
+    /// Credential file path. For S3, use ~/.aws/credentials.
+    #[structopt(short, long)]
+    credential_file: Option<String>,
+    /// Remote region.
+    #[structopt(short, long)]
+    region: Option<u64>,
+    /// Remote bucket name.
+    #[structopt(short, long)]
+    bucket: Option<String>,
+    /// Remote path prefix
+    #[structopt(short = "x", long)]
+    prefix: Option<String>,
+    #[structopt(subcommand)]
+    command: Command,
+}
+
+#[derive(StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+enum Command {
+    /// Save file to storage.
+    Save,
+    /// Load file from storage.
+    Load,
+}
+
+fn create_s3_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
+    let mut config = S3::default();
+
+    if let Some(credential_file) = &opt.credential_file {
+        let ini = Ini::load_from_file(credential_file).map_err(|e| {
+            Error::new(
+                ErrorKind::Other,
+                format!("Failed to parse credential file as ini: {}", e),
+            )
+        })?;
+        let props = ini
+            .section(Some("default"))
+            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse section"))?;
+        config.access_key = props
+            .get("aws_access_key_id")
+            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
+            .clone();
+        config.secret_access_key = props
+            .get("aws_secret_access_key")
+            .ok_or_else(|| Error::new(ErrorKind::Other, "fail to parse credential"))?
+            .clone();
+    }
+
+    if let Some(region) = opt.region {
+        config.region = format!("{}", region);
     } else {
         return Err(Error::new(ErrorKind::Other, "missing region"));
     }
-    if let Some(bucket) = matches.value_of("bucket") {
+    if let Some(bucket) = &opt.bucket {
         config.bucket = bucket.to_string();
     } else {
         return Err(Error::new(ErrorKind::Other, "missing bucket"));
     }
-    if let Some(prefix) = matches.value_of("prefix") {
+    if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
     create_storage(&make_s3_backend(config))
 }
 
 fn process() -> Result<()> {
-    let yaml = &clap::YamlLoader::load_from_str(CMD).unwrap()[0];
-    let app = App::from_yaml(yaml);
-    let matches = app.get_matches();
-
-    let storage = match matches.value_of("storage") {
-        Some("noop") => create_storage(&make_noop_backend())?,
-        Some("local") => match matches.value_of("path") {
-            Some(path) => create_storage(&make_local_backend(Path::new(&path)))?,
-            _ => return Err(Error::new(ErrorKind::Other, "missing path")),
-        },
-        Some("s3") => create_s3_storage(&matches)?,
-        _ => return Err(Error::new(ErrorKind::Other, "storage unrecognized")),
+    let opt = Opt::from_args();
+    let storage = match opt.storage {
+        StorageType::Noop => create_storage(&make_noop_backend())?,
+        StorageType::Local => create_storage(&make_local_backend(Path::new(&opt.path)))?,
+        StorageType::S3 => create_s3_storage(&opt)?,
     };
 
-    let file_path = matches.value_of("file").unwrap();
-    let name = matches.value_of("name").unwrap();
-    match matches.subcommand_name() {
-        Some("save") => {
-            let file = File::open(file_path)?;
+    match opt.command {
+        Command::Save => {
+            let file = File::open(&opt.file)?;
             let file_size = file.metadata()?.len();
-            storage.write(name, Box::new(AllowStdIo::new(file)), file_size)?;
+            storage.write(&opt.name, Box::new(AllowStdIo::new(file)), file_size)?;
         }
-        Some("load") => {
-            let mut file = AllowStdIo::new(File::create(file_path)?);
-            let reader = storage.read(name)?;
+        Command::Load => {
+            let reader = storage.read(&opt.name);
+            let mut file = AllowStdIo::new(File::create(&opt.file)?);
             block_on(copy(reader, &mut file))?;
         }
-        _ => return Err(Error::new(ErrorKind::Other, "subcommand unrecognized")),
     }
 
     Ok(())

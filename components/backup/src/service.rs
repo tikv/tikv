@@ -1,11 +1,12 @@
 use std::sync::atomic::*;
 use std::sync::Arc;
 
-use futures::future::*;
-use futures::prelude::*;
-use futures::sync::mpsc;
-use grpcio::*;
-use kvproto::backup::{BackupRequest, BackupResponse};
+use futures::channel::mpsc;
+use futures::compat::Compat;
+use futures::StreamExt;
+use futures_01::{future::Future, sink::Sink, stream::Stream};
+use grpcio::{self, *};
+use kvproto::backup::*;
 use kvproto::backup_grpc::*;
 use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::worker::*;
