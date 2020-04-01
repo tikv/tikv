@@ -208,7 +208,7 @@ impl TiKVServer {
         validate_and_persist_config(&mut config, true);
         check_system_config(&config);
 
-        tikv_util::set_panic_hook(false, &config.storage.data_dir);
+        tikv_util::set_panic_hook(false, &config.storage.data_dir, &config.panic_log_file);
 
         info!(
             "using config";
@@ -520,12 +520,12 @@ impl TiKVServer {
             coprocessor_host.clone(),
             self.config.coprocessor.clone(),
         );
+
         split_check_worker.start(split_check_runner).unwrap();
         cfg_controller.register(
             tikv::config::Module::Coprocessor,
             Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
         );
-
         self.config
             .raft_store
             .validate()
@@ -550,7 +550,6 @@ impl TiKVServer {
         );
 
         let raft_router = node.get_router();
-
         node.start(
             engines.engines.clone(),
             server.transport(),

@@ -1845,6 +1845,9 @@ pub struct TiKvConfig {
     pub slow_log_threshold: ReadableDuration,
 
     #[config(skip)]
+    pub panic_log_file: String,
+
+    #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
 
     #[config(skip)]
@@ -1907,6 +1910,7 @@ impl Default for TiKvConfig {
             log_file: "".to_owned(),
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
+            panic_log_file: "tikv_stderr.log".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
