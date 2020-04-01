@@ -215,9 +215,9 @@ impl CmdBatch {
         self.cmds.is_empty()
     }
 
-    pub fn size() -> usize {
+    pub fn size(&self) -> usize {
         let mut cmd_bytes = 0;
-        for cmd in batch.cmds.iter() {
+        for cmd in self.cmds.iter() {
             let Cmd {
                 ref request,
                 ref response,
