@@ -178,7 +178,6 @@ impl Simulator for ServerCluster {
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
-        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool =
             coprocessor::readpool_impl::build_read_pool_for_test(store.get_engine());
         let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
