@@ -199,7 +199,9 @@ impl ScalarFunc {
             | ScalarFuncSig::WeekDay
             | ScalarFuncSig::WeekOfYear
             | ScalarFuncSig::Year
-            | ScalarFuncSig::UnaryNot
+            | ScalarFuncSig::UnaryNotInt
+            | ScalarFuncSig::UnaryNotReal
+            | ScalarFuncSig::UnaryNotDecimal
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
             | ScalarFuncSig::UnaryMinusDecimal
@@ -508,6 +510,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonValidJsonSig
             | ScalarFuncSig::JsonContainsSig
             | ScalarFuncSig::JsonKeys2ArgsSig
+            | ScalarFuncSig::JsonValidOthersSig
             | ScalarFuncSig::JsonValidStringSig => return Err(Error::UnknownSignature(sig)),
         };
         if args < min_args || args > max_args {
@@ -763,7 +766,9 @@ dispatch_call! {
         LogicalOr => logical_or,
         LogicalXor => logical_xor,
 
-        UnaryNot => unary_not,
+        UnaryNotInt => unary_not_int,
+        UnaryNotReal => unary_not_real,
+        UnaryNotDecimal => unary_not_decimal,
         UnaryMinusInt => unary_minus_int,
         IntIsNull => int_is_null,
         IntIsFalse => int_is_false,
@@ -1266,7 +1271,9 @@ mod tests {
                     ScalarFuncSig::WeekDay,
                     ScalarFuncSig::WeekOfYear,
                     ScalarFuncSig::Year,
-                    ScalarFuncSig::UnaryNot,
+                    ScalarFuncSig::UnaryNotInt,
+                    ScalarFuncSig::UnaryNotReal,
+                    ScalarFuncSig::UnaryNotDecimal,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
                     ScalarFuncSig::UnaryMinusDecimal,
