@@ -22,6 +22,7 @@ use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
+use encryption::DataKeyManager;
 use engine::rocks;
 use engine::Engines;
 use engine_rocks::encryption::get_env;
@@ -62,7 +63,10 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
-            let env = get_env(&cfg.storage.data_dir, &cfg.encryption).unwrap();
+            let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
+                .unwrap()
+                .map(|key_manager| Arc::new(key_manager));
+            let env = get_env(key_manager, None).unwrap();
             let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
             kv_db_opts.set_env(env.clone());

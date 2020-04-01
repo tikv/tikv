@@ -76,6 +76,10 @@ tokio-timer = "0.2"
 txn_types = { path = "../txn_types"}
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
+[dependencies.prometheus-static-metric]
+git = "https://github.com/tikv/rust-prometheus.git"
+rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
+
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
 
