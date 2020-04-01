@@ -24,10 +24,10 @@ fn new_kv_server() -> (ImportKVServer, ImportKvClient, TempDir) {
 
     let ch = {
         let env = Arc::new(Environment::new(1));
-        let addr = server.bind_addrs().first().unwrap();
+        let (host, port) = server.bind_addrs();
         ChannelBuilder::new(env)
             .keepalive_timeout(Duration::from_secs(60))
-            .connect(&format!("{}:{}", addr.0, addr.1))
+            .connect(&format!("{}:{}", host, port))
     };
     let client = ImportKvClient::new(ch);
 

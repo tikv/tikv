@@ -93,6 +93,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
             Arc::clone(&thread_load),
+            security_mgr.clone(),
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
@@ -103,7 +104,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .resource_quota(mem_quota)
+            .set_resource_quota(mem_quota)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .build_args();
@@ -172,8 +173,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     pub fn build_and_bind(&mut self) -> Result<SocketAddr> {
         let sb = self.builder_or_server.take().unwrap().left().unwrap();
         let server = sb.build()?;
-        let (ref host, port) = server.bind_addrs()[0];
-        let addr = SocketAddr::new(IpAddr::from_str(host)?, port as u16);
+        let (host, port) = server.bind_addrs().next().unwrap();
+        let addr = SocketAddr::new(IpAddr::from_str(host)?, port);
         info!("listening on addr"; "addr" => addr);
         self.local_addr = addr;
         self.builder_or_server = Some(Either::Right(server));

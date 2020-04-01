@@ -221,9 +221,9 @@ impl Config {
     /// Gets configured grpc compression algorithm.
     pub fn grpc_compression_algorithm(&self) -> CompressionAlgorithms {
         match self.grpc_compression_type {
-            GrpcCompressionType::None => CompressionAlgorithms::None,
-            GrpcCompressionType::Deflate => CompressionAlgorithms::Deflate,
-            GrpcCompressionType::Gzip => CompressionAlgorithms::Gzip,
+            GrpcCompressionType::None => CompressionAlgorithms::GRPC_COMPRESS_NONE,
+            GrpcCompressionType::Deflate => CompressionAlgorithms::GRPC_COMPRESS_DEFLATE,
+            GrpcCompressionType::Gzip => CompressionAlgorithms::GRPC_COMPRESS_GZIP,
         }
     }
 }

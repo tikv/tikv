@@ -11,3 +11,4 @@ time = "0.1"
 rand = "0.6.5"
 rand_isaac = "0.1.1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+grpcio = { version = "0.5", features = ["openssl-vendored"] }

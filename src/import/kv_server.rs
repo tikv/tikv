@@ -64,7 +64,7 @@ impl ImportKVServer {
         self.grpc_server.shutdown();
     }
 
-    pub fn bind_addrs(&self) -> &[(String, u16)] {
-        self.grpc_server.bind_addrs()
+    pub fn bind_addrs(&self) -> (&String, u16) {
+        self.grpc_server.bind_addrs().next().unwrap()
     }
 }

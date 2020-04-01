@@ -28,7 +28,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
-use tikv_util::security::SecurityManager;
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
@@ -727,7 +727,7 @@ where
     ) {
         if !self.is_leader() {
             let status = RpcStatus::new(
-                RpcStatusCode::FailedPrecondition,
+                RpcStatusCode::FAILED_PRECONDITION,
                 Some("I'm not the leader of deadlock detector".to_string()),
             );
             handle.spawn(sink.fail(status).map_err(|_| ()));
@@ -819,13 +819,19 @@ where
 pub struct Service {
     waiter_mgr_scheduler: WaiterMgrScheduler,
     detector_scheduler: Scheduler,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(waiter_mgr_scheduler: WaiterMgrScheduler, detector_scheduler: Scheduler) -> Self {
+    pub fn new(
+        waiter_mgr_scheduler: WaiterMgrScheduler,
+        detector_scheduler: Scheduler,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Self {
         Self {
             waiter_mgr_scheduler,
             detector_scheduler,
+            security_mgr,
         }
     }
 }
@@ -838,9 +844,12 @@ impl deadlock_grpc::Deadlock for Service {
         _req: WaitForEntriesRequest,
         sink: UnarySink<WaitForEntriesResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
-            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+            let status = RpcStatus::new(RpcStatusCode::RESOURCE_EXHAUSTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()))
         } else {
             ctx.spawn(
@@ -864,10 +873,13 @@ impl deadlock_grpc::Deadlock for Service {
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let task = Task::DetectRpc { stream, sink };
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {
-            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+            let status = RpcStatus::new(RpcStatusCode::RESOURCE_EXHAUSTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
