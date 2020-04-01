@@ -246,6 +246,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             };
 
             if has_lock {
+                // TODO: here we parse lock_value twice, maybe we could pass `lock_value` to `handle_lock`?
                 if self.cfg.check_can_be_cached && self.can_be_cached {
                     let lock_value = self.cursors.lock.value(&mut self.statistics.lock);
                     let lock = Lock::parse(lock_value)?;
@@ -319,14 +320,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
-            let seek_ts = if self.cfg.check_can_be_cached && self.can_be_cached {
-                // TODO: use "write.seek(ts) + write.prev()" to check newer data maybe faster?
-                TimeStamp::max()
-            } else {
-                self.cfg.ts
-            };
             self.cursors.write.seek(
-                &user_key.clone().append_ts(seek_ts),
+                &user_key.clone().append_ts(self.cfg.ts),
                 &mut self.statistics.write,
             )?;
             if !self.cursors.write.valid()? {
@@ -337,22 +332,6 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                 // Meet another key.
                 return Ok(false);
-            }
-            // Do the real seek if the previous seek was for checking newer data
-            if seek_ts == TimeStamp::max() && Key::decode_ts_from(current_key)? > self.cfg.ts {
-                self.can_be_cached = false;
-                self.cursors.write.near_seek(
-                    &user_key.clone().append_ts(self.cfg.ts),
-                    &mut self.statistics.write,
-                )?;
-                if !self.cursors.write.valid()? {
-                    return Ok(false);
-                }
-                let current_key = self.cursors.write.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
-                    // Meet another key.
-                    return Ok(false);
-                }
             }
         }
         Ok(true)
