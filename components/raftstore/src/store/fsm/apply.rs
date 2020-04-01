@@ -420,7 +420,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
-        // Must call this before invoking callback.
+        // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
         self.host.on_flush_apply();
 
         for cbs in self.cbs.drain(..) {

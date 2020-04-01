@@ -214,6 +214,27 @@ impl CmdBatch {
     pub fn is_empty(&self) -> bool {
         self.cmds.is_empty()
     }
+
+    pub fn size() -> usize {
+        let mut cmd_bytes = 0;
+        for cmd in batch.cmds.iter() {
+            let Cmd {
+                ref request,
+                ref response,
+                ..
+            } = cmd;
+            if !response.get_header().has_error() {
+                if !request.has_admin_request() {
+                    for req in request.requests.iter() {
+                        let put = req.get_put();
+                        cmd_bytes += put.get_key().len();
+                        cmd_bytes += put.get_value().len();
+                    }
+                }
+            }
+        }
+        cmd_bytes
+    }
 }
 
 pub trait CmdObserver: Coprocessor {
