@@ -29,8 +29,20 @@ pub fn logical_or(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>>
 
 #[rpn_fn]
 #[inline]
-pub fn unary_not(arg: &Option<i64>) -> Result<Option<i64>> {
+pub fn unary_not_int(arg: &Option<i64>) -> Result<Option<i64>> {
     Ok(arg.map(|v| (v == 0) as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_not_real(arg: &Option<Real>) -> Result<Option<i64>> {
+    Ok(arg.map(|v| (v.into_inner() == 0f64) as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_not_decimal(arg: &Option<Decimal>) -> Result<Option<i64>> {
+    Ok(arg.as_ref().map(|v| v.is_zero() as i64))
 }
 
 #[rpn_fn]
@@ -124,20 +136,53 @@ mod tests {
     }
 
     #[test]
-    fn test_unary_not() {
+    fn test_unary_not_int() {
         let test_cases = vec![
-            (Some(0), Some(1)),
-            (Some(1), Some(0)),
-            (Some(2), Some(0)),
-            (Some(-1), Some(0)),
             (None, None),
+            (0.into(), Some(1)),
+            (1.into(), Some(0)),
+            (2.into(), Some(0)),
+            ((-1).into(), Some(0)),
         ];
         for (arg, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::UnaryNot)
+                .evaluate(ScalarFuncSig::UnaryNotInt)
                 .unwrap();
-            assert_eq!(output, expect_output);
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_unary_not_real() {
+        let test_cases = vec![
+            (None, None),
+            (0.0.into(), Some(1)),
+            (1.0.into(), Some(0)),
+            (0.3.into(), Some(0)),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::UnaryNotReal)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_unary_not_decimal() {
+        let test_cases = vec![
+            (None, None),
+            (Decimal::zero().into(), Some(1)),
+            (Decimal::from(1).into(), Some(0)),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::UnaryNotDecimal)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
         }
     }
 
