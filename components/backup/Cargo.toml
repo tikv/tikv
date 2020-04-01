@@ -51,7 +51,7 @@ engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage" }
 failure = "0.1"
-futures = "0.1"
+futures = { version = "0.3", features = ["compat"] }
 futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
@@ -70,8 +70,11 @@ tidb_query = { path = "../tidb_query" }
 tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
-tokio-threadpool = "0.1"
 txn_types = { path = "../txn_types" }
+
+[dependencies.futures_01]
+version = "0.1"
+package = "futures"
 
 [dev-dependencies]
 futures-executor = "0.3"

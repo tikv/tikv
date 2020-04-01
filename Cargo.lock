@@ -206,6 +206,7 @@ dependencies = [
  "external_storage",
  "failure",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-executor",
  "futures-util",
  "grpcio",
@@ -228,7 +229,6 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
- "tokio-threadpool",
  "txn_types",
  "uuid",
 ]
@@ -1098,6 +1098,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "bytes 0.5.3",
  "futures 0.3.4",
  "futures-executor",
  "futures-io",
@@ -1105,9 +1106,9 @@ dependencies = [
  "kvproto",
  "rand 0.7.3",
  "rusoto_core",
- "rusoto_credential",
  "rusoto_mock",
  "rusoto_s3",
+ "rusoto_util",
  "rust-ini",
  "slog",
  "slog-global",
@@ -1115,7 +1116,6 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tokio 0.2.13",
- "tokio-util 0.3.0",
  "url",
 ]
 
@@ -1546,7 +1546,7 @@ dependencies = [
  "log",
  "slab",
  "tokio 0.2.13",
- "tokio-util 0.2.0",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3446,6 +3446,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_sts"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e83d166cfb294672db98a60159c4a81a8169c6c91054a275cb812158c73815e5"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "chrono",
+ "futures 0.3.4",
+ "rusoto_core",
+ "serde_urlencoded",
+ "tempfile",
+ "xml-rs",
+]
+
+[[package]]
+name = "rusoto_util"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_sts",
+]
+
+[[package]]
 name = "rust-argon2"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4559,7 +4585,6 @@ checksum = "0fa5e81d6bc4e67fe889d5783bd2a128ab2e0cfa487e0be16b6a8d177b101616"
 dependencies = [
  "bytes 0.5.3",
  "fnv",
- "futures-core",
  "iovec",
  "lazy_static",
  "libc",
@@ -4814,21 +4839,6 @@ checksum = "571da51182ec208780505a32528fc5512a8fe1443ab960b3f2f3ef093cd16930"
 dependencies = [
  "bytes 0.5.3",
  "futures-core",
- "futures-sink",
- "log",
- "pin-project-lite",
- "tokio 0.2.13",
-]
-
-[[package]]
-name = "tokio-util"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af67cdce2b40f8dffb0ee04c853a24217b5d0d3e358f0f5ccc0b5332174ed9a8"
-dependencies = [
- "bytes 0.5.3",
- "futures-core",
- "futures-io",
  "futures-sink",
  "log",
  "pin-project-lite",
