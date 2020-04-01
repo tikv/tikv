@@ -1500,7 +1500,7 @@ dependencies = [
  "futures-util",
  "http 0.2.1",
  "indexmap",
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8",
  "slab",
  "tokio 0.2.13",
  "tokio-util",
@@ -1693,7 +1693,7 @@ dependencies = [
  "http-body 0.3.1",
  "httparse",
  "itoa",
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8",
  "net2",
  "pin-project",
  "time 0.1.38",
@@ -3333,6 +3333,9 @@ dependencies = [
  "hyper-tls",
  "lazy_static 1.4.0",
  "log 0.4.8",
+ "md5",
+ "percent-encoding 2.1.0",
+ "pin-project",
  "rusoto_credential",
  "rusoto_signature",
  "rustc_version 0.2.2",
@@ -3402,8 +3405,8 @@ dependencies = [
  "futures 0.3.1",
  "hex 0.4.0",
  "hmac",
- "http",
- "hyper 0.12.35",
+ "http 0.2.1",
+ "hyper 0.13.4",
  "log 0.4.8",
  "md5",
  "percent-encoding 2.1.0",
@@ -4625,25 +4628,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-process"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afbd6ef1b8cc2bd2c2b580d882774d443ebb1c6ceefe35ba9ea4ab586c89dbe8"
-dependencies = [
- "crossbeam-queue",
- "futures 0.1.29",
- "lazy_static 1.4.0",
- "libc",
- "log 0.4.8",
- "mio",
- "mio-named-pipes",
- "tokio-io",
- "tokio-reactor",
- "tokio-signal",
- "winapi 0.3.4",
-]
-
-[[package]]
 name = "tokio-reactor"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4765,7 +4749,7 @@ dependencies = [
  "bytes 0.5.4",
  "futures-core",
  "futures-sink",
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8",
  "pin-project-lite",
  "tokio 0.2.13",
 ]
@@ -5020,7 +5004,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ce8a968cb1cd110d136ff8b819a556d6fb6d919363c61534f6860c7eb172ba0"
 dependencies = [
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8",
  "try-lock",
 ]
 
@@ -5048,7 +5032,7 @@ checksum = "d967d37bf6c16cca2973ca3af071d0a2523392e4a594548155d89a678f4237cd"
 dependencies = [
  "bumpalo",
  "lazy_static 1.4.0",
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8",
  "proc-macro2 1.0.9",
  "quote 1.0.2",
  "syn 1.0.8",
