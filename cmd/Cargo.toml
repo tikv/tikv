@@ -55,6 +55,7 @@ backup = { path = "../components/backup", default-features = false }
 cdc = { path = "../components/cdc" }
 chrono = "0.4"
 clap = "2.32"
+encryption = { path = "../components/encryption" }
 engine = { path = "../components/engine" }
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }

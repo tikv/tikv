@@ -578,6 +578,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -2009,7 +2010,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c79d2c2ac68f9ec40fa03faac3882baac38db314"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2028,7 +2029,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c79d2c2ac68f9ec40fa03faac3882baac38db314"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3386,7 +3387,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c79d2c2ac68f9ec40fa03faac3882baac38db314"
 dependencies = [
  "libc",
  "librocksdb_sys",
