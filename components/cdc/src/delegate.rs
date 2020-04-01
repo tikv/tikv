@@ -250,7 +250,7 @@ impl Delegate {
             &self.downstreams
         };
         assert!(
-            downstreams.len() != 0,
+            !downstreams.is_empty(),
             "region {} miss downstream, event: {:?}",
             self.region_id,
             change_data_event,
@@ -314,9 +314,9 @@ impl Delegate {
             let mut cmd_bytes = 0;
             for cmd in batch.cmds.iter() {
                 let Cmd {
-                    index: _,
                     ref request,
                     ref response,
+                    ..
                 } = cmd;
                 if !response.get_header().has_error() {
                     if !request.has_admin_request() {
