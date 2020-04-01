@@ -35,7 +35,7 @@ use tikv_util::HandyRwLock;
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::metrics::{
-    INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
+    CfNames, INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
     SNAPSHOT_CF_SIZE,
 };
 use crate::store::peer_storage::JOB_STATUS_CANCELLING;
@@ -45,7 +45,11 @@ pub mod snap_io;
 
 // Data in CF_RAFT should be excluded for a snapshot.
 pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
-
+pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
+    (CfNames::default, CF_DEFAULT),
+    (CfNames::lock, CF_LOCK),
+    (CfNames::write, CF_WRITE),
+];
 pub const SNAPSHOT_VERSION: u64 = 2;
 
 /// Name prefix for the self-generated snapshot file.
@@ -671,7 +675,7 @@ impl Snap {
         }
 
         let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
-        for cf in SNAPSHOT_CFS {
+        for (cf_enum, cf) in SNAPSHOT_CFS_ENUM_PAIR {
             self.switch_to_cf_file(cf)?;
             let cf_file = &mut self.cf_files[self.cf_index];
             let path = cf_file.tmp_path.to_str().unwrap();
@@ -700,10 +704,10 @@ impl Snap {
             }
 
             SNAPSHOT_CF_KV_COUNT
-                .with_label_values(&[cf])
+                .get(*cf_enum)
                 .observe(cf_stat.key_count as f64);
             SNAPSHOT_CF_SIZE
-                .with_label_values(&[cf])
+                .get(*cf_enum)
                 .observe(cf_stat.total_size as f64);
             info!(
                 "scan snapshot of one cf";
@@ -1497,7 +1501,7 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.to_str().unwrap();
-        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
+        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         Ok(Arc::new(db))
     }
 
@@ -1507,7 +1511,7 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.to_str().unwrap();
-        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
+        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         let db = Arc::new(db);
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
