@@ -7,10 +7,9 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, Peekable};
+use engine_traits::{KvEngine, KvEngines, Peekable};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -131,7 +130,7 @@ impl<E: KvEngine> PeerFsm<E> {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<E>> {
         let meta_peer = match util::find_peer(region, store_id) {
@@ -174,7 +173,7 @@ impl<E: KvEngine> PeerFsm<E> {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<SenderFsmPair<E>> {
@@ -1106,7 +1105,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .ctx
             .engines
             .kv
-            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
             debug!(
@@ -1541,7 +1539,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let task = RaftlogGcTask {
-            raft_engine: self.fsm.peer.get_store().get_raft_engine().c().clone(),
+            raft_engine: self.fsm.peer.get_store().get_raft_engine(),
             region_id: self.fsm.peer.get_store().get_region_id(),
             start_idx: self.fsm.peer.last_compacted_idx,
             end_idx: state.get_index() + 1,
@@ -1734,8 +1732,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let state_key = keys::region_state_key(region_id);
-        let state: RegionLocalState = match self.ctx.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)
-        {
+        let state: RegionLocalState = match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key) {
             Err(e) => {
                 error!(
                     "failed to load region state, ignore";
@@ -2906,9 +2903,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
     fn verify_and_store_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) -> bool {
         if expected_index < self.fsm.peer.consistency_state.index {
-            REGION_HASH_COUNTER_VEC
-                .with_label_values(&["verify", "miss"])
-                .inc();
+            REGION_HASH_COUNTER.verify.miss.inc();
             warn!(
                 "has scheduled a new hash, skip.";
                 "region_id" => self.fsm.region_id(),
@@ -2942,9 +2937,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "peer_id" => self.fsm.peer_id(),
                 "index" => self.fsm.peer.consistency_state.index
             );
-            REGION_HASH_COUNTER_VEC
-                .with_label_values(&["verify", "matched"])
-                .inc();
+            REGION_HASH_COUNTER.verify.matched.inc();
             self.fsm.peer.consistency_state.hash = vec![];
             return false;
         }
@@ -2953,9 +2946,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             // Maybe computing is too slow or computed result is dropped due to channel full.
             // If computing is too slow, miss count will be increased twice.
-            REGION_HASH_COUNTER_VEC
-                .with_label_values(&["verify", "miss"])
-                .inc();
+            REGION_HASH_COUNTER.verify.miss.inc();
             warn!(
                 "hash belongs to wrong index, skip.";
                 "region_id" => self.fsm.region_id(),
