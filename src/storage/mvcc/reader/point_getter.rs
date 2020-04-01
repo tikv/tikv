@@ -159,20 +159,28 @@ impl<S: Snapshot> PointGetter<S> {
         match self.isolation_level {
             IsolationLevel::Si => {
                 // Check for locks that signal concurrent writes in Si.
-                self.load_and_check_lock(user_key, Some(&mut can_be_cached_by_lock))?;
+                let check_lock_res =
+                    self.load_and_check_lock(user_key, Some(&mut can_be_cached_by_lock));
+                if let Err(e) = check_lock_res {
+                    *can_be_cached.unwrap() = can_be_cached_by_lock;
+                    return Err(e);
+                }
             }
             IsolationLevel::Rc => {}
         }
 
         let mut use_near_seek = false;
-        if let Some(can_be_cached) = can_be_cached {
-            self.write_cursor.seek(
-                &user_key.clone().append_ts(TimeStamp::max()),
-                &mut self.statistics.write,
-            )?;
-            let current_key = self.write_cursor.key(&mut self.statistics.write);
-            *can_be_cached = can_be_cached_by_lock && Key::decode_ts_from(current_key)? <= self.ts;
-            use_near_seek = true;
+        if can_be_cached_by_lock {
+            if let Some(true) = can_be_cached {
+                self.write_cursor.seek(
+                    &user_key.clone().append_ts(TimeStamp::max()),
+                    &mut self.statistics.write,
+                )?;
+                let current_key = self.write_cursor.key(&mut self.statistics.write);
+                *can_be_cached.unwrap() =
+                    can_be_cached_by_lock && Key::decode_ts_from(current_key)? <= self.ts;
+                use_near_seek = true;
+            }
         }
 
         self.load_data(user_key, use_near_seek)

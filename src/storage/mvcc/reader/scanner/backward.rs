@@ -240,7 +240,13 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         }
         assert!(ts > last_checked_commit_ts);
 
-        // Check newer data if needed
+        // After several `prev()`, we still not get the latest version for the specified ts,
+        // use seek to locate the latest version.
+
+        // `user_key` must have reserved space here, so its clone has reserved space too. So no
+        // reallocation happens in `append_ts`.
+
+        // Check newer data if we need to do check_can_be_cached
         let mut use_near_seek = false;
         if self.cfg.check_can_be_cached && self.can_be_cached {
             let seek_key = user_key.clone().append_ts(TimeStamp::max());
@@ -259,10 +265,6 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             }
         }
 
-        // After several `prev()`, we still not get the latest version for the specified ts,
-        // use seek to locate the latest version.
-        // `user_key` must have reserved space here, so its clone has reserved space too. So no
-        // reallocation happens in `append_ts`.
         let seek_key = user_key.clone().append_ts(ts);
 
         // TODO: Replace by cast + seek().
