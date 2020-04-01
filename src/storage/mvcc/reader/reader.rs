@@ -2,10 +2,9 @@
 
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine::IterOption;
 use engine_rocks::properties::MvccProperties;
 use engine_rocks::RocksTablePropertiesCollection;
-use engine_traits::{TableProperties, TablePropertiesCollection};
+use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
@@ -69,7 +68,7 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(val);
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, self.fill_cache);
+            let iter_opt = IterOptions::new(None, None, self.fill_cache);
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
@@ -92,7 +91,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
+            let iter_opt = IterOptions::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
@@ -130,7 +129,7 @@ impl<S: Snapshot> MvccReader<S> {
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
-                let iter_opt = IterOption::new(None, None, self.fill_cache);
+                let iter_opt = IterOptions::new(None, None, self.fill_cache);
                 let iter = self
                     .snapshot
                     .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
@@ -138,7 +137,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
         } else {
             // use prefix bloom filter
-            let iter_opt = IterOption::default()
+            let iter_opt = IterOptions::default()
                 .use_prefix_seek()
                 .set_prefix_same_as_start(true);
             let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
@@ -233,7 +232,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
+            let iter_opt = IterOptions::new(None, None, true);
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
             self.data_cursor = Some(iter);
         }
@@ -242,7 +241,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
+            let iter_opt = IterOptions::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
@@ -253,7 +252,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
+            let iter_opt = IterOptions::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
@@ -327,7 +326,7 @@ impl<S: Snapshot> MvccReader<S> {
         mut start: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
-        let iter_opt = IterOption::new(None, None, self.fill_cache);
+        let iter_opt = IterOptions::new(None, None, self.fill_cache);
         let scan_mode = self.get_scan_mode(false);
         let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
         let mut keys = vec![];
@@ -452,7 +451,6 @@ mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::DB;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
-    use engine::IterOption;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::{Compat, RocksEngine};
     use engine_traits::{Mutable, WriteBatchExt};
@@ -755,7 +753,7 @@ mod tests {
         ];
 
         for (_, &(min, max, ref res)) in tests.iter().enumerate() {
-            let mut iopt = IterOption::default();
+            let mut iopt = IterOptions::default();
             iopt.set_hint_min_ts(min);
             iopt.set_hint_max_ts(max);
 
