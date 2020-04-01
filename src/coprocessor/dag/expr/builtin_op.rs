@@ -86,9 +86,19 @@ impl ScalarFunc {
         Ok(Some(ret))
     }
 
-    pub fn unary_not(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn unary_not_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let arg = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some((arg == 0f64) as i64))
+    }
+
+    pub fn unary_not_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some((arg == 0) as i64))
+    }
+
+    pub fn unary_not_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let arg = try_opt!(self.children[0].eval_decimal(ctx, row));
+        Ok(Some(arg.is_zero() as i64))
     }
 
     pub fn unary_minus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -370,11 +380,17 @@ mod test {
     #[test]
     fn test_unary_op() {
         let tests = vec![
-            (ScalarFuncSig::UnaryNot, Datum::I64(1), Some(0)),
-            (ScalarFuncSig::UnaryNot, Datum::I64(0), Some(1)),
-            (ScalarFuncSig::UnaryNot, Datum::I64(123), Some(0)),
-            (ScalarFuncSig::UnaryNot, Datum::I64(-123), Some(0)),
-            (ScalarFuncSig::UnaryNot, Datum::Null, None),
+            (ScalarFuncSig::UnaryNotInt, Datum::I64(1), Some(0)),
+            (ScalarFuncSig::UnaryNotInt, Datum::I64(0), Some(1)),
+            (ScalarFuncSig::UnaryNotInt, Datum::I64(123), Some(0)),
+            (ScalarFuncSig::UnaryNotInt, Datum::I64(-123), Some(0)),
+            (ScalarFuncSig::UnaryNotInt, Datum::Null, None),
+            (ScalarFuncSig::UnaryNotReal, Datum::F64(0.3), Some(0)),
+            (ScalarFuncSig::UnaryNotReal, Datum::F64(0.0), Some(1)),
+            (ScalarFuncSig::UnaryNotReal, Datum::Null, None),
+            (ScalarFuncSig::UnaryNotDecimal, str2dec("0.3"), Some(0)),
+            (ScalarFuncSig::UnaryNotDecimal, str2dec("0"), Some(1)),
+            (ScalarFuncSig::UnaryNotDecimal, Datum::Null, None),
             (ScalarFuncSig::RealIsTrue, Datum::F64(0.25), Some(1)),
             (ScalarFuncSig::RealIsTrue, Datum::F64(0.0), Some(0)),
             (ScalarFuncSig::RealIsTrue, Datum::Null, Some(0)),
