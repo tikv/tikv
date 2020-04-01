@@ -5,7 +5,7 @@ use grpcio::{RpcStatus, RpcStatusCode};
 use super::Error;
 
 pub fn make_rpc_error(err: Error) -> RpcStatus {
-    RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", err)))
+    RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)))
 }
 
 macro_rules! send_rpc_response {

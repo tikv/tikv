@@ -18,6 +18,7 @@ use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::{gc_worker::GCConfig, BlockCacheConfig, Config as StorageConfig};
+use tikv_util::collections::HashSet;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
@@ -507,12 +508,15 @@ fn test_serde_custom_tikv_config() {
         region_max_keys: 100000,
         region_split_keys: 100000,
     };
+    let mut cert_allowed_cn = HashSet::default();
+    cert_allowed_cn.insert("example.tikv.com".to_owned());
     value.security = SecurityConfig {
         ca_path: "invalid path".to_owned(),
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cipher_file: "invalid path".to_owned(),
+        cert_allowed_cn,
     };
     value.import = ImportConfig {
         import_dir: "/abc".to_owned(),

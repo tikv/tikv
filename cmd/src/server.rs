@@ -230,6 +230,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_router.clone(),
         engines.kv.clone(),
         Arc::clone(&importer),
+        security_mgr.clone(),
     );
 
     // Create Debug service.
@@ -237,15 +238,18 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         engines.clone(),
         raft_router.clone(),
         storage.gc_worker.clone(),
+        security_mgr.clone(),
     );
 
     // Create Backup service.
     let mut backup_worker = tikv_util::worker::Worker::new("backup-endpoint");
     let backup_scheduler = backup_worker.scheduler();
-    let backup_service = backup::Service::new(backup_scheduler);
+    let backup_service = backup::Service::new(backup_scheduler, security_mgr.clone());
 
     // Create Deadlock service.
-    let deadlock_service = lock_mgr.as_ref().map(|lm| lm.deadlock_service());
+    let deadlock_service = lock_mgr
+        .as_ref()
+        .map(|lm| lm.deadlock_service(security_mgr.clone()));
 
     // Create server
     let mut server = Server::new(

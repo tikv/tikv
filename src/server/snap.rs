@@ -283,7 +283,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
     f.then(move |res| match res {
         Ok(()) => sink.success(Done::new()),
         Err(e) => {
-            let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
+            let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", e)));
             sink.fail(status)
         }
     })
@@ -332,7 +332,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 if self.recving_count.load(Ordering::SeqCst) >= self.cfg.concurrent_recv_snap_limit
                 {
                     warn!("too many recving snapshot tasks, ignore");
-                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+                    let status = RpcStatus::new(RpcStatusCode::RESOURCE_EXHAUSTED, None);
                     self.pool.spawn(sink.fail(status)).forget();
                     return;
                 }

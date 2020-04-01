@@ -14,7 +14,7 @@ raft = "0.4"
 futures = "0.1"
 tokio-timer = "0.2"
 tokio-threadpool = "0.1"
-grpcio = { version = "0.4", features = [ "openssl-vendored" ] }
+grpcio = { version = "0.5", features = [ "openssl-vendored" ] }
 rand = "0.6.5"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger

@@ -270,7 +270,7 @@ impl<T: Stream> Stream for Reusable<T> {
 
 fn grpc_error_is_unimplemented(e: &GrpcError) -> bool {
     if let GrpcError::RpcFailure(RpcStatus { ref status, .. }) = e {
-        let x = *status == RpcStatusCode::Unimplemented;
+        let x = *status == RpcStatusCode::UNIMPLEMENTED;
         return x;
     }
     false

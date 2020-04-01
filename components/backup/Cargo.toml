@@ -23,7 +23,7 @@ tikv_util = { path = "../tikv_util" }
 futures = "0.1"
 tempfile = "3.0"
 tokio-threadpool = "0.1"
-grpcio = { version = "0.4", features = [ "openssl-vendored" ] }
+grpcio = { version = "0.5", features = [ "openssl-vendored" ] }
 url = "2.0"
 hex = "0.3"
 external_storage = { path = "../external_storage" }

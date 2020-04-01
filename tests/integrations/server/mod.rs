@@ -3,6 +3,7 @@
 mod kv_service;
 mod lock_manager;
 mod raft_client;
+mod security;
 
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ use tikv_util::security::{SecurityConfig, SecurityManager};
 macro_rules! unary_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: UnarySink<$resp_name>) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -27,7 +28,7 @@ macro_rules! unary_call {
 macro_rules! sstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: ServerStreamingSink<$resp_name>) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -36,7 +37,7 @@ macro_rules! sstream_call {
 macro_rules! cstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -45,7 +46,7 @@ macro_rules! cstream_call {
 macro_rules! bstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }

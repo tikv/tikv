@@ -33,6 +33,7 @@ use protobuf::RepeatedField;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
@@ -54,6 +55,8 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     snap_scheduler: Scheduler<SnapTask>,
 
     thread_load: Arc<ThreadLoad>,
+
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
@@ -64,6 +67,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         thread_load: Arc<ThreadLoad>,
+        security_mgr: Arc<SecurityManager>,
     ) -> Self {
         Service {
             storage,
@@ -71,6 +75,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
             ch,
             snap_scheduler,
             thread_load,
+            security_mgr,
         }
     }
 
@@ -88,6 +93,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for Service<T, E, L> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
         let future = future_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -104,6 +112,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
     }
 
     fn kv_scan(&mut self, ctx: RpcContext<'_>, req: ScanRequest, sink: UnarySink<ScanResponse>) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan.start_coarse_timer();
         let future = future_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -125,6 +136,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: PrewriteRequest,
         sink: UnarySink<PrewriteResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.start_coarse_timer();
         let future = future_prewrite(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -146,6 +160,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: PessimisticLockRequest,
         sink: UnarySink<PessimisticLockResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .kv_pessimistic_lock
             .start_coarse_timer();
@@ -169,6 +186,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: PessimisticRollbackRequest,
         sink: UnarySink<PessimisticRollbackResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .kv_pessimistic_rollback
             .start_coarse_timer();
@@ -192,6 +212,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: CommitRequest,
         sink: UnarySink<CommitResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_commit.start_coarse_timer();
 
         let future = future_commit(&self.storage, req)
@@ -218,6 +241,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: CleanupRequest,
         sink: UnarySink<CleanupResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_cleanup.start_coarse_timer();
         let future = future_cleanup(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -239,6 +265,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: BatchGetRequest,
         sink: UnarySink<BatchGetResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_batch_get.start_coarse_timer();
         let future = future_batch_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -260,6 +289,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: BatchRollbackRequest,
         sink: UnarySink<BatchRollbackResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .kv_batch_rollback
             .start_coarse_timer();
@@ -283,6 +315,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: TxnHeartBeatRequest,
         sink: UnarySink<TxnHeartBeatResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .kv_txn_heart_beat
             .start_coarse_timer();
@@ -306,6 +341,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: ScanLockRequest,
         sink: UnarySink<ScanLockResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
         let future = future_scan_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -327,6 +365,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: ResolveLockRequest,
         sink: UnarySink<ResolveLockResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_resolve_lock.start_coarse_timer();
         let future = future_resolve_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -343,6 +384,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
     }
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GCRequest, sink: UnarySink<GCResponse>) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
         let future = future_gc(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -364,6 +408,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: DeleteRangeRequest,
         sink: UnarySink<DeleteRangeResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_delete_range.start_coarse_timer();
         let future = future_delete_range(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -385,6 +432,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: RawGetRequest,
         sink: UnarySink<RawGetResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_get.start_coarse_timer();
         let future = future_raw_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -406,6 +456,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: RawBatchGetRequest,
         sink: UnarySink<RawBatchGetResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_get.start_coarse_timer();
 
         let future = future_raw_batch_get(&self.storage, req)
@@ -428,6 +481,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: RawScanRequest,
         sink: UnarySink<RawScanResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
 
         let future = future_raw_scan(&self.storage, req)
@@ -450,6 +506,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: RawBatchScanRequest,
         sink: UnarySink<RawBatchScanResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_scan.start_coarse_timer();
 
         let future = future_raw_batch_scan(&self.storage, req)
@@ -472,6 +531,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: RawPutRequest,
         sink: UnarySink<RawPutResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_put.start_coarse_timer();
         let future = future_raw_put(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -493,6 +555,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: RawBatchPutRequest,
         sink: UnarySink<RawBatchPutResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_put.start_coarse_timer();
 
         let future = future_raw_batch_put(&self.storage, req)
@@ -515,6 +580,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: RawDeleteRequest,
         sink: UnarySink<RawDeleteResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete.start_coarse_timer();
         let future = future_raw_delete(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -536,6 +604,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: RawBatchDeleteRequest,
         sink: UnarySink<RawBatchDeleteResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_delete.start_coarse_timer();
 
         let future = future_raw_batch_delete(&self.storage, req)
@@ -558,6 +629,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: RawDeleteRangeRequest,
         sink: UnarySink<RawDeleteRangeResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete_range.start_coarse_timer();
 
         let future = future_raw_delete_range(&self.storage, req)
@@ -580,6 +654,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .unsafe_destroy_range
             .start_coarse_timer();
@@ -619,6 +696,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
         let future = future_cop(&self.cop, req, Some(ctx.peer()))
             .and_then(|resp| sink.success(resp).map_err(Error::from))
@@ -640,6 +720,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: Request,
         sink: ServerStreamingSink<Response>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .coprocessor_stream
             .start_coarse_timer();
@@ -649,7 +732,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
             .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .map_err(|e| {
-                let code = RpcStatusCode::Unknown;
+                let code = RpcStatusCode::UNKNOWN;
                 let msg = Some(format!("{:?}", e));
                 GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
@@ -674,6 +757,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         stream: RequestStream<RaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let ch = self.ch.clone();
         ctx.spawn(
             stream
@@ -687,9 +773,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
+                            RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
+                        Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
                     };
                     sink.fail(status)
                         .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
@@ -703,6 +789,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         info!("batch_raft RPC is called, new gRPC stream established");
         let ch = self.ch.clone();
         ctx.spawn(
@@ -724,9 +813,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
+                            RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
+                        Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
                     };
                     sink.fail(status).map_err(
                         |e| error!("KvService::batch_raft send response fail"; "err" => ?e),
@@ -741,13 +830,16 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
             let sink = match e.into_inner() {
                 SnapTask::Recv { sink, .. } => sink,
                 _ => unreachable!(),
             };
-            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+            let status = RpcStatus::new(RpcStatusCode::RESOURCE_EXHAUSTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -758,6 +850,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         mut req: MvccGetByKeyRequest,
         sink: UnarySink<MvccGetByKeyResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.mvcc_get_by_key.start_coarse_timer();
 
         let key = Key::from_raw(req.get_key());
@@ -799,6 +894,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         mut req: MvccGetByStartTsRequest,
         sink: UnarySink<MvccGetByStartTsResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .mvcc_get_by_start_ts
             .start_coarse_timer();
@@ -844,6 +942,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
 
         let region_id = req.get_context().get_region_id();
@@ -864,7 +965,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         };
 
         if let Err(e) = self.ch.casual_send(region_id, req) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -916,6 +1017,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let timer = GRPC_MSG_HISTOGRAM_VEC.read_index.start_coarse_timer();
 
         let region_id = req.get_context().get_region_id();
@@ -937,7 +1041,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         let (cb, future) = paired_future_callback();
 
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -985,6 +1089,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
         stream: RequestStream<BatchCommandsRequest>,
         sink: DuplexSink<BatchCommandsResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
 
         let ctx = Arc::new(ctx);
@@ -1019,7 +1126,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> tikvpb_grpc::Tikv for 
                 (r, WriteFlags::default().buffer_hint(false))
             })
             .map_err(|e| {
-                let code = RpcStatusCode::Unknown;
+                let code = RpcStatusCode::UNKNOWN;
                 let msg = Some(format!("{:?}", e));
                 GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
