@@ -2,6 +2,24 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.1.0-rc]
+### New Features
++ Support backing up data with the Raw KV API [#7051](https://github.com/tikv/tikv/pull/7051)
++ Support the TLS authentication for the status server [#7142](https://github.com/tikv/tikv/pull/7142)
++ Support the TLS authentication for the KV server [#7305](https://github.com/tikv/tikv/pull/7305)
+
+### Bug Fixes
++ Fix the issue of conflict check failure or data index inconsistency caused by inserting an existing key into a transaction and then deleting it immediately when disabling the consistency check parameter [#7112](https://github.com/tikv/tikv/pull/7112)
++ Fix the calculation error when `TopN` compares unsigned integers [#7199](https://github.com/tikv/tikv/pull/7199)
++ Introduce a flow control mechanism in Raftstore to solve the problem that without flow control, it might cause slow log tracking and cause the cluster to be stuck, and the problem that the large transaction size might cause the frequent reconnection among TiKV servers [#7087](https://github.com/tikv/tikv/pull/7087) [#7078](https://github.com/tikv/tikv/pull/7078)
++ Fix the issue that pending read requests sent to replicas might be permanently blocked [#6543](https://github.com/tikv/tikv/pull/6543)
++ Fix the issue that replica read might be blocked by applying snapshots [#7249](https://github.com/tikv/tikv/pull/7249)
++ Fix the issue that transferring leader might cause TiKV to panic [#7240](https://github.com/tikv/tikv/pull/7240)
++ Fix the issue that all SST files were filled with zeroes when backing up data to S3 [#6967](https://github.com/tikv/tikv/pull/6967)
++ Fix the issue that the size of SST file was not recorded during backup, resulting in many empty Regions after restoration [#6983](https://github.com/tikv/tikv/pull/6983)
++ Optimize the time to hold locks to improve the performance of backup [#7202](https://github.com/tikv/tikv/pull/7202)
++ Support AWS IAM web identity for backup [#7297](https://github.com/tikv/tikv/pull/7297)
+
 ## [3.1.0-beta.2]
 + Raftstore
   + Add the `peer_address` parameter to connect other nodes to the TiKV server [#6491](https://github.com/tikv/tikv/pull/6491)
@@ -17,7 +35,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Fix the panic caused by incorrectly processing the deleted values during the backup [#6726](https://github.com/tikv/tikv/pull/6726)
 
 ## [3.1.0-beta.1]
-+ backup 
++ backup
     + Change the name of the backup file from `start_key` to the hash value of `start_key` to reduce the file name's length for easy reading (https://github.com/tikv/tikv/pull/6198)
     + Disable RocksDB's `force_consistency_checks` check to avoid false positives in the consistency check [#6249](https://github.com/tikv/tikv/pull/6249)
     + Add the incremental backup feature [#6286](https://github.com/tikv/tikv/pull/6286)
