@@ -2,14 +2,15 @@
 
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{fmt, u64};
 
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+use kvproto::replicate_mode::ReplicateStatus;
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
-use raft::{AppendedLogProgress, CommitIndexSolver, INVALID_INDEX};
+use raft::INVALID_INDEX;
 use time::{Duration, Timespec};
 
 use super::peer_storage;
@@ -630,125 +631,44 @@ impl<
 pub struct StoreGroup {
     labels: HashMap<String, u64>,
     stores: HashMap<u64, u64>,
-    peers: HashMap<u64, u64>,
 }
 
 impl StoreGroup {
-    pub fn register_store(&mut self, store_id: u64, label: String) {
+    pub fn register_store(&mut self, store_id: u64, label: String) -> Option<u64> {
         debug!("associated {} {}", store_id, label);
         if self.stores.contains_key(&store_id) {
-            return;
+            return None;
         }
         if let Some(id) = self.labels.get(&label) {
             self.stores.insert(store_id, *id);
-            return;
+            return Some(*id);
         }
-        let len = self.labels.len() as u64;
-        self.labels.insert(label, len);
-        self.stores.insert(store_id, len);
+        let label_id = self.labels.len() as u64 + 1;
+        self.labels.insert(label, label_id);
+        self.stores.insert(store_id, label_id);
+        Some(label_id)
     }
 
     #[inline]
-    pub fn register_peer(&mut self, peer_id: u64, store_id: u64) {
-        debug!("register {} {}", peer_id, store_id);
-        self.peers.insert(peer_id, store_id);
-    }
-
-    #[inline]
-    pub fn remove_peer(&mut self, peer_id: u64) {
-        self.peers.remove(&peer_id);
-    }
-
-    #[inline]
-    pub fn label_id(&self, peer_id: u64) -> Option<u64> {
-        self.peers
-            .get(&peer_id)
-            .and_then(|store_id| self.stores.get(store_id).cloned())
+    pub fn label_id(&self, store_id: u64) -> Option<u64> {
+        self.stores.get(&store_id).cloned()
     }
 }
 
-pub struct LabelSolver {
-    groups: Arc<Mutex<StoreGroup>>,
-    // (peer_id, label_id)
-    label_ids: Vec<(u64, u64)>,
+#[derive(Default)]
+pub struct ReplicationMode {
+    pub status: ReplicateStatus,
+    pub group: StoreGroup,
+    pub commit_group_buffer: Vec<(u64, u64)>,
 }
 
-impl LabelSolver {
-    pub fn new(groups: Arc<Mutex<StoreGroup>>, region: &metapb::Region) -> LabelSolver {
-        let mut label_ids = Vec::with_capacity(region.get_peers().len());
-        {
-            let mut groups = groups.lock().unwrap();
-            for p in region.get_peers() {
-                if !p.is_learner {
-                    groups.register_peer(p.id, p.store_id);
-                    if let Some(label_id) = groups.label_id(p.id) {
-                        label_ids.push((p.id, label_id));
-                    }
-                }
+impl ReplicationMode {
+    pub fn calculate_commit_group(&mut self, peers: &[metapb::Peer]) {
+        self.commit_group_buffer.clear();
+        for p in peers {
+            if let Some(label_id) = self.group.label_id(p.store_id) {
+                self.commit_group_buffer.push((p.id, label_id));
             }
-        }
-        LabelSolver { groups, label_ids }
-    }
-
-    fn gc(&mut self, prs: &[AppendedLogProgress]) {
-        let mut index = 0;
-        while index < self.label_ids.len() {
-            let peer_id = self.label_ids[index].0;
-            if prs.iter().all(|p| p.id != peer_id) {
-                self.label_ids.swap_remove(index);
-                if prs.len() == self.label_ids.len() {
-                    break;
-                }
-            } else {
-                index += 1;
-            }
-        }
-    }
-}
-
-impl CommitIndexSolver for LabelSolver {
-    fn solve(&mut self, prs: &[AppendedLogProgress]) -> u64 {
-        let mut last_label_id = u64::MAX;
-        let mut missing = false;
-        if prs.len() < self.label_ids.len() {
-            self.gc(prs);
-        }
-        'outer: for pr in prs {
-            for (id, label_id) in &self.label_ids {
-                if *id == pr.id {
-                    debug!("find {} -> {} {} {}", id, last_label_id, label_id, pr.index);
-                    if last_label_id == u64::MAX {
-                        last_label_id = *label_id;
-                        continue 'outer;
-                    }
-                    if last_label_id == *label_id {
-                        continue 'outer;
-                    }
-                    return pr.index;
-                }
-            }
-            let groups = self.groups.lock().unwrap();
-            debug!("querying {}", pr.id);
-            if let Some(label_id) = groups.label_id(pr.id) {
-                debug!(
-                    "find {} -> {} {} {}",
-                    pr.id, last_label_id, label_id, pr.index
-                );
-                self.label_ids.push((pr.id, label_id));
-                if last_label_id == u64::MAX {
-                    last_label_id = label_id;
-                } else if last_label_id != label_id {
-                    return pr.index;
-                }
-            } else {
-                missing = true;
-            }
-        }
-        if missing {
-            debug!("missing");
-            prs[prs.len() - 1].index
-        } else {
-            prs[0].index
         }
     }
 }
@@ -1242,64 +1162,5 @@ mod tests {
                 check_region_epoch(&req, &region, true).unwrap_err();
             }
         }
-    }
-
-    #[test]
-    fn test_commit_index_solver() {
-        let store_group = Arc::new(Mutex::new(StoreGroup::default()));
-        let mut region = metapb::Region::new();
-        region.mut_peers().push(new_peer(1, 1));
-        region.mut_peers().push(new_peer(2, 2));
-        region.mut_peers().push(new_peer(3, 3));
-        let mut solver = LabelSolver::new(store_group.clone(), &region);
-        let mut resps = Vec::new();
-        resps.push(AppendedLogProgress { id: 1, index: 14 });
-        resps.push(AppendedLogProgress { id: 2, index: 7 });
-        resps.push(AppendedLogProgress { id: 3, index: 4 });
-        // Until all stores are associated with labels, it will return the last index.
-        assert_eq!(solver.solve(&resps), 4);
-        store_group
-            .lock()
-            .unwrap()
-            .register_store(1, "l1".to_owned());
-        assert_eq!(solver.solve(&resps), 4);
-        store_group
-            .lock()
-            .unwrap()
-            .register_store(2, "l1".to_owned());
-        assert_eq!(solver.solve(&resps), 4);
-        store_group
-            .lock()
-            .unwrap()
-            .register_store(3, "l1".to_owned());
-        // When all stores are registered, it will return the first log index.
-        assert_eq!(solver.solve(&resps), 14);
-        store_group.lock().unwrap().stores.remove(&2);
-        solver.label_ids.clear();
-        store_group
-            .lock()
-            .unwrap()
-            .register_store(2, "l2".to_owned());
-        // When there are multiple labels, it will return the first log index of second label.
-        assert_eq!(solver.solve(&resps), 7);
-        resps.push(AppendedLogProgress { id: 4, index: 0 });
-        // Although 4 is not associated with labels, but 2 is different from others, so it still
-        // solves the index to 7.
-        assert_eq!(solver.solve(&resps), 7);
-        store_group.lock().unwrap().stores.remove(&2);
-        store_group.lock().unwrap().remove_peer(2);
-        resps.remove(1);
-        store_group
-            .lock()
-            .unwrap()
-            .register_store(4, "l1".to_owned());
-        // It can't resolve label id without peer -> store relation.
-        assert_eq!(solver.solve(&resps), 0);
-        store_group.lock().unwrap().register_peer(4, 4);
-        assert_eq!(solver.solve(&resps), 14);
-        // Unmatched store id count should trigger GC.
-        assert_eq!(solver.label_ids.len(), 4);
-        assert_eq!(solver.solve(&resps), 14);
-        assert_eq!(solver.label_ids.len(), 3);
     }
 }

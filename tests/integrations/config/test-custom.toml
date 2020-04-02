@@ -147,8 +147,6 @@ store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = false
-commit-algorithm = "integrity-over-label"
-replicate-label = "test-key"
 early-apply = false
 
 [coprocessor]

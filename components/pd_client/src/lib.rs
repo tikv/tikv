@@ -35,6 +35,7 @@ use futures::Future;
 use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb;
+use kvproto::replicate_mode::ReplicateStatus;
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
@@ -95,7 +96,11 @@ pub trait PdClient: Send + Sync {
     /// It may happen that multi nodes start at same time to try to
     /// bootstrap, but only one can succeed, while others will fail
     /// and must remove their created local Region data themselves.
-    fn bootstrap_cluster(&self, _stores: metapb::Store, _region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &self,
+        _stores: metapb::Store,
+        _region: metapb::Region,
+    ) -> Result<Option<ReplicateStatus>> {
         unimplemented!();
     }
 
@@ -114,7 +119,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Informs PD when the store starts or some store information changes.
-    fn put_store(&self, _store: metapb::Store) -> Result<()> {
+    fn put_store(&self, _store: metapb::Store) -> Result<Option<ReplicateStatus>> {
         unimplemented!();
     }
 

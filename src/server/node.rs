@@ -16,11 +16,13 @@ use engine_rocks::{CloneCompat, Compat, RocksEngine};
 use engine_traits::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
+use kvproto::replicate_mode::ReplicateStatus;
 use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::util::ReplicationMode;
 use raftstore::store::SplitCheckTask;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{DynamicConfig, PdTask};
@@ -57,6 +59,7 @@ pub struct Node<C: PdClient + ConfigClient + 'static> {
     has_started: bool,
 
     pd_client: Arc<C>,
+    mode: Arc<Mutex<ReplicationMode>>,
 }
 
 impl<C> Node<C>
@@ -69,6 +72,7 @@ where
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
+        mode: Arc<Mutex<ReplicationMode>>,
     ) -> Node<C> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
@@ -107,6 +111,7 @@ where
             pd_client,
             system,
             has_started: false,
+            mode,
         }
     }
 
@@ -149,18 +154,11 @@ where
             )));
             self.bootstrap_cluster(&engines, first_region)?;
         }
-        let replicate_label = self.store_cfg.value().replicate_label.clone();
-        if !replicate_label.is_empty() {
-            for l in self.store.get_labels() {
-                if l.key == replicate_label {
-                    trans
-                        .store_group()
-                        .lock()
-                        .unwrap()
-                        .register_store(store_id, l.value.to_lowercase());
-                }
-            }
-        }
+
+        // Put store only if the cluster is bootstrapped.
+        info!("put store to PD"; "store" => ?&self.store);
+        let status = self.pd_client.put_store(self.store.clone())?;
+        self.load_all_stores(status);
 
         self.start_store(
             store_id,
@@ -174,10 +172,6 @@ where
             split_check_worker,
             dyn_cfg,
         )?;
-
-        // Put store only if the cluster is bootstrapped.
-        info!("put store to PD"; "store" => ?&self.store);
-        self.pd_client.put_store(self.store.clone())?;
 
         Ok(())
     }
@@ -263,6 +257,28 @@ where
         let region = initial_region(store_id, region_id, peer_id);
         store::prepare_bootstrap_cluster(&engines.c(), &region)?;
         Ok(region)
+    }
+
+    fn load_all_stores(&mut self, status: Option<ReplicateStatus>) {
+        let status = match status {
+            Some(s) => s,
+            None => return,
+        };
+        let stores = match self.pd_client.get_all_stores(false) {
+            Ok(stores) => stores,
+            Err(e) => panic!("failed to load all stores: {:?}", e),
+        };
+        let label_key = &status.get_dr_autosync().label_key;
+        let mut mode = self.mode.lock().unwrap();
+        for store in stores {
+            for l in store.get_labels() {
+                if l.key == *label_key {
+                    mode.group.register_store(store.id, l.value.to_lowercase());
+                    break;
+                }
+            }
+        }
+        mode.status = status;
     }
 
     fn check_or_prepare_bootstrap_cluster(
@@ -379,6 +395,7 @@ where
             importer,
             split_check_worker,
             dyn_cfg,
+            self.mode.clone(),
         )?;
         Ok(())
     }

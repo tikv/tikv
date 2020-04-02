@@ -2968,7 +2968,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/busyjay/raft-rs?branch=custom-quorum-only-on-committing-logs#aca2e95b084a5d7e3c6fa3be4897ee8c3801c3f1"
+source = "git+https://github.com/busyjay/raft-rs?branch=custom-quorum-only-on-committing-logs#0af309e6a3e6c955f03e3e197dc4ed68cf19bcd1"
 dependencies = [
  "fxhash",
  "getset",
@@ -2982,7 +2982,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/busyjay/raft-rs?branch=custom-quorum-only-on-committing-logs#aca2e95b084a5d7e3c6fa3be4897ee8c3801c3f1"
+source = "git+https://github.com/busyjay/raft-rs?branch=custom-quorum-only-on-committing-logs#0af309e6a3e6c955f03e3e197dc4ed68cf19bcd1"
 dependencies = [
  "lazy_static",
  "prost",

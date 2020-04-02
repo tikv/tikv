@@ -1,20 +1,18 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::util::StoreGroup;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
 use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use kvproto::raft_serverpb::RaftMessage;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 
 /// Transports messages between different Raft peers.
 pub trait Transport: Send + Clone {
     fn send(&mut self, msg: RaftMessage) -> Result<()>;
 
     fn flush(&mut self);
-    fn store_group(&self) -> Arc<Mutex<StoreGroup>>;
 }
 
 /// Routes message to target region.

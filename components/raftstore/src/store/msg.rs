@@ -178,6 +178,10 @@ pub enum SignificantMsg {
         // False means it came from target region.
         stale: bool,
     },
+    StoreResolved {
+        store_id: u64,
+        label_id: u64,
+    },
 }
 
 /// Message that will be sent to a peer.

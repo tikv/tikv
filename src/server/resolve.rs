@@ -5,9 +5,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use kvproto::metapb;
+use kvproto::replicate_mode::ReplicateStatusMode;
 
+use engine_traits::KvEngine;
 use pd_client::{take_peer_address, PdClient};
-use raftstore::store::util::StoreGroup;
+use raftstore::store::util::ReplicationMode;
+use raftstore::store::RaftRouter;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -42,14 +45,14 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T: PdClient> {
+struct Runner<T: PdClient, E: KvEngine> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
-    store_group: Arc<Mutex<StoreGroup>>,
-    key: String,
+    mode: Arc<Mutex<ReplicationMode>>,
+    router: Option<RaftRouter<E>>,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<T: PdClient, E: KvEngine> Runner<T, E> {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
@@ -73,16 +76,22 @@ impl<T: PdClient> Runner<T> {
     fn get_address(&self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
         let mut s = box_try!(pd_client.get_store(store_id));
-        if !self.key.is_empty() {
-            for l in s.get_labels() {
-                if l.key == self.key {
-                    self.store_group
-                        .lock()
-                        .unwrap()
-                        .register_store(s.id, l.value.to_lowercase());
-                    break;
+        let mut label_id = None;
+        let mut mode = self.mode.lock().unwrap();
+        let label_key = &mode.status.get_dr_autosync().label_key;
+        if mode.status.mode == ReplicateStatusMode::DrAutosync {
+            if mode.group.label_id(store_id).is_none() {
+                for l in s.get_labels() {
+                    if l.key == *label_key {
+                        label_id = mode.group.register_store(store_id, l.value.to_lowercase());
+                        break;
+                    }
                 }
             }
+        }
+        drop(mode);
+        if let (Some(label_id), Some(router)) = (label_id, &self.router) {
+            router.report_resolved(store_id, label_id);
         }
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
@@ -99,7 +108,7 @@ impl<T: PdClient> Runner<T> {
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient, E: KvEngine> Runnable<Task> for Runner<T, E> {
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
@@ -120,24 +129,29 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T>(
+pub fn new_resolver<T, E>(
     pd_client: Arc<T>,
-    key: &str,
-) -> Result<(Worker<Task>, PdStoreAddrResolver, Arc<Mutex<StoreGroup>>)>
+    router: RaftRouter<E>,
+) -> Result<(
+    Worker<Task>,
+    PdStoreAddrResolver,
+    Arc<Mutex<ReplicationMode>>,
+)>
 where
     T: PdClient + 'static,
+    E: KvEngine,
 {
     let mut worker = Worker::new("addr-resolver");
-    let store_group = Arc::new(Mutex::new(StoreGroup::default()));
+    let mode = Arc::new(Mutex::new(ReplicationMode::default()));
     let runner = Runner {
         pd_client,
         store_addrs: HashMap::default(),
-        store_group: store_group.clone(),
-        key: key.to_owned(),
+        mode: mode.clone(),
+        router: Some(router),
     };
     box_try!(worker.start(runner));
     let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver, store_group))
+    Ok((worker, resolver, mode))
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -158,6 +172,7 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use engine_rocks::RocksEngine;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use tikv_util::collections::HashMap;
@@ -188,7 +203,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RocksEngine> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -196,8 +211,8 @@ mod tests {
         Runner {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
-            store_group: Default::default(),
-            key: String::new(),
+            mode: Default::default(),
+            router: None,
         }
     }
 

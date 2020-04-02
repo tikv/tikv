@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic, Arc};
+use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
@@ -20,6 +20,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
+use kvproto::replicate_mode::{DrAutoSyncState, ReplicateStatusMode};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
@@ -36,7 +37,7 @@ use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, CommitAlgorithm, Config, PdTask, ReadResponse, RegionSnapshot};
+use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -53,7 +54,7 @@ use super::peer_storage::{
 };
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, is_initial_msg, LabelSolver, Lease, LeaseState};
+use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState, ReplicationMode};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -253,7 +254,6 @@ impl Peer {
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
         peer: metapb::Peer,
-        trans: &impl Transport,
     ) -> Result<Peer> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -281,13 +281,7 @@ impl Peer {
         };
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
-        let mut raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
-        if CommitAlgorithm::IntegrityOverLabel == cfg.commit_algorithm {
-            raft_group.set_solver(Some(Box::new(LabelSolver::new(
-                trans.store_group(),
-                &region,
-            ))));
-        }
+        let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
 
         let mut peer = Peer {
             peer,
@@ -337,6 +331,40 @@ impl Peer {
         }
 
         Ok(peer)
+    }
+
+    pub fn init_commit_group(&mut self, mode: &mut ReplicationMode) {
+        if mode.status.mode == ReplicateStatusMode::Majority {
+            return;
+        }
+        if self.get_store().region().get_peers().is_empty() {
+            return;
+        }
+        if mode.status.get_dr_autosync().state == DrAutoSyncState::Async {
+            return;
+        }
+        mode.calculate_commit_group(self.get_store().region().get_peers());
+        self.raft_group
+            .raft
+            .assign_commit_groups(&mode.commit_group_buffer);
+    }
+
+    pub fn switch_commit_group(&mut self, mode: &Mutex<ReplicationMode>) {
+        let mut guard = mode.lock().unwrap();
+        let clear = guard.status.mode == ReplicateStatusMode::Majority
+            || guard.status.get_dr_autosync().state == DrAutoSyncState::Async;
+        if clear {
+            drop(guard);
+            self.raft_group.raft.clear_commit_group();
+        } else {
+            guard.calculate_commit_group(self.region().get_peers());
+            let ids = mem::replace(
+                &mut guard.commit_group_buffer,
+                Vec::with_capacity(self.region().get_peers().len()),
+            );
+            drop(guard);
+            self.raft_group.raft.assign_commit_groups(&ids);
+        }
     }
 
     /// Register self to apply_scheduler so that the peer is then usable.
@@ -1829,7 +1857,7 @@ impl Peer {
             }
         }
         // TODO: should store_group be updated?
-        let promoted_commit_index = progress.maximal_committed_index(self.raft_group.solver_mut());
+        let promoted_commit_index = progress.maximal_committed_index();
         if promoted_commit_index >= self.get_store().truncated_index() {
             return Ok(());
         }

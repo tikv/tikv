@@ -220,9 +220,8 @@ impl Simulator for ServerCluster {
         let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
         // Create pd client, snapshot manager, server.
-        let (worker, resolver, store_groups) =
-            resolve::new_resolver(Arc::clone(&self.pd_client), &cfg.raft_store.replicate_label)
-                .unwrap();
+        let (worker, resolver, meta) =
+            resolve::new_resolver(Arc::clone(&self.pd_client), router.clone()).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
@@ -242,7 +241,6 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 gc_worker.clone(),
                 None,
-                store_groups.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
@@ -283,6 +281,7 @@ impl Simulator for ServerCluster {
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
+            meta,
         );
 
         // Register the role change observer of the lock manager.

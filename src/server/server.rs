@@ -3,7 +3,7 @@
 use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use futures::{Future, Stream};
@@ -19,7 +19,6 @@ use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::util::StoreGroup;
 use raftstore::store::SnapManager;
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -80,7 +79,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
-        store_groups: Arc<Mutex<StoreGroup>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
@@ -159,7 +157,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker.scheduler(),
             raft_router.clone(),
             resolver,
-            store_groups,
         );
 
         let svr = Server {
@@ -408,7 +405,6 @@ mod tests {
             SnapManager::new("", None),
             gc_worker,
             None,
-            Arc::default(),
         )
         .unwrap();
 

@@ -28,7 +28,7 @@ use raftstore::{
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
         new_compaction_listener,
-        util::StoreGroup,
+        util::ReplicationMode,
         LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
     },
 };
@@ -121,7 +121,7 @@ struct TiKVServer {
     router: RaftRouter<RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
-    store_groups: Arc<Mutex<StoreGroup>>,
+    mode: Arc<Mutex<ReplicationMode>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<Engines>,
@@ -164,12 +164,12 @@ impl TiKVServer {
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
-        let (resolve_worker, resolver, store_groups) =
-            resolve::new_resolver(Arc::clone(&pd_client), &config.raft_store.replicate_label)
-                .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
-
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+
+        let (resolve_worker, resolver, mode) =
+            resolve::new_resolver(Arc::clone(&pd_client), router.clone())
+                .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
@@ -182,7 +182,7 @@ impl TiKVServer {
             router,
             system: Some(system),
             resolver,
-            store_groups,
+            mode,
             store_path,
             encryption_key_manager: None,
             engines: None,
@@ -523,7 +523,6 @@ impl TiKVServer {
             snap_mgr.clone(),
             gc_worker.clone(),
             unified_read_pool,
-            self.store_groups.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
@@ -564,6 +563,7 @@ impl TiKVServer {
             &server_config,
             raft_store,
             self.pd_client.clone(),
+            self.mode.clone(),
         );
 
         let raft_router = node.get_router();

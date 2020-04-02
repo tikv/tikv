@@ -3,7 +3,6 @@
 use std::time::Duration;
 
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::CommitAlgorithm;
 use std::sync::mpsc;
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
@@ -11,8 +10,7 @@ use tikv_util::HandyRwLock;
 fn prepare_cluster() -> Cluster<ServerCluster> {
     let mut cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
-    cluster.cfg.raft_store.commit_algorithm = CommitAlgorithm::IntegrityOverLabel;
-    cluster.cfg.raft_store.replicate_label = "zone".to_owned();
+    cluster.pd_client.configure_dr_auto_sync("zone");
     cluster.create_engines();
     cluster.bootstrap_region().unwrap();
     cluster

@@ -21,7 +21,6 @@ use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use raftstore::store::util::StoreGroup;
 use raftstore::store::*;
 use raftstore::Result;
 use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
@@ -113,9 +112,6 @@ impl Transport for ChannelTransport {
     }
 
     fn flush(&mut self) {}
-    fn store_group(&self) -> Arc<Mutex<StoreGroup>> {
-        Default::default()
-    }
 }
 
 type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
@@ -185,6 +181,7 @@ impl Simulator for NodeCluster {
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
+            Arc::default(),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0

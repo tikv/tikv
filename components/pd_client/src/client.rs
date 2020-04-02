@@ -12,6 +12,7 @@ use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
+use kvproto::replicate_mode::ReplicateStatus;
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
@@ -133,7 +134,11 @@ impl PdClient for RpcClient {
         Ok(self.cluster_id)
     }
 
-    fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &self,
+        stores: metapb::Store,
+        region: metapb::Region,
+    ) -> Result<Option<ReplicateStatus>> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["bootstrap_cluster"])
             .start_coarse_timer();
@@ -143,11 +148,11 @@ impl PdClient for RpcClient {
         req.set_store(stores);
         req.set_region(region);
 
-        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
             client.bootstrap_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
-        Ok(())
+        Ok(resp.replicate_status.take())
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
@@ -182,7 +187,7 @@ impl PdClient for RpcClient {
         Ok(resp.get_id())
     }
 
-    fn put_store(&self, store: metapb::Store) -> Result<()> {
+    fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicateStatus>> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["put_store"])
             .start_coarse_timer();
@@ -191,12 +196,12 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store(store);
 
-        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
             client.put_store_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(())
+        Ok(resp.replicate_status.take())
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {

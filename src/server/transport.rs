@@ -2,7 +2,7 @@
 
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use crate::server::metrics::*;
 use crate::server::raft_client::RaftClient;
@@ -11,7 +11,6 @@ use crate::server::snap::Task as SnapTask;
 use crate::server::Result;
 use raft::SnapshotStatus;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::util::StoreGroup;
 use raftstore::store::Transport;
 use raftstore::Result as RaftStoreResult;
 use tikv_util::collections::HashSet;
@@ -28,7 +27,6 @@ where
     pub raft_router: T,
     resolving: Arc<RwLock<HashSet<u64>>>,
     resolver: S,
-    store_groups: Arc<Mutex<StoreGroup>>,
 }
 
 impl<T, S> Clone for ServerTransport<T, S>
@@ -43,7 +41,6 @@ where
             raft_router: self.raft_router.clone(),
             resolving: Arc::clone(&self.resolving),
             resolver: self.resolver.clone(),
-            store_groups: self.store_groups.clone(),
         }
     }
 }
@@ -54,7 +51,6 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         snap_scheduler: Scheduler<SnapTask>,
         raft_router: T,
         resolver: S,
-        store_groups: Arc<Mutex<StoreGroup>>,
     ) -> ServerTransport<T, S> {
         ServerTransport {
             raft_client,
@@ -62,7 +58,6 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
             raft_router,
             resolving: Arc::new(RwLock::new(Default::default())),
             resolver,
-            store_groups,
         }
     }
 
@@ -244,11 +239,6 @@ where
 
     fn flush(&mut self) {
         self.flush_raft_client();
-    }
-
-    #[inline]
-    fn store_group(&self) -> Arc<Mutex<StoreGroup>> {
-        self.store_groups.clone()
     }
 }
 
