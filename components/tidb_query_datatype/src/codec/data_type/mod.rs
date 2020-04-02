@@ -17,6 +17,7 @@ use crate::EvalType;
 
 use crate::codec::convert::ConvertTo;
 use crate::expr::EvalContext;
+use num_traits::Zero;
 use tidb_query_common::error::Result;
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
@@ -36,7 +37,7 @@ impl AsMySQLBool for Int {
 impl AsMySQLBool for Real {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
-        Ok(self.round() != 0f64)
+        Ok(!self.is_zero())
     }
 }
 
