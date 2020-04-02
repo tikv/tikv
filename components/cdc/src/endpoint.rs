@@ -523,7 +523,8 @@ impl Initializer {
         let build_resolver = self.build_resolver;
         info!("async incremental scan";
             "region_id" => region.get_id(),
-            "downstream_id" => ?downstream_id);
+            "downstream_id" => ?downstream_id,
+            "observe_id" => ?observe_id);
 
         // spawn the task to a thread pool.
         // TODO: Add a cancellation mechanism so that the scanning can be canceled if it doesn't
@@ -643,12 +644,13 @@ impl Initializer {
                 "resolver initialized";
                 "region_id" => region.get_id(),
                 "resolved_ts" => rts,
-                "lock_count" => resolver.locks().len()
+                "lock_count" => resolver.locks().len(),
+                "observe_id" => ?observe_id,
             );
         }
 
         fail_point!("before_schedule_resolver_ready");
-        info!("schedule resolver ready"; "region_id" => region.get_id());
+        info!("schedule resolver ready"; "region_id" => region.get_id(), "observe_id" => ?observe_id);
         if let Err(e) = sched.schedule(Task::ResolverReady {
             observe_id,
             resolver,
