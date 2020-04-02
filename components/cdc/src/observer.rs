@@ -110,6 +110,33 @@ impl RoleObserver for CdcObserver {
     }
 }
 
+impl RegionChangeObserver for CdcObserver {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        event: RegionChangeEvent,
+        _: StateRole,
+    ) {
+        match event {
+            RegionChangeEvent::Destroy => {
+                let region_id = ctx.region().get_id();
+                if self.is_subscribed(region_id) {
+                    // Unregister all downstreams.
+                    let store_err = RaftStoreError::RegionNotFound(region_id);
+                    let deregister = Deregister::Region {
+                        region_id,
+                        err: CdcError::Request(store_err.into()),
+                    };
+                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                        error!("schedule cdc task failed"; "error" => ?e);
+                    }
+                }
+            }
+            _ => (),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
