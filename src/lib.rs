@@ -89,7 +89,7 @@ pub fn tikv_version_info() -> String {
 /// Prints the tikv version information to the standard output.
 pub fn log_tikv_info() {
     info!("Welcome to TiKV");
-    for line in tikv_version_info().lines().filter(|s| s.len() > 0) {
+    for line in tikv_version_info().lines().filter(|s| !s.is_empty()) {
         info!("{}", line);
     }
 }
