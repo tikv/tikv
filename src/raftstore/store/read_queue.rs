@@ -21,6 +21,9 @@ pub struct ReadIndexRequest {
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
+    // `removed_from_contexts` is `true` means its uuid has already been removed from `contexts` in
+    // `advance_replica_reads`.
+    removed_from_contexts: bool,
 }
 
 impl ReadIndexRequest {
@@ -48,6 +51,7 @@ impl ReadIndexRequest {
             cmds,
             renew_lease_time,
             read_index: None,
+            removed_from_contexts: false,
         }
     }
 }
@@ -186,6 +190,7 @@ impl ReadIndexQueue {
                     "ReadIndexQueue::reads[{}].uuid: {}, but want: {}",
                     raw_offset, self.reads[offset].id, uuid
                 );
+                self.reads[offset].removed_from_contexts = true;
                 if let Some(occur_index) = self.reads[offset].read_index {
                     if occur_index < index {
                         continue;
@@ -203,7 +208,16 @@ impl ReadIndexQueue {
         }
 
         if min_changed_offset != usize::MAX {
-            self.ready_cnt = cmp::max(self.ready_cnt, max_changed_offset + 1);
+            let candidate_ready_cnt = max_changed_offset + 1;
+            if candidate_ready_cnt > self.ready_cnt {
+                for i in self.ready_cnt..candidate_ready_cnt {
+                    if !self.reads[i].removed_from_contexts {
+                        self.reads[i].removed_from_contexts = true;
+                        self.contexts.remove(&self.reads[i].id);
+                    }
+                }
+                self.ready_cnt = candidate_ready_cnt;
+            }
         }
         if max_changed_offset > 0 {
             self.fold(min_changed_offset, max_changed_offset);
@@ -242,16 +256,12 @@ impl ReadIndexQueue {
         if self.ready_cnt == 0 {
             return None;
         }
+        // `contexts` is already handled in `advance_replica_reads`.
         self.ready_cnt -= 1;
         self.handled_cnt += 1;
-        let res = self
-            .reads
-            .pop_front()
-            .expect("read_queue is empty but ready_cnt > 0");
-        // If it's a follower it's necessary, otherwise the field
-        // must have been cleared, so it's also ok.
-        self.contexts.remove(&res.id);
-        Some(res)
+        let res = self.reads.pop_front();
+        assert!(res.is_some());
+        res
     }
 
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
