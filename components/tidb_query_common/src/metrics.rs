@@ -3,7 +3,9 @@
 use prometheus::*;
 use prometheus_static_metric::*;
 
-make_auto_flush_static_metric! {
+use tikv_util::metrics::TLSMetricGroup;
+
+make_static_metric! {
     pub label_enum ExecutorName {
         batch_table_scan,
         batch_index_scan,
@@ -37,7 +39,7 @@ lazy_static::lazy_static! {
     .unwrap();
 }
 
-lazy_static::lazy_static! {
-    pub static ref EXECUTOR_COUNT_METRICS: LocalCoprExecutorCount =
-        auto_flush_from!(COPR_EXECUTOR_COUNT, LocalCoprExecutorCount);
+thread_local! {
+    pub static EXECUTOR_COUNT_METRICS: TLSMetricGroup<LocalCoprExecutorCount> =
+        TLSMetricGroup::new(LocalCoprExecutorCount::from(&COPR_EXECUTOR_COUNT));
 }
