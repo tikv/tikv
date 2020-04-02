@@ -8,7 +8,7 @@
 # it is our lowest common denominator in terms of distro support.
 
 # Some commands in this script are structured in order to reduce the number of layers Docker
-# generates. Unfortunately Docker is limited to only 125 layers: 
+# generates. Unfortunately Docker is limited to only 125 layers:
 # https://github.com/moby/moby/blob/a9507c6f76627fdc092edc542d5a7ef4a6df5eec/layer/layer.go#L50-L53
 
 # We require epel packages, so enable the fedora EPEL repo then install dependencies.
@@ -16,18 +16,15 @@
 # Attempt to clean and rebuild the cache to avoid 404s
 cat <<EOT
 FROM centos:7.6.1810 as builder
-RUN yum clean all && \
-    yum makecache && \
-    yum update -y && \
-    yum install -y epel-release && \
+RUN yum install -y epel-release && \
     yum clean all && \
-    yum makecache && \
-	yum update -y && \
-	yum install -y tar wget git which file unzip python-pip openssl-devel \
-		make cmake3 gcc gcc-c++ libstdc++-static pkg-config psmisc gdb \
-		libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
-        dwz && \
-	yum clean all
+    yum makecache
+
+RUN yum install -y \
+        perl \
+        make cmake3 pkg-config dwz \
+        gcc gcc-c++ libstdc++-static && \
+    yum clean all
 EOT
 
 
@@ -54,11 +51,6 @@ RUN rustup set profile minimal
 RUN rustup default \$(cat "rust-toolchain")
 EOT
 
-# Use Makefile to build
-cat <<EOT
-COPY Makefile ./
-EOT
-
 # For cargo
 cat <<EOT
 COPY scripts ./scripts
@@ -78,18 +70,18 @@ done
 
 # Create dummy files, build the dependencies
 # then remove TiKV fingerprint for following rebuild.
-# Finally, remove test dependencies and profile features.
+# Finally, remove fuzz and profile features.
 cat <<EOT
 RUN mkdir -p ./cmd/src/bin && \\
     echo 'fn main() {}' > ./cmd/src/bin/tikv-ctl.rs && \\
     echo 'fn main() {}' > ./cmd/src/bin/tikv-server.rs && \\
     for cargotoml in \$(find . -name "Cargo.toml"); do \\
         sed -i '/fuzz/d' \${cargotoml} && \\
-        sed -i '/test\_/d' \${cargotoml} && \\
-        sed -i '/profiler/d' \${cargotoml} && \\
-        sed -i '/\"tests\",/d' \${cargotoml} ; \\
-    done && \\
-    make build_dist_release
+        sed -i '/profiler/d' \${cargotoml} ; \\
+    done
+
+COPY Makefile ./
+RUN make build_dist_release
 EOT
 
 # Remove fingerprints for when we build the real binaries.
@@ -102,7 +94,13 @@ echo "COPY src src"
 
 # Build real binaries now
 cat <<EOT
-COPY ./.git ./.git
+ARG GIT_FULLBACK="Unknown (no git or not git repo)"
+ARG GIT_HASH=${GIT_FULLBACK}
+ARG GIT_TAG=${GIT_FULLBACK}
+ARG GIT_BRANCH=${GIT_FULLBACK}
+ENV TIKV_BUILD_GIT_HASH=${GIT_HASH}
+ENV TIKV_BUILD_GIT_TAG=${GIT_TAG}
+ENV TIKV_BUILD_GIT_BRANCH=${GIT_BRANCH}
 RUN make build_dist_release
 EOT
 
