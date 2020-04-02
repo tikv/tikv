@@ -14,11 +14,11 @@ use engine::rocks::{
     DB,
 };
 use engine::IterOptionsExt;
-use engine::{self, Engines, IterOption};
-use engine_rocks::{Compat, RocksWriteBatch};
+use engine::{self, Engines};
+use engine_rocks::{CloneCompat, Compat, RocksWriteBatch};
 use engine_traits::{
-    Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection, TablePropertiesExt,
-    WriteBatch, WriteOptions,
+    IterOptions, Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection,
+    TablePropertiesExt, WriteBatch, WriteOptions,
 };
 use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
@@ -32,8 +32,8 @@ use raft::{self, RawNode};
 use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::Iterator as EngineIterator;
+use engine_rocks::properties::MvccProperties;
 use engine_rocks::RangeProperties;
-use raftstore::coprocessor::properties::MvccProperties;
 use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
@@ -478,7 +478,7 @@ impl Debugger {
 
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
-        let readopts = IterOption::new(
+        let readopts = IterOptions::new(
             Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
             Some(KeyBuilder::from_vec(to, 0, 0)),
             false,
@@ -510,7 +510,7 @@ impl Debugger {
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::new(
-                self.engines.clone(),
+                self.engines.c(),
                 region,
                 fake_snap_worker.scheduler(),
                 peer_id,
@@ -875,6 +875,7 @@ impl Debugger {
             ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
             ("mvcc.num_rows", mvcc_properties.num_rows),
             ("mvcc.num_puts", mvcc_properties.num_puts),
+            ("mvcc.num_deletes", mvcc_properties.num_deletes),
             ("mvcc.num_versions", mvcc_properties.num_versions),
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
         ]
@@ -962,7 +963,7 @@ impl MvccChecker {
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
-            let readopts = IterOption::new(
+            let readopts = IterOptions::new(
                 Some(KeyBuilder::from_vec(from, 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
@@ -1236,7 +1237,7 @@ impl MvccInfoIterator {
             } else {
                 Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
             };
-            let readopts = IterOption::new(None, to, false).build_read_opts();
+            let readopts = IterOptions::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
             iter.seek(SeekKey::from(from)).unwrap();

@@ -364,7 +364,7 @@ fn test_restart_leader_insecure() {
 
 #[test]
 fn test_restart_leader_secure() {
-    let security_cfg = test_util::new_security_cfg();
+    let security_cfg = test_util::new_security_cfg(None);
     let mgr = SecurityManager::new(&security_cfg).unwrap();
     restart_leader(mgr)
 }

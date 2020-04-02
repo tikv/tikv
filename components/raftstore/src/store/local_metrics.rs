@@ -23,38 +23,32 @@ impl RaftReadyMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.message > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["message"])
-                .inc_by(self.message as i64);
+            STORE_RAFT_READY_COUNTER.message.inc_by(self.message as i64);
             self.message = 0;
         }
         if self.commit > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["commit"])
-                .inc_by(self.commit as i64);
+            STORE_RAFT_READY_COUNTER.commit.inc_by(self.commit as i64);
             self.commit = 0;
         }
         if self.append > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["append"])
-                .inc_by(self.append as i64);
+            STORE_RAFT_READY_COUNTER.append.inc_by(self.append as i64);
             self.append = 0;
         }
         if self.snapshot > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["snapshot"])
+            STORE_RAFT_READY_COUNTER
+                .snapshot
                 .inc_by(self.snapshot as i64);
             self.snapshot = 0;
         }
         if self.pending_region > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["pending_region"])
+            STORE_RAFT_READY_COUNTER
+                .pending_region
                 .inc_by(self.pending_region as i64);
             self.pending_region = 0;
         }
         if self.has_ready_region > 0 {
-            STORE_RAFT_READY_COUNTER_VEC
-                .with_label_values(&["has_ready_region"])
+            STORE_RAFT_READY_COUNTER
+                .has_ready_region
                 .inc_by(self.has_ready_region as i64);
             self.has_ready_region = 0;
         }
@@ -85,86 +79,86 @@ impl RaftMessageMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.append > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["append"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .append
                 .inc_by(self.append as i64);
             self.append = 0;
         }
         if self.append_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["append_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .append_resp
                 .inc_by(self.append_resp as i64);
             self.append_resp = 0;
         }
         if self.prevote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["prevote"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .prevote
                 .inc_by(self.prevote as i64);
             self.prevote = 0;
         }
         if self.prevote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["prevote_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .prevote_resp
                 .inc_by(self.prevote_resp as i64);
             self.prevote_resp = 0;
         }
         if self.vote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["vote"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .vote
                 .inc_by(self.vote as i64);
             self.vote = 0;
         }
         if self.vote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["vote_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .vote_resp
                 .inc_by(self.vote_resp as i64);
             self.vote_resp = 0;
         }
         if self.snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["snapshot"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .snapshot
                 .inc_by(self.snapshot as i64);
             self.snapshot = 0;
         }
         if self.request_snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["request_snapshot"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .request_snapshot
                 .inc_by(self.request_snapshot as i64);
             self.request_snapshot = 0;
         }
         if self.heartbeat > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["heartbeat"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .heartbeat
                 .inc_by(self.heartbeat as i64);
             self.heartbeat = 0;
         }
         if self.heartbeat_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["heartbeat_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .heartbeat_resp
                 .inc_by(self.heartbeat_resp as i64);
             self.heartbeat_resp = 0;
         }
         if self.transfer_leader > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["transfer_leader"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .transfer_leader
                 .inc_by(self.transfer_leader as i64);
             self.transfer_leader = 0;
         }
         if self.timeout_now > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["timeout_now"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .timeout_now
                 .inc_by(self.timeout_now as i64);
             self.timeout_now = 0;
         }
         if self.read_index > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["read_index"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .read_index
                 .inc_by(self.read_index as i64);
             self.read_index = 0;
         }
         if self.read_index_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
-                .with_label_values(&["read_index_resp"])
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .read_index_resp
                 .inc_by(self.read_index_resp as i64);
             self.read_index_resp = 0;
         }
@@ -186,50 +180,50 @@ pub struct RaftMessageDropMetrics {
 impl RaftMessageDropMetrics {
     fn flush(&mut self) {
         if self.mismatch_store_id > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["mismatch_store_id"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .mismatch_store_id
                 .inc_by(self.mismatch_store_id as i64);
             self.mismatch_store_id = 0;
         }
         if self.mismatch_region_epoch > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["mismatch_region_epoch"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .mismatch_region_epoch
                 .inc_by(self.mismatch_region_epoch as i64);
             self.mismatch_region_epoch = 0;
         }
         if self.stale_msg > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["stale_msg"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .stale_msg
                 .inc_by(self.stale_msg as i64);
             self.stale_msg = 0;
         }
         if self.region_overlap > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["region_overlap"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .region_overlap
                 .inc_by(self.region_overlap as i64);
             self.region_overlap = 0;
         }
         if self.region_no_peer > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["region_no_peer"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .region_no_peer
                 .inc_by(self.region_no_peer as i64);
             self.region_no_peer = 0;
         }
         if self.region_tombstone_peer > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["region_tombstone_peer"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .region_tombstone_peer
                 .inc_by(self.region_tombstone_peer as i64);
             self.region_tombstone_peer = 0;
         }
         if self.region_nonexistent > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["region_nonexistent"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .region_nonexistent
                 .inc_by(self.region_nonexistent as i64);
             self.region_nonexistent = 0;
         }
         if self.applying_snap > 0 {
-            STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC
-                .with_label_values(&["applying_snap"])
+            STORE_RAFT_DROPPED_MESSAGE_COUNTER
+                .applying_snap
                 .inc_by(self.applying_snap as i64);
             self.applying_snap = 0;
         }
@@ -269,44 +263,40 @@ impl RaftProposeMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.all > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["all"])
-                .inc_by(self.all as i64);
+            PEER_PROPOSAL_COUNTER.all.inc_by(self.all as i64);
             self.all = 0;
         }
         if self.local_read > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["local_read"])
+            PEER_PROPOSAL_COUNTER
+                .local_read
                 .inc_by(self.local_read as i64);
             self.local_read = 0;
         }
         if self.read_index > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["read_index"])
+            PEER_PROPOSAL_COUNTER
+                .read_index
                 .inc_by(self.read_index as i64);
             self.read_index = 0;
         }
         if self.unsafe_read_index > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["unsafe_read_index"])
+            PEER_PROPOSAL_COUNTER
+                .unsafe_read_index
                 .inc_by(self.unsafe_read_index as i64);
             self.unsafe_read_index = 0;
         }
         if self.normal > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["normal"])
-                .inc_by(self.normal as i64);
+            PEER_PROPOSAL_COUNTER.normal.inc_by(self.normal as i64);
             self.normal = 0;
         }
         if self.transfer_leader > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["transfer_leader"])
+            PEER_PROPOSAL_COUNTER
+                .transfer_leader
                 .inc_by(self.transfer_leader as i64);
             self.transfer_leader = 0;
         }
         if self.conf_change > 0 {
-            PEER_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["conf_change"])
+            PEER_PROPOSAL_COUNTER
+                .conf_change
                 .inc_by(self.conf_change as i64);
             self.conf_change = 0;
         }
@@ -347,56 +337,56 @@ impl Default for RaftInvalidProposeMetrics {
 impl RaftInvalidProposeMetrics {
     fn flush(&mut self) {
         if self.mismatch_store_id > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["mismatch_store_id"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .mismatch_store_id
                 .inc_by(self.mismatch_store_id as i64);
             self.mismatch_store_id = 0;
         }
         if self.region_not_found > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["region_not_found"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .region_not_found
                 .inc_by(self.region_not_found as i64);
             self.region_not_found = 0;
         }
         if self.not_leader > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["not_leader"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .not_leader
                 .inc_by(self.not_leader as i64);
             self.not_leader = 0;
         }
         if self.mismatch_peer_id > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["mismatch_peer_id"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .mismatch_peer_id
                 .inc_by(self.mismatch_peer_id as i64);
             self.mismatch_peer_id = 0;
         }
         if self.stale_command > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["stale_command"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .stale_command
                 .inc_by(self.stale_command as i64);
             self.stale_command = 0;
         }
         if self.epoch_not_match > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["epoch_not_match"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .epoch_not_match
                 .inc_by(self.epoch_not_match as i64);
             self.epoch_not_match = 0;
         }
         if self.read_index_no_leader > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["read_index_no_leader"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .read_index_no_leader
                 .inc_by(self.read_index_no_leader as i64);
             self.read_index_no_leader = 0;
         }
         if self.region_not_initialized > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["region_not_initialized"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .region_not_initialized
                 .inc_by(self.region_not_initialized as i64);
             self.region_not_initialized = 0;
         }
         if self.is_applying_snapshot > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["is_applying_snapshot"])
+            RAFT_INVALID_PROPOSAL_COUNTER
+                .is_applying_snapshot
                 .inc_by(self.is_applying_snapshot as i64);
             self.is_applying_snapshot = 0;
         }
