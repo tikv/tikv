@@ -39,6 +39,7 @@ pub enum Deregister {
     },
     Region {
         region_id: u64,
+        observe_id: ObserveID,
         err: Error,
     },
     Conn(ConnID),
@@ -68,10 +69,12 @@ impl fmt::Debug for Deregister {
                 .finish(),
             Deregister::Region {
                 ref region_id,
+                ref observe_id,
                 ref err,
             } => de
                 .field("deregister", &"region")
                 .field("region_id", region_id)
+                .field("observe_id", observe_id)
                 .field("err", err)
                 .finish(),
             Deregister::Conn(ref conn_id) => de
@@ -257,21 +260,45 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                     }
                 }
                 if is_last {
-                    self.capture_regions.remove(&region_id);
+                    let delegate = self.capture_regions.remove(&region_id).unwrap();
                     // Do not continue to observe the events of the region.
-                    self.observer.unsubscribe_region(region_id);
+                    let oid = self.observer.unsubscribe_region(region_id, delegate.id);
+                    assert!(
+                        oid.is_some(),
+                        "unsubscribe region {} failed, ObserveID {:?}",
+                        region_id,
+                        delegate.id
+                    );
                 }
             }
-            Deregister::Region { region_id, err } => {
+            Deregister::Region {
+                region_id,
+                observe_id,
+                err,
+            } => {
                 // Something went wrong, deregister all downstreams of the region.
-                if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
-                    delegate.stop(err);
+
+                // To avoid ABA problem, we must check the unique ObserveID.
+                let need_remove = self
+                    .capture_regions
+                    .get(&region_id)
+                    .map_or(false, |d| d.id == observe_id);
+                if need_remove {
+                    if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
+                        delegate.stop(err);
+                    }
                 }
                 self.connections
                     .iter_mut()
                     .for_each(|(_, conn)| conn.unsubscribe(region_id));
                 // Do not continue to observe the events of the region.
-                self.observer.unsubscribe_region(region_id);
+                let oid = self.observer.unsubscribe_region(region_id, observe_id);
+                assert_eq!(
+                    need_remove, oid.is_some(),
+                    "unsubscribe region {} failed, ObserveID {:?}",
+                    region_id,
+                    observe_id
+                );
             }
             Deregister::Conn(conn_id) => {
                 // The connection is closed, deregister all downstreams of the connection.
@@ -281,9 +308,16 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                         .for_each(|(region_id, downstream_id)| {
                             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                                 if delegate.unsubscribe(downstream_id, None) {
-                                    self.capture_regions.remove(&region_id);
+                                    let delegate = self.capture_regions.remove(&region_id).unwrap();
                                     // Do not continue to observe the events of the region.
-                                    self.observer.unsubscribe_region(region_id);
+                                    let oid =
+                                        self.observer.unsubscribe_region(region_id, delegate.id);
+                                    assert!(
+                                        oid.is_some(),
+                                        "unsubscribe region {} failed, ObserveID {:?}",
+                                        region_id,
+                                        delegate.id
+                                    );
                                 }
                             }
                         });
@@ -302,7 +336,8 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
             None => {
-                error!("register for a nonexistent connection"; "region_id" => region_id, "conn_id" => ?conn_id);
+                error!("register for a nonexistent connection";
+                    "region_id" => region_id, "conn_id" => ?conn_id);
                 return;
             }
         };
@@ -312,7 +347,10 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             return;
         }
 
-        info!("cdc register region"; "region_id" => region_id, "conn_id" => ?conn.get_id(), "downstream_id" => ?downstream.get_id());
+        info!("cdc register region";
+            "region_id" => region_id,
+            "conn_id" => ?conn.get_id(),
+            "downstream_id" => ?downstream.get_id());
         let mut enabled = None;
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
@@ -347,7 +385,14 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let change_cmd = if let Some(enabled) = enabled {
             // The region has never been registered.
             // Subscribe the change events of the region.
-            self.observer.subscribe_region(region_id);
+            let old_id = self.observer.subscribe_region(region_id, delegate.id);
+            assert!(
+                old_id.is_none(),
+                "region {} must not be observed twice, old ObserveID {:?}, new ObserveID {:?}",
+                region_id,
+                old_id.unwrap(),
+                delegate.id
+            );
 
             ChangeCmd::RegisterObserver {
                 observe_id: delegate.id,
@@ -399,6 +444,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
         for batch in multi {
             let region_id = batch.region_id;
+            let mut deregister = None;
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 if delegate.has_failed() {
                     // Skip the batch if the delegate has failed.
@@ -407,11 +453,15 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 if let Err(e) = delegate.on_batch(batch) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
-                    let deregister = Deregister::Region { region_id, err: e };
-                    if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e);
-                    }
+                    deregister = Some(Deregister::Region {
+                        region_id,
+                        observe_id: delegate.id,
+                        err: e,
+                    });
                 }
+            }
+            if let Some(deregister) = deregister {
+                self.on_deregister(deregister);
             }
         }
     }
@@ -436,7 +486,11 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 if let Err(e) = delegate.on_region_ready(resolver, region) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
-                    let deregister = Deregister::Region { region_id, err: e };
+                    let deregister = Deregister::Region {
+                        region_id,
+                        observe_id: delegate.id,
+                        err: e,
+                    };
                     self.on_deregister(deregister);
                 }
             } else {
@@ -548,6 +602,7 @@ impl Initializer {
             let err = resp.response.take_header().take_error();
             let deregister = Deregister::Region {
                 region_id: self.region_id,
+                observe_id: self.observe_id,
                 err: Error::Request(err),
             };
             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
