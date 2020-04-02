@@ -4,6 +4,8 @@ use std::borrow::ToOwned;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{Error, ErrorKind};
+use std::fs;
 
 use chrono::Local;
 use clap::ArgMatches;
@@ -41,6 +43,23 @@ fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
 
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
+    if !config.panic_log_file.is_empty() {
+        // check parent exists
+        let path = Path::new(&config.panic_log_file);
+        let parent = path.parent().ok_or_else(|| {
+            Error::new(
+                ErrorKind::Other,
+                "Unable to get parent directory of log file",
+            )
+        }).unwrap_or_else(|e| {
+            fatal!("failed to initialize panic log: {}", e);
+        });
+        if !parent.is_dir() {
+            fs::create_dir_all(parent).unwrap_or_else(|e| {
+                fatal!("failed to initialize panic log: {}, create {:?} failed", e, parent);
+            });
+        }
+    }
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.

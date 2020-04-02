@@ -167,6 +167,9 @@ pub fn get_string_by_level(lv: Level) -> &'static str {
 }
 
 pub fn redirect_panic_log(panic_log_file: &str) {
+    if panic_log_file.is_empty() {
+        return;
+    }
     let tikv_err_log_file = OpenOptions::new()
         .create(true)
         .write(true)
