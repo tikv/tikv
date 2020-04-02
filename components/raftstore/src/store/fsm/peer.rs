@@ -309,8 +309,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::Noop => {}
+                PeerMsg::ReplicateModeUpdate => self.on_replicate_mode_update(),
             }
         }
+    }
+
+    fn on_replicate_mode_update(&mut self) {
+        self.fsm
+            .peer
+            .switch_commit_group(&self.ctx.replication_mode)
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<RocksEngine>) {

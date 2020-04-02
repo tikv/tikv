@@ -35,7 +35,7 @@ use futures::Future;
 use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb;
-use kvproto::replicate_mode::ReplicateStatus;
+use kvproto::replicate_mode::{RegionReplicateStatus, ReplicateStatus};
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
@@ -172,6 +172,7 @@ pub trait PdClient: Send + Sync {
         _region: metapb::Region,
         _leader: metapb::Peer,
         _region_stat: RegionStat,
+        _replicate_status: Option<RegionReplicateStatus>,
     ) -> PdFuture<()> {
         unimplemented!();
     }
@@ -202,7 +203,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Sends store statistics regularly.
-    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<Option<ReplicateStatus>> {
         unimplemented!();
     }
 

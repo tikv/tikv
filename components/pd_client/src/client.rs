@@ -12,7 +12,7 @@ use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::replicate_mode::ReplicateStatus;
+use kvproto::replicate_mode::{RegionReplicateStatus, ReplicateStatus};
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
@@ -305,6 +305,7 @@ impl PdClient for RpcClient {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
+        replicate_status: Option<RegionReplicateStatus>,
     ) -> PdFuture<()> {
         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
 
@@ -321,6 +322,9 @@ impl PdClient for RpcClient {
         req.set_keys_read(region_stat.read_keys);
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
+        if let Some(s) = replicate_status {
+            req.set_replicate_status(s);
+        }
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(region_stat.last_report_ts.into_inner());
         interval.set_end_timestamp(UnixSecs::now().into_inner());
@@ -433,7 +437,7 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<Option<ReplicateStatus>> {
         let timer = Instant::now();
 
         let mut req = pdpb::StoreHeartbeatRequest::default();
@@ -448,12 +452,12 @@ impl PdClient for RpcClient {
                 .client_stub
                 .store_heartbeat_async_opt(&req, Self::call_option())
                 .unwrap();
-            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+            Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
                 check_resp_header(resp.get_header())?;
-                Ok(())
+                Ok(resp.replicate_status.take())
             })) as PdFuture<_>
         };
 

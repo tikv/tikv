@@ -20,7 +20,9 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
-use kvproto::replicate_mode::{DrAutoSyncState, ReplicateStatusMode};
+use kvproto::replicate_mode::{
+    DrAutoSyncState, RegionReplicateStatus, RegionReplicateStatusState, ReplicateStatusMode,
+};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
@@ -244,6 +246,7 @@ pub struct Peer {
 
     /// Time of the last attempt to wake up inactive leader.
     pub bcast_wake_up_time: Option<UtilInstant>,
+    pub recover_id: u64,
 }
 
 impl Peer {
@@ -323,6 +326,7 @@ impl Peer {
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
+            recover_id: 0,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -334,12 +338,14 @@ impl Peer {
     }
 
     pub fn init_commit_group(&mut self, mode: &mut ReplicationMode) {
+        debug!("init commit group"; "mode" => ?mode, "regioni_id" => self.region_id, "peer_id" => self.peer.id);
         if mode.status.mode == ReplicateStatusMode::Majority {
             return;
         }
         if self.get_store().region().get_peers().is_empty() {
             return;
         }
+        self.recover_id = mode.status.get_dr_autosync().recover_id;
         if mode.status.get_dr_autosync().state == DrAutoSyncState::Async {
             return;
         }
@@ -350,9 +356,14 @@ impl Peer {
     }
 
     pub fn switch_commit_group(&mut self, mode: &Mutex<ReplicationMode>) {
+        debug!("switch commit group"; "mode" => ?mode, "regioni_id" => self.region_id, "peer_id" => self.peer.id);
         let mut guard = mode.lock().unwrap();
-        let clear = guard.status.mode == ReplicateStatusMode::Majority
-            || guard.status.get_dr_autosync().state == DrAutoSyncState::Async;
+        let clear = if guard.status.mode == ReplicateStatusMode::Majority {
+            true
+        } else {
+            self.recover_id = guard.status.get_dr_autosync().recover_id;
+            guard.status.get_dr_autosync().state == DrAutoSyncState::Async
+        };
         if clear {
             drop(guard);
             self.raft_group.raft.clear_commit_group();
@@ -1857,7 +1868,7 @@ impl Peer {
             }
         }
         // TODO: should store_group be updated?
-        let promoted_commit_index = progress.maximal_committed_index();
+        let promoted_commit_index = progress.maximal_committed_index().0;
         if promoted_commit_index >= self.get_store().truncated_index() {
             return Ok(());
         }
@@ -2539,6 +2550,23 @@ impl Peer {
         None
     }
 
+    fn region_replicate_status(&mut self) -> Option<RegionReplicateStatus> {
+        if self.recover_id == 0 {
+            return None;
+        }
+        let mut status = RegionReplicateStatus::default();
+        status.recover_id = self.recover_id;
+        if self
+            .raft_group
+            .raft
+            .check_group_commit_consistent()
+            .unwrap_or(false)
+        {
+            status.state = RegionReplicateStatusState::IntegrityOverLabel;
+        }
+        Some(status)
+    }
+
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
             term: self.term(),
@@ -2550,6 +2578,7 @@ impl Peer {
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
+            replicate_status: self.region_replicate_status(),
         };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(

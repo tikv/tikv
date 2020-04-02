@@ -627,7 +627,7 @@ impl<
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct StoreGroup {
     labels: HashMap<String, u64>,
     stores: HashMap<u64, u64>,
@@ -655,7 +655,7 @@ impl StoreGroup {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ReplicationMode {
     pub status: ReplicateStatus,
     pub group: StoreGroup,

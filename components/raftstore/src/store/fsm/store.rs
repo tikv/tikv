@@ -14,6 +14,7 @@ use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use kvproto::replicate_mode::{ReplicateStatus, ReplicateStatusMode};
 use protobuf::Message;
 use raft::{Ready, StateRole};
 use std::cmp::{Ord, Ordering as CmpOrdering};
@@ -194,6 +195,10 @@ impl<E: KvEngine> RaftRouter<E> {
         self.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
         });
+    }
+
+    fn report_status_update(&self) {
+        self.broadcast_normal(|| PeerMsg::ReplicateModeUpdate)
     }
 
     pub fn report_resolved(&self, store_id: u64, label_id: u64) {
@@ -445,6 +450,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 StoreMsg::Start { store } => self.start(store),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
+                StoreMsg::ReplicationModeUpdate(status) => self.on_replication_mode_update(status),
             }
         }
     }
@@ -2051,6 +2057,23 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.
         self.ctx.router.report_unreachable(store_id);
+    }
+
+    fn on_replication_mode_update(&mut self, status: ReplicateStatus) {
+        let mut mode = self.ctx.replication_mode.lock().unwrap();
+        if mode.status.mode == status.mode {
+            if status.mode == ReplicateStatusMode::Majority {
+                return;
+            }
+            let exist_dr = mode.status.get_dr_autosync();
+            let dr = status.get_dr_autosync();
+            if exist_dr.recover_id == dr.recover_id && exist_dr.state == dr.state {
+                return;
+            }
+        }
+        mode.status = status;
+        drop(mode);
+        self.ctx.router.report_status_update()
     }
 }
 

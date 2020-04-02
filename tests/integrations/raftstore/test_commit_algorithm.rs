@@ -1,10 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::thread;
 use std::time::Duration;
 
+use kvproto::replicate_mode::*;
 use raft::eraftpb::ConfChangeType;
 use std::sync::mpsc;
 use test_raftstore::*;
+use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
 fn prepare_cluster() -> Cluster<ServerCluster> {
@@ -13,6 +16,8 @@ fn prepare_cluster() -> Cluster<ServerCluster> {
     cluster.pd_client.configure_dr_auto_sync("zone");
     cluster.create_engines();
     cluster.bootstrap_region().unwrap();
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 10;
     cluster
         .cfg
         .server
@@ -53,6 +58,10 @@ fn test_integrity_over_first_label() {
         .unwrap();
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    assert_eq!(state.recover_id, 1);
+    assert_eq!(state.state, RegionReplicateStatusState::IntegrityOverLabel);
 
     cluster.clear_send_filters();
     cluster.add_send_filter(IsolationFilterFactory::new(3));
@@ -74,8 +83,52 @@ fn test_integrity_over_first_label() {
         Err(mpsc::RecvTimeoutError::Timeout)
     );
     must_get_none(&cluster.get_engine(1), b"k2");
-    cluster.clear_send_filters();
+    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    assert_eq!(state.recover_id, 1);
+    assert_eq!(state.state, RegionReplicateStatusState::IntegrityOverLabel);
+
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::Async);
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    assert_eq!(state.recover_id, 2);
+    assert_eq!(state.state, RegionReplicateStatusState::Majority);
+
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::SyncRecover);
+    thread::sleep(Duration::from_millis(100));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cf_cmd("default", b"k3", b"v3")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request, cb)
+        .unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    must_get_none(&cluster.get_engine(1), b"k3");
+    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    assert_eq!(state.recover_id, 3);
+    assert_eq!(state.state, RegionReplicateStatusState::Majority);
+
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    assert_eq!(state.recover_id, 3);
+    assert_eq!(state.state, RegionReplicateStatusState::IntegrityOverLabel);
 }
 
 /// Conf change should consider labels when IntegrityOverFirstLabel is chosen.

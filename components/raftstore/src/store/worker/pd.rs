@@ -19,6 +19,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::replicate_mode::RegionReplicateStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
@@ -28,7 +29,7 @@ use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::Callback;
 use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg};
 use pd_client::metrics::*;
 use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -101,6 +102,7 @@ pub enum Task {
         written_keys: u64,
         approximate_size: Option<u64>,
         approximate_keys: Option<u64>,
+        replicate_status: Option<RegionReplicateStatus>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -206,12 +208,14 @@ impl Display for Task {
             Task::Heartbeat {
                 ref region,
                 ref peer,
+                ref replicate_status,
                 ..
             } => write!(
                 f,
-                "heartbeat for region {:?}, leader {}",
+                "heartbeat for region {:?}, leader {}, replicate status {:?}",
                 region,
-                peer.get_id()
+                peer.get_id(),
+                replicate_status
             ),
             Task::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)
@@ -502,6 +506,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         region: metapb::Region,
         peer: metapb::Peer,
         region_stat: RegionStat,
+        replicate_status: Option<RegionReplicateStatus>,
     ) {
         self.store_stat
             .region_bytes_written
@@ -518,7 +523,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
 
         let f = self
             .pd_client
-            .region_heartbeat(term, region.clone(), peer, region_stat)
+            .region_heartbeat(term, region.clone(), peer, region_stat, replicate_status)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -602,9 +607,17 @@ impl<T: PdClient + ConfigClient> Runner<T> {
             .with_label_values(&["available"])
             .set(available as i64);
 
-        let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
-            error!("store heartbeat failed"; "err" => ?e);
-        });
+        let router = self.router.clone();
+        let f = self
+            .pd_client
+            .store_heartbeat(stats)
+            .map_err(|e| {
+                error!("store heartbeat failed"; "err" => ?e);
+            })
+            .map(move |status| {
+                let status = status.unwrap_or_default();
+                let _ = router.send_control(StoreMsg::ReplicationModeUpdate(status));
+            });
         handle.spawn(f);
     }
 
@@ -878,6 +891,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 written_keys,
                 approximate_size,
                 approximate_keys,
+                replicate_status,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
                     get_region_approximate_size(&self.db, &region).unwrap_or_default()
@@ -933,6 +947,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                         approximate_keys,
                         last_report_ts,
                     },
+                    replicate_status,
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {
