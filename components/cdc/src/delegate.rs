@@ -285,7 +285,7 @@ impl Delegate {
             for batch in pending.multi_batch {
                 self.on_batch(batch)?;
             }
-            CDC_PENDING_CMD_BYTES_GAUGE.dec(pending.cmd_bytes as i64);
+            CDC_PENDING_CMD_BYTES_GAUGE.sub(pending.cmd_bytes as i64);
         }
         info!("region is ready"; "region_id" => self.region_id);
         Ok(())
@@ -310,16 +310,17 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
         self.broadcast(change_data_event, 0);
-        CDC_RESOLVED_TS_GAP_HISTOGRAM
-            .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000);
+        let gap = (min_ts.physical() - resolved_ts.physical()) / 1000;
+        CDC_RESOLVED_TS_GAP_HISTOGRAM.observe(gap as f64);
         Some(resolved_ts)
     }
 
     pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
         if let Some(pending) = self.pending.as_mut() {
+            let cmd_bytes = batch.size();
             pending.multi_batch.push(batch);
-            pending.cmd_bytes += batch.size();
-            CDC_PENDING_CMD_BYTES_GAUGE.inc(cmd_bytes as i64);
+            pending.cmd_bytes += cmd_bytes;
+            CDC_PENDING_CMD_BYTES_GAUGE.add(cmd_bytes as i64);
             return Ok(());
         }
         // Stale CmdBatch, drop it sliently.
