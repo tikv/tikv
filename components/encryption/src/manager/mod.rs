@@ -13,9 +13,9 @@ use protobuf::Message;
 use crate::config::{EncryptionConfig, MasterKeyConfig};
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
-use crate::master_key::*;
+use crate::master_key::{create_backend, Backend, PlaintextBackend};
 use crate::metrics::*;
-use crate::{Error, Iv, Result};
+use crate::{Error, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
@@ -64,6 +64,8 @@ impl Dicts {
                 file_dict.merge_from_bytes(&file_bytes)?;
                 let mut key_dict = KeyDictionary::default();
                 key_dict.merge_from_bytes(&key_bytes)?;
+                ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
+
                 Ok(Some(Dicts {
                     file_dict,
                     key_dict,
@@ -112,7 +114,7 @@ impl Dicts {
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = self.file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
-        file.write(&file_bytes, &PlainTextBackend::default())?;
+        file.write(&file_bytes, &PlaintextBackend::default())?;
 
         FILE_SIZE_GAUGE
             .with_label_values(&["file_dictionary"])

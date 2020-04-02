@@ -11,7 +11,7 @@ use rand::{thread_rng, RngCore};
 
 use crate::master_key::*;
 use crate::metrics::*;
-use crate::{Error, Result};
+use crate::Result;
 
 mod header;
 use header::*;
