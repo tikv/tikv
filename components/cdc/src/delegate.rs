@@ -25,11 +25,10 @@ use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 use tikv::storage::txn::TxnEntry;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::{Error, Result};
 
