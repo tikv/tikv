@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
-use kvproto::encryptionpb::EncryptionMethod;
+use kvproto::encryptionpb::{EncryptionConfig, EncryptionMethod};
 use openssl::symm::{self, Cipher as OCipher};
 
-use crate::Result;
+use crate::{Error, Result};
 
 #[cfg(not(feature = "prost-codec"))]
 pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DBEncryptionMethod {
@@ -54,6 +54,26 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
         EncryptionMethod::Aes256Ctr => 32,
         unknown => panic!("bad EncryptionMethod {:?}", unknown),
     }
+}
+
+pub fn verify_encryption_config(config: &EncryptionConfig) -> Result<()> {
+    if config.method == compat(EncryptionMethod::Unknown) {
+        return Err(Error::UnknownEncryption);
+    }
+    if config.method != compat(EncryptionMethod::Plaintext) {
+        let key_len = get_method_key_length(config.method);
+        if config.key.len() != key_len {
+            return Err(Error::Other(
+                format!(
+                    "unexpected key length, expected {} vs actual {}",
+                    key_len,
+                    config.key.len()
+                )
+                .into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub enum Cipher {

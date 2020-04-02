@@ -13,7 +13,10 @@ mod encrypted_file;
 mod errors;
 mod manager;
 mod master_key;
+mod read;
 
-pub use self::config::{EncryptionConfig, MasterKeyConfig};
+pub use self::config::*;
+pub use self::crypter::*;
 pub use self::errors::{Error, Result};
 pub use self::manager::DataKeyManager;
+pub use self::read::{DecrypterReader, EncrypterReader};
