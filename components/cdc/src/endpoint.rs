@@ -720,9 +720,9 @@ mod tests {
 
         // Pessimistic locks should not be tracked
         for i in 0..10 {
-            let (k, v) = (&[b'k', i], &[b'v', i]);
+            let k = &[b'k', i];
             let ts = TimeStamp::new(i as _);
-            must_pessimistic_prewrite_put(&engine, k, v, k, ts, ts, true);
+            must_acquire_pessimistic_lock(&engine, k, k, ts, ts);
         }
 
         for i in 10..100 {

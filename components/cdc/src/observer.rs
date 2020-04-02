@@ -47,6 +47,9 @@ impl CdcObserver {
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));
+        coprocessor_host
+            .registry
+            .register_region_change_observer(100, BoxRegionChangeObserver::new(self.clone()));
     }
 
     /// Subscribe an region, the observer will sink events of the region into
@@ -117,9 +120,9 @@ impl RegionChangeObserver for CdcObserver {
         event: RegionChangeEvent,
         _: StateRole,
     ) {
+        let region_id = ctx.region().get_id();
         match event {
             RegionChangeEvent::Destroy => {
-                let region_id = ctx.region().get_id();
                 if self.is_subscribed(region_id) {
                     // Unregister all downstreams.
                     let store_err = RaftStoreError::RegionNotFound(region_id);
