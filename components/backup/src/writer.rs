@@ -1,15 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::io::Read;
 use std::sync::Arc;
 use std::time::Instant;
 
+use encryption::EncrypterReader;
 use engine::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use futures_util::io::AllowStdIo;
-use kvproto::backup::File;
+use kvproto::{
+    backup::File,
+    encryptionpb::{EncryptionConfig, EncryptionMethod},
+};
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err, file::Sha256Reader, time::Limiter};
@@ -73,6 +78,7 @@ impl Writer {
         cf: &'static str,
         limiter: Limiter,
         storage: &dyn ExternalStorage,
+        encryption: &EncryptionConfig,
     ) -> Result<File> {
         let (sst_info, sst_reader) = self.writer.finish_read()?;
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
@@ -80,7 +86,15 @@ impl Writer {
             .observe(sst_info.file_size() as f64);
         let file_name = format!("{}_{}.sst", name, cf);
 
-        let (reader, hasher) = Sha256Reader::new(sst_reader)
+        let (reader, iv): (Box<dyn Read + Send>, _) =
+            if encryption.method == EncryptionMethod::Plaintext {
+                (Box::new(sst_reader), None)
+            } else {
+                let (encrypter, iv) = EncrypterReader::new(sst_reader, encryption)?;
+                (Box::new(encrypter), Some(iv))
+            };
+        // In case encryption is enabled, this is a sha256 hash of ciphertext.
+        let (reader, hasher) = Sha256Reader::new(reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
         storage.write(
             &file_name,
@@ -102,6 +116,9 @@ impl Writer {
         file.set_total_bytes(self.total_bytes);
         file.set_cf(cf.to_owned());
         file.set_size(sst_info.file_size());
+        if let Some(iv) = iv {
+            file.set_iv(iv.as_slice().to_vec());
+        }
         Ok(file)
     }
 
@@ -171,7 +188,11 @@ impl BackupWriter {
     }
 
     /// Save buffered SST files to the given external storage.
-    pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
+    pub fn save(
+        self,
+        storage: &dyn ExternalStorage,
+        encryption: &EncryptionConfig,
+    ) -> Result<Vec<File>> {
         let start = Instant::now();
         let mut files = Vec::with_capacity(2);
         let write_written = !self.write.is_empty() || !self.default.is_empty();
@@ -182,6 +203,7 @@ impl BackupWriter {
                 CF_DEFAULT,
                 self.limiter.clone(),
                 storage,
+                encryption,
             )?;
             files.push(default);
         }
@@ -192,6 +214,7 @@ impl BackupWriter {
                 CF_WRITE,
                 self.limiter.clone(),
                 storage,
+                encryption,
             )?;
             files.push(write);
         }
@@ -248,7 +271,11 @@ impl BackupRawKVWriter {
     }
 
     /// Save buffered SST files to the given external storage.
-    pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
+    pub fn save(
+        self,
+        storage: &dyn ExternalStorage,
+        encryption: &EncryptionConfig,
+    ) -> Result<Vec<File>> {
         let start = Instant::now();
         let mut files = Vec::with_capacity(1);
         if !self.writer.is_empty() {
@@ -257,6 +284,7 @@ impl BackupRawKVWriter {
                 self.cf,
                 self.limiter.clone(),
                 storage,
+                encryption,
             )?;
             files.push(file);
         }

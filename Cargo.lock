@@ -201,6 +201,7 @@ name = "backup"
 version = "0.0.1"
 dependencies = [
  "crc64fast",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
