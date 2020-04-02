@@ -65,7 +65,10 @@ fn test_stale_resolver() {
         .event_feed()
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx.send((req.clone(), WriteFlags::default())).wait().unwrap();
+    let _req_tx = req_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
     let (req_tx1, resp_rx1) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()

@@ -427,7 +427,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn on_min_ts(&mut self, min_ts: TimeStamp) {
-        let mut min_resolved_ts = TimeStamp::zero();
+        let mut min_resolved_ts = TimeStamp::max();
         let mut min_ts_region_id = 0;
         for (region_id, delegate) in self.capture_regions.iter_mut() {
             if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
@@ -438,7 +438,8 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
             }
         }
         if min_ts_region_id > 0 {
-            CDC_MIN_TS_REGION.set(min_ts_region_id as i64)
+            CDC_MIN_TS_REGION.set(min_ts_region_id as i64);
+            CDC_MIN_RESOLVED_TS.set((min_resolved_ts.physical() / 1000) as i64);
         }
         self.register_min_ts_event();
     }
