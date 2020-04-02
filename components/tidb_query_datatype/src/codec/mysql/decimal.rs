@@ -1927,7 +1927,7 @@ impl Display for Decimal {
 impl crate::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
     fn as_mysql_bool(&self, ctx: &mut EvalContext) -> tidb_query_common::error::Result<bool> {
-        Ok(ConvertTo::<f64>::convert(self, ctx)?.round() != 0f64)
+        Ok(ConvertTo::<f64>::convert(self, ctx)? != 0f64)
     }
 }
 
