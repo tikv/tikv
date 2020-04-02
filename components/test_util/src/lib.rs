@@ -43,7 +43,7 @@ pub fn setup_for_ci() {
     if env::var("PANIC_ABORT").is_ok() {
         // Panics as aborts, it's helpful for debugging,
         // but also stops tests immediately.
-        tikv_util::set_panic_hook(true, "./");
+        tikv_util::set_panic_hook(true, "./", "");
     }
 
     tikv_util::check_environment_variables();
