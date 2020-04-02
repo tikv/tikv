@@ -4466,11 +4466,11 @@ dependencies = [
  "tokio-core",
  "tokio-executor",
  "tokio-sync",
- "tokio-threadpool",
  "tokio-timer",
  "toml",
  "url",
  "utime",
+ "yatp",
  "zeroize",
 ]
 
