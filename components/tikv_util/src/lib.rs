@@ -21,7 +21,7 @@ extern crate test;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
-use std::fs::{ File };
+use std::fs::File;
 use std::io;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};

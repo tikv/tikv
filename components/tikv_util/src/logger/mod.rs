@@ -5,10 +5,10 @@ mod formatter;
 
 use std::env;
 use std::fmt;
+use std::fs::OpenOptions;
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::fs::OpenOptions;
 
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
@@ -179,14 +179,7 @@ pub fn redirect_panic_log(panic_log_file: &str) {
 
     let decorator = slog_term::PlainDecorator::new(tikv_err_log_file);
     let drainer = TikvFormat::new(decorator);
-    let _ = init_log(
-        drainer,
-        slog::Level::Error,
-        false,
-        false,
-        vec![],
-        0,
-    );
+    let _ = init_log(drainer, slog::Level::Error, false, false, vec![], 0);
 }
 
 // Converts `slog::Level` to unified log level format.
