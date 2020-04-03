@@ -18,6 +18,17 @@ pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DB
 }
 
 #[cfg(not(feature = "prost-codec"))]
+pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -> EncryptionMethod {
+    match method {
+        DBEncryptionMethod::Plaintext => EncryptionMethod::Plaintext,
+        DBEncryptionMethod::Aes128Ctr => EncryptionMethod::Aes128Ctr,
+        DBEncryptionMethod::Aes192Ctr => EncryptionMethod::Aes192Ctr,
+        DBEncryptionMethod::Aes256Ctr => EncryptionMethod::Aes256Ctr,
+        DBEncryptionMethod::Unknown => EncryptionMethod::Unknown,
+    }
+}
+
+#[cfg(not(feature = "prost-codec"))]
 pub fn compat(method: EncryptionMethod) -> EncryptionMethod {
     method
 }
@@ -32,6 +43,17 @@ pub fn encryption_method_to_db_encryption_method(
         3/* EncryptionMethod::Aes192Ctr */ => DBEncryptionMethod::Aes192Ctr,
         4/* EncryptionMethod::Aes256Ctr */ => DBEncryptionMethod::Aes256Ctr,
         _/* EncryptionMethod::Unknown */ => DBEncryptionMethod::Unknown,
+    }
+}
+
+#[cfg(feature = "prost-codec")]
+pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -> i32 {
+    match method {
+        DBEncryptionMethod::Plaintext => 1,
+        DBEncryptionMethod::Aes128Ctr => 2,
+        DBEncryptionMethod::Aes192Ctr => 3,
+        DBEncryptionMethod::Aes256Ctr => 4,
+        DBEncryptionMethod::Unknown => 5,
     }
 }
 

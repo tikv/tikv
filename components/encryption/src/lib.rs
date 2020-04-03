@@ -17,8 +17,8 @@ mod read;
 
 pub use self::config::*;
 pub use self::crypter::*;
-pub use self::errors::{Error, Result};
 pub use self::encrypted_file::EncryptedFile;
+pub use self::errors::{Error, Result};
 pub use self::manager::DataKeyManager;
 pub use self::master_key::{Backend, FileBackend, KmsBackend};
-pub use self::read::{DecrypterReader, EncrypterReader};
+pub use self::read::{create_crypter, DecrypterReader, EncrypterReader};

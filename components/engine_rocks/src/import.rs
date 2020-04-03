@@ -9,7 +9,6 @@ use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
 use std::fs::File;
 use std::io::{self, ErrorKind};
 use std::path::Path;
-use tikv_util::file::calc_crc32;
 
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
@@ -44,44 +43,17 @@ impl ImportExt for RocksEngine {
         &self,
         cf: &Self::CFHandle,
         path: P,
-        expected_size: u64,
-        expected_checksum: u32,
+        _expected_size: u64,
+        _expected_checksum: u32,
     ) -> Result<()> {
         let path = path.as_ref().to_str().unwrap();
         let f = File::open(path)?;
 
-        let meta = f.metadata()?;
-        if expected_size > 0 {
-            // check sst file size when expected_size > 0
-            if meta.len() != expected_size {
-                return Err(Error::Engine(format!(
-                    "invalid size {} for {}, expected {}",
-                    meta.len(),
-                    path,
-                    expected_size
-                )));
-            }
-        }
-        if expected_checksum > 0 {
-            let checksum = calc_crc32(path)?;
-            if checksum == expected_checksum {
-                return Ok(());
-            }
-
-            // RocksDB may have modified the global seqno.
-            let cf = cf.as_inner();
-            set_external_sst_file_global_seq_no(&self.as_inner(), cf, path, 0)?;
-            f.sync_all()
-                .map_err(|e| format!("sync {}: {:?}", path, e))?;
-
-            let checksum = calc_crc32(path)?;
-            if checksum != expected_checksum {
-                return Err(Error::Engine(format!(
-                    "invalid checksum {} for {}, expected {}",
-                    checksum, path, expected_checksum
-                )));
-            }
-        }
+        // RocksDB may have modified the global seqno.
+        let cf = cf.as_inner();
+        set_external_sst_file_global_seq_no(&self.as_inner(), cf, path, 0)?;
+        f.sync_all()
+            .map_err(|e| format!("sync {}: {:?}", path, e))?;
 
         Ok(())
     }

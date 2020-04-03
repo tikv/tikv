@@ -10,7 +10,7 @@ use futures_util::{
     task::{Context, Poll},
 };
 use kvproto::encryptionpb::EncryptionConfig;
-use openssl::symm::{Crypter as OCrypter, Mode};
+use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
 
 use crate::{Cipher, Error, Iv, Result};
 
@@ -58,6 +58,24 @@ impl<R: AsyncRead + Unpin> AsyncRead for DecrypterReader<R> {
     }
 }
 
+pub fn create_crypter(
+    config: &EncryptionConfig,
+    mode: Mode,
+    iv: Option<&[u8]>,
+) -> Result<(OCipher, OCrypter)> {
+    match Cipher::from(config.method) {
+        Cipher::Plaintext => Err(Error::Other(
+            "init crypter while encryption is not enabled"
+                .to_owned()
+                .into(),
+        )),
+        Cipher::AesCtr(cipher) => {
+            let crypter = OCrypter::new(cipher, mode, &config.key, iv)?;
+            Ok((cipher, crypter))
+        }
+    }
+}
+
 /// Implementation of EncrypterReader and DecrypterReader.
 struct CrypterReader<R> {
     reader: R,
@@ -73,26 +91,17 @@ impl<R> CrypterReader<R> {
         iv: Option<Iv>,
     ) -> Result<(CrypterReader<R>, Iv)> {
         crate::verify_encryption_config(config)?;
-        match Cipher::from(config.method) {
-            Cipher::Plaintext => Err(Error::Other(
-                "init crypter while encryption is not enabled"
-                    .to_owned()
-                    .into(),
-            )),
-            Cipher::AesCtr(cipher) => {
-                let block_size = cipher.block_size();
-                let iv = iv.unwrap_or_else(|| Iv::new());
-                let crypter = OCrypter::new(cipher, mode, &config.key, Some(iv.as_slice()))?;
-                Ok((
-                    CrypterReader {
-                        reader,
-                        crypter,
-                        block_size,
-                    },
-                    iv,
-                ))
-            }
-        }
+        let iv = iv.unwrap_or_else(|| Iv::new());
+        let (cipher, crypter) = create_crypter(config, mode, Some(iv.as_slice()))?;
+        let block_size = cipher.block_size();
+        Ok((
+            CrypterReader {
+                reader,
+                crypter,
+                block_size,
+            },
+            iv,
+        ))
     }
 
     // For simplicity, the following implementation rely on the fact that OpenSSL always

@@ -485,6 +485,7 @@ impl TiKVServer {
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
+            .encryption_key_manager(self.encryption_key_manager.clone())
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.
