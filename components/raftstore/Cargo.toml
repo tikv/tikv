@@ -87,7 +87,3 @@ git = "https://github.com/tikv/yatp.git"
 engine = { path = "../engine" }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer" }
-
-[dependencies.prometheus-static-metric]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"

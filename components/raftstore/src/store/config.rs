@@ -9,8 +9,8 @@ use crate::{coprocessor, Result};
 use configuration::{
     rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, RollbackCollector,
 };
-use engine::rocks::util::config as rocks_config;
-use engine::rocks::PerfLevel;
+use engine_rocks::config as rocks_config;
+use engine_rocks::PerfLevel;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 lazy_static! {

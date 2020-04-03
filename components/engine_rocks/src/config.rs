@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rocks::{DBCompressionType, DBTitanDBBlobRunMode};
 use configuration::ConfigValue;
+use rocksdb::{DBCompressionType, DBTitanDBBlobRunMode};
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -38,7 +38,7 @@ pub mod compression_type_level_serde {
     use serde::ser::SerializeSeq;
     use serde::{Deserializer, Serializer};
 
-    use crate::rocks::DBCompressionType;
+    use rocksdb::DBCompressionType;
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -163,7 +163,7 @@ macro_rules! numeric_enum_mod {
 
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
-            use crate::rocks::$enum;
+            use rocksdb::$enum;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer

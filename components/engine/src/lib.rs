@@ -10,8 +10,6 @@ extern crate prometheus;
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::{fmt, u64};
 
 use super::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
-use engine::rocks::{set_perf_level, PerfContext, PerfLevel};
+use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
