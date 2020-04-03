@@ -2,6 +2,7 @@
 
 use configuration::ConfigValue;
 use rocksdb::{DBCompressionType, DBTitanDBBlobRunMode};
+pub use rocksdb::PerfLevel;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

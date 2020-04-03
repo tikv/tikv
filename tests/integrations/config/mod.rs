@@ -9,9 +9,8 @@ use slog::Level;
 use encryption::{EncryptionConfig, MasterKeyConfig};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
-    PerfLevel,
 };
-use engine_rocks::config::{BlobRunMode, CompressionType};
+use engine_rocks::config::{BlobRunMode, CompressionType, PerfLevel};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
