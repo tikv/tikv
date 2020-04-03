@@ -60,10 +60,11 @@ pub trait DatumPayloadDecoder:
     }
 
     #[inline]
-    fn read_datum_payload_decimal(&mut self) -> Result<Decimal> {
-        self.read_decimal().map_err(|_| {
-            Error::InvalidDataType("Failed to decode datum payload as decimal".to_owned())
-        })
+    fn read_datum_payload_decimal(&mut self, field_type: &FieldType) -> Result<Decimal> {
+        self.read_decimal_and_round(field_type.as_accessor().decimal())
+            .map_err(|_| {
+                Error::InvalidDataType("Failed to decode datum payload as decimal".to_owned())
+            })
     }
 
     #[inline]
@@ -369,7 +370,10 @@ pub fn decode_real_datum(mut raw_datum: &[u8], field_type: &FieldType) -> Result
     }
 }
 
-pub fn decode_decimal_datum(mut raw_datum: &[u8]) -> Result<Option<Decimal>> {
+pub fn decode_decimal_datum(
+    mut raw_datum: &[u8],
+    field_type: &FieldType,
+) -> Result<Option<Decimal>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
             "Failed to decode datum flag".to_owned(),
@@ -380,7 +384,7 @@ pub fn decode_decimal_datum(mut raw_datum: &[u8]) -> Result<Option<Decimal>> {
     match flag {
         datum::NIL_FLAG => Ok(None),
         // In both index and record, it's flag is `DECIMAL`. See TiDB's `encode()`.
-        datum::DECIMAL_FLAG => Ok(Some(raw_datum.read_datum_payload_decimal()?)),
+        datum::DECIMAL_FLAG => Ok(Some(raw_datum.read_datum_payload_decimal(field_type)?)),
         _ => Err(Error::InvalidDataType(format!(
             "Unsupported datum flag {} for Decimal vector",
             flag
@@ -500,8 +504,8 @@ impl<'a> RawDatumDecoder<Real> for &'a [u8] {
 }
 
 impl<'a> RawDatumDecoder<Decimal> for &'a [u8] {
-    fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Decimal>> {
-        decode_decimal_datum(self)
+    fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Decimal>> {
+        decode_decimal_datum(self, field_type)
     }
 }
 

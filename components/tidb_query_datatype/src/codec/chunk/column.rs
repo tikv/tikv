@@ -91,7 +91,7 @@ impl Column {
             }
             EvalType::Decimal => {
                 for &row_index in logical_rows {
-                    col.append_decimal_datum(&raw_datums[row_index])?
+                    col.append_decimal_datum(&raw_datums[row_index], field_type)?
                 }
             }
             EvalType::Bytes => {
@@ -742,7 +742,7 @@ impl Column {
         Ok(())
     }
 
-    pub fn append_decimal_datum(&mut self, src_datum: &[u8]) -> Result<()> {
+    pub fn append_decimal_datum(&mut self, src_datum: &[u8], field_type: &FieldType) -> Result<()> {
         if src_datum.is_empty() {
             return Err(Error::InvalidDataType(
                 "Failed to decode datum flag".to_owned(),
@@ -754,8 +754,10 @@ impl Column {
             datum::NIL_FLAG => self.append_null(),
             // In both index and record, it's flag is `DECIMAL`. See TiDB's `encode()`.
             datum::DECIMAL_FLAG => {
-                self.data
-                    .write_decimal_to_chunk_by_datum_payload(raw_datum)?;
+                self.data.write_decimal_to_chunk_by_datum_payload(
+                    raw_datum,
+                    field_type.as_accessor().decimal(),
+                )?;
                 self.finish_append_fixed();
             }
             _ => {

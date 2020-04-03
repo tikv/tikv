@@ -275,7 +275,7 @@ impl Expression {
                 .map(|e| Expression::new_const(e, field_type)),
             ExprType::MysqlDecimal => expr
                 .get_val()
-                .read_decimal()
+                .read_decimal_and_round(field_type.as_accessor().decimal())
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),

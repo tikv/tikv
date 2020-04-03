@@ -1173,10 +1173,12 @@ impl Decimal {
                 res.word_buf[idx as usize] = 0;
             }
             res.frac_cnt = frac as u8;
+            res.result_frac_cnt = res.frac_cnt;
             return res;
         }
         if frac >= res.frac_cnt as i8 {
             res.frac_cnt = frac as u8;
+            res.result_frac_cnt = res.frac_cnt;
             return res;
         }
 
@@ -2093,8 +2095,12 @@ impl<T: BufferWriter> DecimalEncoder for T {}
 
 pub trait DecimalDatumPayloadChunkEncoder: NumberEncoder + DecimalEncoder {
     #[inline]
-    fn write_decimal_to_chunk_by_datum_payload(&mut self, mut src_payload: &[u8]) -> Result<()> {
-        let decimal = src_payload.read_decimal()?;
+    fn write_decimal_to_chunk_by_datum_payload(
+        &mut self,
+        mut src_payload: &[u8],
+        frac: isize,
+    ) -> Result<()> {
+        let decimal = src_payload.read_decimal_and_round(frac)?;
         self.write_decimal_to_chunk(&decimal)
     }
 }
@@ -2233,6 +2239,14 @@ pub trait DecimalDecoder: NumberDecoder {
         }
         d.result_frac_cnt = frac_cnt;
         Ok(d)
+    }
+
+    fn read_decimal_and_round(&mut self, frac: isize) -> Result<Decimal> {
+        let dec = self.read_decimal()?;
+        if frac != crate::UNSPECIFIED_LENGTH && frac as u8 > dec.frac_cnt {
+            return dec.round(frac as i8, RoundMode::HalfEven).into();
+        }
+        Ok(dec)
     }
 
     /// `read_decimal_from_chunk` decode Decimal encoded by `write_decimal_to_chunk`.
@@ -3089,6 +3103,20 @@ mod tests {
             let decoded = buf.as_slice().read_decimal().unwrap();
             let res = res.map(|_| decoded.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
+            let decoded = buf
+                .as_slice()
+                .read_decimal_and_round((decoded.frac_cnt + 2) as isize)
+                .unwrap();
+            let res = res.map(|_| decoded.to_string());
+            assert_eq!(
+                res,
+                exp.map(|s| {
+                    if s.contains('.') {
+                        return s.to_owned() + "00";
+                    }
+                    s.to_owned() + ".00"
+                })
+            );
         }
     }
 
