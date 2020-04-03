@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use configuration::ConfigValue;
-use rocksdb::{DBCompressionType, DBTitanDBBlobRunMode};
 pub use rocksdb::PerfLevel;
+use rocksdb::{DBCompressionType, DBTitanDBBlobRunMode};
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
