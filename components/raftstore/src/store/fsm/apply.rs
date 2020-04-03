@@ -15,7 +15,7 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -2314,13 +2314,13 @@ impl GenSnapTask {
         self.commit_index
     }
 
-    pub fn generate_and_schedule_snapshot(
+    pub fn generate_and_schedule_snapshot<E>(
         self,
-        kv_snap: RocksSnapshot,
+        kv_snap: E::Snapshot,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        region_sched: &Scheduler<RegionTask<RocksEngine>>,
-    ) -> Result<()> {
+        region_sched: &Scheduler<RegionTask<E>>,
+    ) -> Result<()> where E: KvEngine {
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
             notifier: self.snap_notifier,
