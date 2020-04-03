@@ -606,17 +606,17 @@ struct WaitSourceMergeState {
     logs_up_to_date: Arc<AtomicU64>,
 }
 
-struct YieldState {
+struct YieldState<E> where E: KvEngine {
     /// All of the entries that need to continue to be applied after
     /// the source peer has applied its logs.
     pending_entries: Vec<Entry>,
     /// All of messages that need to continue to be handled after
     /// the source peer has applied its logs and pending entries
     /// are all handled.
-    pending_msgs: Vec<Msg<RocksEngine>>,
+    pending_msgs: Vec<Msg<E>>,
 }
 
-impl Debug for YieldState {
+impl<E> Debug for YieldState<E> where E: KvEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("YieldState")
             .field("pending_entries", &self.pending_entries.len())
@@ -674,7 +674,7 @@ pub struct ApplyDelegate<E> where E: KvEngine {
     is_merging: bool,
     /// Records the epoch version after the last merge.
     last_merge_version: u64,
-    yield_state: Option<YieldState>,
+    yield_state: Option<YieldState<E>>,
     /// A temporary state that keeps track of the progress of the source peer state when
     /// CommitMerge is unable to be executed.
     wait_merge_state: Option<WaitSourceMergeState>,
