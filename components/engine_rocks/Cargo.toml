@@ -44,3 +44,4 @@ features = ["encryption"]
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 tempfile = "3.0"
 rand = "0.7"
+toml = "0.4"

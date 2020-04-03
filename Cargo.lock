@@ -1088,6 +1088,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
+ "toml",
  "txn_types",
 ]
 

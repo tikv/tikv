@@ -199,7 +199,7 @@ macro_rules! numeric_enum_mod {
             #[cfg(test)]
             mod tests {
                 use toml;
-                use crate::rocks::$enum;
+                use rocksdb::$enum;
 
                 #[test]
                 fn test_serde() {
@@ -264,7 +264,7 @@ numeric_enum_mod! {perf_level_serde PerfLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rocks::DBCompressionType;
+    use rocksdb::DBCompressionType;
 
     #[test]
     fn test_parse_compression_type() {
