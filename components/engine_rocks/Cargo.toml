@@ -6,12 +6,10 @@ publish = false
 
 [features]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "keys/protobuf-codec",
   "txn_types/protobuf-codec",
 ]
 prost-codec = [
-  "engine/prost-codec",
   "keys/prost-codec",
   "txn_types/prost-codec",
 ]

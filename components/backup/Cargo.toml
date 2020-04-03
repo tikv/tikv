@@ -11,7 +11,6 @@ path = "tests/integrations/mod.rs"
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "external_storage/protobuf-codec",
   "grpcio/protobuf-codec",
@@ -23,7 +22,6 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
 ]
 prost-codec = [
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "external_storage/prost-codec",
   "grpcio/prost-codec",
