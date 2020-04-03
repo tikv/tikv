@@ -2455,19 +2455,19 @@ pub enum TaskRes<E> where E: KvEngine {
     },
 }
 
-pub struct ApplyFsm {
-    delegate: ApplyDelegate<RocksEngine>,
-    receiver: Receiver<Msg<RocksEngine>>,
-    mailbox: Option<BasicMailbox<ApplyFsm>>,
+pub struct ApplyFsm<E> where E: KvEngine {
+    delegate: ApplyDelegate<E>,
+    receiver: Receiver<Msg<E>>,
+    mailbox: Option<BasicMailbox<ApplyFsm<E>>>,
 }
 
-impl ApplyFsm {
-    fn from_peer(peer: &Peer) -> (LooseBoundedSender<Msg<RocksEngine>>, Box<ApplyFsm>) {
+impl<E> ApplyFsm<E> where E: KvEngine {
+    fn from_peer(peer: &Peer) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
 
-    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg<RocksEngine>>, Box<ApplyFsm>) {
+    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
         let (tx, rx) = loose_bounded(usize::MAX);
         let delegate = ApplyDelegate::from_registration(reg);
         (
@@ -2495,9 +2495,9 @@ impl ApplyFsm {
     }
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
-    fn handle_apply<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_apply<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<RocksEngine, W>,
+        apply_ctx: &mut ApplyContext<E, W>,
         apply: Apply,
     ) {
         if apply_ctx.timer.is_none() {
@@ -2543,7 +2543,7 @@ impl ApplyFsm {
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn handle_proposal(&mut self, region_proposal: RegionProposal<RocksEngine>) {
+    fn handle_proposal(&mut self, region_proposal: RegionProposal<E>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = region_proposal.props.len();
         assert_eq!(self.delegate.id, region_proposal.id);
@@ -2573,9 +2573,9 @@ impl ApplyFsm {
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn destroy<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<RocksEngine, W>,
+        ctx: &mut ApplyContext<E, W>,
     ) {
         let region_id = self.delegate.region_id();
         if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
@@ -2596,9 +2596,9 @@ impl ApplyFsm {
     }
 
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
-    fn handle_destroy<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_destroy<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<RocksEngine, W>,
+        ctx: &mut ApplyContext<E, W>,
         d: Destroy,
     ) {
         assert_eq!(d.region_id, self.delegate.region_id());
@@ -2618,9 +2618,9 @@ impl ApplyFsm {
         }
     }
 
-    fn resume_pending<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn resume_pending<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<RocksEngine, W>,
+        ctx: &mut ApplyContext<E, W>,
     ) -> bool {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
@@ -2659,9 +2659,9 @@ impl ApplyFsm {
         true
     }
 
-    fn logs_up_to_date_for_merge<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn logs_up_to_date_for_merge<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<RocksEngine, W>,
+        ctx: &mut ApplyContext<E, W>,
         catch_up_logs: CatchUpLogs,
     ) {
         fail_point!("after_handle_catch_up_logs_for_merge");
@@ -2696,9 +2696,9 @@ impl ApplyFsm {
     }
 
     #[allow(unused_mut)]
-    fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<RocksEngine, W>,
+        apply_ctx: &mut ApplyContext<E, W>,
         snap_task: GenSnapTask,
     ) {
         if self.delegate.pending_remove || self.delegate.stopped {
@@ -2753,11 +2753,11 @@ impl ApplyFsm {
         );
     }
 
-    fn handle_change<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_change<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<RocksEngine, W>,
+        apply_ctx: &mut ApplyContext<E, W>,
         cmd: ChangeCmd,
-        cb: Callback<RocksEngine>,
+        cb: Callback<E>,
     ) {
         let (region_id, region_epoch, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
@@ -2793,7 +2793,7 @@ impl ApplyFsm {
                 }
                 ReadResponse {
                     response: Default::default(),
-                    snapshot: Some(RegionSnapshot::<RocksEngine>::from_snapshot(
+                    snapshot: Some(RegionSnapshot::<E>::from_snapshot(
                         apply_ctx.engine.snapshot().into_sync(),
                         self.delegate.region.clone(),
                     )),
@@ -2811,10 +2811,10 @@ impl ApplyFsm {
         cb.invoke_read(resp);
     }
 
-    fn handle_tasks<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_tasks<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<RocksEngine, W>,
-        msgs: &mut Vec<Msg<RocksEngine>>,
+        apply_ctx: &mut ApplyContext<E, W>,
+        msgs: &mut Vec<Msg<E>>,
     ) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -2849,8 +2849,8 @@ impl ApplyFsm {
     }
 }
 
-impl Fsm for ApplyFsm {
-    type Message = Msg<RocksEngine>;
+impl<E> Fsm for ApplyFsm<E> where E: KvEngine {
+    type Message = Msg<E>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -2874,7 +2874,7 @@ impl Fsm for ApplyFsm {
     }
 }
 
-impl Drop for ApplyFsm {
+impl<E> Drop for ApplyFsm<E> where E: KvEngine {
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
     }
@@ -2900,7 +2900,7 @@ pub struct ApplyPoller<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     cfg_tracker: Tracker<Config>,
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm, ControlFsm>
+impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm<RocksEngine>, ControlFsm>
     for ApplyPoller<W>
 {
     fn begin(&mut self, _batch_size: usize) {
@@ -2925,7 +2925,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm, Contro
         unimplemented!()
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm) -> Option<usize> {
+    fn handle_normal(&mut self, normal: &mut ApplyFsm<RocksEngine>) -> Option<usize> {
         let mut expected_msg_count = None;
         normal.delegate.written = false;
         if normal.delegate.yield_state.is_some() {
@@ -2965,7 +2965,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm, Contro
         expected_msg_count
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
+    fn end(&mut self, fsms: &mut [Box<ApplyFsm<RocksEngine>>]) {
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {
@@ -3007,7 +3007,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     }
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> HandlerBuilder<ApplyFsm, ControlFsm>
+impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> HandlerBuilder<ApplyFsm<RocksEngine>, ControlFsm>
     for Builder<W>
 {
     type Handler = ApplyPoller<W>;
@@ -3034,19 +3034,19 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> HandlerBuilder<ApplyFsm, Con
 
 #[derive(Clone)]
 pub struct ApplyRouter {
-    pub router: BatchRouter<ApplyFsm, ControlFsm>,
+    pub router: BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>,
 }
 
 impl Deref for ApplyRouter {
-    type Target = BatchRouter<ApplyFsm, ControlFsm>;
+    type Target = BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>;
 
-    fn deref(&self) -> &BatchRouter<ApplyFsm, ControlFsm> {
+    fn deref(&self) -> &BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
         &self.router
     }
 }
 
 impl DerefMut for ApplyRouter {
-    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm, ControlFsm> {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
         &mut self.router
     }
 }
@@ -3124,19 +3124,19 @@ impl ApplyRouter {
 }
 
 pub struct ApplyBatchSystem {
-    system: BatchSystem<ApplyFsm, ControlFsm>,
+    system: BatchSystem<ApplyFsm<RocksEngine>, ControlFsm>,
 }
 
 impl Deref for ApplyBatchSystem {
-    type Target = BatchSystem<ApplyFsm, ControlFsm>;
+    type Target = BatchSystem<ApplyFsm<RocksEngine>, ControlFsm>;
 
-    fn deref(&self) -> &BatchSystem<ApplyFsm, ControlFsm> {
+    fn deref(&self) -> &BatchSystem<ApplyFsm<RocksEngine>, ControlFsm> {
         &self.system
     }
 }
 
 impl DerefMut for ApplyBatchSystem {
-    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm, ControlFsm> {
+    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm<RocksEngine>, ControlFsm> {
         &mut self.system
     }
 }
