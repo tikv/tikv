@@ -467,7 +467,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     previous_metrics: RaftMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<T, C>,
-    pending_proposals: Vec<RegionProposal>,
+    pending_proposals: Vec<RegionProposal<RocksEngine>>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }

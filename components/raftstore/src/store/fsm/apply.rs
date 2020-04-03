@@ -2253,14 +2253,14 @@ impl<E> Proposal<E> where E: KvEngine {
     }
 }
 
-pub struct RegionProposal {
+pub struct RegionProposal<E> where E: KvEngine {
     pub id: u64,
     pub region_id: u64,
-    pub props: Vec<Proposal<RocksEngine>>,
+    pub props: Vec<Proposal<E>>,
 }
 
-impl RegionProposal {
-    pub fn new(id: u64, region_id: u64, props: Vec<Proposal<RocksEngine>>) -> RegionProposal {
+impl<E> RegionProposal<E> where E: KvEngine {
+    pub fn new(id: u64, region_id: u64, props: Vec<Proposal<E>>) -> RegionProposal<E> {
         RegionProposal {
             id,
             region_id,
@@ -2362,7 +2362,7 @@ pub enum Msg {
         apply: Apply,
     },
     Registration(Registration),
-    Proposal(RegionProposal),
+    Proposal(RegionProposal<RocksEngine>),
     LogsUpToDate(CatchUpLogs),
     Noop,
     Destroy(Destroy),
@@ -2543,7 +2543,7 @@ impl ApplyFsm {
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn handle_proposal(&mut self, region_proposal: RegionProposal) {
+    fn handle_proposal(&mut self, region_proposal: RegionProposal<RocksEngine>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = region_proposal.props.len();
         assert_eq!(self.delegate.id, region_proposal.id);
