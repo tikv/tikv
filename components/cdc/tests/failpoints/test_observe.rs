@@ -1,8 +1,4 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
-
 use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
@@ -15,10 +11,7 @@ use kvproto::cdcpb::{
     ChangeDataRequest,
 };
 use kvproto::kvrpcpb::*;
-use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
-use raft::StateRole;
-use raftstore::coprocessor::{ObserverContext, RoleObserver};
 use test_raftstore::sleep_ms;
 
 #[test]
@@ -76,7 +69,7 @@ fn test_stale_observe_cmd() {
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let commit_resp =
         suite.async_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
-    thread::sleep(Duration::from_millis(200));
+    sleep_ms(200);
     // Close previous connection and open a new one twice time
     let (req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
