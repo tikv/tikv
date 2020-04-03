@@ -209,7 +209,7 @@ impl PendingDeleteRanges {
 struct SnapContext<R> {
     engines: KvEngines<RocksEngine, RocksEngine>,
     batch_size: usize,
-    mgr: SnapManager,
+    mgr: SnapManager<RocksEngine>,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
@@ -544,7 +544,7 @@ pub struct Runner<R> {
 impl<R: CasualRouter<RocksEngine>> Runner<R> {
     pub fn new(
         engines: KvEngines<RocksEngine, RocksEngine>,
-        mgr: SnapManager,
+        mgr: SnapManager<RocksEngine>,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
@@ -707,7 +707,7 @@ mod tests {
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine_rocks::{CloneCompat, Compat, RocksSnapshot};
+    use engine_rocks::{CloneCompat, Compat, RocksSnapshot, RocksEngine};
     use engine_traits::{CompactExt, Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -893,7 +893,7 @@ mod tests {
             }
             let data = s1.get_data();
             let key = SnapKey::from_snap(&s1).unwrap();
-            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+            let mgr = SnapManager::<RocksEngine>::new(snap_dir.path().to_str().unwrap(), None);
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
             let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();

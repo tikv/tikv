@@ -103,7 +103,7 @@ struct SendStat {
 /// It will first send the normal raft snapshot message and then send the snapshot file.
 fn send_snap(
     env: Arc<Environment>,
-    mgr: SnapManager,
+    mgr: SnapManager<RocksEngine>,
     security_mgr: Arc<SecurityManager>,
     cfg: &Config,
     addr: &str,
@@ -182,7 +182,7 @@ struct RecvSnapContext {
 }
 
 impl RecvSnapContext {
-    fn new(head_chunk: Option<SnapshotChunk>, snap_mgr: &SnapManager) -> Result<Self> {
+    fn new(head_chunk: Option<SnapshotChunk>, snap_mgr: &SnapManager<RocksEngine>) -> Result<Self> {
         // head_chunk is None means the stream is empty.
         let mut head = head_chunk.ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
         if !head.has_message() {
@@ -238,7 +238,7 @@ impl RecvSnapContext {
 fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
-    snap_mgr: SnapManager,
+    snap_mgr: SnapManager<RocksEngine>,
     raft_router: R,
 ) -> impl Future<Item = (), Error = Error> {
     let stream = stream.map_err(Error::from);
@@ -293,7 +293,7 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
 
 pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
     env: Arc<Environment>,
-    snap_mgr: SnapManager,
+    snap_mgr: SnapManager<RocksEngine>,
     pool: CpuPool,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
@@ -305,7 +305,7 @@ pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
 impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
     pub fn new(
         env: Arc<Environment>,
-        snap_mgr: SnapManager,
+        snap_mgr: SnapManager<RocksEngine>,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<Config>,

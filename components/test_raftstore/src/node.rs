@@ -32,7 +32,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
+    snap_paths: HashMap<u64, (SnapManager<RocksEngine>, TempDir)>,
     routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine>>>,
 }
 
