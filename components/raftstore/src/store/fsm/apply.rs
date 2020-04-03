@@ -2893,15 +2893,16 @@ impl Fsm for ControlFsm {
     }
 }
 
-pub struct ApplyPoller<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
-    msg_buf: Vec<Msg<RocksEngine>>,
-    apply_ctx: ApplyContext<RocksEngine, W>,
+pub struct ApplyPoller<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E> {
+    msg_buf: Vec<Msg<E>>,
+    apply_ctx: ApplyContext<E, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm<RocksEngine>, ControlFsm>
-    for ApplyPoller<W>
+impl<E, W> PollHandler<ApplyFsm<E>, ControlFsm>
+    for ApplyPoller<E, W>
+    where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E>
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -2925,7 +2926,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm<RocksEn
         unimplemented!()
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm<RocksEngine>) -> Option<usize> {
+    fn handle_normal(&mut self, normal: &mut ApplyFsm<E>) -> Option<usize> {
         let mut expected_msg_count = None;
         normal.delegate.written = false;
         if normal.delegate.yield_state.is_some() {
@@ -2965,7 +2966,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm<RocksEn
         expected_msg_count
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm<RocksEngine>>]) {
+    fn end(&mut self, fsms: &mut [Box<ApplyFsm<E>>]) {
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {
@@ -3010,11 +3011,11 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> HandlerBuilder<ApplyFsm<RocksEngine>, ControlFsm>
     for Builder<W>
 {
-    type Handler = ApplyPoller<W>;
+    type Handler = ApplyPoller<RocksEngine, W>;
 
-    fn build(&mut self) -> ApplyPoller<W> {
+    fn build(&mut self) -> ApplyPoller<RocksEngine, W> {
         let cfg = self.cfg.value();
-        ApplyPoller::<W> {
+        ApplyPoller::<RocksEngine, W> {
             msg_buf: Vec::with_capacity(cfg.messages_per_tick),
             apply_ctx: ApplyContext::new(
                 self.tag.clone(),
