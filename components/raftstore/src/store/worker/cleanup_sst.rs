@@ -49,6 +49,7 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
 
     /// Deletes SST files from the importer.
     fn handle_delete_sst(&self, ssts: Vec<SstMeta>) {
+        fail_point!("raft_before_delete_sst");
         for sst in &ssts {
             let _ = self.importer.delete(sst);
         }
