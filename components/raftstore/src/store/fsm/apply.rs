@@ -2235,15 +2235,15 @@ impl Registration {
     }
 }
 
-pub struct Proposal {
+pub struct Proposal<E> where E: KvEngine {
     is_conf_change: bool,
     index: u64,
     term: u64,
-    pub cb: Callback<RocksEngine>,
+    pub cb: Callback<E>,
 }
 
-impl Proposal {
-    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<RocksEngine>) -> Proposal {
+impl<E> Proposal<E> where E: KvEngine {
+    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<E>) -> Proposal<E> {
         Proposal {
             is_conf_change,
             index,
@@ -2256,11 +2256,11 @@ impl Proposal {
 pub struct RegionProposal {
     pub id: u64,
     pub region_id: u64,
-    pub props: Vec<Proposal>,
+    pub props: Vec<Proposal<RocksEngine>>,
 }
 
 impl RegionProposal {
-    pub fn new(id: u64, region_id: u64, props: Vec<Proposal>) -> RegionProposal {
+    pub fn new(id: u64, region_id: u64, props: Vec<Proposal<RocksEngine>>) -> RegionProposal {
         RegionProposal {
             id,
             region_id,
