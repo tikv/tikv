@@ -16,9 +16,7 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{
-    KvEngine, MiscExt, Peekable, Snapshot as SnapshotTrait, WriteBatch, WriteBatchVecExt,
-};
+use engine_traits::{KvEngine, MiscExt, Peekable, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -1665,9 +1663,7 @@ impl ApplyDelegate {
             |_| { unreachable!() }
         );
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["batch-split", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let split_reqs = req.get_splits();
         let right_derive = split_reqs.get_right_derive();
@@ -1757,9 +1753,7 @@ impl ApplyDelegate {
         });
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["batch-split", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
 
         Ok((
             resp,
@@ -1774,9 +1768,7 @@ impl ApplyDelegate {
     ) -> Result<(AdminResponse, ApplyResult)> {
         fail_point!("apply_before_prepare_merge");
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["prepare_merge", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
 
         let prepare_merge = req.get_prepare_merge();
         let index = prepare_merge.get_min_index();
@@ -1817,9 +1809,7 @@ impl ApplyDelegate {
             )
         });
         fail_point!("apply_after_prepare_merge");
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["prepare_merge", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
 
         Ok((
             AdminResponse::default(),
@@ -1858,9 +1848,7 @@ impl ApplyDelegate {
             apply_before_commit_merge();
         }
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["commit_merge", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.commit_merge.all.inc();
 
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
@@ -1965,9 +1953,7 @@ impl ApplyDelegate {
                 )
             });
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["commit_merge", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
 
         let resp = AdminResponse::default();
         Ok((
@@ -1984,9 +1970,7 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext<W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["rollback_merge", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
@@ -2012,9 +1996,7 @@ impl ApplyDelegate {
             )
         });
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["rollback_merge", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.rollback_merge.success.inc();
         let resp = AdminResponse::default();
         Ok((
             resp,
@@ -2030,9 +2012,7 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext<W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["compact", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::default();
@@ -2076,9 +2056,7 @@ impl ApplyDelegate {
         // compact failure is safe to be omitted, no need to assert.
         compact_raft_log(&self.tag, apply_state, compact_index, compact_term)?;
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["compact", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.compact.success.inc();
 
         Ok((
             resp,
@@ -3018,7 +2996,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
             coprocessor_host: builder.coprocessor_host.clone(),
             importer: builder.importer.clone(),
             region_scheduler: builder.region_scheduler.clone(),
-            engine: RocksEngine::from_db(builder.engines.kv.clone()),
+            engine: builder.engines.kv.clone(),
             _phantom: PhantomData,
             sender,
             router,

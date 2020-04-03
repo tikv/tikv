@@ -3,9 +3,8 @@
 use std::f64::INFINITY;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
-use engine_traits::{name_to_cf, CF_DEFAULT};
+use engine_traits::{name_to_cf, CompactExt, MiscExt, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -15,7 +14,7 @@ use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::RocksEngine;
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
@@ -233,7 +232,11 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
 
         if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
-            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
+            && self
+                .engine
+                .c()
+                .ingest_maybe_slowdown_writes(CF_DEFAULT)
+                .expect("cf")
         {
             let err = "too many sst files are ingesting";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
@@ -317,7 +320,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 Some(req.get_output_level())
             };
 
-            let res = compact_files_in_range(&engine, start, end, output_level);
+            let res = engine.c().compact_files_in_range(start, end, output_level);
             match res {
                 Ok(_) => info!(
                     "compact files in range";
