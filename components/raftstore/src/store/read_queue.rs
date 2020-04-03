@@ -22,6 +22,8 @@ pub struct ReadIndexRequest {
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksEngine>)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
+    // `true` means it's in `ReadIndexQueue::reads`.
+    in_contexts: bool,
 }
 
 impl ReadIndexRequest {
@@ -49,6 +51,7 @@ impl ReadIndexRequest {
             cmds,
             renew_lease_time,
             read_index: None,
+            in_contexts: false,
         }
     }
 }
@@ -136,8 +139,9 @@ impl ReadIndexQueue {
         self.contexts.clear();
     }
 
-    pub fn push_back(&mut self, read: ReadIndexRequest, is_leader: bool) {
+    pub fn push_back(&mut self, mut read: ReadIndexRequest, is_leader: bool) {
         if !is_leader {
+            read.in_contexts = true;
             let offset = self.handled_cnt + self.reads.len();
             self.contexts.insert(read.id, offset);
         }
@@ -187,6 +191,7 @@ impl ReadIndexQueue {
                     "ReadIndexQueue::reads[{}].uuid: {}, but want: {}",
                     raw_offset, self.reads[offset].id, uuid
                 );
+                self.reads[offset].in_contexts = false;
                 if let Some(occur_index) = self.reads[offset].read_index {
                     if occur_index < index {
                         continue;
@@ -245,13 +250,12 @@ impl ReadIndexQueue {
         }
         self.ready_cnt -= 1;
         self.handled_cnt += 1;
-        let res = self
+        let mut res = self
             .reads
             .pop_front()
             .expect("read_queue is empty but ready_cnt > 0");
-        if !self.contexts.is_empty() {
-            // If the peer is leader, `contexts` must be empty so we don't need to care.
-            // In the another case remove uuid from `contexts`.
+        if res.in_contexts {
+            res.in_contexts = false;
             self.contexts.remove(&res.id);
         }
         Some(res)
