@@ -317,7 +317,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_replicate_mode_update(&mut self) {
         self.fsm
             .peer
-            .switch_commit_group(&self.ctx.replication_mode)
+            .switch_commit_group(&self.ctx.replication_mode);
+        if self.fsm.peer.is_leader() {
+            self.reset_raft_tick(GroupState::Ordered);
+            self.register_pd_heartbeat_tick();
+        }
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<RocksEngine>) {
@@ -816,6 +820,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // to allow it to campaign quickly when abnormal situation is detected.
         if !self.fsm.peer.is_leader() {
             self.register_raft_base_tick();
+        } else {
+            self.register_pd_heartbeat_tick();
         }
     }
 
