@@ -16,10 +16,11 @@ use raftstore::Result as RaftStoreResult;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
 use tikv_util::HandyRwLock;
+use engine_rocks::RocksEngine;
 
 pub struct ServerTransport<T, S>
 where
-    T: RaftStoreRouter + 'static,
+    T: RaftStoreRouter<RocksEngine> + 'static,
     S: StoreAddrResolver + 'static,
 {
     raft_client: Arc<RwLock<RaftClient<T>>>,
@@ -31,7 +32,7 @@ where
 
 impl<T, S> Clone for ServerTransport<T, S>
 where
-    T: RaftStoreRouter + 'static,
+    T: RaftStoreRouter<RocksEngine> + 'static,
     S: StoreAddrResolver + 'static,
 {
     fn clone(&self) -> Self {
@@ -45,7 +46,7 @@ where
     }
 }
 
-impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTransport<T, S> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static> ServerTransport<T, S> {
     pub fn new(
         raft_client: Arc<RwLock<RaftClient<T>>>,
         snap_scheduler: Scheduler<SnapTask>,
@@ -228,7 +229,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
 
 impl<T, S> Transport for ServerTransport<T, S>
 where
-    T: RaftStoreRouter + 'static,
+    T: RaftStoreRouter<RocksEngine> + 'static,
     S: StoreAddrResolver + 'static,
 {
     fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
@@ -242,14 +243,14 @@ where
     }
 }
 
-struct SnapshotReporter<T: RaftStoreRouter + 'static> {
+struct SnapshotReporter<T: RaftStoreRouter<RocksEngine> + 'static> {
     raft_router: T,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
 }
 
-impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
             "send snapshot";

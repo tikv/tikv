@@ -33,7 +33,7 @@ use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter>>,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine>>>,
 }
 
 #[derive(Clone)]
@@ -138,7 +138,7 @@ impl NodeCluster {
 
 impl NodeCluster {
     #[allow(dead_code)]
-    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<ServerRaftStoreRouter> {
+    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine>> {
         self.trans
             .core
             .lock()

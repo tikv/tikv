@@ -44,7 +44,7 @@ pub struct ImportSSTService<Router> {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<Router: RaftStoreRouter> ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
     pub fn new(
         cfg: Config,
         router: Router,
@@ -69,7 +69,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
     }
 }
 
-impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,

@@ -23,6 +23,7 @@ use tikv_util::mpsc::batch::{self, BatchCollector, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
+use engine_rocks::RocksEngine;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
@@ -40,7 +41,7 @@ struct Conn {
 }
 
 impl Conn {
-    fn new<T: RaftStoreRouter + 'static>(
+    fn new<T: RaftStoreRouter<RocksEngine> + 'static>(
         env: Arc<Environment>,
         router: T,
         addr: &str,
@@ -150,7 +151,7 @@ pub struct RaftClient<T: 'static> {
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter> RaftClient<T> {
+impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,

@@ -24,6 +24,7 @@ use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
 use tikv_util::Either;
+use engine_rocks::RocksEngine;
 
 use super::load_statistics::*;
 use super::raft_client::RaftClient;
@@ -44,7 +45,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -67,7 +68,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
@@ -325,7 +326,7 @@ mod tests {
         significant_msg_sender: Sender<SignificantMsg>,
     }
 
-    impl RaftStoreRouter for TestRaftStoreRouter {
+    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())

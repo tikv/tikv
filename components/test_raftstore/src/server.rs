@@ -45,7 +45,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
+type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
