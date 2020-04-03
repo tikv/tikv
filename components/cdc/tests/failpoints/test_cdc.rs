@@ -138,7 +138,7 @@ fn test_merge() {
         .wait()
         .unwrap();
     sleep_ms(200);
-    // Pause before completint commit merge
+    // Pause before completing commit merge
     let fp = "before_handle_catch_up_logs_for_merge";
     fail::cfg(fp, "pause").unwrap();
     // The call is finished when prepare_merge is applied.
