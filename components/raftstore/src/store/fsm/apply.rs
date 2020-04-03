@@ -99,14 +99,21 @@ impl<E> Debug for PendingCmd<E> where E: KvEngine {
 }
 
 /// Commands waiting to be committed and applied.
-#[derive(Default, Debug)]
-pub struct PendingCmdQueue {
-    normals: VecDeque<PendingCmd<RocksEngine>>,
-    conf_change: Option<PendingCmd<RocksEngine>>,
+#[derive(Debug)]
+pub struct PendingCmdQueue<E> where E: KvEngine {
+    normals: VecDeque<PendingCmd<E>>,
+    conf_change: Option<PendingCmd<E>>,
 }
 
-impl PendingCmdQueue {
-    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<RocksEngine>> {
+impl<E> PendingCmdQueue<E> where E: KvEngine {
+    fn new() -> PendingCmdQueue<E> {
+        PendingCmdQueue {
+            normals: VecDeque::new(),
+            conf_change: None,
+        }
+    }
+    
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<E>> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
@@ -121,18 +128,18 @@ impl PendingCmdQueue {
         })
     }
 
-    fn append_normal(&mut self, cmd: PendingCmd<RocksEngine>) {
+    fn append_normal(&mut self, cmd: PendingCmd<E>) {
         self.normals.push_back(cmd);
     }
 
-    fn take_conf_change(&mut self) -> Option<PendingCmd<RocksEngine>> {
+    fn take_conf_change(&mut self) -> Option<PendingCmd<E>> {
         // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
         self.conf_change.take()
     }
 
     // TODO: seems we don't need to separate conf change from normal entries.
-    fn set_conf_change(&mut self, cmd: PendingCmd<RocksEngine>) {
+    fn set_conf_change(&mut self, cmd: PendingCmd<E>) {
         self.conf_change = Some(cmd);
     }
 }
@@ -658,7 +665,7 @@ pub struct ApplyDelegate {
     pending_remove: bool,
 
     /// The commands waiting to be committed and applied
-    pending_cmds: PendingCmdQueue,
+    pending_cmds: PendingCmdQueue<RocksEngine>,
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
@@ -708,7 +715,7 @@ impl ApplyDelegate {
             yield_state: None,
             wait_merge_state: None,
             is_merging: reg.is_merging,
-            pending_cmds: Default::default(),
+            pending_cmds: PendingCmdQueue::new(),
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
