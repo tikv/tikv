@@ -246,7 +246,7 @@ pub struct Peer {
 
     /// Time of the last attempt to wake up inactive leader.
     pub bcast_wake_up_time: Option<UtilInstant>,
-    pub recover_id: u64,
+    pub replication_mode_version: u64,
 }
 
 impl Peer {
@@ -326,7 +326,7 @@ impl Peer {
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
-            recover_id: 0,
+            replication_mode_version: 0,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -340,12 +340,13 @@ impl Peer {
     pub fn init_commit_group(&mut self, mode: &mut ReplicationMode) {
         debug!("init commit group"; "mode" => ?mode, "regioni_id" => self.region_id, "peer_id" => self.peer.id);
         if mode.status.mode == ReplicateStatusMode::Majority {
+            self.replication_mode_version = 0;
             return;
         }
         if self.get_store().region().get_peers().is_empty() {
             return;
         }
-        self.recover_id = mode.status.get_dr_autosync().recover_id;
+        self.replication_mode_version = mode.status.get_dr_autosync().state_id;
         if mode.status.get_dr_autosync().state == DrAutoSyncState::Async {
             return;
         }
@@ -359,9 +360,10 @@ impl Peer {
         debug!("switch commit group"; "mode" => ?mode, "regioni_id" => self.region_id, "peer_id" => self.peer.id);
         let mut guard = mode.lock().unwrap();
         let clear = if guard.status.mode == ReplicateStatusMode::Majority {
+            self.replication_mode_version = 0;
             true
         } else {
-            self.recover_id = guard.status.get_dr_autosync().recover_id;
+            self.replication_mode_version = guard.status.get_dr_autosync().state_id;
             guard.status.get_dr_autosync().state == DrAutoSyncState::Async
         };
         if clear {
@@ -2551,19 +2553,16 @@ impl Peer {
     }
 
     fn region_replicate_status(&mut self) -> Option<RegionReplicateStatus> {
-        if self.recover_id == 0 {
+        if self.replication_mode_version == 0 {
             return None;
         }
         let mut status = RegionReplicateStatus::default();
-        status.recover_id = self.recover_id;
-        if self
-            .raft_group
-            .raft
-            .check_group_commit_consistent()
-            .unwrap_or(false)
-        {
-            status.state = RegionReplicateStatusState::IntegrityOverLabel;
-        }
+        status.state_id = self.replication_mode_version;
+        status.state = match self.raft_group.raft.check_group_commit_consistent() {
+            Some(true) => RegionReplicateStatusState::IntegrityOverLabel,
+            Some(false) => RegionReplicateStatusState::Majority,
+            None => RegionReplicateStatusState::Unknown,
+        };
         Some(status)
     }
 

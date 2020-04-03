@@ -60,7 +60,7 @@ fn test_integrity_over_first_label() {
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
     thread::sleep(Duration::from_millis(100));
     let state = cluster.pd_client.region_replicate_status(region.get_id());
-    assert_eq!(state.recover_id, 1);
+    assert_eq!(state.state_id, 1);
     assert_eq!(state.state, RegionReplicateStatusState::IntegrityOverLabel);
 
     cluster.clear_send_filters();
@@ -84,7 +84,7 @@ fn test_integrity_over_first_label() {
     );
     must_get_none(&cluster.get_engine(1), b"k2");
     let state = cluster.pd_client.region_replicate_status(region.get_id());
-    assert_eq!(state.recover_id, 1);
+    assert_eq!(state.state_id, 1);
     assert_eq!(state.state, RegionReplicateStatusState::IntegrityOverLabel);
 
     cluster
@@ -94,7 +94,7 @@ fn test_integrity_over_first_label() {
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     thread::sleep(Duration::from_millis(100));
     let state = cluster.pd_client.region_replicate_status(region.get_id());
-    assert_eq!(state.recover_id, 2);
+    assert_eq!(state.state_id, 2);
     assert_eq!(state.state, RegionReplicateStatusState::Majority);
 
     cluster
@@ -120,14 +120,14 @@ fn test_integrity_over_first_label() {
     );
     must_get_none(&cluster.get_engine(1), b"k3");
     let state = cluster.pd_client.region_replicate_status(region.get_id());
-    assert_eq!(state.recover_id, 3);
+    assert_eq!(state.state_id, 3);
     assert_eq!(state.state, RegionReplicateStatusState::Majority);
 
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
     thread::sleep(Duration::from_millis(100));
     let state = cluster.pd_client.region_replicate_status(region.get_id());
-    assert_eq!(state.recover_id, 3);
+    assert_eq!(state.state_id, 3);
     assert_eq!(state.state, RegionReplicateStatusState::IntegrityOverLabel);
 }
 

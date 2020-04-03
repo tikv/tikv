@@ -2067,7 +2067,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             }
             let exist_dr = mode.status.get_dr_autosync();
             let dr = status.get_dr_autosync();
-            if exist_dr.recover_id == dr.recover_id && exist_dr.state == dr.state {
+            if exist_dr.state_id == dr.state_id && exist_dr.state == dr.state {
                 return;
             }
         }

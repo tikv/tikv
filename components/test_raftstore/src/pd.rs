@@ -1000,15 +1000,15 @@ impl TestPdClient {
         let mut status = ReplicateStatus::default();
         status.mode = ReplicateStatusMode::DrAutosync;
         status.mut_dr_autosync().label_key = label_key.to_owned();
-        status.mut_dr_autosync().recover_id = 1;
+        status.mut_dr_autosync().state_id = 1;
         self.cluster.wl().replication_status = Some(status);
     }
 
     pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
         let mut cluster = self.cluster.wl();
         let status = cluster.replication_status.as_mut().unwrap();
-        let dr = status.mut_dr_autosync();
-        dr.recover_id += 1;
+        let mut dr = status.mut_dr_autosync();
+        dr.state_id += 1;
         dr.state = state;
     }
 
