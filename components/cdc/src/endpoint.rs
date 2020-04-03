@@ -439,7 +439,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
         }
         if min_ts_region_id > 0 {
             CDC_MIN_RESOLVED_TS_REGION.set(min_ts_region_id as i64);
-            CDC_MIN_RESOLVED_TS.set((min_resolved_ts.physical() / 1000) as i64);
+            CDC_MIN_RESOLVED_TS.set(min_resolved_ts.physical() as f64 / 1000f64);
         }
         self.register_min_ts_event();
     }

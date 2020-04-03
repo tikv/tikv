@@ -21,7 +21,7 @@ lazy_static! {
         "The region which has minimal resolved ts"
     )
     .unwrap();
-    pub static ref CDC_MIN_RESOLVED_TS: IntGauge = register_int_gauge!(
+    pub static ref CDC_MIN_RESOLVED_TS: Gauge = register_gauge!(
         "tikv_cdc_min_resolved_ts",
         "The minimal resolved ts for current regions"
     )
