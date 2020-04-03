@@ -62,6 +62,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for DecrypterReader<R> {
 struct CrypterReader<R> {
     reader: R,
     crypter: OCrypter,
+    block_size: usize,
 }
 
 impl<R> CrypterReader<R> {
@@ -79,9 +80,17 @@ impl<R> CrypterReader<R> {
                     .into(),
             )),
             Cipher::AesCtr(cipher) => {
+                let block_size = cipher.block_size();
                 let iv = iv.unwrap_or_else(|| Iv::new());
                 let crypter = OCrypter::new(cipher, mode, &config.key, Some(iv.as_slice()))?;
-                Ok((CrypterReader { reader, crypter }, iv))
+                Ok((
+                    CrypterReader {
+                        reader,
+                        crypter,
+                        block_size,
+                    },
+                    iv,
+                ))
             }
         }
     }
@@ -89,13 +98,12 @@ impl<R> CrypterReader<R> {
     // For simplicity, the following implementation rely on the fact that OpenSSL always
     // return exact same size as input in CTR mode. If it is not true in the future, or we
     // want to support other counter modes, this code needs to be updated.
-    fn do_crypter(
-        &mut self,
-        read_buf: &[u8],
-        buf: &mut [u8],
-        read_count: usize,
-    ) -> IoResult<usize> {
-        let crypter_count = self.crypter.update(&read_buf[..read_count], buf)?;
+    fn do_crypter(&mut self, buf: &mut [u8], read_count: usize) -> IoResult<usize> {
+        // OCrypter require the output buffer to have block_size extra bytes, or it will panic.
+        let mut crypter_buffer = vec![0; read_count + self.block_size];
+        let crypter_count = self
+            .crypter
+            .update(&buf[..read_count], &mut crypter_buffer)?;
         if read_count != crypter_count {
             return Err(IoError::new(
                 ErrorKind::Other,
@@ -105,30 +113,29 @@ impl<R> CrypterReader<R> {
                 ),
             ));
         }
-        Ok(crypter_count)
+        buf[..read_count].copy_from_slice(&crypter_buffer[..read_count]);
+        Ok(read_count)
     }
 }
 
 impl<R: Read> Read for CrypterReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
-        let mut read_buf = vec![0; buf.len()];
-        let read_count = self.reader.read(&mut read_buf)?;
+        let read_count = self.reader.read(buf)?;
         if read_count == 0 {
             return Ok(0);
         }
-        self.do_crypter(&read_buf, buf, read_count)
+        self.do_crypter(buf, read_count)
     }
 }
 
 impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
         let inner = Pin::into_inner(self);
-        let mut read_buf = vec![0; buf.len()];
-        let poll = Pin::new(&mut inner.reader).poll_read(cx, &mut read_buf);
+        let poll = Pin::new(&mut inner.reader).poll_read(cx, buf);
         let read_count = match poll {
             Poll::Ready(Ok(read_count)) if read_count > 0 => read_count,
             _ => return poll,
         };
-        Poll::Ready(inner.do_crypter(&read_buf, buf, read_count))
+        Poll::Ready(inner.do_crypter(buf, read_count))
     }
 }
