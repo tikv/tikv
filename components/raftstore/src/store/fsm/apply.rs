@@ -16,7 +16,7 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, MiscExt, Peekable, Snapshot, WriteBatch, WriteBatchVecExt};
+use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -282,17 +282,17 @@ impl<E> Notifier<E> where E: KvEngine {
     }
 }
 
-struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
+struct ApplyContext<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E> {
     tag: String,
     timer: Option<Instant>,
     host: CoprocessorHost,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
-    notifier: Notifier<RocksEngine>,
-    engine: RocksEngine,
-    cbs: MustConsumeVec<ApplyCallback<RocksEngine>>,
-    apply_res: Vec<ApplyRes<RocksEngine>>,
+    notifier: Notifier<E>,
+    engine: E,
+    cbs: MustConsumeVec<ApplyCallback<E>>,
+    apply_res: Vec<ApplyRes<E>>,
     exec_ctx: Option<ExecContext>,
 
     kv_wb: Option<W>,
@@ -310,18 +310,18 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     use_delete_range: bool,
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
+impl<E, W> ApplyContext<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E> {
     pub fn new(
         tag: String,
         host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
-        engine: RocksEngine,
+        engine: E,
         router: ApplyRouter,
-        notifier: Notifier<RocksEngine>,
+        notifier: Notifier<E>,
         cfg: &Config,
-    ) -> ApplyContext<W> {
-        ApplyContext::<W> {
+    ) -> ApplyContext<E, W> {
+        ApplyContext::<E, W> {
             tag,
             timer: None,
             host,
@@ -349,7 +349,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
-    pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate) {
+    pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<E>) {
         self.prepare_write_batch();
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
@@ -383,7 +383,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
     /// write the changes into rocksdb.
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
-    pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
+    pub fn commit(&mut self, delegate: &mut ApplyDelegate<E>) {
         if self.last_applied_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
@@ -392,7 +392,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
         self.commit_opt(delegate, true);
     }
 
-    fn commit_opt(&mut self, delegate: &mut ApplyDelegate, persistent: bool) {
+    fn commit_opt(&mut self, delegate: &mut ApplyDelegate<E>, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
             self.write_to_db();
@@ -435,7 +435,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
     }
 
     /// Finishes `Apply`s for the delegate.
-    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult<RocksEngine>>) {
+    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate<E>, results: VecDeque<ExecResult<E>>) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
@@ -647,7 +647,7 @@ impl Debug for WaitSourceMergeState {
 /// located at this store, and it will get the corresponding apply delegate to
 /// handle the apply task to make the code logic more clear.
 #[derive(Debug)]
-pub struct ApplyDelegate {
+pub struct ApplyDelegate<E> where E: KvEngine {
     /// The ID of the peer.
     id: u64,
     /// The term of the Region.
@@ -666,7 +666,7 @@ pub struct ApplyDelegate {
     pending_remove: bool,
 
     /// The commands waiting to be committed and applied
-    pending_cmds: PendingCmdQueue<RocksEngine>,
+    pending_cmds: PendingCmdQueue<E>,
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
@@ -699,8 +699,8 @@ pub struct ApplyDelegate {
     metrics: ApplyMetrics,
 }
 
-impl ApplyDelegate {
-    fn from_registration(reg: Registration) -> ApplyDelegate {
+impl<E> ApplyDelegate<E> where E: KvEngine {
+    fn from_registration(reg: Registration) -> ApplyDelegate<E> {
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -733,9 +733,9 @@ impl ApplyDelegate {
     }
 
     /// Handles all the committed_entries, namely, applies the committed entries.
-    fn handle_raft_committed_entries<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_raft_committed_entries<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<W>,
+        apply_ctx: &mut ApplyContext<E, W>,
         mut committed_entries: Vec<Entry>,
     ) {
         if committed_entries.is_empty() {
@@ -810,15 +810,15 @@ impl ApplyDelegate {
         }
     }
 
-    fn update_metrics<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn update_metrics<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &ApplyContext<W>,
+        apply_ctx: &ApplyContext<E, W>,
     ) {
         self.metrics.written_bytes += apply_ctx.delta_bytes();
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(&self, wb: &mut W) {
+    fn write_apply_state<W: WriteBatch + WriteBatchVecExt<E>>(&self, wb: &mut W) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -832,11 +832,11 @@ impl ApplyDelegate {
         });
     }
 
-    fn handle_raft_entry_normal<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_raft_entry_normal<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<W>,
+        apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
-    ) -> ApplyResult<RocksEngine> {
+    ) -> ApplyResult<E> {
         fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
             ApplyResult::Yield
         });
@@ -878,11 +878,11 @@ impl ApplyDelegate {
         ApplyResult::None
     }
 
-    fn handle_raft_entry_conf_change<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn handle_raft_entry_conf_change<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<W>,
+        apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
-    ) -> ApplyResult<RocksEngine> {
+    ) -> ApplyResult<E> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
@@ -917,7 +917,7 @@ impl ApplyDelegate {
         index: u64,
         term: u64,
         is_conf_change: bool,
-    ) -> Option<Callback<RocksEngine>> {
+    ) -> Option<Callback<E>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -948,13 +948,13 @@ impl ApplyDelegate {
         None
     }
 
-    fn process_raft_cmd<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn process_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<W>,
+        apply_ctx: &mut ApplyContext<E, W>,
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
-    ) -> ApplyResult<RocksEngine> {
+    ) -> ApplyResult<E> {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -1001,13 +1001,13 @@ impl ApplyDelegate {
     ///   2. it encounters an error that may not occur on all stores, in this case
     /// we should try to apply the entry again or panic. Considering that this
     /// usually due to disk operation fail, which is rare, so just panic is ok.
-    fn apply_raft_cmd<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn apply_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyResult<RocksEngine>) {
+    ) -> (RaftCmdResponse, ApplyResult<E>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1081,9 +1081,9 @@ impl ApplyDelegate {
         (resp, exec_result)
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn destroy<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<W>,
+        apply_ctx: &mut ApplyContext<E, W>,
     ) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
@@ -1110,13 +1110,13 @@ impl ApplyDelegate {
     }
 }
 
-impl ApplyDelegate {
+impl<E> ApplyDelegate<E> where E: KvEngine {
     // Only errors that will also occur on all other stores should be returned.
-    fn exec_raft_cmd<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
@@ -1128,11 +1128,11 @@ impl ApplyDelegate {
         }
     }
 
-    fn exec_admin_cmd<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_admin_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
@@ -1171,11 +1171,11 @@ impl ApplyDelegate {
         Ok((resp, exec_result))
     }
 
-    fn exec_write_cmd<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_write_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
         fail_point!(
             "on_apply_write_cmd",
             cfg!(release) || self.id() == 3,
@@ -1244,7 +1244,7 @@ impl ApplyDelegate {
 }
 
 // Write commands related.
-impl ApplyDelegate {
+impl<E> ApplyDelegate<E> where E: KvEngine {
     fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
@@ -1330,7 +1330,7 @@ impl ApplyDelegate {
 
     fn handle_delete_range(
         &mut self,
-        engine: &RocksEngine,
+        engine: &E,
         req: &Request,
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
@@ -1402,7 +1402,7 @@ impl ApplyDelegate {
     fn handle_ingest_sst(
         &mut self,
         importer: &Arc<SSTImporter>,
-        engine: &RocksEngine,
+        engine: &E,
         req: &Request,
         ssts: &mut Vec<SstMeta>,
     ) -> Result<Response> {
@@ -1434,12 +1434,12 @@ impl ApplyDelegate {
 }
 
 // Admin commands related.
-impl ApplyDelegate {
-    fn exec_change_peer<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+impl<E> ApplyDelegate<E> where E: KvEngine {
+    fn exec_change_peer<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1634,11 +1634,11 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_split<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_split<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E>)> {
         info!(
             "split is deprecated, redirect to use batch split";
             "region_id" => self.region_id(),
@@ -1656,11 +1656,11 @@ impl ApplyDelegate {
         self.exec_batch_split(ctx, &admin_req)
     }
 
-    fn exec_batch_split<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_batch_split<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E>)> {
         fail_point!(
             "apply_before_split_1_3",
             { self.id == 3 && self.region_id() == 1 },
@@ -1765,11 +1765,11 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_prepare_merge<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_prepare_merge<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E>)> {
         fail_point!("apply_before_prepare_merge");
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
@@ -1836,11 +1836,11 @@ impl ApplyDelegate {
     // 7.   resume `exec_commit_merge` in target apply fsm
     // 8.   `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source peer fsm
     // 9.   `on_merge_result` in source peer fsm (destroy itself)
-    fn exec_commit_merge<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_commit_merge<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E>)> {
         {
             let apply_before_commit_merge = || {
                 fail_point!(
@@ -1969,11 +1969,11 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_rollback_merge<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_rollback_merge<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E>)> {
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
@@ -2011,11 +2011,11 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_compact_log<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_compact_log<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
@@ -2071,11 +2071,11 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_compute_hash<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_compute_hash<W: WriteBatch + WriteBatchVecExt<E>>(
         &self,
-        ctx: &ApplyContext<W>,
+        ctx: &ApplyContext<E, W>,
         _: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E>)> {
         let resp = AdminResponse::default();
         Ok((
             resp,
@@ -2092,11 +2092,11 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_verify_hash<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
+    fn exec_verify_hash<W: WriteBatch + WriteBatchVecExt<E>>(
         &self,
-        _: &ApplyContext<W>,
+        _: &ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<RocksEngine>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E>)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
@@ -2372,7 +2372,7 @@ pub enum Msg {
         cb: Callback<RocksEngine>,
     },
     #[cfg(any(test, feature = "testexport"))]
-    Validate(u64, Box<dyn FnOnce((&ApplyDelegate, bool)) + Send>),
+    Validate(u64, Box<dyn FnOnce((&ApplyDelegate<RocksEngine>, bool)) + Send>),
 }
 
 impl Msg {
@@ -2456,7 +2456,7 @@ pub enum TaskRes<E> where E: KvEngine {
 }
 
 pub struct ApplyFsm {
-    delegate: ApplyDelegate,
+    delegate: ApplyDelegate<RocksEngine>,
     receiver: Receiver<Msg>,
     mailbox: Option<BasicMailbox<ApplyFsm>>,
 }
@@ -2497,7 +2497,7 @@ impl ApplyFsm {
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
     fn handle_apply<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<W>,
+        apply_ctx: &mut ApplyContext<RocksEngine, W>,
         apply: Apply,
     ) {
         if apply_ctx.timer.is_none() {
@@ -2575,7 +2575,7 @@ impl ApplyFsm {
 
     fn destroy<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<RocksEngine, W>,
     ) {
         let region_id = self.delegate.region_id();
         if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
@@ -2598,7 +2598,7 @@ impl ApplyFsm {
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
     fn handle_destroy<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<RocksEngine, W>,
         d: Destroy,
     ) {
         assert_eq!(d.region_id, self.delegate.region_id());
@@ -2620,7 +2620,7 @@ impl ApplyFsm {
 
     fn resume_pending<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<RocksEngine, W>,
     ) -> bool {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
@@ -2661,7 +2661,7 @@ impl ApplyFsm {
 
     fn logs_up_to_date_for_merge<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
-        ctx: &mut ApplyContext<W>,
+        ctx: &mut ApplyContext<RocksEngine, W>,
         catch_up_logs: CatchUpLogs,
     ) {
         fail_point!("after_handle_catch_up_logs_for_merge");
@@ -2698,7 +2698,7 @@ impl ApplyFsm {
     #[allow(unused_mut)]
     fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<W>,
+        apply_ctx: &mut ApplyContext<RocksEngine, W>,
         snap_task: GenSnapTask,
     ) {
         if self.delegate.pending_remove || self.delegate.stopped {
@@ -2755,7 +2755,7 @@ impl ApplyFsm {
 
     fn handle_change<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<W>,
+        apply_ctx: &mut ApplyContext<RocksEngine, W>,
         cmd: ChangeCmd,
         cb: Callback<RocksEngine>,
     ) {
@@ -2813,7 +2813,7 @@ impl ApplyFsm {
 
     fn handle_tasks<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<W>,
+        apply_ctx: &mut ApplyContext<RocksEngine, W>,
         msgs: &mut Vec<Msg>,
     ) {
         let mut channel_timer = None;
@@ -2895,7 +2895,7 @@ impl Fsm for ControlFsm {
 
 pub struct ApplyPoller<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     msg_buf: Vec<Msg>,
-    apply_ctx: ApplyContext<W>,
+    apply_ctx: ApplyContext<RocksEngine, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
@@ -3259,14 +3259,14 @@ mod tests {
 
     fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
     where
-        F: FnOnce(&ApplyDelegate) + Send + 'static,
+        F: FnOnce(&ApplyDelegate<RocksEngine>) + Send + 'static,
     {
         let (validate_tx, validate_rx) = mpsc::channel();
         router.schedule_task(
             region_id,
             Msg::Validate(
                 region_id,
-                Box::new(move |(delegate, _): (&ApplyDelegate, _)| {
+                Box::new(move |(delegate, _): (&ApplyDelegate<RocksEngine>, _)| {
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),
