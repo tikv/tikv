@@ -11,7 +11,7 @@ use std::u64;
 
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt};
+use engine_traits::{KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, KvEngine};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -46,12 +46,12 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
 /// Region related task
 #[derive(Debug)]
-pub enum Task {
+pub enum Task<E> where E: KvEngine {
     Gen {
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: RocksSnapshot,
+        kv_snap: E::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
@@ -68,8 +68,8 @@ pub enum Task {
     },
 }
 
-impl Task {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
+impl<E> Task<E> where E: KvEngine {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task<E> {
         Task::Destroy {
             region_id,
             start_key,
@@ -78,7 +78,7 @@ impl Task {
     }
 }
 
-impl Display for Task {
+impl<E> Display for Task<E> where E: KvEngine {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
@@ -538,7 +538,7 @@ pub struct Runner<R> {
     ctx: SnapContext<R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task>,
+    pending_applies: VecDeque<Task<RocksEngine>>,
 }
 
 impl<R: CasualRouter<RocksEngine>> Runner<R> {
@@ -599,11 +599,11 @@ impl<R: CasualRouter<RocksEngine>> Runner<R> {
     }
 }
 
-impl<R> Runnable<Task> for Runner<R>
+impl<R> Runnable<Task<RocksEngine>> for Runner<R>
 where
     R: CasualRouter<RocksEngine> + Send + Clone + 'static,
 {
-    fn run(&mut self, task: Task) {
+    fn run(&mut self, task: Task<RocksEngine>) {
         match task {
             Task::Gen {
                 region_id,
@@ -667,7 +667,7 @@ pub enum Event {
     CheckApply,
 }
 
-impl<R> RunnableWithTimer<Task, Event> for Runner<R>
+impl<R> RunnableWithTimer<Task<RocksEngine>, Event> for Runner<R>
 where
     R: CasualRouter<RocksEngine> + Send + Clone + 'static,
 {

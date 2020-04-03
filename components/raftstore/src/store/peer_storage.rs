@@ -517,7 +517,7 @@ pub struct PeerStorage {
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_sched: Scheduler<RegionTask>,
+    region_sched: Scheduler<RegionTask<RocksEngine>>,
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
@@ -561,7 +561,7 @@ impl PeerStorage {
     pub fn new(
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
-        region_sched: Scheduler<RegionTask>,
+        region_sched: Scheduler<RegionTask<RocksEngine>>,
         peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage> {
@@ -1582,7 +1582,7 @@ mod tests {
 
     use super::*;
 
-    fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
+    fn new_storage(sched: Scheduler<RegionTask<RocksEngine>>, path: &TempDir) -> PeerStorage {
         let kv_db =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));
@@ -1632,7 +1632,7 @@ mod tests {
     }
 
     fn new_storage_from_ents(
-        sched: Scheduler<RegionTask>,
+        sched: Scheduler<RegionTask<RocksEngine>>,
         path: &TempDir,
         ents: &[Entry],
     ) -> PeerStorage {
@@ -1879,7 +1879,7 @@ mod tests {
     fn generate_and_schedule_snapshot(
         gen_task: GenSnapTask,
         engines: &KvEngines<RocksEngine, RocksEngine>,
-        sched: &Scheduler<RegionTask>,
+        sched: &Scheduler<RegionTask<RocksEngine>>,
     ) -> Result<()> {
         let apply_state: RaftApplyState = engines
             .kv

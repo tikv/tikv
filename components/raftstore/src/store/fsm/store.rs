@@ -206,7 +206,7 @@ pub struct PollContext<T, C: 'static> {
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask>,
+    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
     pub apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
@@ -729,7 +729,7 @@ pub struct RaftPollerBuilder<T, C> {
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask>,
+    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
     apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
@@ -973,7 +973,7 @@ struct Workers {
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
-    region_worker: Worker<RegionTask>,
+    region_worker: Worker<RegionTask<RocksEngine>>,
     coprocessor_host: CoprocessorHost,
     future_poller: ThreadPool,
 }
