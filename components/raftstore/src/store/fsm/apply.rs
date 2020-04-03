@@ -170,7 +170,7 @@ impl Range {
 }
 
 #[derive(Debug)]
-pub enum ExecResult<E, S> where S: Snapshot<E>, E: KvEngine {
+pub enum ExecResult<E> where E: KvEngine {
     ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
@@ -195,7 +195,7 @@ pub enum ExecResult<E, S> where S: Snapshot<E>, E: KvEngine {
     ComputeHash {
         region: Region,
         index: u64,
-        snap: S,
+        snap: E::Snapshot,
         _phantom: PhantomData<E>,
     },
     VerifyHash {
@@ -215,7 +215,7 @@ pub enum ApplyResult<E> where E: KvEngine {
     None,
     Yield,
     /// Additional result that needs to be sent back to raftstore.
-    Res(ExecResult<E, E::Snapshot>),
+    Res(ExecResult<E>),
     /// It is unable to apply the `CommitMerge` until the source peer
     /// has applied to the required position and sets the atomic boolean
     /// to true.
@@ -435,7 +435,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
     }
 
     /// Finishes `Apply`s for the delegate.
-    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult<RocksEngine, RocksSnapshot>>) {
+    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult<RocksEngine>>) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
@@ -2440,7 +2440,7 @@ pub struct ApplyRes<E> where E: KvEngine {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult<E, E::Snapshot>>,
+    pub exec_res: VecDeque<ExecResult<E>>,
     pub metrics: ApplyMetrics,
 }
 

@@ -2149,7 +2149,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         assert_eq!(prev, Some(prev_region));
     }
 
-    fn on_ready_result(&mut self, exec_results: &mut VecDeque<ExecResult<RocksEngine, RocksSnapshot>>, metrics: &ApplyMetrics) {
+    fn on_ready_result(&mut self, exec_results: &mut VecDeque<ExecResult<RocksEngine>>, metrics: &ApplyMetrics) {
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
