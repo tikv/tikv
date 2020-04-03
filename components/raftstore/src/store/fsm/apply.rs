@@ -58,14 +58,14 @@ const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
-pub struct PendingCmd {
+pub struct PendingCmd<E> where E: KvEngine {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback<RocksEngine>>,
+    pub cb: Option<Callback<E>>,
 }
 
-impl PendingCmd {
-    fn new(index: u64, term: u64, cb: Callback<RocksEngine>) -> PendingCmd {
+impl<E> PendingCmd<E> where E: KvEngine {
+    fn new(index: u64, term: u64, cb: Callback<E>) -> PendingCmd<E> {
         PendingCmd {
             index,
             term,
@@ -74,7 +74,7 @@ impl PendingCmd {
     }
 }
 
-impl Drop for PendingCmd {
+impl<E> Drop for PendingCmd<E> where E: KvEngine {
     fn drop(&mut self) {
         if self.cb.is_some() {
             safe_panic!(
@@ -86,7 +86,7 @@ impl Drop for PendingCmd {
     }
 }
 
-impl Debug for PendingCmd {
+impl<E> Debug for PendingCmd<E> where E: KvEngine {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -101,12 +101,12 @@ impl Debug for PendingCmd {
 /// Commands waiting to be committed and applied.
 #[derive(Default, Debug)]
 pub struct PendingCmdQueue {
-    normals: VecDeque<PendingCmd>,
-    conf_change: Option<PendingCmd>,
+    normals: VecDeque<PendingCmd<RocksEngine>>,
+    conf_change: Option<PendingCmd<RocksEngine>>,
 }
 
 impl PendingCmdQueue {
-    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<RocksEngine>> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
@@ -121,18 +121,18 @@ impl PendingCmdQueue {
         })
     }
 
-    fn append_normal(&mut self, cmd: PendingCmd) {
+    fn append_normal(&mut self, cmd: PendingCmd<RocksEngine>) {
         self.normals.push_back(cmd);
     }
 
-    fn take_conf_change(&mut self) -> Option<PendingCmd> {
+    fn take_conf_change(&mut self) -> Option<PendingCmd<RocksEngine>> {
         // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
         self.conf_change.take()
     }
 
     // TODO: seems we don't need to separate conf change from normal entries.
-    fn set_conf_change(&mut self, cmd: PendingCmd) {
+    fn set_conf_change(&mut self, cmd: PendingCmd<RocksEngine>) {
         self.conf_change = Some(cmd);
     }
 }
@@ -503,7 +503,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
 }
 
 /// Calls the callback of `cmd` when the Region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl KvEngine>) {
     debug!(
         "region is removed, notify commands";
         "region_id" => region_id,
@@ -514,14 +514,14 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback<RocksEngine>) {
+pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl KvEngine>) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
     cb.invoke_with_response(resp);
 }
 
 /// Calls the callback of `cmd` when it can not be processed further.
-fn notify_stale_command(region_id: u64, peer_id: u64, term: u64, mut cmd: PendingCmd) {
+fn notify_stale_command(region_id: u64, peer_id: u64, term: u64, mut cmd: PendingCmd<impl KvEngine>) {
     info!(
         "command is stale, skip";
         "region_id" => region_id,
@@ -532,7 +532,7 @@ fn notify_stale_command(region_id: u64, peer_id: u64, term: u64, mut cmd: Pendin
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback<RocksEngine>) {
+pub fn notify_stale_req(term: u64, cb: Callback<impl KvEngine>) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -4399,7 +4399,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksEngine>::new(1, 1, Callback::None);
         });
         res.unwrap_err();
     }
@@ -4407,7 +4407,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksEngine>::new(1, 1, Callback::None);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });
