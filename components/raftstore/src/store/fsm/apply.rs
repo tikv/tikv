@@ -263,14 +263,14 @@ impl<E> ApplyCallback<E> where E: KvEngine {
 }
 
 #[derive(Clone)]
-pub enum Notifier {
-    Router(RaftRouter<RocksEngine>),
+pub enum Notifier<E> where E: KvEngine {
+    Router(RaftRouter<E>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<RocksEngine>>),
+    Sender(Sender<PeerMsg<E>>),
 }
 
-impl Notifier {
-    fn notify(&self, region_id: u64, msg: PeerMsg<RocksEngine>) {
+impl<E> Notifier<E> where E: KvEngine {
+    fn notify(&self, region_id: u64, msg: PeerMsg<E>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -288,7 +288,7 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
-    notifier: Notifier,
+    notifier: Notifier<RocksEngine>,
     engine: RocksEngine,
     cbs: MustConsumeVec<ApplyCallback<RocksEngine>>,
     apply_res: Vec<ApplyRes>,
@@ -317,7 +317,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
         region_scheduler: Scheduler<RegionTask>,
         engine: RocksEngine,
         router: ApplyRouter,
-        notifier: Notifier,
+        notifier: Notifier<RocksEngine>,
         cfg: &Config,
     ) -> ApplyContext<W> {
         ApplyContext::<W> {
@@ -2980,7 +2980,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     engine: RocksEngine,
-    sender: Notifier,
+    sender: Notifier<RocksEngine>,
     router: ApplyRouter,
     _phantom: PhantomData<W>,
 }
@@ -2988,7 +2988,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<T, C>,
-        sender: Notifier,
+        sender: Notifier<RocksEngine>,
         router: ApplyRouter,
     ) -> Builder<W> {
         Builder::<W> {
