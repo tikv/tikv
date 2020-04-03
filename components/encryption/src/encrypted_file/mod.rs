@@ -110,17 +110,17 @@ mod tests {
         let file = EncryptedFile::new(tmp.path(), "encrypted");
         assert_eq!(file.base, tmp.path());
         assert_eq!(file.name, "encrypted");
-        let ret = file.read(&PlaintextBackend::default());
+        let ret = file.read(&PlainTextBackend::default());
         assert_matches!(ret, Err(Error::Io(_)));
-        if let Err(Error::Io(e)) = file.read(&PlaintextBackend::default()) {
+        if let Err(Error::Io(e)) = file.read(&PlainTextBackend::default()) {
             assert_eq!(ErrorKind::NotFound, e.kind());
         }
 
         let content = b"test content";
-        file.write(content, &PlaintextBackend::default()).unwrap();
+        file.write(content, &PlainTextBackend::default()).unwrap();
         drop(file);
 
         let file = EncryptedFile::new(tmp.path(), "encrypted");
-        assert_eq!(file.read(&PlaintextBackend::default()).unwrap(), content);
+        assert_eq!(file.read(&PlainTextBackend::default()).unwrap(), content);
     }
 }

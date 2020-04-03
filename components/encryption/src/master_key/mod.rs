@@ -26,9 +26,9 @@ pub use self::file::FileBackend;
 // TODO support KMS
 
 #[derive(Default)]
-pub(crate) struct PlaintextBackend {}
+pub(crate) struct PlainTextBackend {}
 
-impl Backend for PlaintextBackend {
+impl Backend for PlainTextBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
         let mut content = EncryptedContent::default();
         content.set_content(plaintext.to_owned());
@@ -45,7 +45,7 @@ impl Backend for PlaintextBackend {
 
 pub(crate) fn create_backend(config: &MasterKeyConfig) -> Result<Arc<dyn Backend>> {
     Ok(match config {
-        MasterKeyConfig::Plaintext => Arc::new(PlaintextBackend {}) as _,
+        MasterKeyConfig::Plaintext => Arc::new(PlainTextBackend {}) as _,
         MasterKeyConfig::File { method, path } => Arc::new(FileBackend::new(*method, path)?) as _,
         #[cfg(test)]
         MasterKeyConfig::Mock(mock) => mock.clone() as _,
@@ -78,7 +78,7 @@ pub mod tests {
     impl Default for MockBackend {
         fn default() -> MockBackend {
             MockBackend {
-                inner: Box::new(PlaintextBackend {}),
+                inner: Box::new(PlainTextBackend {}),
                 is_wrong_master_key: false,
                 encrypt_fail: false,
                 encrypt_called: 0,
