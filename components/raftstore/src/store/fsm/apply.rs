@@ -2359,6 +2359,7 @@ pub enum Msg {
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     Change {
+        term: u64,
         cmd: ChangeCmd,
         cb: Callback<RocksEngine>,
     },
@@ -2746,11 +2747,19 @@ impl ApplyFsm {
 
     fn handle_change<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
+        term: u64,
         apply_ctx: &mut ApplyContext<W>,
         cmd: ChangeCmd,
         cb: Callback<RocksEngine>,
     ) {
-        let (region_id, region_epoch, enabled) = match cmd {
+        if term != self.delegate.applied_index_term {
+            cb.invoke_with_response(cmd_resp::new_error(Error::NotLeader(
+                self.delegate.region_id(),
+                None,
+            )));
+            return;
+        }
+        let (observe_id, region_id, region_epoch, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
                 region_id,
                 region_epoch,
@@ -2827,7 +2836,7 @@ impl ApplyFsm {
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
-                Some(Msg::Change { cmd, cb }) => self.handle_change(apply_ctx, cmd, cb),
+                Some(Msg::Change { term, cmd, cb }) => self.handle_change(term, apply_ctx, cmd, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
                 None => break,
@@ -3084,10 +3093,12 @@ impl ApplyRouter {
                 Msg::Change {
                     cmd: ChangeCmd::RegisterObserver { region_id, .. },
                     cb,
+                    ..
                 }
                 | Msg::Change {
                     cmd: ChangeCmd::Snapshot { region_id, .. },
                     cb,
+                    ..
                 } => {
                     warn!("target region is not found";
                             "region_id" => region_id);
@@ -3998,6 +4009,7 @@ mod tests {
         router.schedule_task(
             1,
             Msg::Change {
+                term: 1,
                 cmd: ChangeCmd::RegisterObserver {
                     region_id: 1,
                     region_epoch: region_epoch.clone(),
@@ -4059,6 +4071,7 @@ mod tests {
         router.schedule_task(
             2,
             Msg::Change {
+                term: 1,
                 cmd: ChangeCmd::RegisterObserver {
                     region_id: 2,
                     region_epoch,
@@ -4222,6 +4235,7 @@ mod tests {
         router.schedule_task(
             1,
             Msg::Change {
+                term: 1,
                 cmd: ChangeCmd::RegisterObserver {
                     region_id: 1,
                     region_epoch: region_epoch.clone(),
@@ -4375,6 +4389,7 @@ mod tests {
         router.schedule_task(
             1,
             Msg::Change {
+                term: 1,
                 cmd: ChangeCmd::RegisterObserver {
                     region_id: 1,
                     region_epoch,

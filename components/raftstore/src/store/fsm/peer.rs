@@ -509,9 +509,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             )));
             return;
         }
-        self.ctx
-            .apply_router
-            .schedule_task(self.region_id(), ApplyTask::Change { cmd, cb })
+        self.ctx.apply_router.schedule_task(
+            self.region_id(),
+            ApplyTask::Change {
+                term: self.fsm.peer.term(),
+                cmd,
+                cb,
+            },
+        )
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
