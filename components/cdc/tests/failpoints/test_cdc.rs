@@ -178,10 +178,7 @@ fn test_merge() {
     let source = suite.cluster.get_region(b"k0");
     req.region_id = source.get_id();
     req.set_region_epoch(source.get_region_epoch().clone());
-    let _source_tx = source_tx
-        .send((req.clone(), WriteFlags::default()))
-        .wait()
-        .unwrap();
+    let _source_tx = source_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Continue to commit merge
     fail::remove(fp);
     let mut events = source_event(false);
