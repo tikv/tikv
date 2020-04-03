@@ -248,9 +248,11 @@ impl ReadIndexQueue {
             .reads
             .pop_front()
             .expect("read_queue is empty but ready_cnt > 0");
-        // If it's a follower it's necessary, otherwise the field
-        // must have been cleared, so it's also ok.
-        self.contexts.remove(&res.id);
+        if !self.contexts.is_empty() {
+            // If the peer is leader, `contexts` must be empty so we don't need to care.
+            // In the another case remove uuid from `contexts`.
+            self.contexts.remove(&res.id);
+        }
         Some(res)
     }
 
