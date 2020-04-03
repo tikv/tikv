@@ -262,8 +262,12 @@ where
     fn load_all_stores(&mut self, status: Option<ReplicateStatus>) {
         let status = match status {
             Some(s) => s,
-            None => return,
+            None => {
+                info!("no status is returned, using majority mode");
+                return;
+            }
         };
+        info!("initializing replication mode"; "status" => ?status);
         let stores = match self.pd_client.get_all_stores(false) {
             Ok(stores) => stores,
             Err(e) => panic!("failed to load all stores: {:?}", e),

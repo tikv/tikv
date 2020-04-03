@@ -2071,6 +2071,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 return;
             }
         }
+        info!("updating replication mode"; "status" => ?status);
         mode.status = status;
         drop(mode);
         self.ctx.router.report_status_update()
