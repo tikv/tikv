@@ -802,7 +802,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_apply_res(&mut self, res: ApplyTaskRes) {
+    fn on_apply_res(&mut self, res: ApplyTaskRes<RocksEngine>) {
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {

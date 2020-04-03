@@ -2445,8 +2445,8 @@ pub struct ApplyRes<E> where E: KvEngine {
 }
 
 #[derive(Debug)]
-pub enum TaskRes {
-    Apply(ApplyRes<RocksEngine>),
+pub enum TaskRes<E> where E: KvEngine {
+    Apply(ApplyRes<E>),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
