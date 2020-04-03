@@ -613,7 +613,7 @@ struct YieldState {
     /// All of messages that need to continue to be handled after
     /// the source peer has applied its logs and pending entries
     /// are all handled.
-    pending_msgs: Vec<Msg>,
+    pending_msgs: Vec<Msg<RocksEngine>>,
 }
 
 impl Debug for YieldState {
@@ -2356,38 +2356,38 @@ pub enum ChangeCmd {
     },
 }
 
-pub enum Msg {
+pub enum Msg<E> where E: KvEngine {
     Apply {
         start: Instant,
         apply: Apply,
     },
     Registration(Registration),
-    Proposal(RegionProposal<RocksEngine>),
+    Proposal(RegionProposal<E>),
     LogsUpToDate(CatchUpLogs),
     Noop,
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     Change {
         cmd: ChangeCmd,
-        cb: Callback<RocksEngine>,
+        cb: Callback<E>,
     },
     #[cfg(any(test, feature = "testexport"))]
-    Validate(u64, Box<dyn FnOnce((&ApplyDelegate<RocksEngine>, bool)) + Send>),
+    Validate(u64, Box<dyn FnOnce((&ApplyDelegate<E>, bool)) + Send>),
 }
 
-impl Msg {
-    pub fn apply(apply: Apply) -> Msg {
+impl<E> Msg<E> where E: KvEngine {
+    pub fn apply(apply: Apply) -> Msg<E> {
         Msg::Apply {
             start: Instant::now(),
             apply,
         }
     }
 
-    pub fn register(peer: &Peer) -> Msg {
+    pub fn register(peer: &Peer) -> Msg<E> {
         Msg::Registration(Registration::new(peer))
     }
 
-    pub fn destroy(region_id: u64, async_remove: bool) -> Msg {
+    pub fn destroy(region_id: u64, async_remove: bool) -> Msg<E> {
         Msg::Destroy(Destroy {
             region_id,
             async_remove,
@@ -2395,7 +2395,7 @@ impl Msg {
     }
 }
 
-impl Debug for Msg {
+impl<E> Debug for Msg<E> where E: KvEngine {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Msg::Apply { apply, .. } => write!(f, "[region {}] async apply", apply.region_id),
@@ -2457,17 +2457,17 @@ pub enum TaskRes<E> where E: KvEngine {
 
 pub struct ApplyFsm {
     delegate: ApplyDelegate<RocksEngine>,
-    receiver: Receiver<Msg>,
+    receiver: Receiver<Msg<RocksEngine>>,
     mailbox: Option<BasicMailbox<ApplyFsm>>,
 }
 
 impl ApplyFsm {
-    fn from_peer(peer: &Peer) -> (LooseBoundedSender<Msg>, Box<ApplyFsm>) {
+    fn from_peer(peer: &Peer) -> (LooseBoundedSender<Msg<RocksEngine>>, Box<ApplyFsm>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
 
-    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg>, Box<ApplyFsm>) {
+    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg<RocksEngine>>, Box<ApplyFsm>) {
         let (tx, rx) = loose_bounded(usize::MAX);
         let delegate = ApplyDelegate::from_registration(reg);
         (
@@ -2814,7 +2814,7 @@ impl ApplyFsm {
     fn handle_tasks<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
         apply_ctx: &mut ApplyContext<RocksEngine, W>,
-        msgs: &mut Vec<Msg>,
+        msgs: &mut Vec<Msg<RocksEngine>>,
     ) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -2850,7 +2850,7 @@ impl ApplyFsm {
 }
 
 impl Fsm for ApplyFsm {
-    type Message = Msg;
+    type Message = Msg<RocksEngine>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -2894,7 +2894,7 @@ impl Fsm for ControlFsm {
 }
 
 pub struct ApplyPoller<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
-    msg_buf: Vec<Msg>,
+    msg_buf: Vec<Msg<RocksEngine>>,
     apply_ctx: ApplyContext<RocksEngine, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
@@ -3052,7 +3052,7 @@ impl DerefMut for ApplyRouter {
 }
 
 impl ApplyRouter {
-    pub fn schedule_task(&self, region_id: u64, msg: Msg) {
+    pub fn schedule_task(&self, region_id: u64, msg: Msg<RocksEngine>) {
         let reg = match self.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
@@ -3276,7 +3276,7 @@ mod tests {
     }
 
     // Make sure msgs are handled in the same batch.
-    fn batch_messages(router: &ApplyRouter, region_id: u64, msgs: Vec<Msg>) {
+    fn batch_messages(router: &ApplyRouter, region_id: u64, msgs: Vec<Msg<RocksEngine>>) {
         let (notify1, wait1) = mpsc::channel();
         let (notify2, wait2) = mpsc::channel();
         router.schedule_task(
