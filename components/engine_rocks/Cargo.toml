@@ -20,6 +20,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 lazy_static = "1.4.0"
+libc = "0.2"
 time = "0.1"
 
 [dependencies.rocksdb]

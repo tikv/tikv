@@ -14,6 +14,7 @@
 //!
 //! Please read the engine_trait crate docs before hacking.
 
+#![feature(c_variadic)]
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 #[macro_use]
@@ -35,6 +36,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
+mod logger;
+pub use crate::logger::*;
 mod misc;
 pub use crate::misc::*;
 mod snapshot;

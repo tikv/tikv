@@ -25,8 +25,8 @@ use configuration::{
 };
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
-    TitanDBOptions,
+    DBCompressionType, DBInfoLogLevel, DBOptions, DBRateLimiterMode, DBRecoveryMode,
+    LRUCacheOptions, TitanDBOptions,
 };
 use slog;
 
@@ -43,8 +43,8 @@ use engine::rocks::util::{
 };
 use engine::DB;
 use engine_rocks::{
-    RangePropertiesCollectorFactory, RocksEventListener, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RangePropertiesCollectorFactory, RocksEventListener, RocksdbLogger,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
@@ -796,6 +796,9 @@ pub struct DbConfig {
     pub raftcf: RaftCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
+    #[config(skip)]
+    #[serde(with = "log_level_serde")]
+    pub log_level: slog::Level,
 }
 
 impl Default for DbConfig {
@@ -837,6 +840,7 @@ impl Default for DbConfig {
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: titan_config,
+            log_level: slog::Level::Info,
         }
     }
 }
@@ -893,7 +897,14 @@ impl DbConfig {
         opts.enable_multi_batch_write(self.enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
-
+        opts.set_info_log(RocksdbLogger::default());
+        opts.set_info_log_level(match self.log_level {
+            slog::Level::Error => DBInfoLogLevel::Error,
+            slog::Level::Critical => DBInfoLogLevel::Fatal,
+            slog::Level::Info => DBInfoLogLevel::Info,
+            slog::Level::Warning => DBInfoLogLevel::Warn,
+            slog::Level::Debug | slog::Level::Trace => DBInfoLogLevel::Debug,
+        });
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
@@ -1838,6 +1849,9 @@ pub struct TiKvConfig {
     pub log_file: String,
 
     #[config(skip)]
+    pub rocksdb_log_file: String,
+
+    #[config(skip)]
     pub slow_log_file: String,
 
     #[config(skip)]
@@ -1901,6 +1915,7 @@ impl Default for TiKvConfig {
             enable_dynamic_config: true,
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            rocksdb_log_file: "".to_owned(),
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),

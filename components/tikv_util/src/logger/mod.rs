@@ -323,28 +323,37 @@ impl slog::Value for LogCost {
 }
 
 /// Dispatches logs to a normal `Drain` or a slow-log specialized `Drain` by tag
-pub struct LogDispatcher<N: Drain, S: Drain> {
+pub struct LogDispatcher<N: Drain, R: Drain, S: Drain> {
     normal: N,
+    rocksdb: R,
     slow: S,
 }
 
-impl<N: Drain, S: Drain> LogDispatcher<N, S> {
-    pub fn new(normal: N, slow: S) -> Self {
-        Self { normal, slow }
+impl<N: Drain, R: Drain, S: Drain> LogDispatcher<N, R, S> {
+    pub fn new(normal: N, rocksdb: R, slow: S) -> Self {
+        Self {
+            normal,
+            rocksdb,
+            slow,
+        }
     }
 }
 
-impl<N, S> Drain for LogDispatcher<N, S>
+impl<N, R, S> Drain for LogDispatcher<N, R, S>
 where
     N: Drain<Ok = (), Err = io::Error>,
+    R: Drain<Ok = (), Err = io::Error>,
     S: Drain<Ok = (), Err = io::Error>,
 {
     type Ok = ();
     type Err = io::Error;
 
     fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        if record.tag().starts_with("slow_log") {
+        let tag = record.tag();
+        if tag.starts_with("slow_log") {
             self.slow.log(record, values)
+        } else if tag.starts_with("rocksdb_log") {
+            self.rocksdb.log(record, values)
         } else {
             self.normal.log(record, values)
         }
