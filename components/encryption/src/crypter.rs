@@ -102,21 +102,6 @@ pub struct Iv {
 }
 
 impl Iv {
-    pub fn as_slice(&self) -> &[u8; IV_LEN] {
-        &self.iv
-    }
-}
-
-impl<'a> From<&'a [u8]> for Iv {
-    fn from(src: &'a [u8]) -> Iv {
-        assert_eq!(src.len(), IV_LEN, "Nonce + Counter must be 16 bytes");
-        let mut iv = [0; IV_LEN];
-        iv.copy_from_slice(src);
-        Iv { iv }
-    }
-}
-
-impl Iv {
     /// Generate a nonce and a counter randomly.
     pub fn new() -> Iv {
         use rand::{rngs::OsRng, RngCore};
@@ -125,6 +110,26 @@ impl Iv {
         OsRng.fill_bytes(&mut iv);
 
         Iv { iv }
+    }
+
+    pub fn as_slice(&self) -> &[u8; IV_LEN] {
+        &self.iv
+    }
+
+    pub fn from_slice(iv: &[u8]) -> Result<Iv> {
+        if iv.len() != IV_LEN {
+            return Err(Error::Other(
+                format!(
+                    "iv length mismatch, expected {} vs actual {}",
+                    IV_LEN,
+                    iv.len()
+                )
+                .into(),
+            ));
+        }
+        let mut iv_copy = [0u8; IV_LEN];
+        iv_copy.copy_from_slice(iv);
+        Ok(Iv { iv: iv_copy })
     }
 }
 

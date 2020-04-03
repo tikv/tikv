@@ -101,7 +101,7 @@ impl FileBackend {
                     .into(),
                 )
             })?;
-        let iv = Iv::from(iv_value.as_slice());
+        let iv = Iv::from_slice(iv_value.as_slice())?;
         let method = decode_ecryption_method(method_value)?;
         let checksum = content
             .get_metadata()
