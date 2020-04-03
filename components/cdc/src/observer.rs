@@ -120,22 +120,19 @@ impl RegionChangeObserver for CdcObserver {
         event: RegionChangeEvent,
         _: StateRole,
     ) {
-        let region_id = ctx.region().get_id();
-        match event {
-            RegionChangeEvent::Destroy => {
-                if self.is_subscribed(region_id) {
-                    // Unregister all downstreams.
-                    let store_err = RaftStoreError::RegionNotFound(region_id);
-                    let deregister = Deregister::Region {
-                        region_id,
-                        err: CdcError::Request(store_err.into()),
-                    };
-                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e);
-                    }
+        if let RegionChangeEvent::Destroy = event {
+            let region_id = ctx.region().get_id();
+            if self.is_subscribed(region_id) {
+                // Unregister all downstreams.
+                let store_err = RaftStoreError::RegionNotFound(region_id);
+                let deregister = Deregister::Region {
+                    region_id,
+                    err: CdcError::Request(store_err.into()),
+                };
+                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                    error!("schedule cdc task failed"; "error" => ?e);
                 }
             }
-            _ => (),
         }
     }
 }
