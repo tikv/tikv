@@ -15,7 +15,6 @@ pub fn new_security_cfg(cn: Option<HashSet<String>>) -> SecurityConfig {
         cert_path: format!("{}", p.join("data/server.pem").display()),
         key_path: format!("{}", p.join("data/key.pem").display()),
         override_ssl_target: "".to_owned(),
-        cipher_file: "".to_owned(),
         cert_allowed_cn: cn.unwrap_or_default(),
     }
 }
