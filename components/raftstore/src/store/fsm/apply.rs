@@ -292,7 +292,7 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     notifier: Notifier<RocksEngine>,
     engine: RocksEngine,
     cbs: MustConsumeVec<ApplyCallback<RocksEngine>>,
-    apply_res: Vec<ApplyRes>,
+    apply_res: Vec<ApplyRes<RocksEngine>>,
     exec_ctx: Option<ExecContext>,
 
     kv_wb: Option<W>,
@@ -2436,17 +2436,17 @@ pub struct ApplyMetrics {
 }
 
 #[derive(Debug)]
-pub struct ApplyRes {
+pub struct ApplyRes<E> where E: KvEngine {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult<RocksEngine, RocksSnapshot>>,
+    pub exec_res: VecDeque<ExecResult<E, E::Snapshot>>,
     pub metrics: ApplyMetrics,
 }
 
 #[derive(Debug)]
 pub enum TaskRes {
-    Apply(ApplyRes),
+    Apply(ApplyRes<RocksEngine>),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
@@ -3298,7 +3298,7 @@ mod tests {
         notify2.send(()).unwrap();
     }
 
-    fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>) -> ApplyRes {
+    fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>) -> ApplyRes<RocksEngine> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
