@@ -15,6 +15,8 @@
 //! Please read the engine_trait crate docs before hacking.
 
 #![feature(c_variadic)]
+#![cfg_attr(test, feature(test))]
+
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 #[macro_use]
@@ -22,12 +24,17 @@ extern crate tikv_util;
 #[macro_use]
 extern crate slog_global;
 
+#[cfg(test)]
+extern crate test;
+
 mod cf_handle;
 pub use crate::cf_handle::*;
 mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
+mod compact;
+pub use crate::compact::*;
 mod db_options;
 pub use crate::db_options::*;
 mod db_vector;
@@ -61,7 +68,7 @@ pub use compat::*;
 mod compact_listener;
 pub use compact_listener::*;
 
-mod properties;
+pub mod properties;
 pub use properties::*;
 
 pub mod rocks_metrics;
@@ -74,4 +81,3 @@ pub mod event_listener;
 pub use event_listener::*;
 
 pub mod encryption;
-pub use encryption::WrappedEncryptionKeyManager;

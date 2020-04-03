@@ -10,13 +10,11 @@ test = false
 
 [features]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "keys/protobuf-codec",
   "kvproto/protobuf-codec",
 ]
 prost-codec = [
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "keys/prost-codec",
   "kvproto/prost-codec",

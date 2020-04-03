@@ -16,13 +16,13 @@ use grpcio::{
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct SecurityConfig {
+    // SSL configs.
     pub ca_path: String,
     pub cert_path: String,
     pub key_path: String,
     // Test purpose only.
     #[serde(skip)]
     pub override_ssl_target: String,
-    pub cipher_file: String,
     pub cert_allowed_cn: HashSet<String>,
 }
 
@@ -33,7 +33,6 @@ impl Default for SecurityConfig {
             cert_path: String::new(),
             key_path: String::new(),
             override_ssl_target: String::new(),
-            cipher_file: String::new(),
             cert_allowed_cn: HashSet::default(),
         }
     }
@@ -160,10 +159,6 @@ impl SecurityManager {
                 CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
             )
         }
-    }
-
-    pub fn cipher_file(&self) -> &str {
-        &self.cfg.cipher_file
     }
 
     pub fn cert_allowed_cn(&self) -> &HashSet<String> {

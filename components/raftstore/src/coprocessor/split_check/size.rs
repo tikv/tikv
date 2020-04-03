@@ -344,12 +344,12 @@ fn get_approximate_split_keys_cf(
 #[cfg(test)]
 pub mod tests {
     use super::Checker;
-    use crate::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine_rocks::properties::RangePropertiesCollectorFactory;
     use engine_rocks::{Compat, RocksEngine};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
@@ -424,7 +424,7 @@ pub mod tests {
         cfg.batch_split_limit = 5;
 
         let mut runnable = SplitCheckRunner::new(
-            Arc::clone(&engine),
+            engine.c().clone(),
             tx.clone(),
             CoprocessorHost::new(tx),
             cfg,
