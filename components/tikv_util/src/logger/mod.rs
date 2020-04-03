@@ -719,11 +719,22 @@ mod tests {
         }
     }
 
+    struct RocksdbLogWriter;
+    impl Write for RocksdbLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            SLOW_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            SLOW_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
     #[test]
     fn test_slow_log_dispatcher() {
         let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
-        let drain = LogDispatcher::new(normal, slow).fuse();
+        let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter));
+        let drain = LogDispatcher::new(normal, rocksdb, slow).fuse();
         let drain = SlowLogFilter {
             threshold: 200,
             inner: drain,
