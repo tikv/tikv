@@ -2759,7 +2759,7 @@ impl ApplyFsm {
             )));
             return;
         }
-        let (observe_id, region_id, region_epoch, enabled) = match cmd {
+        let (region_id, region_epoch, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
                 region_id,
                 region_epoch,
