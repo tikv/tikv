@@ -116,7 +116,10 @@ fn test_ingest_sst_without_crc32() {
 
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
 
-    let temp_dir = Builder::new().prefix("test_ingest_sst_without_crc32").tempdir().unwrap();
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_sst_without_crc32")
+        .tempdir()
+        .unwrap();
 
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
