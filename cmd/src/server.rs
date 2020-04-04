@@ -9,6 +9,7 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
+use encryption::DataKeyManager;
 use engine::rocks;
 use engine_rocks::{encryption::get_env, Compat, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
@@ -91,6 +92,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     tikv.init_fs();
     tikv.init_yatp();
+    tikv.init_encryption();
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
     let server_config = tikv.init_servers(&gc_worker);
@@ -118,6 +120,7 @@ struct TiKVServer {
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
     store_path: PathBuf,
+    encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<Engines>,
     servers: Option<Servers>,
     region_info_accessor: RegionInfoAccessor,
@@ -176,6 +179,7 @@ impl TiKVServer {
             system: Some(system),
             resolver,
             store_path,
+            encryption_key_manager: None,
             engines: None,
             servers: None,
             region_info_accessor,
@@ -321,8 +325,15 @@ impl TiKVServer {
         prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL_ELAPSED.clone())).unwrap();
     }
 
+    fn init_encryption(&mut self) {
+        self.encryption_key_manager =
+            DataKeyManager::from_config(&self.config.encryption, &self.config.storage.data_dir)
+                .unwrap()
+                .map(|key_manager| Arc::new(key_manager));
+    }
+
     fn init_engines(&mut self) {
-        let env = get_env(&self.config.storage.data_dir, &self.config.encryption).unwrap();
+        let env = get_env(self.encryption_key_manager.clone(), None).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
@@ -515,7 +526,7 @@ impl TiKVServer {
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            engines.engines.kv.clone(),
+            engines.engines.kv.c().clone(),
             self.router.clone(),
             coprocessor_host.clone(),
             self.config.coprocessor.clone(),

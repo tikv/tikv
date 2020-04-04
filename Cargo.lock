@@ -581,6 +581,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -1055,13 +1056,9 @@ dependencies = [
  "encryption",
  "engine_traits",
  "hex 0.4.2",
- "kvproto",
  "lazy_static",
  "prometheus",
- "prost",
  "protobuf",
- "quick-error",
- "raft",
  "rocksdb",
  "serde",
  "serde_derive",
@@ -1091,6 +1088,7 @@ dependencies = [
  "encryption",
  "engine",
  "engine_traits",
+ "keys",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -1098,10 +1096,12 @@ dependencies = [
  "rocksdb",
  "slog",
  "slog-global",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
+ "txn_types",
 ]
 
 [[package]]
@@ -2020,7 +2020,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2039,7 +2039,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3028,6 +3028,7 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
+ "prometheus-static-metric",
  "prost",
  "protobuf",
  "quick-error",
@@ -3397,7 +3398,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4547,7 +4548,6 @@ dependencies = [
  "bitflags",
  "byteorder",
  "chrono",
- "coarsetime",
  "codec",
  "configuration",
  "crc32fast",

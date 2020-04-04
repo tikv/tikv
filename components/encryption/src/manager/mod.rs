@@ -10,7 +10,7 @@ use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
 
-use crate::config::MasterKeyConfig;
+use crate::config::{EncryptionConfig, MasterKeyConfig};
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
 use crate::master_key::{create_backend, Backend, PlaintextBackend};
@@ -289,6 +289,19 @@ pub struct DataKeyManager {
 }
 
 impl DataKeyManager {
+    pub fn from_config(
+        config: &EncryptionConfig,
+        dict_path: &str,
+    ) -> Result<Option<DataKeyManager>> {
+        Self::new(
+            &config.master_key,
+            &config.previous_master_key,
+            config.method,
+            config.data_key_rotation_period.into(),
+            dict_path,
+        )
+    }
+
     pub fn new(
         master_key_config: &MasterKeyConfig,
         previous_master_key_config: &MasterKeyConfig,
