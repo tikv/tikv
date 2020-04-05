@@ -635,6 +635,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
+    pub fn raw_get_with_trace(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+    ) -> impl Future<Item = (Vec<u8>, Option<Vec<u8>>), Error = Error> {
+        let (rx, root_span) = self.root_span();
+        self.raw_get(ctx, cf, key, root_span).map(move |res| {
+            let spans = rx.iter().collect::<Vec<_>>();
+            let encoded_spans = encode_spans_in_jaeger_binary(&spans).unwrap();
+            let reporter = JaegerBinaryReporter::new("tikv_storage").unwrap();
+            reporter.report(&spans).unwrap();
+            (encoded_spans, res)
+        })
+    }
+
     /// Get the value of a raw key.
     /// TODO 糊 tracing
     pub fn raw_get(
@@ -642,18 +658,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         key: Vec<u8>,
+        root_span: Span,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
         const CMD: &str = "raw_get";
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let waiting_pool_span = root_span.child("waiting executor pool", |options| options.start());
 
         let res = self.read_pool.spawn_handle(
             async move {
+                std::mem::drop(waiting_pool_span);
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
+                let snapshot_span = root_span.child("take snapshot", |options| options.start());
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snapshot_span, &ctx))
                         .await?;
+                let _get_span = root_span.child(format!("executing command {}", CMD), |options| {
+                    options.start()
+                });
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
@@ -2467,13 +2490,23 @@ mod tests {
         );
         expect_none(
             storage
-                .raw_get(Context::default(), "".to_string(), b"d".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"d".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_value(
             b"005".to_vec(),
             storage
-                .raw_get(Context::default(), "".to_string(), b"e".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"e".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
 
@@ -2493,13 +2526,23 @@ mod tests {
         expect_value(
             b"001".to_vec(),
             storage
-                .raw_get(Context::default(), "".to_string(), b"a".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"a".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_value(
             b"002".to_vec(),
             storage
-                .raw_get(Context::default(), "".to_string(), b"b".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"b".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
 
@@ -2519,7 +2562,12 @@ mod tests {
         for kv in &test_data {
             expect_none(
                 storage
-                    .raw_get(Context::default(), "".to_string(), kv.0.to_vec())
+                    .raw_get(
+                        Context::default(),
+                        "".to_string(),
+                        kv.0.to_vec(),
+                        Span::inactive(),
+                    )
                     .wait(),
             );
         }
@@ -2556,7 +2604,7 @@ mod tests {
             expect_value(
                 val,
                 storage
-                    .raw_get(Context::default(), "".to_string(), key)
+                    .raw_get(Context::default(), "".to_string(), key, Span::inactive())
                     .wait(),
             );
         }
@@ -2699,29 +2747,54 @@ mod tests {
         expect_value(
             b"aa".to_vec(),
             storage
-                .raw_get(Context::default(), "".to_string(), b"a".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"a".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_none(
             storage
-                .raw_get(Context::default(), "".to_string(), b"b".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"b".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_value(
             b"cc".to_vec(),
             storage
-                .raw_get(Context::default(), "".to_string(), b"c".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"c".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_none(
             storage
-                .raw_get(Context::default(), "".to_string(), b"d".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"d".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_value(
             b"ee".to_vec(),
             storage
-                .raw_get(Context::default(), "".to_string(), b"e".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"e".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
 
@@ -2740,7 +2813,7 @@ mod tests {
         for (k, _) in test_data {
             expect_none(
                 storage
-                    .raw_get(Context::default(), "".to_string(), k)
+                    .raw_get(Context::default(), "".to_string(), k, Span::inactive())
                     .wait(),
             );
         }

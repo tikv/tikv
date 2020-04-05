@@ -1262,15 +1262,21 @@ fn future_raw_get<E: Engine, L: LockManager>(
     mut req: RawGetRequest,
 ) -> impl Future<Item = RawGetResponse, Error = Error> {
     storage
-        .raw_get(req.take_context(), req.take_cf(), req.take_key())
+        .raw_get_with_trace(req.take_context(), req.take_cf(), req.take_key())
         .then(|v| {
             let mut resp = RawGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
                 match v {
-                    Ok(Some(val)) => resp.set_value(val),
-                    Ok(None) => resp.set_not_found(true),
+                    Ok((trace, Some(val))) => {
+                        resp.set_value(val);
+                        resp.set_trace_spans(trace);
+                    }
+                    Ok((trace, None)) => {
+                        resp.set_not_found(true);
+                        resp.set_trace_spans(trace)
+                    }
                     Err(e) => resp.set_error(format!("{}", e)),
                 }
             }
@@ -1694,6 +1700,7 @@ impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustracing_jaeger::Span;
     use rustracing_jaeger::Span;
     use std::thread;
     use tokio_sync::oneshot;

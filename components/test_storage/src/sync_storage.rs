@@ -271,7 +271,7 @@ impl<E: Engine> SyncTestStorage<E> {
     }
 
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        self.store.raw_get(ctx, cf, key).wait()
+        self.store.raw_get(ctx, cf, key, Span::inactive()).wait()
     }
 
     pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
