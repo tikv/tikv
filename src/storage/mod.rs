@@ -259,14 +259,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         start_ts: TimeStamp,
     ) -> impl Future<Item = (Vec<u8>, Option<Value>), Error = Error> {
         let (rx, root_span) = self.root_span();
-        self.get(ctx, key, start_ts, root_span)
-            .map(move |res| {
-                let spans = rx.iter().collect::<Vec<_>>();
-                let encoded_spans = encode_spans_in_jaeger_binary(&spans).unwrap();
-                let reporter = JaegerBinaryReporter::new("tikv_storage").unwrap();
-                reporter.report(&spans).unwrap();
-                (encoded_spans, res)
-            })
+        self.get(ctx, key, start_ts, root_span).map(move |res| {
+            let spans = rx.iter().collect::<Vec<_>>();
+            let encoded_spans = encode_spans_in_jaeger_binary(&spans).unwrap();
+            let reporter = JaegerBinaryReporter::new("tikv_storage").unwrap();
+            reporter.report(&spans).unwrap();
+            (encoded_spans, res)
+        })
     }
 
     /// Get value of the given key from a snapshot.
