@@ -20,8 +20,8 @@ use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
+use tikv_util::timer::{SteadyTimer, Timer};
+use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -183,6 +183,8 @@ impl fmt::Debug for Task {
     }
 }
 
+const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+
 pub struct Endpoint<T> {
     capture_regions: HashMap<u64, Delegate>,
     connections: HashMap<ConnID, Conn>,
@@ -228,6 +230,14 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         };
         ep.register_min_ts_event();
         ep
+    }
+
+    pub fn new_timer(&self) -> Timer<()> {
+        // Currently there is only one timeout for CDC.
+        let cdc_timer_cap = 1;
+        let mut timer = Timer::new(cdc_timer_cap);
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+        timer
     }
 
     pub fn set_min_ts_interval(&mut self, dur: Duration) {
@@ -294,7 +304,8 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 // Do not continue to observe the events of the region.
                 let oid = self.observer.unsubscribe_region(region_id, observe_id);
                 assert_eq!(
-                    need_remove, oid.is_some(),
+                    need_remove,
+                    oid.is_some(),
                     "unsubscribe region {} failed, ObserveID {:?}",
                     region_id,
                     observe_id
@@ -390,7 +401,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 old_id.is_none(),
                 "region {} must not be observed twice, old ObserveID {:?}, new ObserveID {:?}",
                 region_id,
-                old_id.unwrap(),
+                old_id,
                 delegate.id
             );
 
@@ -494,10 +505,14 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                     self.on_deregister(deregister);
                 }
             } else {
-                debug!("stale region ready"; "region_id" => region.get_id(), "observe_id" => ?observe_id, "current_id" => ?delegate.id);
+                debug!("stale region ready";
+                    "region_id" => region.get_id(),
+                    "observe_id" => ?observe_id,
+                    "current_id" => ?delegate.id);
             }
         } else {
-            debug!("region not found on region ready (finish building resolver)"; "region_id" => region.get_id());
+            debug!("region not found on region ready (finish building resolver)";
+                "region_id" => region.get_id());
         }
     }
 
@@ -507,8 +522,6 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 if resolved_ts < self.min_resolved_ts {
                     self.min_resolved_ts = resolved_ts;
                     self.min_ts_region_id = region_id;
-                    CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
-                    CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
                 }
             }
         }
@@ -782,6 +795,20 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
             }
         }
         self.flush_all();
+    }
+}
+
+impl<T: 'static + RaftStoreRouter> RunnableWithTimer<Task, ()> for Endpoint<T> {
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
+        if self.min_resolved_ts != TimeStamp::max() {
+            CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
+            CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
+        }
+        self.min_resolved_ts = TimeStamp::max();
+        self.min_ts_region_id = 0;
+
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
     }
 }
 
