@@ -9,8 +9,6 @@ extern crate prometheus;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
@@ -43,10 +41,10 @@ impl Engines {
     }
 
     pub fn sync_kv(&self) -> Result<()> {
-        self.kv.sync_wal().map_err(Error::RocksDb)
+        self.kv.sync_wal().map_err(Error::Engine)
     }
 
     pub fn sync_raft(&self) -> Result<()> {
-        self.raft.sync_wal().map_err(Error::RocksDb)
+        self.raft.sync_wal().map_err(Error::Engine)
     }
 }
