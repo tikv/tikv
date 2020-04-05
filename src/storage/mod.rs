@@ -2488,7 +2488,12 @@ mod tests {
         expect_value(
             b"004".to_vec(),
             storage
-                .raw_get(Context::default(), "".to_string(), b"d".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"d".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
 
@@ -2508,7 +2513,12 @@ mod tests {
         expect_value(
             b"003".to_vec(),
             storage
-                .raw_get(Context::default(), "".to_string(), b"c".to_vec())
+                .raw_get(
+                    Context::default(),
+                    "".to_string(),
+                    b"c".to_vec(),
+                    Span::inactive(),
+                )
                 .wait(),
         );
         expect_none(
@@ -2709,7 +2719,7 @@ mod tests {
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
         let x: Vec<Option<Vec<u8>>> = storage
-            .raw_batch_get_command("".to_string(), cmds, Span::inactive())
+            .raw_batch_get_command("".to_string(), cmds)
             .wait()
             .unwrap()
             .into_iter()

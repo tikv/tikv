@@ -1705,7 +1705,6 @@ impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Respon
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustracing_jaeger::Span;
     use std::thread;
     use tokio_sync::oneshot;
 
