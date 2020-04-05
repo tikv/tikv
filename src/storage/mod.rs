@@ -704,7 +704,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Get the values of a set of raw keys, return a list of `Result`s.
-    /// //TODO 糊tracing
     pub fn raw_batch_get_command(
         &self,
         cf: String,
@@ -741,6 +740,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .flatten()
     }
 
+    pub fn raw_batch_get_with_trace(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+    ) -> impl Future<Item = (Vec<u8>, Vec<Result<KvPair>>), Error = Error> {
+        let (rx, root_span) = self.root_span();
+        self.raw_batch_get(ctx, cf, keys, root_span)
+            .map(move |res| {
+                let spans = rx.iter().collect::<Vec<_>>();
+                let encoded_spans = encode_spans_in_jaeger_binary(&spans).unwrap();
+                let reporter = JaegerBinaryReporter::new("tikv_storage").unwrap();
+                reporter.report(&spans).unwrap();
+                (encoded_spans, res)
+            })
+    }
+
     /// Get the values of some raw keys in a batch.
     /// //todo 糊 tracing
     pub fn raw_batch_get(
@@ -748,18 +764,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         keys: Vec<Vec<u8>>,
+        root_span: Span,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_get";
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let waiting_pool_span = root_span.child("waiting executor pool", |options| options.start());
 
         let res = self.read_pool.spawn_handle(
             async move {
+                std::mem::drop(waiting_pool_span);
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
+                let snapshot_span = root_span.child("take snapshot", |options| options.start());
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snapshot_span, &ctx))
                         .await?;
+                let _get_span = root_span.child(format!("executing command {}", CMD), |options| {
+                    options.start()
+                });
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
                     let cf = Self::rawkv_cf(&cf)?;
@@ -2643,7 +2666,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .raw_batch_get(Context::default(), "".to_string(), keys)
+                .raw_batch_get(Context::default(), "".to_string(), keys, Span::inactive())
                 .wait(),
         );
     }
@@ -2686,7 +2709,7 @@ mod tests {
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
         let x: Vec<Option<Vec<u8>>> = storage
-            .raw_batch_get_command("".to_string(), cmds)
+            .raw_batch_get_command("".to_string(), cmds, Span::inactive())
             .wait()
             .unwrap()
             .into_iter()
@@ -2728,7 +2751,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .raw_batch_get(Context::default(), "".to_string(), keys)
+                .raw_batch_get(Context::default(), "".to_string(), keys, Span::inactive())
                 .wait(),
         );
 
@@ -3254,7 +3277,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .raw_batch_get(Context::default(), "".to_string(), keys)
+                .raw_batch_get(Context::default(), "".to_string(), keys, Span::inactive())
                 .wait(),
         );
 
