@@ -50,7 +50,6 @@ failpoints = ["fail/failpoints", "tikv/failpoints"]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "grpcio/protobuf-codec",
   "kvproto/protobuf-codec",
   "pd_client/protobuf-codec",
@@ -63,7 +62,6 @@ protobuf-codec = [
   "cdc/protobuf-codec",
 ]
 prost-codec = [
-  "engine/prost-codec",
   "grpcio/prost-codec",
   "kvproto/prost-codec",
   "pd_client/prost-codec",
@@ -86,6 +84,7 @@ fail = { version = "0.3", optional = true }
 crc64fast = "0.1"
 crossbeam = "0.7.2"
 configuration = { path = "../components/configuration" }
+encryption = { path = "../components/encryption" }
 engine = { path = "../components/engine" }
 cdc = { path = "../components/cdc" }
 futures = "0.1"
