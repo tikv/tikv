@@ -118,7 +118,7 @@ impl<E: Engine> SyncTestStorage<E> {
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .batch_get(ctx, keys.to_owned(), start_ts.into())
+            .batch_get(ctx, keys.to_owned(), start_ts.into(), Span::inactive())
             .wait()
     }
 

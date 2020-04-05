@@ -1196,14 +1196,21 @@ fn future_batch_get<E: Engine, L: LockManager>(
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     storage
-        .batch_get(req.take_context(), keys, req.get_version().into())
-        .then(|v| {
+        .batch_get_with_trace(req.take_context(), keys, req.get_version().into())
+        .then(|traced_v| {
             let mut resp = BatchGetResponse::default();
+            traced_v
+                .as_ref()
+                .iter()
+                .for_each(|t| resp.set_trace_spans(t.0.clone()));
+            let v = traced_v.map(|t| t.1);
+
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
                 resp.set_pairs(extract_kv_pairs(v).into());
             }
+
             Ok(resp)
         })
 }
@@ -1687,6 +1694,7 @@ impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustracing_jaeger::Span;
     use std::thread;
     use tokio_sync::oneshot;
 

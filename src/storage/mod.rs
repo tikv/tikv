@@ -392,6 +392,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .flatten()
     }
 
+    pub fn batch_get_with_trace(
+        &self,
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: TimeStamp,
+    ) -> impl Future<Item = (Vec<u8>, Vec<Result<KvPair>>), Error = Error> {
+        let (rx, root_span) = self.root_span();
+        self.batch_get(ctx, keys, start_ts, root_span)
+            .map(move |res| {
+                let spans = rx.iter().collect::<Vec<_>>();
+                let encoded_spans = encode_spans_in_jaeger_binary(&spans).unwrap();
+                let reporter = JaegerBinaryReporter::new("tikv_storage").unwrap();
+                reporter.report(&spans).unwrap();
+                (encoded_spans, res)
+            })
+    }
+
     /// Get values of a set of keys in a batch from the snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
@@ -401,19 +418,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
+        root_span: Span,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "batch_get";
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let waiting_pool_span = root_span.child("waiting executor pool", |options| options.start());
 
         let res = self.read_pool.spawn_handle(
             async move {
+                std::mem::drop(waiting_pool_span);
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+                let snapshot_span = root_span.child("take snapshot", |options| options.start());
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, Span::inactive(), &ctx))
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snapshot_span, &ctx))
                         .await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
@@ -424,6 +445,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                     );
+                    let _get_span = root_span
+                        .child(format!("executing command {}", CMD), |options| {
+                            options.start()
+                        });
                     let result = snap_store
                         .batch_get(&keys, &mut statistics)
                         .map_err(Error::from)
@@ -1499,6 +1524,7 @@ mod tests {
                     Context::default(),
                     vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                     1.into(),
+                    Span::inactive(),
                 )
                 .wait(),
         );
@@ -1789,6 +1815,7 @@ mod tests {
                     Context::default(),
                     vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                     2.into(),
+                    Span::inactive(),
                 )
                 .wait(),
         );
@@ -1824,6 +1851,7 @@ mod tests {
                         Key::from_raw(b"b"),
                     ],
                     5.into(),
+                    Span::inactive(),
                 )
                 .wait(),
         );
