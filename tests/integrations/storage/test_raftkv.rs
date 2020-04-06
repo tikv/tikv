@@ -7,8 +7,7 @@ use std::time;
 use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
-use engine::IterOption;
-use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
 use tikv::storage::CfStatistics;
@@ -311,7 +310,7 @@ fn assert_none_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) 
 fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut cursor = snapshot
-        .iter(IterOption::default(), ScanMode::Mixed)
+        .iter(IterOptions::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -328,7 +327,7 @@ fn assert_seek_cf<E: Engine>(
 ) {
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut cursor = snapshot
-        .iter_cf(cf, IterOption::default(), ScanMode::Mixed)
+        .iter_cf(cf, IterOptions::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -403,7 +402,7 @@ fn seek<E: Engine>(ctx: &Context, engine: &E) {
     assert_seek(ctx, engine, b"x\x00", (b"z", b"2"));
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut iter = snapshot
-        .iter(IterOption::default(), ScanMode::Mixed)
+        .iter(IterOptions::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CfStatistics::default();
     assert!(!iter
@@ -418,7 +417,7 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     must_put(ctx, engine, b"z", b"2");
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut cursor = snapshot
-        .iter(IterOption::default(), ScanMode::Mixed)
+        .iter(IterOptions::default(), ScanMode::Mixed)
         .unwrap();
     assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
     assert_near_seek(&mut cursor, b"a", (b"x", b"1"));

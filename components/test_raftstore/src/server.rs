@@ -290,7 +290,7 @@ impl Simulator for ServerCluster {
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            Arc::clone(&engines.kv),
+            engines.kv.c().clone(),
             router.clone(),
             coprocessor_host.clone(),
             cfg.coprocessor.clone(),

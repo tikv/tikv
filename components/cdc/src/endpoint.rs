@@ -22,7 +22,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, Sender as PoolSender, ThreadPool};
-use txn_types::{Key, Lock, TimeStamp};
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID};
 use crate::service::{Conn, ConnID};
@@ -571,7 +571,10 @@ impl Initializer {
                     let (encoded_key, value) = lock;
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
-                    resolver.track_lock(lock.ts, key);
+                    match lock.lock_type {
+                        LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key),
+                        _ => (),
+                    };
                 }
             }
         }
@@ -715,6 +718,13 @@ mod tests {
 
         let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Vec<u8>>>::new();
 
+        // Pessimistic locks should not be tracked
+        for i in 0..10 {
+            let k = &[b'k', i];
+            let ts = TimeStamp::new(i as _);
+            must_acquire_pessimistic_lock(&engine, k, k, ts, ts);
+        }
+
         for i in 10..100 {
             let (k, v) = (&[b'k', i], &[b'v', i]);
             let ts = TimeStamp::new(i as _);
@@ -784,7 +794,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone());
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
         let downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -810,7 +820,7 @@ mod tests {
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
-        let downstream = Downstream::new("".to_string(), region_epoch);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0);
         let new_downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req,
