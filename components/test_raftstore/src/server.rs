@@ -171,7 +171,7 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            Some(engines.kv.clone()),
+            Some(engines.kv.c().clone()),
             Some(raft_router.clone()),
             Some(region_info_accessor.clone()),
             cfg.gc.clone(),
