@@ -8,6 +8,7 @@ use super::compact::{Runner as CompactRunner, Task as CompactTask};
 use crate::store::StoreRouter;
 use pd_client::PdClient;
 use tikv_util::worker::Runnable;
+use engine_rocks::RocksEngine;
 
 pub enum Task {
     Compact(CompactTask),
@@ -24,12 +25,12 @@ impl Display for Task {
 }
 
 pub struct Runner<C, S> {
-    compact: CompactRunner,
+    compact: CompactRunner<RocksEngine>,
     cleanup_sst: CleanupSSTRunner<C, S>,
 }
 
 impl<C: PdClient, S: StoreRouter> Runner<C, S> {
-    pub fn new(compact: CompactRunner, cleanup_sst: CleanupSSTRunner<C, S>) -> Runner<C, S> {
+    pub fn new(compact: CompactRunner<RocksEngine>, cleanup_sst: CleanupSSTRunner<C, S>) -> Runner<C, S> {
         Runner {
             compact,
             cleanup_sst,
