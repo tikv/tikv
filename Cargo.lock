@@ -392,6 +392,9 @@ name = "bytes"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bzip2-sys"
@@ -1053,22 +1056,33 @@ name = "encryption"
 version = "0.0.1"
 dependencies = [
  "byteorder",
+ "bytes 0.4.12",
  "crc32fast",
  "engine_traits",
  "failure",
+ "futures 0.3.4",
  "hex 0.4.2",
  "kvproto",
  "matches",
  "openssl",
  "protobuf",
  "rand 0.7.3",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kms",
+ "rusoto_mock",
+ "rusoto_util",
+ "rust-ini",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
+ "structopt",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
+ "tokio 0.2.13",
+ "toml",
 ]
 
 [[package]]
@@ -3497,6 +3511,20 @@ dependencies = [
  "shlex",
  "tokio 0.2.13",
  "zeroize",
+]
+
+[[package]]
+name = "rusoto_kms"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "167c735c81ca560f7cd9914f99eabada7b5b66b3b14d7e4401507c68ebca02bb"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "futures 0.3.4",
+ "rusoto_core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
