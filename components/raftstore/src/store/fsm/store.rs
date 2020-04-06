@@ -76,8 +76,8 @@ const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_VOTES_CAP: usize = 20;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
-pub struct StoreInfo {
-    pub engine: RocksEngine,
+pub struct StoreInfo<E> {
+    pub engine: E,
     pub capacity: u64,
 }
 

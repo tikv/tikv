@@ -104,7 +104,7 @@ pub enum Task {
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
-        store_info: StoreInfo,
+        store_info: StoreInfo<RocksEngine>,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -533,7 +533,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         &mut self,
         handle: &Handle,
         mut stats: pdpb::StoreStats,
-        store_info: StoreInfo,
+        store_info: StoreInfo<RocksEngine>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.engine.path()) {
             Err(e) => {
