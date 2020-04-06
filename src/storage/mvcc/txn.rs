@@ -1312,9 +1312,9 @@ mod tests {
 
         // Try to cleanup another transaction's lock. Does nothing.
         must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
-        // If there is no exisiting lock when cleanup, it cannot be a pessimistic transaction,
-        // so the rollback needn't be protected.
-        must_get_rollback_protected(&engine, k, ts(10, 1), false);
+        // If there is no exisiting lock when cleanup, it may be a pessimistic transaction,
+        // so the rollback should be protected.
+        must_get_rollback_protected(&engine, k, ts(10, 1), true);
         must_locked(&engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
