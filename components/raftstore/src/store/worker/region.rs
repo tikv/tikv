@@ -217,7 +217,7 @@ struct SnapContext<EK, R> where EK: KvEngine {
     router: R,
 }
 
-impl<EK, R> SnapContext<EK, R> where EK: KvEngine, R: CasualRouter<RocksEngine> {
+impl<EK, R> SnapContext<EK, R> where EK: KvEngine, R: CasualRouter<EK> {
     /// Generates the snapshot of the Region.
     fn generate_snap(
         &self,
