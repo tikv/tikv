@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine_rocks::{RocksEngine};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngines, Mutable, KvEngine};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -206,8 +205,8 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext<EK, R> where EK: KvEngine {
-    engines: KvEngines<EK, RocksEngine>,
+struct SnapContext<EK, ER, R> where EK: KvEngine, ER: KvEngine {
+    engines: KvEngines<EK, ER>,
     batch_size: usize,
     mgr: SnapManager<EK>,
     use_delete_range: bool,
@@ -217,7 +216,9 @@ struct SnapContext<EK, R> where EK: KvEngine {
     router: R,
 }
 
-impl<EK, R> SnapContext<EK, R> where EK: KvEngine, R: CasualRouter<EK> {
+impl<EK, ER, R> SnapContext<EK, ER, R>
+where EK: KvEngine, ER: KvEngine, R: CasualRouter<EK>
+{
     /// Generates the snapshot of the Region.
     fn generate_snap(
         &self,
@@ -533,24 +534,26 @@ impl<EK, R> SnapContext<EK, R> where EK: KvEngine, R: CasualRouter<EK> {
     }
 }
 
-pub struct Runner<EK, R> where EK: KvEngine {
+pub struct Runner<EK, ER, R> where EK: KvEngine, ER: KvEngine {
     pool: ThreadPool<TaskCell>,
-    ctx: SnapContext<EK, R>,
+    ctx: SnapContext<EK, ER, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<EK>>,
 }
 
-impl<EK, R> Runner<EK, R> where EK: KvEngine, R: CasualRouter<EK> {
+impl<EK, ER, R> Runner<EK, ER, R>
+where EK: KvEngine, ER: KvEngine, R: CasualRouter<EK>
+{
     pub fn new(
-        engines: KvEngines<EK, RocksEngine>,
+        engines: KvEngines<EK, ER>,
         mgr: SnapManager<EK>,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
         coprocessor_host: CoprocessorHost,
         router: R,
-    ) -> Runner<EK, R> {
+    ) -> Runner<EK, ER, R> {
         Runner {
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(GENERATE_POOL_SIZE)
@@ -599,9 +602,10 @@ impl<EK, R> Runner<EK, R> where EK: KvEngine, R: CasualRouter<EK> {
     }
 }
 
-impl<EK, R> Runnable<Task<EK>> for Runner<EK, R>
+impl<EK, ER, R> Runnable<Task<EK>> for Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn run(&mut self, task: Task<EK>) {
@@ -668,9 +672,10 @@ pub enum Event {
     CheckApply,
 }
 
-impl<EK, R> RunnableWithTimer<Task<EK>, Event> for Runner<EK, R>
+impl<EK, ER, R> RunnableWithTimer<Task<EK>, Event> for Runner<EK, ER, R>
 where
     EK: KvEngine,
+    ER: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
