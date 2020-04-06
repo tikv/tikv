@@ -533,24 +533,24 @@ impl<EK, R> SnapContext<EK, R> where EK: KvEngine, R: CasualRouter<EK> {
     }
 }
 
-pub struct Runner<R> {
+pub struct Runner<EK, R> where EK: KvEngine {
     pool: ThreadPool<TaskCell>,
-    ctx: SnapContext<RocksEngine, R>,
+    ctx: SnapContext<EK, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task<RocksEngine>>,
+    pending_applies: VecDeque<Task<EK>>,
 }
 
-impl<R: CasualRouter<RocksEngine>> Runner<R> {
+impl<EK, R> Runner<EK, R> where EK: KvEngine, R: CasualRouter<EK> {
     pub fn new(
-        engines: KvEngines<RocksEngine, RocksEngine>,
-        mgr: SnapManager<RocksEngine>,
+        engines: KvEngines<EK, RocksEngine>,
+        mgr: SnapManager<EK>,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
         coprocessor_host: CoprocessorHost,
         router: R,
-    ) -> Runner<R> {
+    ) -> Runner<EK, R> {
         Runner {
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(GENERATE_POOL_SIZE)
@@ -599,11 +599,12 @@ impl<R: CasualRouter<RocksEngine>> Runner<R> {
     }
 }
 
-impl<R> Runnable<Task<RocksEngine>> for Runner<R>
+impl<EK, R> Runnable<Task<EK>> for Runner<EK, R>
 where
-    R: CasualRouter<RocksEngine> + Send + Clone + 'static,
+    EK: KvEngine,
+    R: CasualRouter<EK> + Send + Clone + 'static,
 {
-    fn run(&mut self, task: Task<RocksEngine>) {
+    fn run(&mut self, task: Task<EK>) {
         match task {
             Task::Gen {
                 region_id,
@@ -667,9 +668,10 @@ pub enum Event {
     CheckApply,
 }
 
-impl<R> RunnableWithTimer<Task<RocksEngine>, Event> for Runner<R>
+impl<EK, R> RunnableWithTimer<Task<EK>, Event> for Runner<EK, R>
 where
-    R: CasualRouter<RocksEngine> + Send + Clone + 'static,
+    EK: KvEngine,
+    R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
