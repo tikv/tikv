@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, KvEngine};
+use engine_traits::{KvEngines, Mutable, KvEngine};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -206,10 +206,10 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext<R> {
-    engines: KvEngines<RocksEngine, RocksEngine>,
+struct SnapContext<EK, R> where EK: KvEngine {
+    engines: KvEngines<EK, RocksEngine>,
     batch_size: usize,
-    mgr: SnapManager<RocksEngine>,
+    mgr: SnapManager<EK>,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
@@ -217,18 +217,18 @@ struct SnapContext<R> {
     router: R,
 }
 
-impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
+impl<EK, R> SnapContext<EK, R> where EK: KvEngine, R: CasualRouter<RocksEngine> {
     /// Generates the snapshot of the Region.
     fn generate_snap(
         &self,
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: RocksSnapshot,
+        kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) -> Result<()> {
         // do we need to check leader here?
-        let snap = box_try!(store::do_snapshot::<RocksEngine>(
+        let snap = box_try!(store::do_snapshot::<EK>(
             self.mgr.clone(),
             kv_snap,
             region_id,
@@ -258,7 +258,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: RocksSnapshot,
+        kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) {
         SNAP_COUNTER_VEC
@@ -535,7 +535,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
 
 pub struct Runner<R> {
     pool: ThreadPool<TaskCell>,
-    ctx: SnapContext<R>,
+    ctx: SnapContext<RocksEngine, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<RocksEngine>>,
