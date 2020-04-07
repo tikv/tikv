@@ -762,7 +762,7 @@ impl<E> PeerStorage<E> where E: KvEngine {
     }
 
     pub fn raw_snapshot(&self) -> RocksSnapshot {
-        RocksSnapshot::new(self.engines.kv.as_inner().clone())
+        self.engines.kv.snapshot()
     }
 
     fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
