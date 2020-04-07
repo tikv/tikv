@@ -502,7 +502,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_capture_change(&mut self, cmd: ChangeCmd, cb: Callback<RocksEngine>) {
-        if !self.fsm.peer.is_leader() {
+        if self.fsm.peer.pending_remove || self.fsm.stopped || !self.fsm.peer.ready_to_handle_read()
+        {
             cb.invoke_with_response(new_error(Error::NotLeader(
                 self.region_id(),
                 self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
