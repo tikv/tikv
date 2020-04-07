@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::RaftMessage;
-use raft::eraftpb::MessageType;
 use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::*;
@@ -262,21 +262,18 @@ fn test_replica_read_on_stale_peer() {
     let filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 3)
             .direction(Direction::Recv)
-            .msg_type(MessageType::MsgAppend)
+            .msg_type(MessageType::MsgAppend),
     );
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(3, filter);
+    cluster.sim.wl().add_recv_filter(3, filter);
     cluster.must_put(b"k2", b"v2");
-    let resp1_ch = async_read_on_peer(&mut cluster, peer_on_store3.clone(), region.clone(), b"k2", true, true);
+    let resp1_ch = async_read_on_peer(
+        &mut cluster,
+        peer_on_store3.clone(),
+        region.clone(),
+        b"k2",
+        true,
+        true,
+    );
     // must be timeout
     assert!(resp1_ch.recv_timeout(Duration::from_micros(100)).is_err());
-    
-    cluster.sim.wl().clear_recv_filters(3);
-
-    cluster.must_put(b"k3", b"v3");
-    let resp2_ch = async_read_on_peer(&mut cluster, peer_on_store3, region, b"k2", true, true);
-    let resp2 = resp2_ch.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert!(!resp2.get_header().has_error(), "{:?}", resp2);
 }
