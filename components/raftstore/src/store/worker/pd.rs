@@ -3,28 +3,20 @@
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use fs2;
 use futures::sync::oneshot;
 use futures::Future;
+use tokio_core::reactor::Handle;
+use tokio_timer::Delay;
 
+use engine_rocks::RocksEngine;
+use engine_traits::MiscExt;
+use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
-use tokio_core::reactor::Handle;
-use tokio_timer::Delay;
-
-use engine::rocks::util::*;
-use engine::rocks::DB;
-use engine_rocks::RocksEngine;
-use pd_client::metrics::*;
-use pd_client::{ConfigClient, Error, PdClient, RegionStat};
-use tikv_util::collections::HashMap;
-use tikv_util::time::UnixSecs;
-use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
@@ -35,6 +27,11 @@ use crate::store::worker::{QpsStats, SplitHubConfigManager};
 use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+use pd_client::metrics::*;
+use pd_client::{ConfigClient, Error, PdClient, RegionStat};
+use tikv_util::collections::HashMap;
+use tikv_util::time::UnixSecs;
+use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
