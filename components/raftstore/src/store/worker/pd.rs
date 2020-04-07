@@ -259,15 +259,15 @@ fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         .collect()
 }
 
-struct StatsMonitor {
-    scheduler: Scheduler<Task<RocksEngine>>,
+struct StatsMonitor<E> where E: KvEngine {
+    scheduler: Scheduler<Task<E>>,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
     interval: Duration,
 }
 
-impl StatsMonitor {
-    pub fn new(interval: Duration, scheduler: Scheduler<Task<RocksEngine>>) -> Self {
+impl<E> StatsMonitor<E> where E: KvEngine {
+    pub fn new(interval: Duration, scheduler: Scheduler<Task<E>>) -> Self {
         StatsMonitor {
             scheduler,
             handle: None,
@@ -340,7 +340,7 @@ pub struct Runner<T: PdClient + ConfigClient> {
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
     scheduler: Scheduler<Task<RocksEngine>>,
-    stats_monitor: StatsMonitor,
+    stats_monitor: StatsMonitor<RocksEngine>,
 }
 
 impl<T: PdClient + ConfigClient> Runner<T> {
@@ -1094,7 +1094,7 @@ mod tests {
 
     struct RunnerTest {
         store_stat: Arc<Mutex<StoreStat>>,
-        stats_monitor: StatsMonitor,
+        stats_monitor: StatsMonitor<RocksEngine>,
     }
 
     impl RunnerTest {
