@@ -1993,13 +1993,11 @@ mod tests {
         must_unlocked(&engine, k);
         must_get_commit_ts(&engine, k, 30, 31);
 
-        // Rollback collapsed.
+        // Rollback
         must_rollback_collapsed(&engine, k, 32);
         must_rollback_collapsed(&engine, k, 33);
         must_acquire_pessimistic_lock_err(&engine, k, k, 32, 32);
-        // Currently we cannot avoid this.
-        must_acquire_pessimistic_lock(&engine, k, k, 32, 34);
-        must_pessimistic_rollback(&engine, k, 32, 34);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 32, 34);
         must_unlocked(&engine, k);
 
         // Acquire lock when there is lock with different for_update_ts.
