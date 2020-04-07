@@ -10,7 +10,7 @@ use std::{cmp, error, u64};
 
 use engine_rocks::{RocksEngine, RocksWriteBatch};
 use engine_traits::CF_RAFT;
-use engine_traits::{Iterable, KvEngine, KvEngines, Mutable, Peekable, SyncMutable, WriteBatch};
+use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, SyncMutable, WriteBatch};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1312,7 +1312,7 @@ fn get_sync_log_from_entry(entry: &Entry) -> bool {
 }
 
 pub fn fetch_entries_to(
-    engine: &RocksEngine,
+    engine: &impl KvEngine,
     region_id: u64,
     low: u64,
     high: u64,
@@ -1568,7 +1568,7 @@ mod tests {
     use engine::rocks::util::new_engine;
     use engine::Engines;
     use engine_rocks::{CloneCompat, Compat, RocksWriteBatch};
-    use engine_traits::WriteBatchExt;
+    use engine_traits::{WriteBatchExt, Iterable};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
