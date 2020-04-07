@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::RocksEngine;
-use engine_traits::{CfName, KvEngine};
+use engine_traits::{CfName};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -149,9 +149,7 @@ impl_box_observer!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
-pub struct Registry<E>
-where
-    E: KvEngine,
+pub struct Registry<E> where E: 'static
 {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
@@ -164,8 +162,6 @@ where
 }
 
 impl<E> Default for Registry<E>
-where
-    E: KvEngine,
 {
     fn default() -> Registry<E> {
         Registry {
@@ -194,8 +190,6 @@ macro_rules! push {
 }
 
 impl<E> Registry<E>
-where
-    E: KvEngine,
 {
     pub fn register_admin_observer(&mut self, priority: u32, ao: BoxAdminObserver) {
         push!(priority, ao, self.admin_observers);
