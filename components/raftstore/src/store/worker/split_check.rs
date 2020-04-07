@@ -5,8 +5,8 @@ use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 
-use engine_rocks::{RocksEngine, RocksEngineIterator};
-use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS};
+use engine_rocks::RocksEngine;
+use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -66,19 +66,19 @@ impl Ord for KeyEntry {
     }
 }
 
-struct MergedIterator {
-    iters: Vec<(CfName, RocksEngineIterator)>,
+struct MergedIterator<I> {
+    iters: Vec<(CfName, I)>,
     heap: BinaryHeap<KeyEntry>,
 }
 
-impl MergedIterator {
-    fn new(
-        db: &RocksEngine,
+impl<I> MergedIterator<I> where I: Iterator {
+    fn new<E: KvEngine>(
+        db: &E,
         cfs: &[CfName],
         start_key: &[u8],
         end_key: &[u8],
         fill_cache: bool,
-    ) -> Result<MergedIterator> {
+    ) -> Result<MergedIterator<E::Iterator>> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.iter().enumerate() {
@@ -269,7 +269,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::new(&self.engine, LARGE_CFS, start_key, end_key, false).map(
+        MergedIterator::<<RocksEngine as Iterable>::Iterator>::new(&self.engine, LARGE_CFS, start_key, end_key, false).map(
             |mut iter| {
                 let mut size = 0;
                 let mut keys = 0;
