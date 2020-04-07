@@ -59,7 +59,7 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
 }
 
-impl FlowStatsReporter for Scheduler<Task<RocksEngine>> {
+impl<E> FlowStatsReporter for Scheduler<Task<E>> where E: KvEngine {
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
@@ -180,7 +180,7 @@ pub struct PeerStat {
     pub last_report_ts: UnixSecs,
 }
 
-impl Display for Task<RocksEngine> {
+impl<E> Display for Task<E> where E: KvEngine {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::AskSplit {
