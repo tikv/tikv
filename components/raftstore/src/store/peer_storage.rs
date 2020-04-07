@@ -273,7 +273,7 @@ pub struct InvokeContext {
 }
 
 impl InvokeContext {
-    pub fn new(store: &PeerStorage) -> InvokeContext {
+    pub fn new(store: &PeerStorage<impl KvEngine>) -> InvokeContext {
         InvokeContext {
             region_id: store.get_region_id(),
             raft_state: store.raft_state.clone(),
@@ -505,7 +505,8 @@ fn init_last_term(
     }
 }
 
-pub struct PeerStorage {
+// FIXME: Should E be EK (kv) or ER (raft)?
+pub struct PeerStorage<E> where E: KvEngine {
     pub engines: KvEngines<RocksEngine, RocksEngine>,
 
     peer_id: u64,
@@ -517,7 +518,7 @@ pub struct PeerStorage {
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_sched: Scheduler<RegionTask<RocksEngine>>,
+    region_sched: Scheduler<RegionTask<E>>,
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
@@ -526,7 +527,7 @@ pub struct PeerStorage {
     pub tag: String,
 }
 
-impl Storage for PeerStorage {
+impl<E> Storage for PeerStorage<E> where E: KvEngine {
     fn initial_state(&self) -> raft::Result<RaftState> {
         self.initial_state()
     }
@@ -557,14 +558,14 @@ impl Storage for PeerStorage {
     }
 }
 
-impl PeerStorage {
+impl<E> PeerStorage<E> where E: KvEngine {
     pub fn new(
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
-        region_sched: Scheduler<RegionTask<RocksEngine>>,
+        region_sched: Scheduler<RegionTask<E>>,
         peer_id: u64,
         tag: String,
-    ) -> Result<PeerStorage> {
+    ) -> Result<PeerStorage<E>> {
         debug!(
             "creating storage on specified path";
             "region_id" => region.get_id(),

@@ -34,7 +34,7 @@ where
     E: KvEngine,
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new(ps: &PeerStorage) -> RegionSnapshot<RocksEngine> {
+    pub fn new(ps: &PeerStorage<RocksEngine>) -> RegionSnapshot<RocksEngine> {
         RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
     }
 
