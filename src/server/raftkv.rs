@@ -1,8 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::IterOption;
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
 use engine_traits::CfName;
+use engine_traits::IterOptions;
 use engine_traits::Peekable;
 use engine_traits::CF_DEFAULT;
 use kvproto::errorpb;
@@ -388,7 +388,7 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
@@ -398,7 +398,7 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
