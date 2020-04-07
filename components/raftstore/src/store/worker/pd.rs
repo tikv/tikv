@@ -12,8 +12,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-use engine_rocks::RocksEngine;
-use engine_traits::{MiscExt, KvEngine};
+use engine_traits::{KvEngine};
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -324,12 +323,12 @@ impl<E> StatsMonitor<E> where E: KvEngine {
     }
 }
 
-pub struct Runner<T: PdClient + ConfigClient> {
+pub struct Runner<E, T> where E: KvEngine, T: PdClient + ConfigClient {
     store_id: u64,
     pd_client: Arc<T>,
     config_handler: Box<dyn DynamicConfig>,
-    router: RaftRouter<RocksEngine>,
-    db: RocksEngine,
+    router: RaftRouter<E>,
+    db: E,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -339,22 +338,22 @@ pub struct Runner<T: PdClient + ConfigClient> {
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task<RocksEngine>>,
-    stats_monitor: StatsMonitor<RocksEngine>,
+    scheduler: Scheduler<Task<E>>,
+    stats_monitor: StatsMonitor<E>,
 }
 
-impl<T: PdClient + ConfigClient> Runner<T> {
+impl<E, T> Runner<E, T> where E: KvEngine, T: PdClient + ConfigClient {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
         config_handler: Box<dyn DynamicConfig>,
-        router: RaftRouter<RocksEngine>,
-        db: RocksEngine,
-        scheduler: Scheduler<Task<RocksEngine>>,
+        router: RaftRouter<E>,
+        db: E,
+        scheduler: Scheduler<Task<E>>,
         store_heartbeat_interval: u64,
-    ) -> Runner<T> {
+    ) -> Runner<E, T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start() {
@@ -383,7 +382,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<RocksEngine>,
+        callback: Callback<E>,
     ) {
         let router = self.router.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -424,7 +423,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<RocksEngine>,
+        callback: Callback<E>,
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -533,7 +532,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         &mut self,
         handle: &Handle,
         mut stats: pdpb::StoreStats,
-        store_info: StoreInfo<RocksEngine>,
+        store_info: StoreInfo<E>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.engine.path()) {
             Err(e) => {
@@ -838,8 +837,8 @@ impl<T: PdClient + ConfigClient> Runner<T> {
     }
 }
 
-impl<T: PdClient + ConfigClient> Runnable<Task<RocksEngine>> for Runner<T> {
-    fn run(&mut self, task: Task<RocksEngine>, handle: &Handle) {
+impl<E, T> Runnable<Task<E>> for Runner<E, T> where E: KvEngine, T: PdClient + ConfigClient {
+    fn run(&mut self, task: Task<E>, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
@@ -1019,14 +1018,14 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request(
-    router: &RaftRouter<RocksEngine>,
+fn send_admin_request<E>(
+    router: &RaftRouter<E>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<RocksEngine>,
-) {
+    callback: Callback<E>,
+) where E: KvEngine {
     let cmd_type = request.get_cmd_type();
 
     let mut req = RaftCmdRequest::default();
@@ -1045,7 +1044,7 @@ fn send_admin_request(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(router: &RaftRouter<RocksEngine>, source_region_id: u64, target: metapb::Peer) {
+fn send_merge_fail(router: &RaftRouter<impl KvEngine>, source_region_id: u64, target: metapb::Peer) {
     let target_id = target.get_id();
     if let Err(e) = router.force_send(
         source_region_id,
@@ -1063,7 +1062,7 @@ fn send_merge_fail(router: &RaftRouter<RocksEngine>, source_region_id: u64, targ
 
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
-    router: &RaftRouter<RocksEngine>,
+    router: &RaftRouter<impl KvEngine>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
@@ -1089,6 +1088,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Instant;
     use tikv_util::worker::FutureWorker;
+    use engine_rocks::RocksEngine;
 
     use super::*;
 
