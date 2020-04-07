@@ -240,6 +240,9 @@ fn test_read_hibernated_region() {
     assert!(!resp2.get_header().has_error(), "{:?}", resp2);
 }
 
+/// The read index response can advance the commit index.
+/// But in previous implemtation, we forget to set term in read index response
+/// which causes panic in raft-rs. This test is to reproduce the case.
 #[test]
 fn test_replica_read_on_stale_peer() {
     let mut cluster = new_node_cluster(0, 3);
