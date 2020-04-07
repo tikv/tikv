@@ -2,13 +2,13 @@
 
 use kvproto::kvrpcpb;
 
+use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
+
 use tikv_util::time::{self, Duration, Instant};
 
-use crate::coprocessor::*;
-use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
-use crate::storage::Statistics;
-
 use super::metrics::*;
+use crate::coprocessor::*;
+use crate::storage::Statistics;
 
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.

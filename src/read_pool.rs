@@ -314,17 +314,12 @@ mod metrics {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
-
-    use futures03::channel::oneshot;
-
-    use raftstore::store::FlowStatistics;
-    use raftstore::store::QpsStats;
-    use tikv_util::collections::HashMap;
-
-    use crate::storage::TestEngineBuilder;
-
     use super::*;
+    use crate::storage::TestEngineBuilder;
+    use futures03::channel::oneshot;
+    use raftstore::store::{FlowStatistics, QpsStats};
+    use std::thread;
+    use tikv_util::collections::HashMap;
 
     #[derive(Clone)]
     struct DummyReporter;

@@ -242,6 +242,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 }
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
+
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
@@ -310,6 +311,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 }
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
+
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
@@ -371,6 +373,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 }
                 tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges, false);
                 let command_duration = tikv_util::time::Instant::now_coarse();
+
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -458,6 +461,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 }
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
+
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -597,7 +601,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
-
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -967,8 +970,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 metrics::tls_collect_command_count(CMD, priority_tag);
                 {
                     let end_key = match &end_key {
-                        Some(end_key)=>end_key.to_vec(),
-                        None=>vec![],
+                        Some(end_key) => end_key.to_vec(),
+                        None => vec![],
                     };
                     tls_collect_qps(
                         ctx.get_region_id(),
@@ -1272,21 +1275,18 @@ impl<E: Engine> TestStorageBuilder<E> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
+    use futures03::executor::block_on;
+    use kvproto::kvrpcpb::{CommandPri, LockInfo};
     use std::{
         fmt::Debug,
         sync::mpsc::{channel, Sender},
     };
-
-    use futures03::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, LockInfo};
-
     use tikv_util::collections::HashMap;
     use tikv_util::config::ReadableSize;
     use txn_types::Mutation;
-
-    use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
-
-    use super::*;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);

@@ -1,10 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use futures::sync::oneshot;
+use futures::Future;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use futures::sync::oneshot;
-use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
@@ -1053,9 +1053,10 @@ fn send_destroy_peer_message(
 #[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Mutex;
     use tikv_util::worker::FutureWorker;
+
+    use super::*;
 
     struct RunnerTest {
         store_stat: Arc<Mutex<StoreStat>>,

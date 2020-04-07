@@ -19,19 +19,6 @@
 //!
 //! Please refer to `Endpoint` for more details.
 
-use kvproto::{coprocessor as coppb, kvrpcpb};
-
-use async_trait::async_trait;
-pub use checksum::checksum_crc64_xor;
-use tikv_util::deadline::Deadline;
-use tikv_util::time::Duration;
-use txn_types::TsSet;
-
-use crate::storage::Statistics;
-
-pub use self::endpoint::Endpoint;
-pub use self::error::{Error, Result};
-
 mod cache;
 mod checksum;
 pub mod dag;
@@ -43,6 +30,17 @@ pub(crate) mod metrics;
 pub mod readpool_impl;
 mod statistics;
 mod tracker;
+
+pub use self::endpoint::Endpoint;
+pub use self::error::{Error, Result};
+pub use checksum::checksum_crc64_xor;
+
+use crate::storage::Statistics;
+use async_trait::async_trait;
+use kvproto::{coprocessor as coppb, kvrpcpb};
+use tikv_util::deadline::Deadline;
+use tikv_util::time::Duration;
+use txn_types::TsSet;
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;

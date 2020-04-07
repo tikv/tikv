@@ -2643,16 +2643,14 @@ impl DynamicConfig for ConfigHandler {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering;
-
-    use kvproto::configpb::Version;
-    use slog::Level;
     use tempfile::Builder;
-    use toml;
-
-    use engine::rocks::util::new_engine_opt;
 
     use super::*;
+    use engine::rocks::util::new_engine_opt;
+    use kvproto::configpb::Version;
+    use slog::Level;
+    use std::cmp::Ordering;
+    use toml;
 
     #[test]
     fn test_check_critical_cfg_with() {

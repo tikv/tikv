@@ -1058,9 +1058,21 @@ impl RaftBatchSystem {
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
         if engine.support_write_batch_vec() {
-            self.start_system::<T, C, RocksWriteBatchVec>(workers, region_peers, builder, dyn_cfg, manager)?;
+            self.start_system::<T, C, RocksWriteBatchVec>(
+                workers,
+                region_peers,
+                builder,
+                dyn_cfg,
+                manager,
+            )?;
         } else {
-            self.start_system::<T, C, RocksWriteBatch>(workers, region_peers, builder, dyn_cfg, manager)?;
+            self.start_system::<T, C, RocksWriteBatch>(
+                workers,
+                region_peers,
+                builder,
+                dyn_cfg,
+                manager,
+            )?;
         }
         Ok(())
     }
