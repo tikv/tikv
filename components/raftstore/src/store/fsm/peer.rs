@@ -510,6 +510,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             )));
             return;
         }
+        info!("on capture change"; "region_id" => self.region_id());
         self.ctx
             .apply_router
             .schedule_task(self.region_id(), ApplyTask::Change { cmd, cb })

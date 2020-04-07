@@ -323,6 +323,7 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 region_epoch: request.take_region_epoch(),
             }
         };
+        info!("schedule change cmd"; "region_id" => region_id, "conn_id" => ?conn_id, "downstream_id" => ?downstream_id);
         if let Err(e) = self.raft_router.send(
             region_id,
             CasualMessage::CaptureChange {
