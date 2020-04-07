@@ -12,7 +12,7 @@ use engine::rocks::{
 };
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::{Config as RaftstoreConfig, QuorumAlgorithm};
+use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
@@ -181,7 +181,6 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
-        quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
