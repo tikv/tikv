@@ -34,7 +34,7 @@ where
     E: KvEngine,
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine>) -> RegionSnapshot<RocksEngine> {
+    pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine, RocksEngine>) -> RegionSnapshot<RocksEngine> {
         RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
     }
 
@@ -417,14 +417,14 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_peer_storage(engines: KvEngines<RocksEngine, RocksEngine>, r: &Region) -> PeerStorage<RocksEngine, RocksEngine> {
+    fn new_peer_storage(engines: KvEngines<RocksEngine, RocksEngine>, r: &Region) -> PeerStorage<RocksEngine, RocksEngine, RocksEngine> {
         let (sched, _) = worker::dummy_scheduler();
         PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
     fn load_default_dataset(
         engines: KvEngines<RocksEngine, RocksEngine>,
-    ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
+    ) -> (PeerStorage<RocksEngine, RocksEngine, RocksEngine>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -448,7 +448,7 @@ mod tests {
 
     fn load_multiple_levels_dataset(
         engines: KvEngines<RocksEngine, RocksEngine>,
-    ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
+    ) -> (PeerStorage<RocksEngine, RocksEngine, RocksEngine>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);

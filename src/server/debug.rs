@@ -509,7 +509,7 @@ impl Debugger {
                 })?;
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
-            let peer_storage = box_try!(PeerStorage::<RocksEngine, RocksEngine>::new(
+            let peer_storage = box_try!(PeerStorage::<RocksEngine, RocksEngine, RocksEngine>::new(
                 self.engines.c(),
                 region,
                 fake_snap_worker.scheduler(),
