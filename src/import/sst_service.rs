@@ -13,7 +13,7 @@ use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
@@ -88,12 +88,8 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => {
-                    switcher.enter_normal_mode(&self.engine, mf)
-                }
-                SwitchMode::Import => {
-                    switcher.enter_import_mode(&self.engine, mf)
-                }
+                SwitchMode::Normal => switcher.enter_normal_mode(&self.engine, mf),
+                SwitchMode::Import => switcher.enter_import_mode(&self.engine, mf),
             }
         };
         match res {

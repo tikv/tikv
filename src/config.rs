@@ -39,16 +39,15 @@ use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_
 use encryption::EncryptionConfig;
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
-    db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-    NoopSliceTransform,
+    db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
-    RangePropertiesCollectorFactory, RocksEventListener, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE, RocksEngine,
+    RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
+use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_traits::{DBOptionsExt, CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient, Error as PdError};
 use raftstore::coprocessor::Config as CopConfig;

@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
@@ -245,9 +245,7 @@ impl<E: Engine> GcRunner<E> {
         let start_key = keys::data_key(region_info.region.get_start_key());
         let end_key = keys::data_end_key(region_info.region.get_end_key());
 
-        let collection = match db
-            .get_range_properties_cf(CF_WRITE, &start_key, &end_key)
-        {
+        let collection = match db.get_range_properties_cf(CF_WRITE, &start_key, &end_key) {
             Ok(c) => c,
             Err(e) => {
                 error!(
@@ -918,6 +916,7 @@ mod tests {
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{txn::commands, Storage, TestStorageBuilder};
+    use engine_rocks::Compat;
     use futures::Future;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
@@ -926,7 +925,6 @@ mod tests {
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
     use txn_types::Mutation;
-    use engine_rocks::Compat;
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
     /// For test engines, they writes keys into db directly, but in production a 'z' prefix will be
@@ -1023,7 +1021,13 @@ mod tests {
             .build()
             .unwrap();
         let db = engine.get_rocksdb();
-        let mut gc_worker = GcWorker::new(engine, Some(db.c().clone()), None, None, GcConfig::default());
+        let mut gc_worker = GcWorker::new(
+            engine,
+            Some(db.c().clone()),
+            None,
+            None,
+            GcConfig::default(),
+        );
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1181,8 +1185,13 @@ mod tests {
         let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
             .build()
             .unwrap();
-        let mut gc_worker =
-            GcWorker::new(prefixed_engine, Some(db.c().clone()), None, None, GcConfig::default());
+        let mut gc_worker = GcWorker::new(
+            prefixed_engine,
+            Some(db.c().clone()),
+            None,
+            None,
+            GcConfig::default(),
+        );
         gc_worker.start().unwrap();
 
         let physical_scan_lock = |max_ts: u64, start_key, limit| {
