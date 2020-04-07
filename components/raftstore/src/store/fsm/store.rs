@@ -200,7 +200,7 @@ impl<E: KvEngine> RaftRouter<E> {
 pub struct PollContext<T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
-    pub pd_scheduler: FutureScheduler<PdTask>,
+    pub pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
@@ -724,7 +724,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
 pub struct RaftPollerBuilder<T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
-    pd_scheduler: FutureScheduler<PdTask>,
+    pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
@@ -967,7 +967,7 @@ where
 }
 
 struct Workers {
-    pd_worker: FutureWorker<PdTask>,
+    pd_worker: FutureWorker<PdTask<RocksEngine>>,
     consistency_check_worker: Worker<ConsistencyCheckTask<RocksEngine>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
@@ -1004,7 +1004,7 @@ impl RaftBatchSystem {
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager<RocksEngine>,
-        pd_worker: FutureWorker<PdTask>,
+        pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,

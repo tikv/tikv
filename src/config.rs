@@ -47,6 +47,7 @@ use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
     RangePropertiesCollectorFactory, RocksEventListener, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RocksEngine,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
@@ -2477,7 +2478,7 @@ impl ConfigHandler {
     pub fn start(
         id: String,
         mut controller: ConfigController,
-        scheduler: FutureScheduler<PdTask>,
+        scheduler: FutureScheduler<PdTask<RocksEngine>>,
     ) -> CfgResult<Self> {
         if controller.get_current().enable_dynamic_config {
             if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {

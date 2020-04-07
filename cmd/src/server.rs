@@ -136,7 +136,7 @@ struct Engines {
 }
 
 struct Servers {
-    pd_sender: FutureScheduler<PdTask>,
+    pd_sender: FutureScheduler<PdTask<RocksEngine>>,
     lock_mgr: Option<LockManager>,
     server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,

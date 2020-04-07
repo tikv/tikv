@@ -33,6 +33,7 @@ use tikv_util::metrics::dump;
 use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::FutureScheduler;
+use engine_rocks::RocksEngine;
 
 mod profiler_guard {
     use tikv_alloc::error::ProfResult;
@@ -88,11 +89,11 @@ pub struct StatusServer {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
-    pd_sender: Arc<FutureScheduler<PdTask>>,
+    pd_sender: Arc<FutureScheduler<PdTask<RocksEngine>>>,
 }
 
 impl StatusServer {
-    pub fn new(status_thread_pool_size: usize, pd_sender: FutureScheduler<PdTask>) -> Self {
+    pub fn new(status_thread_pool_size: usize, pd_sender: FutureScheduler<PdTask<RocksEngine>>) -> Self {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
@@ -215,7 +216,7 @@ impl StatusServer {
     }
 
     fn config_handler(
-        pd_sender: &FutureScheduler<PdTask>,
+        pd_sender: &FutureScheduler<PdTask<RocksEngine>>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let (cfg_sender, rx) = oneshot::channel();
         if pd_sender
@@ -623,6 +624,7 @@ mod tests {
     use tikv_util::collections::HashSet;
     use tikv_util::security::SecurityConfig;
     use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
+    use engine_rocks::RocksEngine;
 
     #[test]
     fn test_status_service() {
@@ -672,8 +674,8 @@ mod tests {
     #[test]
     fn test_config_endpoint() {
         struct Runner;
-        impl FutureRunnable<PdTask> for Runner {
-            fn run(&mut self, t: PdTask, _: &Handle) {
+        impl FutureRunnable<PdTask<RocksEngine>> for Runner {
+            fn run(&mut self, t: PdTask<RocksEngine>, _: &Handle) {
                 match t {
                     PdTask::GetConfig { cfg_sender } => cfg_sender.send(String::new()).unwrap(),
                     _ => unreachable!(),
