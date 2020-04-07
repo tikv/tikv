@@ -152,6 +152,7 @@ impl NodeCluster {
     // Set a function that will be invoked after creating each CoprocessorHost. The first argument
     // of `op` is the node_id.
     // Set this before invoking `run_node`.
+    #[allow(clippy::type_complexity)]
     pub fn post_create_coprocessor_host(&mut self, op: Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>) {
         self.post_create_coprocessor_host = Some(op)
     }
