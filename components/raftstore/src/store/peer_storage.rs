@@ -1583,7 +1583,7 @@ mod tests {
 
     use super::*;
 
-    fn new_storage(sched: Scheduler<RegionTask<RocksEngine>>, path: &TempDir) -> PeerStorage {
+    fn new_storage(sched: Scheduler<RegionTask<RocksEngine>>, path: &TempDir) -> PeerStorage<RocksEngine> {
         let kv_db =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));
@@ -1605,7 +1605,7 @@ mod tests {
     }
 
     impl ReadyContext {
-        fn new(s: &PeerStorage) -> ReadyContext {
+        fn new(s: &PeerStorage<RocksEngine>) -> ReadyContext {
             ReadyContext {
                 kv_wb: s.engines.kv.write_batch(),
                 raft_wb: s.engines.raft.write_batch(),
@@ -1636,7 +1636,7 @@ mod tests {
         sched: Scheduler<RegionTask<RocksEngine>>,
         path: &TempDir,
         ents: &[Entry],
-    ) -> PeerStorage {
+    ) -> PeerStorage<RocksEngine> {
         let mut store = new_storage(sched, path);
         let mut kv_wb = store.engines.kv.write_batch();
         let mut ctx = InvokeContext::new(&store);
@@ -1658,7 +1658,7 @@ mod tests {
         store
     }
 
-    fn append_ents(store: &mut PeerStorage, ents: &[Entry]) {
+    fn append_ents(store: &mut PeerStorage<RocksEngine>, ents: &[Entry]) {
         let mut ctx = InvokeContext::new(store);
         let mut ready_ctx = ReadyContext::new(store);
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
@@ -1667,7 +1667,7 @@ mod tests {
         store.raft_state = ctx.raft_state;
     }
 
-    fn validate_cache(store: &PeerStorage, exp_ents: &[Entry]) {
+    fn validate_cache(store: &PeerStorage<RocksEngine>, exp_ents: &[Entry]) {
         assert_eq!(store.cache.cache, exp_ents);
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
@@ -1711,7 +1711,7 @@ mod tests {
         }
     }
 
-    fn get_meta_key_count(store: &PeerStorage) -> usize {
+    fn get_meta_key_count(store: &PeerStorage<RocksEngine>) -> usize {
         let region_id = store.get_region_id();
         let mut count = 0;
         let (meta_start, meta_end) = (
@@ -2425,7 +2425,7 @@ mod tests {
 
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines.c(), &region).unwrap();
-        let build_storage = || -> Result<PeerStorage> {
+        let build_storage = || -> Result<PeerStorage<RocksEngine>> {
             PeerStorage::new(engines.c(), &region, sched.clone(), 0, "".to_owned())
         };
         let mut s = build_storage().unwrap();

@@ -15,7 +15,7 @@ use engine::rocks::{
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines};
-use engine_rocks::{CloneCompat, Compat, RocksWriteBatch};
+use engine_rocks::{CloneCompat, Compat, RocksWriteBatch, RocksEngine};
 use engine_traits::{
     IterOptions, Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection,
     TablePropertiesExt, WriteBatch, WriteOptions,
@@ -509,7 +509,7 @@ impl Debugger {
                 })?;
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
-            let peer_storage = box_try!(PeerStorage::new(
+            let peer_storage = box_try!(PeerStorage::<RocksEngine>::new(
                 self.engines.c(),
                 region,
                 fake_snap_worker.scheduler(),
