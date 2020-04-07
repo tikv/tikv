@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
+use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngines, Mutable, KvEngine};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -212,7 +213,7 @@ struct SnapContext<EK, ER, R> where EK: KvEngine, ER: KvEngine {
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
-    coprocessor_host: CoprocessorHost,
+    coprocessor_host: CoprocessorHost<RocksEngine>,
     router: R,
 }
 
@@ -551,7 +552,7 @@ where EK: KvEngine, ER: KvEngine, R: CasualRouter<EK>
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
-        coprocessor_host: CoprocessorHost,
+        coprocessor_host: CoprocessorHost<RocksEngine>,
         router: R,
     ) -> Runner<EK, ER, R> {
         Runner {
@@ -859,7 +860,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
-            CoprocessorHost::default(),
+            CoprocessorHost::<RocksEngine>::default(),
             router,
         );
         let mut timer = Timer::new(1);

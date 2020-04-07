@@ -249,7 +249,7 @@ impl<E> ApplyCallback<E> where E: KvEngine {
         ApplyCallback { region, cbs }
     }
 
-    fn invoke_all(self, host: &CoprocessorHost) {
+    fn invoke_all(self, host: &CoprocessorHost<RocksEngine>) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
             if let Some(cb) = cb {
@@ -285,7 +285,7 @@ impl<E> Notifier<E> where E: KvEngine {
 struct ApplyContext<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E> {
     tag: String,
     timer: Option<Instant>,
-    host: CoprocessorHost,
+    host: CoprocessorHost<RocksEngine>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<E>>,
     router: ApplyRouter,
@@ -313,7 +313,7 @@ struct ApplyContext<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E>
 impl<E, W> ApplyContext<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E> {
     pub fn new(
         tag: String,
-        host: CoprocessorHost,
+        host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask<E>>,
         engine: E,
@@ -2979,7 +2979,7 @@ impl<E, W> PollHandler<ApplyFsm<E>, ControlFsm>
 pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
-    coprocessor_host: CoprocessorHost,
+    coprocessor_host: CoprocessorHost<RocksEngine>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<RocksEngine>>,
     engine: RocksEngine,
@@ -3321,7 +3321,7 @@ mod tests {
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
-            coprocessor_host: CoprocessorHost::default(),
+            coprocessor_host: CoprocessorHost::<RocksEngine>::default(),
             importer,
             region_scheduler,
             sender,
@@ -3684,7 +3684,7 @@ mod tests {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
         let obs = ApplyObserver::default();
-        let mut host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::<RocksEngine>::default();
         host.registry
             .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
@@ -3939,7 +3939,7 @@ mod tests {
     fn test_cmd_observer() {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
-        let mut host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::<RocksEngine>::default();
         let mut obs = ApplyObserver::default();
         let (sink, cmdbatch_rx) = mpsc::channel();
         obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
@@ -4205,7 +4205,7 @@ mod tests {
         reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
-        let mut host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::<RocksEngine>::default();
         let mut obs = ApplyObserver::default();
         let (sink, cmdbatch_rx) = mpsc::channel();
         obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));

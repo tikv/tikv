@@ -162,7 +162,7 @@ impl Display for Task {
 pub struct Runner<S> {
     engine: RocksEngine,
     router: S,
-    coprocessor: CoprocessorHost,
+    coprocessor: CoprocessorHost<RocksEngine>,
     cfg: Config,
 }
 
@@ -170,7 +170,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
     pub fn new(
         engine: RocksEngine,
         router: S,
-        coprocessor: CoprocessorHost,
+        coprocessor: CoprocessorHost<RocksEngine>,
         cfg: Config,
     ) -> Runner<S> {
         Runner {

@@ -13,6 +13,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
+use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use futures_executor::block_on;
@@ -163,7 +164,7 @@ where
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
-    pub coprocessor_host: CoprocessorHost,
+    pub coprocessor_host: CoprocessorHost<RocksEngine>,
 }
 
 /// `Snapshot` is a trait for snapshot.
@@ -1805,7 +1806,7 @@ pub mod tests {
             region,
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
-            coprocessor_host: CoprocessorHost::default(),
+            coprocessor_host: CoprocessorHost::<RocksEngine>::default(),
         };
         // Verify thte snapshot applying is ok.
         assert!(s4.apply(options).is_ok());
@@ -2130,7 +2131,7 @@ pub mod tests {
             region,
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
-            coprocessor_host: CoprocessorHost::default(),
+            coprocessor_host: CoprocessorHost::<RocksEngine>::default(),
         };
         assert!(s5.apply(options).is_err());
 

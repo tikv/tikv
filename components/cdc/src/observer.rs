@@ -8,6 +8,7 @@ use raftstore::coprocessor::*;
 use raftstore::Error as RaftStoreError;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
+use engine_rocks::RocksEngine;
 
 use crate::endpoint::{Deregister, Task};
 use crate::Error as CdcError;
@@ -39,7 +40,7 @@ impl CdcObserver {
         }
     }
 
-    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost) {
+    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
         // 100 is the priority of the observer. CDC should have a high priority.
         coprocessor_host
             .registry

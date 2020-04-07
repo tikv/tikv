@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::RocksEngine;
-use engine_traits::{CfName};
+use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -269,13 +268,21 @@ macro_rules! loop_ob {
 }
 
 /// Admin and invoke all coprocessors.
-#[derive(Default, Clone)]
-pub struct CoprocessorHost {
-    pub registry: Registry<RocksEngine>,
+#[derive(Clone)]
+pub struct CoprocessorHost<E> where E: 'static {
+    pub registry: Registry<E>,
 }
 
-impl CoprocessorHost {
-    pub fn new<C: CasualRouter<RocksEngine> + Clone + Send + 'static>(ch: C) -> CoprocessorHost {
+impl<E> Default for CoprocessorHost<E> where E: 'static {
+    fn default() -> Self {
+        CoprocessorHost {
+            registry: Default::default(),
+        }
+    }
+}
+
+impl<E> CoprocessorHost<E> where E: KvEngine {
+    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -390,10 +397,10 @@ impl CoprocessorHost {
         &self,
         cfg: &'a Config,
         region: &Region,
-        engine: &RocksEngine,
+        engine: &E,
         auto_split: bool,
         policy: CheckPolicy,
-    ) -> SplitCheckerHost<'a, RocksEngine> {
+    ) -> SplitCheckerHost<'a, E> {
         let mut host = SplitCheckerHost::new(auto_split, cfg);
         loop_ob!(
             region,
@@ -477,6 +484,7 @@ mod tests {
     use kvproto::raft_cmdpb::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
     };
+    use engine_rocks::RocksEngine;
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {
@@ -603,7 +611,7 @@ mod tests {
 
     #[test]
     fn test_trigger_right_hook() {
-        let mut host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::<RocksEngine>::default();
         let ob = TestCoprocessor::default();
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(ob.clone()));
@@ -660,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_order() {
-        let mut host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::<RocksEngine>::default();
 
         let ob1 = TestCoprocessor::default();
         host.registry

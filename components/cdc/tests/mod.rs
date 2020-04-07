@@ -31,6 +31,7 @@ use tikv_util::security::*;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
+use engine_rocks::RocksEngine;
 
 use cdc::{CdcObserver, Task};
 static INIT: Once = Once::new();
@@ -113,7 +114,7 @@ impl TestSuite {
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
-                move |host: &mut CoprocessorHost| {
+                move |host: &mut CoprocessorHost<RocksEngine>| {
                     cdc_ob.register_to(host);
                 },
             ));

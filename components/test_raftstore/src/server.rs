@@ -62,7 +62,7 @@ struct ServerMeta {
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
-type CopHooks = Vec<Box<dyn Fn(&mut CoprocessorHost)>>;
+type CopHooks = Vec<Box<dyn Fn(&mut CoprocessorHost<RocksEngine>)>>;
 
 pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,

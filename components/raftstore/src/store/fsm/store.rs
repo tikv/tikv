@@ -120,7 +120,7 @@ impl StoreMeta {
     #[inline]
     pub fn set_region(
         &mut self,
-        host: &CoprocessorHost,
+        host: &CoprocessorHost<RocksEngine>,
         region: Region,
         peer: &mut crate::store::Peer,
     ) {
@@ -215,7 +215,7 @@ pub struct PollContext<T, C: 'static> {
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager<RocksEngine>,
     pub applying_snap_count: Arc<AtomicUsize>,
-    pub coprocessor_host: CoprocessorHost,
+    pub coprocessor_host: CoprocessorHost<RocksEngine>,
     pub timer: SteadyTimer,
     pub trans: T,
     pub pd_client: Arc<C>,
@@ -736,7 +736,7 @@ pub struct RaftPollerBuilder<T, C> {
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
     snap_mgr: SnapManager<RocksEngine>,
-    pub coprocessor_host: CoprocessorHost,
+    pub coprocessor_host: CoprocessorHost<RocksEngine>,
     trans: T,
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
@@ -974,7 +974,7 @@ struct Workers {
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
     region_worker: Worker<RegionTask<RocksEngine>>,
-    coprocessor_host: CoprocessorHost,
+    coprocessor_host: CoprocessorHost<RocksEngine>,
     future_poller: ThreadPool,
 }
 
@@ -1006,7 +1006,7 @@ impl RaftBatchSystem {
         mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        mut coprocessor_host: CoprocessorHost,
+        mut coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         dyn_cfg: Box<dyn DynamicConfig>,

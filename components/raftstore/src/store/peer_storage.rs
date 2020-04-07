@@ -1920,7 +1920,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
-            CoprocessorHost::default(),
+            CoprocessorHost::<RocksEngine>::default(),
             router,
         );
         worker.start(runner).unwrap();
@@ -2237,7 +2237,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
-            CoprocessorHost::default(),
+            CoprocessorHost::<RocksEngine>::default(),
             router,
         );
         worker.start(runner).unwrap();

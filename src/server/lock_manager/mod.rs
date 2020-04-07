@@ -32,6 +32,7 @@ use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
 use txn_types::TimeStamp;
+use engine_rocks::RocksEngine;
 
 const DETECTED_SLOTS_NUM: usize = 128;
 
@@ -182,7 +183,7 @@ impl LockManager {
 
     /// Creates a `RoleChangeNotifier` of the deadlock detector worker and registers it to
     /// the `CoprocessorHost` to observe the role change events of the leader region.
-    pub fn register_detector_role_change_observer(&self, host: &mut CoprocessorHost) {
+    pub fn register_detector_role_change_observer(&self, host: &mut CoprocessorHost<RocksEngine>) {
         let role_change_notifier = RoleChangeNotifier::new(self.detector_scheduler.clone());
         role_change_notifier.register(host);
     }

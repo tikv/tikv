@@ -17,6 +17,7 @@ use raft::StateRole;
 use tikv_util::collections::HashMap;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
+use engine_rocks::RocksEngine;
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -142,7 +143,7 @@ impl RoleObserver for RegionEventListener {
 
 /// Creates an `RegionEventListener` and register it to given coprocessor host.
 fn register_region_event_listener(
-    host: &mut CoprocessorHost,
+    host: &mut CoprocessorHost<RocksEngine>,
     scheduler: Scheduler<RegionInfoQuery>,
 ) {
     let listener = RegionEventListener { scheduler };
@@ -457,7 +458,7 @@ impl RegionInfoAccessor {
     /// Creates a new `RegionInfoAccessor` and register to `host`.
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
-    pub fn new(host: &mut CoprocessorHost) -> Self {
+    pub fn new(host: &mut CoprocessorHost<RocksEngine>) -> Self {
         let worker = WorkerBuilder::new("region-collector-worker").create();
         let scheduler = worker.scheduler();
 

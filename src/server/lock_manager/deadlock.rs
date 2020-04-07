@@ -31,6 +31,7 @@ use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 use txn_types::TimeStamp;
+use engine_rocks::RocksEngine;
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
@@ -410,7 +411,7 @@ impl RoleChangeNotifier {
         }
     }
 
-    pub(crate) fn register(self, host: &mut CoprocessorHost) {
+    pub(crate) fn register(self, host: &mut CoprocessorHost<RocksEngine>) {
         host.registry
             .register_role_observer(1, BoxRoleObserver::new(self.clone()));
         host.registry
@@ -1112,7 +1113,7 @@ pub mod tests {
         }
     }
 
-    fn start_deadlock_detector(host: &mut CoprocessorHost) -> (FutureWorker<Task>, Scheduler) {
+    fn start_deadlock_detector(host: &mut CoprocessorHost<RocksEngine>) -> (FutureWorker<Task>, Scheduler) {
         let waiter_mgr_worker = FutureWorker::new("dummy-waiter-mgr");
         let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
         let mut detector_worker = FutureWorker::new("test-deadlock-detector");
