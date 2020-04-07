@@ -10,7 +10,7 @@ use std::{cmp, error, u64};
 
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch};
 use engine_traits::CF_RAFT;
-use engine_traits::{Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable, SyncMutable};
+use engine_traits::{Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -231,11 +231,11 @@ impl CacheQueryStats {
     }
 }
 
-pub trait HandleRaftReadyContext {
+pub trait HandleRaftReadyContext<WK, WR> where WK: WriteBatch, WR: WriteBatch {
     /// Returns the mutable references of WriteBatch for both KvDB and RaftDB in one interface.
-    fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch);
-    fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch;
-    fn raft_wb_mut(&mut self) -> &mut RocksWriteBatch;
+    fn wb_mut(&mut self) -> (&mut WK, &mut WR);
+    fn kv_wb_mut(&mut self) -> &mut WK;
+    fn raft_wb_mut(&mut self) -> &mut WR;
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
 }
@@ -888,7 +888,7 @@ impl<E> PeerStorage<E> where E: KvEngine {
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append<H: HandleRaftReadyContext>(
+    pub fn append<H: HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch>>(
         &mut self,
         invoke_ctx: &mut InvokeContext,
         entries: &[Entry],
@@ -1205,7 +1205,7 @@ impl<E> PeerStorage<E> where E: KvEngine {
     /// to update the memory states properly.
     // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
     // a requirement to advance the ready object properly later.
-    pub fn handle_raft_ready<H: HandleRaftReadyContext>(
+    pub fn handle_raft_ready<H: HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch>>(
         &mut self,
         ready_ctx: &mut H,
         ready: &Ready,
@@ -1616,7 +1616,7 @@ mod tests {
         }
     }
 
-    impl HandleRaftReadyContext for ReadyContext {
+    impl HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for ReadyContext {
         fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
             (&mut self.kv_wb, &mut self.raft_wb)
         }

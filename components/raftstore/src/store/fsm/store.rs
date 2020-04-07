@@ -233,7 +233,7 @@ pub struct PollContext<T, C: 'static> {
     pub current_time: Option<Timespec>,
 }
 
-impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
+impl<T, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollContext<T, C> {
     fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
         (&mut self.kv_wb, &mut self.raft_wb)
     }
