@@ -1385,13 +1385,15 @@ pub fn fetch_entries_to(
 }
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
-pub fn clear_meta(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
-    kv_wb: &mut RocksWriteBatch,
-    raft_wb: &mut RocksWriteBatch,
+pub fn clear_meta<EK, ER>(
+    engines: &KvEngines<EK, ER>,
+    kv_wb: &mut EK::WriteBatch,
+    raft_wb: &mut ER::WriteBatch,
     region_id: u64,
     raft_state: &RaftLocalState,
-) -> Result<()> {
+) -> Result<()>
+where EK: KvEngine, ER: KvEngine
+{
     let t = Instant::now();
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
