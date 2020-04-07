@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
-use engine_rocks::{RocksEngine, RocksWriteBatch};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, WriteBatch};
 use keys::{self, enc_end_key, enc_start_key};
@@ -326,8 +325,8 @@ impl InvokeContext {
 }
 
 pub fn recover_from_applying_state(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
-    raft_wb: &mut RocksWriteBatch,
+    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+    raft_wb: &mut impl WriteBatch,
     region_id: u64,
 ) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
@@ -1567,7 +1566,7 @@ mod tests {
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine::rocks::util::new_engine;
     use engine::Engines;
-    use engine_rocks::{CloneCompat, Compat, RocksWriteBatch};
+    use engine_rocks::{CloneCompat, Compat, RocksWriteBatch, RocksEngine};
     use engine_traits::{WriteBatchExt, Iterable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
