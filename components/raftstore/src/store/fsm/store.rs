@@ -48,7 +48,7 @@ use crate::store::util::is_initial_msg;
 use crate::store::worker::{
     CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask, CompactRunner, CompactTask,
     ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
-    ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+    ReadDelegate, RegionRunner, RegionTask, SplitCheckTask, SplitHubConfigManager,
 };
 use crate::store::DynamicConfig;
 use crate::store::PdTask;
@@ -1010,6 +1010,7 @@ impl RaftBatchSystem {
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         dyn_cfg: Box<dyn DynamicConfig>,
+        manager: SplitHubConfigManager,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1057,9 +1058,9 @@ impl RaftBatchSystem {
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
         if engine.support_write_batch_vec() {
-            self.start_system::<T, C, RocksWriteBatchVec>(workers, region_peers, builder, dyn_cfg)?;
+            self.start_system::<T, C, RocksWriteBatchVec>(workers, region_peers, builder, dyn_cfg, manager)?;
         } else {
-            self.start_system::<T, C, RocksWriteBatch>(workers, region_peers, builder, dyn_cfg)?;
+            self.start_system::<T, C, RocksWriteBatch>(workers, region_peers, builder, dyn_cfg, manager)?;
         }
         Ok(())
     }
@@ -1074,6 +1075,7 @@ impl RaftBatchSystem {
         region_peers: Vec<SenderFsmPair<RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
         dyn_cfg: Box<dyn DynamicConfig>,
+        manager: SplitHubConfigManager,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1165,6 +1167,7 @@ impl RaftBatchSystem {
             engines.kv,
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
+            manager,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 

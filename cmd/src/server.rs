@@ -28,6 +28,7 @@ use raftstore::{
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
         new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
+        SplitHubConfigManager,
     },
 };
 use std::{
@@ -546,6 +547,14 @@ impl TiKVServer {
             tikv::config::Module::Raftstore,
             Box::new(RaftstoreConfigManager(raft_store.clone())),
         );
+
+        let config_manager =
+            SplitHubConfigManager(Arc::new(VersionTrack::new(self.config.split.clone())));
+        cfg_controller.register(
+            tikv::config::Module::Split,
+            Box::new(config_manager.clone()),
+        );
+
         let config_client = ConfigHandler::start(
             self.config.server.advertise_addr.clone(),
             cfg_controller,
@@ -572,6 +581,7 @@ impl TiKVServer {
             importer.clone(),
             split_check_worker,
             Box::new(config_client) as _,
+            config_manager,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

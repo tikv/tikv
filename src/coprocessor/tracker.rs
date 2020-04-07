@@ -2,13 +2,13 @@
 
 use kvproto::kvrpcpb;
 
-use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
-
 use tikv_util::time::{self, Duration, Instant};
 
-use super::metrics::*;
 use crate::coprocessor::*;
+use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
 use crate::storage::Statistics;
+
+use super::metrics::*;
 
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
@@ -229,6 +229,17 @@ impl Tracker {
         tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
         tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);
 
+        let peer = self.req_ctx.context.get_peer();
+        let region_id = self.req_ctx.context.get_region_id();
+        let start_key = &self.req_ctx.lower_bound;
+        let end_key = &self.req_ctx.upper_bound;
+        let reverse_scan = if let Some(reverse_scan) = self.req_ctx.is_desc_scan {
+            reverse_scan
+        } else {
+            false
+        };
+
+        tls_collect_qps(region_id, peer, start_key, end_key, reverse_scan);
         self.current_stage = TrackerState::Tracked;
     }
 }

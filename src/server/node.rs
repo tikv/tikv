@@ -23,7 +23,7 @@ use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SplitCheckTask;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{DynamicConfig, PdTask};
+use raftstore::store::{DynamicConfig, PdTask, SplitHubConfigManager};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
 use tikv_util::worker::Worker;
@@ -125,6 +125,7 @@ where
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         dyn_cfg: Box<dyn DynamicConfig>,
+        manager: SplitHubConfigManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -161,6 +162,7 @@ where
             importer,
             split_check_worker,
             dyn_cfg,
+            manager,
         )?;
 
         // Put store only if the cluster is bootstrapped.
@@ -341,6 +343,7 @@ where
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         dyn_cfg: Box<dyn DynamicConfig>,
+        manager: SplitHubConfigManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -367,6 +370,7 @@ where
             importer,
             split_check_worker,
             dyn_cfg,
+            manager,
         )?;
         Ok(())
     }

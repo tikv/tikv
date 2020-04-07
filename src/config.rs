@@ -53,8 +53,8 @@ use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient, Error as PdError};
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
-use raftstore::store::PdTask;
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
+use raftstore::store::{DynamicConfig, PdTask, SplitHubConfig};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::sys::sys_quota::SysQuota;
@@ -1897,6 +1897,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub gc: GcConfig,
+
+    #[config(submodule)]
+    pub split: SplitHubConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1925,6 +1928,7 @@ impl Default for TiKvConfig {
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
+            split: SplitHubConfig::default(),
         }
     }
 }
@@ -2352,6 +2356,7 @@ pub enum Module {
     Import,
     PessimisticTxn,
     Gc,
+    Split,
     Unknown(String),
 }
 
@@ -2364,6 +2369,7 @@ impl From<&str> for Module {
             "raft_store" => Module::Raftstore,
             "coprocessor" => Module::Coprocessor,
             "pd" => Module::Pd,
+            "split" => Module::Split,
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "storage" => Module::Storage,
@@ -2571,9 +2577,9 @@ impl ConfigHandler {
                     }
                     Either::Right(updated) => {
                         if updated {
-                            info!("local config updated"; "version" => ?version);
+                            info!("config updated"; "version" => ?version);
                         } else {
-                            info!("config version upated"; "version" => ?version);
+                            info!("version updated, config needn't be updated"; "version" => ?version);
                         }
                         self.version = version;
                     }
@@ -2611,7 +2617,6 @@ impl ConfigHandler {
     }
 }
 
-use raftstore::store::DynamicConfig;
 impl DynamicConfig for ConfigHandler {
     fn refresh(&mut self, cfg_client: &dyn ConfigClient) {
         debug!(
@@ -2638,14 +2643,16 @@ impl DynamicConfig for ConfigHandler {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::Builder;
+    use std::cmp::Ordering;
 
-    use super::*;
-    use engine::rocks::util::new_engine_opt;
     use kvproto::configpb::Version;
     use slog::Level;
-    use std::cmp::Ordering;
+    use tempfile::Builder;
     use toml;
+
+    use engine::rocks::util::new_engine_opt;
+
+    use super::*;
 
     #[test]
     fn test_check_critical_cfg_with() {

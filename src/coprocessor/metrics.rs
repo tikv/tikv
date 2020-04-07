@@ -4,6 +4,8 @@ use std::cell::RefCell;
 use std::mem;
 
 use crate::storage::{FlowStatistics, FlowStatsReporter, Statistics};
+use kvproto::metapb;
+use raftstore::store::{build_key_range, QpsStats};
 use tikv_util::collections::HashMap;
 
 use prometheus::local::*;
@@ -100,6 +102,7 @@ pub struct CopLocalMetrics {
     pub local_copr_req_wait_time: LocalHistogramVec,
     pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
+    local_qps_stats: QpsStats,
     local_scan_details: HashMap<&'static str, Statistics>,
     local_cop_flow_stats: HashMap<u64, FlowStatistics>,
 }
@@ -121,6 +124,8 @@ thread_local! {
                 HashMap::default(),
             local_cop_flow_stats:
                 HashMap::default(),
+            local_qps_stats:
+                QpsStats::new(),
         }
     );
 }
@@ -146,15 +151,15 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         }
 
         // Report PD metrics
-        if m.local_cop_flow_stats.is_empty() {
-            // Stats to report to PD is empty, ignore.
-            return;
+        if !m.local_cop_flow_stats.is_empty() {
+            let mut read_stats = HashMap::default();
+            mem::swap(&mut read_stats, &mut m.local_cop_flow_stats);
+            reporter.report_read_stats(read_stats);
         }
 
-        let mut read_stats = HashMap::default();
-        mem::swap(&mut read_stats, &mut m.local_cop_flow_stats);
-
-        reporter.report_read_stats(read_stats);
+        let mut qps_stats = QpsStats::new();
+        mem::swap(&mut qps_stats, &mut m.local_qps_stats);
+        reporter.report_qps_stats(qps_stats);
     });
 }
 
@@ -176,5 +181,22 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
             .or_insert_with(crate::storage::FlowStatistics::default);
         flow_stats.add(&statistics.write.flow_stats);
         flow_stats.add(&statistics.data.flow_stats);
+    });
+}
+
+pub fn tls_collect_qps(
+    region_id: u64,
+    peer: &metapb::Peer,
+    start_key: &[u8],
+    end_key: &[u8],
+    reverse_scan: bool,
+) {
+    TLS_COP_METRICS.with(|m| {
+        let mut m = m.borrow_mut();
+        let mut key_range = build_key_range(start_key, end_key);
+        if reverse_scan {
+            std::mem::swap(&mut key_range.start_key, &mut key_range.end_key)
+        }
+        m.local_qps_stats.add(region_id, peer, key_range);
     });
 }

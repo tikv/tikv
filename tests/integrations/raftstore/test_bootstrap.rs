@@ -13,7 +13,7 @@ use engine_rocks::{CloneCompat, Compat};
 use engine_traits::{Peekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::{bootstrap_store, fsm, SnapManager};
+use raftstore::store::{bootstrap_store, fsm, SnapManager, SplitHubConfigManager};
 use test_raftstore::*;
 use tikv::config::ConfigController;
 use tikv::config::ConfigHandler;
@@ -114,6 +114,7 @@ fn test_node_bootstrap_with_prepared_data() {
         importer,
         Worker::new("split"),
         Box::new(config_client),
+        SplitHubConfigManager::default(),
     )
     .unwrap();
     assert!(Arc::clone(&engine)

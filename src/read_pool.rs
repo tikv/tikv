@@ -314,18 +314,25 @@ mod metrics {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::TestEngineBuilder;
-    use futures03::channel::oneshot;
-    use raftstore::store::FlowStatistics;
     use std::thread;
+
+    use futures03::channel::oneshot;
+
+    use raftstore::store::FlowStatistics;
+    use raftstore::store::QpsStats;
     use tikv_util::collections::HashMap;
+
+    use crate::storage::TestEngineBuilder;
+
+    use super::*;
 
     #[derive(Clone)]
     struct DummyReporter;
 
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: HashMap<u64, FlowStatistics>) {}
+
+        fn report_qps_stats(&self, _qps_stats: QpsStats) {}
     }
 
     #[test]

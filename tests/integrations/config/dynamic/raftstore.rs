@@ -10,7 +10,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::fsm::*;
-use raftstore::store::{SnapManager, StoreMsg, Transport};
+use raftstore::store::{SnapManager, SplitHubConfigManager, StoreMsg, Transport};
 use raftstore::Result;
 use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
 use tikv::import::SSTImporter;
@@ -105,6 +105,7 @@ fn start_raftstore(
             importer,
             Worker::new("split"),
             Box::new(config_client),
+            SplitHubConfigManager::default(),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)

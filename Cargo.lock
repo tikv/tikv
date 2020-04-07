@@ -3033,6 +3033,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "rand 0.6.5",
  "serde",
  "serde_derive",
  "slog",

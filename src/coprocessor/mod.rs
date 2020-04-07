@@ -19,6 +19,19 @@
 //!
 //! Please refer to `Endpoint` for more details.
 
+use kvproto::{coprocessor as coppb, kvrpcpb};
+
+use async_trait::async_trait;
+pub use checksum::checksum_crc64_xor;
+use tikv_util::deadline::Deadline;
+use tikv_util::time::Duration;
+use txn_types::TsSet;
+
+use crate::storage::Statistics;
+
+pub use self::endpoint::Endpoint;
+pub use self::error::{Error, Result};
+
 mod cache;
 mod checksum;
 pub mod dag;
@@ -30,17 +43,6 @@ pub(crate) mod metrics;
 pub mod readpool_impl;
 mod statistics;
 mod tracker;
-
-pub use self::endpoint::Endpoint;
-pub use self::error::{Error, Result};
-pub use checksum::checksum_crc64_xor;
-
-use crate::storage::Statistics;
-use async_trait::async_trait;
-use kvproto::{coprocessor as coppb, kvrpcpb};
-use tikv_util::deadline::Deadline;
-use tikv_util::time::Duration;
-use txn_types::TsSet;
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -112,6 +114,12 @@ pub struct ReqContext {
     ///
     /// None means don't try to hit the cache.
     pub cache_match_version: Option<u64>,
+
+    /// The lower bound key in ranges of the request
+    pub lower_bound: Vec<u8>,
+
+    /// The upper bound key in ranges of the request
+    pub upper_bound: Vec<u8>,
 }
 
 impl ReqContext {
@@ -127,6 +135,14 @@ impl ReqContext {
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
+        let lower_bound = match ranges.first().as_ref() {
+            Some(range) => range.start.clone(),
+            None => vec![],
+        };
+        let upper_bound = match ranges.last().as_ref() {
+            Some(range) => range.end.clone(),
+            None => vec![],
+        };
         Self {
             tag,
             context,
@@ -138,6 +154,8 @@ impl ReqContext {
             ranges_len: ranges.len(),
             bypass_locks,
             cache_match_version,
+            lower_bound,
+            upper_bound,
         }
     }
 
