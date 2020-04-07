@@ -6,7 +6,6 @@ publish = false
 
 [features]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
@@ -17,7 +16,6 @@ protobuf-codec = [
   "tikv/protobuf-codec",
 ]
 prost-codec = [
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",

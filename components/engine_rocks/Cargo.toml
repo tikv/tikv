@@ -6,12 +6,10 @@ publish = false
 
 [features]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "keys/protobuf-codec",
   "txn_types/protobuf-codec",
 ]
 prost-codec = [
-  "engine/prost-codec",
   "keys/prost-codec",
   "txn_types/prost-codec",
 ]
@@ -38,7 +36,7 @@ coarsetime = "0.1"
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
-features = ["encryption"]
+features = ["encryption", "static_libcpp"]
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
