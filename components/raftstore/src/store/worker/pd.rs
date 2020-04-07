@@ -12,7 +12,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-use engine_traits::{KvEngine};
+use engine_traits::KvEngine;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -58,7 +58,10 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
 }
 
-impl<E> FlowStatsReporter for Scheduler<Task<E>> where E: KvEngine {
+impl<E> FlowStatsReporter for Scheduler<Task<E>>
+where
+    E: KvEngine,
+{
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
@@ -73,7 +76,10 @@ pub trait DynamicConfig: Send + 'static {
 }
 
 /// Uses an asynchronous thread to tell PD something.
-pub enum Task<E> where E: KvEngine {
+pub enum Task<E>
+where
+    E: KvEngine,
+{
     AskSplit {
         region: metapb::Region,
         split_key: Vec<u8>,
@@ -179,7 +185,10 @@ pub struct PeerStat {
     pub last_report_ts: UnixSecs,
 }
 
-impl<E> Display for Task<E> where E: KvEngine {
+impl<E> Display for Task<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::AskSplit {
@@ -258,14 +267,20 @@ fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         .collect()
 }
 
-struct StatsMonitor<E> where E: KvEngine {
+struct StatsMonitor<E>
+where
+    E: KvEngine,
+{
     scheduler: Scheduler<Task<E>>,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
     interval: Duration,
 }
 
-impl<E> StatsMonitor<E> where E: KvEngine {
+impl<E> StatsMonitor<E>
+where
+    E: KvEngine,
+{
     pub fn new(interval: Duration, scheduler: Scheduler<Task<E>>) -> Self {
         StatsMonitor {
             scheduler,
@@ -323,7 +338,11 @@ impl<E> StatsMonitor<E> where E: KvEngine {
     }
 }
 
-pub struct Runner<E, T> where E: KvEngine, T: PdClient + ConfigClient {
+pub struct Runner<E, T>
+where
+    E: KvEngine,
+    T: PdClient + ConfigClient,
+{
     store_id: u64,
     pd_client: Arc<T>,
     config_handler: Box<dyn DynamicConfig>,
@@ -342,7 +361,11 @@ pub struct Runner<E, T> where E: KvEngine, T: PdClient + ConfigClient {
     stats_monitor: StatsMonitor<E>,
 }
 
-impl<E, T> Runner<E, T> where E: KvEngine, T: PdClient + ConfigClient {
+impl<E, T> Runner<E, T>
+where
+    E: KvEngine,
+    T: PdClient + ConfigClient,
+{
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
@@ -837,7 +860,11 @@ impl<E, T> Runner<E, T> where E: KvEngine, T: PdClient + ConfigClient {
     }
 }
 
-impl<E, T> Runnable<Task<E>> for Runner<E, T> where E: KvEngine, T: PdClient + ConfigClient {
+impl<E, T> Runnable<Task<E>> for Runner<E, T>
+where
+    E: KvEngine,
+    T: PdClient + ConfigClient,
+{
     fn run(&mut self, task: Task<E>, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
@@ -1025,7 +1052,9 @@ fn send_admin_request<E>(
     peer: metapb::Peer,
     request: AdminRequest,
     callback: Callback<E>,
-) where E: KvEngine {
+) where
+    E: KvEngine,
+{
     let cmd_type = request.get_cmd_type();
 
     let mut req = RaftCmdRequest::default();
@@ -1044,7 +1073,11 @@ fn send_admin_request<E>(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(router: &RaftRouter<impl KvEngine>, source_region_id: u64, target: metapb::Peer) {
+fn send_merge_fail(
+    router: &RaftRouter<impl KvEngine>,
+    source_region_id: u64,
+    target: metapb::Peer,
+) {
     let target_id = target.get_id();
     if let Err(e) = router.force_send(
         source_region_id,
@@ -1085,10 +1118,10 @@ fn send_destroy_peer_message(
 #[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
+    use engine_rocks::RocksEngine;
     use std::sync::Mutex;
     use std::time::Instant;
     use tikv_util::worker::FutureWorker;
-    use engine_rocks::RocksEngine;
 
     use super::*;
 

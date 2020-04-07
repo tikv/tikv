@@ -45,9 +45,8 @@ use engine::rocks::util::{
 use engine::DB;
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
-    RangePropertiesCollectorFactory, RocksEventListener, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
-    RocksEngine,
+    RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;

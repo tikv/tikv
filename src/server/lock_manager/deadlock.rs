@@ -7,6 +7,7 @@ use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
+use engine_rocks::RocksEngine;
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
@@ -31,7 +32,6 @@ use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 use txn_types::TimeStamp;
-use engine_rocks::RocksEngine;
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
@@ -1113,7 +1113,9 @@ pub mod tests {
         }
     }
 
-    fn start_deadlock_detector(host: &mut CoprocessorHost<RocksEngine>) -> (FutureWorker<Task>, Scheduler) {
+    fn start_deadlock_detector(
+        host: &mut CoprocessorHost<RocksEngine>,
+    ) -> (FutureWorker<Task>, Scheduler) {
         let waiter_mgr_worker = FutureWorker::new("dummy-waiter-mgr");
         let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
         let mut detector_worker = FutureWorker::new("test-deadlock-detector");

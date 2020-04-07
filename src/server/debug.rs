@@ -15,7 +15,7 @@ use engine::rocks::{
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines};
-use engine_rocks::{CloneCompat, Compat, RocksWriteBatch, RocksEngine};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch};
 use engine_traits::{
     IterOptions, Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection,
     TablePropertiesExt, WriteBatch, WriteOptions,

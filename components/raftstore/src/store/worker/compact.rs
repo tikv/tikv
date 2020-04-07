@@ -5,8 +5,8 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
+use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
-use engine_traits::{KvEngine};
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -86,7 +86,10 @@ pub struct Runner<E> {
     engine: E,
 }
 
-impl<E> Runner<E> where E: KvEngine {
+impl<E> Runner<E>
+where
+    E: KvEngine,
+{
     pub fn new(engine: E) -> Runner<E> {
         Runner { engine }
     }
@@ -117,7 +120,10 @@ impl<E> Runner<E> where E: KvEngine {
     }
 }
 
-impl<E> Runnable<Task> for Runner<E> where E: KvEngine {
+impl<E> Runnable<Task> for Runner<E>
+where
+    E: KvEngine,
+{
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact {

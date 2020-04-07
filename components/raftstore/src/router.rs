@@ -14,7 +14,9 @@ use raft::SnapshotStatus;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<E>: Send + Clone
-where E: KvEngine {
+where
+    E: KvEngine,
+{
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
@@ -61,7 +63,9 @@ where E: KvEngine {
 pub struct RaftStoreBlackHole;
 
 impl<E> RaftStoreRouter<E> for RaftStoreBlackHole
-where E: KvEngine {
+where
+    E: KvEngine,
+{
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         Ok(())
@@ -86,12 +90,18 @@ where E: KvEngine {
 
 /// A router that routes messages to the raftstore
 #[derive(Clone)]
-pub struct ServerRaftStoreRouter<E> where E: KvEngine {
+pub struct ServerRaftStoreRouter<E>
+where
+    E: KvEngine,
+{
     router: RaftRouter<E>,
     local_reader: LocalReader<RaftRouter<E>, E>,
 }
 
-impl<E> ServerRaftStoreRouter<E> where E: KvEngine {
+impl<E> ServerRaftStoreRouter<E>
+where
+    E: KvEngine,
+{
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<E>,
@@ -121,7 +131,10 @@ fn handle_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
     }
 }
 
-impl<E> RaftStoreRouter<E> for ServerRaftStoreRouter<E> where E: KvEngine {
+impl<E> RaftStoreRouter<E> for ServerRaftStoreRouter<E>
+where
+    E: KvEngine,
+{
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
         self.router

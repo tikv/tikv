@@ -611,7 +611,10 @@ impl TiKVServer {
         server_config
     }
 
-    fn register_services(&mut self, gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>) {
+    fn register_services(
+        &mut self,
+        gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
+    ) {
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
 

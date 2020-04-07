@@ -138,7 +138,10 @@ impl NodeCluster {
 
 impl NodeCluster {
     #[allow(dead_code)]
-    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine>> {
+    pub fn get_node_router(
+        &self,
+        node_id: u64,
+    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine>> {
         self.trans
             .core
             .lock()
@@ -153,7 +156,10 @@ impl NodeCluster {
     // of `op` is the node_id.
     // Set this before invoking `run_node`.
     #[allow(clippy::type_complexity)]
-    pub fn post_create_coprocessor_host(&mut self, op: Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>) {
+    pub fn post_create_coprocessor_host(
+        &mut self,
+        op: Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>,
+    ) {
         self.post_create_coprocessor_host = Some(op)
     }
 

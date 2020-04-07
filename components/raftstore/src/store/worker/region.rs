@@ -11,7 +11,7 @@ use std::u64;
 
 use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngines, Mutable, KvEngine};
+use engine_traits::{KvEngine, KvEngines, Mutable};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -46,7 +46,10 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
 /// Region related task
 #[derive(Debug)]
-pub enum Task<E> where E: KvEngine {
+pub enum Task<E>
+where
+    E: KvEngine,
+{
     Gen {
         region_id: u64,
         last_applied_index_term: u64,
@@ -68,7 +71,10 @@ pub enum Task<E> where E: KvEngine {
     },
 }
 
-impl<E> Task<E> where E: KvEngine {
+impl<E> Task<E>
+where
+    E: KvEngine,
+{
     pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task<E> {
         Task::Destroy {
             region_id,
@@ -78,7 +84,10 @@ impl<E> Task<E> where E: KvEngine {
     }
 }
 
-impl<E> Display for Task<E> where E: KvEngine {
+impl<E> Display for Task<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
@@ -206,7 +215,11 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext<EK, ER, R> where EK: KvEngine, ER: KvEngine {
+struct SnapContext<EK, ER, R>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     engines: KvEngines<EK, ER>,
     batch_size: usize,
     mgr: SnapManager<EK>,
@@ -218,7 +231,10 @@ struct SnapContext<EK, ER, R> where EK: KvEngine, ER: KvEngine {
 }
 
 impl<EK, ER, R> SnapContext<EK, ER, R>
-where EK: KvEngine, ER: KvEngine, R: CasualRouter<EK>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
     fn generate_snap(
@@ -535,7 +551,11 @@ where EK: KvEngine, ER: KvEngine, R: CasualRouter<EK>
     }
 }
 
-pub struct Runner<EK, ER, R> where EK: KvEngine, ER: KvEngine {
+pub struct Runner<EK, ER, R>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     pool: ThreadPool<TaskCell>,
     ctx: SnapContext<EK, ER, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
@@ -544,7 +564,10 @@ pub struct Runner<EK, ER, R> where EK: KvEngine, ER: KvEngine {
 }
 
 impl<EK, ER, R> Runner<EK, ER, R>
-where EK: KvEngine, ER: KvEngine, R: CasualRouter<EK>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    R: CasualRouter<EK>,
 {
     pub fn new(
         engines: KvEngines<EK, ER>,
@@ -715,7 +738,7 @@ mod tests {
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine_rocks::{CloneCompat, Compat, RocksSnapshot, RocksEngine};
+    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{CompactExt, Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};

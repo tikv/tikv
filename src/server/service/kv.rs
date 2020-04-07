@@ -21,6 +21,7 @@ use crate::storage::{
     lock_manager::LockManager,
     PointGetCommand, Storage, TxnStatus,
 };
+use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -41,7 +42,6 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{self, Key};
-use engine_rocks::RocksEngine;
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
@@ -143,7 +143,9 @@ macro_rules! handle_request {
     }
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
+    for Service<T, E, L>
+{
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(

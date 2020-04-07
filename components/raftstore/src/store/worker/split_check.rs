@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 
 use engine_rocks::RocksEngine;
-use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS, KvEngine};
+use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -71,7 +71,10 @@ struct MergedIterator<I> {
     heap: BinaryHeap<KeyEntry>,
 }
 
-impl<I> MergedIterator<I> where I: Iterator {
+impl<I> MergedIterator<I>
+where
+    I: Iterator,
+{
     fn new<E: KvEngine>(
         db: &E,
         cfs: &[CfName],
@@ -269,35 +272,40 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::<<RocksEngine as Iterable>::Iterator>::new(&self.engine, LARGE_CFS, start_key, end_key, false).map(
-            |mut iter| {
-                let mut size = 0;
-                let mut keys = 0;
-                while let Some(e) = iter.next() {
-                    if host.on_kv(region, &e) {
-                        return;
-                    }
-                    size += e.entry_size() as u64;
-                    keys += 1;
+        MergedIterator::<<RocksEngine as Iterable>::Iterator>::new(
+            &self.engine,
+            LARGE_CFS,
+            start_key,
+            end_key,
+            false,
+        )
+        .map(|mut iter| {
+            let mut size = 0;
+            let mut keys = 0;
+            while let Some(e) = iter.next() {
+                if host.on_kv(region, &e) {
+                    return;
                 }
+                size += e.entry_size() as u64;
+                keys += 1;
+            }
 
-                // if we scan the whole range, we can update approximate size and keys with accurate value.
-                info!(
-                    "update approximate size and keys with accurate value";
-                    "region_id" => region.get_id(),
-                    "size" => size,
-                    "keys" => keys,
-                );
-                let _ = self.router.send(
-                    region.get_id(),
-                    CasualMessage::RegionApproximateSize { size },
-                );
-                let _ = self.router.send(
-                    region.get_id(),
-                    CasualMessage::RegionApproximateKeys { keys },
-                );
-            },
-        )?;
+            // if we scan the whole range, we can update approximate size and keys with accurate value.
+            info!(
+                "update approximate size and keys with accurate value";
+                "region_id" => region.get_id(),
+                "size" => size,
+                "keys" => keys,
+            );
+            let _ = self.router.send(
+                region.get_id(),
+                CasualMessage::RegionApproximateSize { size },
+            );
+            let _ = self.router.send(
+                region.get_id(),
+                CasualMessage::RegionApproximateKeys { keys },
+            );
+        })?;
         timer.observe_duration();
 
         Ok(host.split_keys())

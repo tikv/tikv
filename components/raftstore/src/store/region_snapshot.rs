@@ -417,7 +417,10 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_peer_storage(engines: KvEngines<RocksEngine, RocksEngine>, r: &Region) -> PeerStorage<RocksEngine, RocksEngine> {
+    fn new_peer_storage(
+        engines: KvEngines<RocksEngine, RocksEngine>,
+        r: &Region,
+    ) -> PeerStorage<RocksEngine, RocksEngine> {
         let (sched, _) = worker::dummy_scheduler();
         PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }

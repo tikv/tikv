@@ -148,7 +148,9 @@ impl_box_observer!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
-pub struct Registry<E> where E: 'static
+pub struct Registry<E>
+where
+    E: 'static,
 {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
@@ -160,8 +162,7 @@ pub struct Registry<E> where E: 'static
     // TODO: add endpoint
 }
 
-impl<E> Default for Registry<E>
-{
+impl<E> Default for Registry<E> {
     fn default() -> Registry<E> {
         Registry {
             admin_observers: Default::default(),
@@ -188,8 +189,7 @@ macro_rules! push {
     };
 }
 
-impl<E> Registry<E>
-{
+impl<E> Registry<E> {
     pub fn register_admin_observer(&mut self, priority: u32, ao: BoxAdminObserver) {
         push!(priority, ao, self.admin_observers);
     }
@@ -269,11 +269,17 @@ macro_rules! loop_ob {
 
 /// Admin and invoke all coprocessors.
 #[derive(Clone)]
-pub struct CoprocessorHost<E> where E: 'static {
+pub struct CoprocessorHost<E>
+where
+    E: 'static,
+{
     pub registry: Registry<E>,
 }
 
-impl<E> Default for CoprocessorHost<E> where E: 'static {
+impl<E> Default for CoprocessorHost<E>
+where
+    E: 'static,
+{
     fn default() -> Self {
         CoprocessorHost {
             registry: Default::default(),
@@ -281,7 +287,10 @@ impl<E> Default for CoprocessorHost<E> where E: 'static {
     }
 }
 
-impl<E> CoprocessorHost<E> where E: KvEngine {
+impl<E> CoprocessorHost<E>
+where
+    E: KvEngine,
+{
     pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
@@ -480,11 +489,11 @@ mod tests {
     use std::sync::atomic::*;
     use std::sync::Arc;
 
+    use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
     };
-    use engine_rocks::RocksEngine;
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {

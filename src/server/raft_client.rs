@@ -10,6 +10,7 @@ use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
 use crossbeam::channel::SendError;
+use engine_rocks::RocksEngine;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
@@ -23,7 +24,6 @@ use tikv_util::mpsc::batch::{self, BatchCollector, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
-use engine_rocks::RocksEngine;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;

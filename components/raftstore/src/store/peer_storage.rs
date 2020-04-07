@@ -230,7 +230,11 @@ impl CacheQueryStats {
     }
 }
 
-pub trait HandleRaftReadyContext<WK, WR> where WK: WriteBatch, WR: WriteBatch {
+pub trait HandleRaftReadyContext<WK, WR>
+where
+    WK: WriteBatch,
+    WR: WriteBatch,
+{
     /// Returns the mutable references of WriteBatch for both KvDB and RaftDB in one interface.
     fn wb_mut(&mut self) -> (&mut WK, &mut WR);
     fn kv_wb_mut(&mut self) -> &mut WK;
@@ -504,7 +508,10 @@ fn init_last_term(
     }
 }
 
-pub struct PeerStorage<EK, ER> where EK: KvEngine {
+pub struct PeerStorage<EK, ER>
+where
+    EK: KvEngine,
+{
     pub engines: KvEngines<EK, ER>,
 
     peer_id: u64,
@@ -525,7 +532,11 @@ pub struct PeerStorage<EK, ER> where EK: KvEngine {
     pub tag: String,
 }
 
-impl<EK, ER> Storage for PeerStorage<EK, ER> where EK: KvEngine, ER: KvEngine {
+impl<EK, ER> Storage for PeerStorage<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fn initial_state(&self) -> raft::Result<RaftState> {
         self.initial_state()
     }
@@ -556,7 +567,11 @@ impl<EK, ER> Storage for PeerStorage<EK, ER> where EK: KvEngine, ER: KvEngine {
     }
 }
 
-impl<EK, ER> PeerStorage<EK, ER> where EK: KvEngine, ER: KvEngine {
+impl<EK, ER> PeerStorage<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     pub fn new(
         engines: KvEngines<EK, ER>,
         region: &metapb::Region,
@@ -1390,7 +1405,9 @@ pub fn clear_meta<EK, ER>(
     region_id: u64,
     raft_state: &RaftLocalState,
 ) -> Result<()>
-where EK: KvEngine, ER: KvEngine
+where
+    EK: KvEngine,
+    ER: KvEngine,
 {
     let t = Instant::now();
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
@@ -1565,8 +1582,8 @@ mod tests {
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine::rocks::util::new_engine;
     use engine::Engines;
-    use engine_rocks::{CloneCompat, Compat, RocksWriteBatch, RocksEngine};
-    use engine_traits::{WriteBatchExt, Iterable, SyncMutable};
+    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch};
+    use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
@@ -1583,7 +1600,10 @@ mod tests {
 
     use super::*;
 
-    fn new_storage(sched: Scheduler<RegionTask<RocksEngine>>, path: &TempDir) -> PeerStorage<RocksEngine, RocksEngine> {
+    fn new_storage(
+        sched: Scheduler<RegionTask<RocksEngine>>,
+        path: &TempDir,
+    ) -> PeerStorage<RocksEngine, RocksEngine> {
         let kv_db =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));

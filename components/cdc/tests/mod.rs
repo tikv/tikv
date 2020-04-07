@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::*;
 use std::time::Duration;
 
+use engine_rocks::RocksEngine;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender};
@@ -31,7 +32,6 @@ use tikv_util::security::*;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
-use engine_rocks::RocksEngine;
 
 use cdc::{CdcObserver, Task};
 static INIT: Once = Once::new();

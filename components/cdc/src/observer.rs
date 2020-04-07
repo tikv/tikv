@@ -3,12 +3,12 @@
 use std::cell::RefCell;
 use std::sync::{Arc, RwLock};
 
+use engine_rocks::RocksEngine;
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::Error as RaftStoreError;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
-use engine_rocks::RocksEngine;
 
 use crate::endpoint::{Deregister, Task};
 use crate::Error as CdcError;

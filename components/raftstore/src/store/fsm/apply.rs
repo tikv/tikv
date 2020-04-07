@@ -15,7 +15,7 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -58,13 +58,19 @@ const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
-pub struct PendingCmd<E> where E: KvEngine {
+pub struct PendingCmd<E>
+where
+    E: KvEngine,
+{
     pub index: u64,
     pub term: u64,
     pub cb: Option<Callback<E>>,
 }
 
-impl<E> PendingCmd<E> where E: KvEngine {
+impl<E> PendingCmd<E>
+where
+    E: KvEngine,
+{
     fn new(index: u64, term: u64, cb: Callback<E>) -> PendingCmd<E> {
         PendingCmd {
             index,
@@ -74,7 +80,10 @@ impl<E> PendingCmd<E> where E: KvEngine {
     }
 }
 
-impl<E> Drop for PendingCmd<E> where E: KvEngine {
+impl<E> Drop for PendingCmd<E>
+where
+    E: KvEngine,
+{
     fn drop(&mut self) {
         if self.cb.is_some() {
             safe_panic!(
@@ -86,7 +95,10 @@ impl<E> Drop for PendingCmd<E> where E: KvEngine {
     }
 }
 
-impl<E> Debug for PendingCmd<E> where E: KvEngine {
+impl<E> Debug for PendingCmd<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -100,19 +112,25 @@ impl<E> Debug for PendingCmd<E> where E: KvEngine {
 
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
-pub struct PendingCmdQueue<E> where E: KvEngine {
+pub struct PendingCmdQueue<E>
+where
+    E: KvEngine,
+{
     normals: VecDeque<PendingCmd<E>>,
     conf_change: Option<PendingCmd<E>>,
 }
 
-impl<E> PendingCmdQueue<E> where E: KvEngine {
+impl<E> PendingCmdQueue<E>
+where
+    E: KvEngine,
+{
     fn new() -> PendingCmdQueue<E> {
         PendingCmdQueue {
             normals: VecDeque::new(),
             conf_change: None,
         }
     }
-    
+
     fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<E>> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
@@ -170,7 +188,10 @@ impl Range {
 }
 
 #[derive(Debug)]
-pub enum ExecResult<E> where E: KvEngine {
+pub enum ExecResult<E>
+where
+    E: KvEngine,
+{
     ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
@@ -211,7 +232,10 @@ pub enum ExecResult<E> where E: KvEngine {
 }
 
 /// The possible returned value when applying logs.
-pub enum ApplyResult<E> where E: KvEngine {
+pub enum ApplyResult<E>
+where
+    E: KvEngine,
+{
     None,
     Yield,
     /// Additional result that needs to be sent back to raftstore.
@@ -238,12 +262,18 @@ impl ExecContext {
     }
 }
 
-struct ApplyCallback<E> where E: KvEngine {
+struct ApplyCallback<E>
+where
+    E: KvEngine,
+{
     region: Region,
     cbs: Vec<(Option<Callback<E>>, RaftCmdResponse)>,
 }
 
-impl<E> ApplyCallback<E> where E: KvEngine {
+impl<E> ApplyCallback<E>
+where
+    E: KvEngine,
+{
     fn new(region: Region) -> ApplyCallback<E> {
         let cbs = vec![];
         ApplyCallback { region, cbs }
@@ -264,13 +294,19 @@ impl<E> ApplyCallback<E> where E: KvEngine {
 }
 
 #[derive(Clone)]
-pub enum Notifier<E> where E: KvEngine {
+pub enum Notifier<E>
+where
+    E: KvEngine,
+{
     Router(RaftRouter<E>),
     #[cfg(test)]
     Sender(Sender<PeerMsg<E>>),
 }
 
-impl<E> Notifier<E> where E: KvEngine {
+impl<E> Notifier<E>
+where
+    E: KvEngine,
+{
     fn notify(&self, region_id: u64, msg: PeerMsg<E>) {
         match *self {
             Notifier::Router(ref r) => {
@@ -282,7 +318,11 @@ impl<E> Notifier<E> where E: KvEngine {
     }
 }
 
-struct ApplyContext<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E> {
+struct ApplyContext<E, W>
+where
+    E: KvEngine,
+    W: WriteBatch + WriteBatchVecExt<E>,
+{
     tag: String,
     timer: Option<Instant>,
     host: CoprocessorHost<RocksEngine>,
@@ -310,7 +350,11 @@ struct ApplyContext<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E>
     use_delete_range: bool,
 }
 
-impl<E, W> ApplyContext<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E> {
+impl<E, W> ApplyContext<E, W>
+where
+    E: KvEngine,
+    W: WriteBatch + WriteBatchVecExt<E>,
+{
     pub fn new(
         tag: String,
         host: CoprocessorHost<RocksEngine>,
@@ -435,7 +479,11 @@ impl<E, W> ApplyContext<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecEx
     }
 
     /// Finishes `Apply`s for the delegate.
-    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate<E>, results: VecDeque<ExecResult<E>>) {
+    pub fn finish_for(
+        &mut self,
+        delegate: &mut ApplyDelegate<E>,
+        results: VecDeque<ExecResult<E>>,
+    ) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
@@ -529,7 +577,12 @@ pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl KvEngine>) {
 }
 
 /// Calls the callback of `cmd` when it can not be processed further.
-fn notify_stale_command(region_id: u64, peer_id: u64, term: u64, mut cmd: PendingCmd<impl KvEngine>) {
+fn notify_stale_command(
+    region_id: u64,
+    peer_id: u64,
+    term: u64,
+    mut cmd: PendingCmd<impl KvEngine>,
+) {
     info!(
         "command is stale, skip";
         "region_id" => region_id,
@@ -606,7 +659,10 @@ struct WaitSourceMergeState {
     logs_up_to_date: Arc<AtomicU64>,
 }
 
-struct YieldState<E> where E: KvEngine {
+struct YieldState<E>
+where
+    E: KvEngine,
+{
     /// All of the entries that need to continue to be applied after
     /// the source peer has applied its logs.
     pending_entries: Vec<Entry>,
@@ -616,7 +672,10 @@ struct YieldState<E> where E: KvEngine {
     pending_msgs: Vec<Msg<E>>,
 }
 
-impl<E> Debug for YieldState<E> where E: KvEngine {
+impl<E> Debug for YieldState<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("YieldState")
             .field("pending_entries", &self.pending_entries.len())
@@ -647,7 +706,10 @@ impl Debug for WaitSourceMergeState {
 /// located at this store, and it will get the corresponding apply delegate to
 /// handle the apply task to make the code logic more clear.
 #[derive(Debug)]
-pub struct ApplyDelegate<E> where E: KvEngine {
+pub struct ApplyDelegate<E>
+where
+    E: KvEngine,
+{
     /// The ID of the peer.
     id: u64,
     /// The term of the Region.
@@ -699,7 +761,10 @@ pub struct ApplyDelegate<E> where E: KvEngine {
     metrics: ApplyMetrics,
 }
 
-impl<E> ApplyDelegate<E> where E: KvEngine {
+impl<E> ApplyDelegate<E>
+where
+    E: KvEngine,
+{
     fn from_registration(reg: Registration) -> ApplyDelegate<E> {
         ApplyDelegate {
             id: reg.id,
@@ -912,12 +977,7 @@ impl<E> ApplyDelegate<E> where E: KvEngine {
         }
     }
 
-    fn find_cb(
-        &mut self,
-        index: u64,
-        term: u64,
-        is_conf_change: bool,
-    ) -> Option<Callback<E>> {
+    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback<E>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -1081,10 +1141,7 @@ impl<E> ApplyDelegate<E> where E: KvEngine {
         (resp, exec_result)
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<E>>(
-        &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
-    ) {
+    fn destroy<W: WriteBatch + WriteBatchVecExt<E>>(&mut self, apply_ctx: &mut ApplyContext<E, W>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
         for cmd in self.pending_cmds.normals.drain(..) {
@@ -1110,7 +1167,10 @@ impl<E> ApplyDelegate<E> where E: KvEngine {
     }
 }
 
-impl<E> ApplyDelegate<E> where E: KvEngine {
+impl<E> ApplyDelegate<E>
+where
+    E: KvEngine,
+{
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
@@ -1244,7 +1304,10 @@ impl<E> ApplyDelegate<E> where E: KvEngine {
 }
 
 // Write commands related.
-impl<E> ApplyDelegate<E> where E: KvEngine {
+impl<E> ApplyDelegate<E>
+where
+    E: KvEngine,
+{
     fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
@@ -1434,7 +1497,10 @@ impl<E> ApplyDelegate<E> where E: KvEngine {
 }
 
 // Admin commands related.
-impl<E> ApplyDelegate<E> where E: KvEngine {
+impl<E> ApplyDelegate<E>
+where
+    E: KvEngine,
+{
     fn exec_change_peer<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
         ctx: &mut ApplyContext<E, W>,
@@ -2235,14 +2301,20 @@ impl Registration {
     }
 }
 
-pub struct Proposal<E> where E: KvEngine {
+pub struct Proposal<E>
+where
+    E: KvEngine,
+{
     is_conf_change: bool,
     index: u64,
     term: u64,
     pub cb: Callback<E>,
 }
 
-impl<E> Proposal<E> where E: KvEngine {
+impl<E> Proposal<E>
+where
+    E: KvEngine,
+{
     pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<E>) -> Proposal<E> {
         Proposal {
             is_conf_change,
@@ -2253,13 +2325,19 @@ impl<E> Proposal<E> where E: KvEngine {
     }
 }
 
-pub struct RegionProposal<E> where E: KvEngine {
+pub struct RegionProposal<E>
+where
+    E: KvEngine,
+{
     pub id: u64,
     pub region_id: u64,
     pub props: Vec<Proposal<E>>,
 }
 
-impl<E> RegionProposal<E> where E: KvEngine {
+impl<E> RegionProposal<E>
+where
+    E: KvEngine,
+{
     pub fn new(id: u64, region_id: u64, props: Vec<Proposal<E>>) -> RegionProposal<E> {
         RegionProposal {
             id,
@@ -2320,7 +2398,10 @@ impl GenSnapTask {
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
         region_sched: &Scheduler<RegionTask<E>>,
-    ) -> Result<()> where E: KvEngine {
+    ) -> Result<()>
+    where
+        E: KvEngine,
+    {
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
             notifier: self.snap_notifier,
@@ -2356,7 +2437,10 @@ pub enum ChangeCmd {
     },
 }
 
-pub enum Msg<E> where E: KvEngine {
+pub enum Msg<E>
+where
+    E: KvEngine,
+{
     Apply {
         start: Instant,
         apply: Apply,
@@ -2375,7 +2459,10 @@ pub enum Msg<E> where E: KvEngine {
     Validate(u64, Box<dyn FnOnce((&ApplyDelegate<E>, bool)) + Send>),
 }
 
-impl<E> Msg<E> where E: KvEngine {
+impl<E> Msg<E>
+where
+    E: KvEngine,
+{
     pub fn apply(apply: Apply) -> Msg<E> {
         Msg::Apply {
             start: Instant::now(),
@@ -2395,7 +2482,10 @@ impl<E> Msg<E> where E: KvEngine {
     }
 }
 
-impl<E> Debug for Msg<E> where E: KvEngine {
+impl<E> Debug for Msg<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Msg::Apply { apply, .. } => write!(f, "[region {}] async apply", apply.region_id),
@@ -2436,7 +2526,10 @@ pub struct ApplyMetrics {
 }
 
 #[derive(Debug)]
-pub struct ApplyRes<E> where E: KvEngine {
+pub struct ApplyRes<E>
+where
+    E: KvEngine,
+{
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
@@ -2445,7 +2538,10 @@ pub struct ApplyRes<E> where E: KvEngine {
 }
 
 #[derive(Debug)]
-pub enum TaskRes<E> where E: KvEngine {
+pub enum TaskRes<E>
+where
+    E: KvEngine,
+{
     Apply(ApplyRes<E>),
     Destroy {
         // ID of region that has been destroyed.
@@ -2455,13 +2551,19 @@ pub enum TaskRes<E> where E: KvEngine {
     },
 }
 
-pub struct ApplyFsm<E> where E: KvEngine {
+pub struct ApplyFsm<E>
+where
+    E: KvEngine,
+{
     delegate: ApplyDelegate<E>,
     receiver: Receiver<Msg<E>>,
     mailbox: Option<BasicMailbox<ApplyFsm<E>>>,
 }
 
-impl<E> ApplyFsm<E> where E: KvEngine {
+impl<E> ApplyFsm<E>
+where
+    E: KvEngine,
+{
     fn from_peer(peer: &Peer) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
@@ -2573,10 +2675,7 @@ impl<E> ApplyFsm<E> where E: KvEngine {
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<E>>(
-        &mut self,
-        ctx: &mut ApplyContext<E, W>,
-    ) {
+    fn destroy<W: WriteBatch + WriteBatchVecExt<E>>(&mut self, ctx: &mut ApplyContext<E, W>) {
         let region_id = self.delegate.region_id();
         if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
             // Flush before destroying to avoid reordering messages.
@@ -2849,7 +2948,10 @@ impl<E> ApplyFsm<E> where E: KvEngine {
     }
 }
 
-impl<E> Fsm for ApplyFsm<E> where E: KvEngine {
+impl<E> Fsm for ApplyFsm<E>
+where
+    E: KvEngine,
+{
     type Message = Msg<E>;
 
     #[inline]
@@ -2874,7 +2976,10 @@ impl<E> Fsm for ApplyFsm<E> where E: KvEngine {
     }
 }
 
-impl<E> Drop for ApplyFsm<E> where E: KvEngine {
+impl<E> Drop for ApplyFsm<E>
+where
+    E: KvEngine,
+{
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
     }
@@ -2893,16 +2998,21 @@ impl Fsm for ControlFsm {
     }
 }
 
-pub struct ApplyPoller<E, W> where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E> {
+pub struct ApplyPoller<E, W>
+where
+    E: KvEngine,
+    W: WriteBatch + WriteBatchVecExt<E>,
+{
     msg_buf: Vec<Msg<E>>,
     apply_ctx: ApplyContext<E, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
 
-impl<E, W> PollHandler<ApplyFsm<E>, ControlFsm>
-    for ApplyPoller<E, W>
-    where E: KvEngine, W: WriteBatch + WriteBatchVecExt<E>
+impl<E, W> PollHandler<ApplyFsm<E>, ControlFsm> for ApplyPoller<E, W>
+where
+    E: KvEngine,
+    W: WriteBatch + WriteBatchVecExt<E>,
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -3008,8 +3118,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     }
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> HandlerBuilder<ApplyFsm<RocksEngine>, ControlFsm>
-    for Builder<W>
+impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
+    HandlerBuilder<ApplyFsm<RocksEngine>, ControlFsm> for Builder<W>
 {
     type Handler = ApplyPoller<RocksEngine, W>;
 
@@ -3299,7 +3409,9 @@ mod tests {
         notify2.send(()).unwrap();
     }
 
-    fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>) -> ApplyRes<RocksEngine> {
+    fn fetch_apply_res(
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
+    ) -> ApplyRes<RocksEngine> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,

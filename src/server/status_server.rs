@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use super::Result;
 use crate::config::TiKvConfig;
+use engine_rocks::RocksEngine;
 use raftstore::store::PdTask;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
@@ -33,7 +34,6 @@ use tikv_util::metrics::dump;
 use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::FutureScheduler;
-use engine_rocks::RocksEngine;
 
 mod profiler_guard {
     use tikv_alloc::error::ProfResult;
@@ -93,7 +93,10 @@ pub struct StatusServer {
 }
 
 impl StatusServer {
-    pub fn new(status_thread_pool_size: usize, pd_sender: FutureScheduler<PdTask<RocksEngine>>) -> Self {
+    pub fn new(
+        status_thread_pool_size: usize,
+        pd_sender: FutureScheduler<PdTask<RocksEngine>>,
+    ) -> Self {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
@@ -619,12 +622,12 @@ mod tests {
 
     use crate::config::TiKvConfig;
     use crate::server::status_server::StatusServer;
+    use engine_rocks::RocksEngine;
     use raftstore::store::PdTask;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
     use tikv_util::security::SecurityConfig;
     use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
-    use engine_rocks::RocksEngine;
 
     #[test]
     fn test_status_service() {
