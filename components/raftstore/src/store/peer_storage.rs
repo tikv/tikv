@@ -272,7 +272,7 @@ pub struct InvokeContext {
 }
 
 impl InvokeContext {
-    pub fn new(store: &PeerStorage<impl KvEngine, impl KvEngine, impl KvEngine>) -> InvokeContext {
+    pub fn new(store: &PeerStorage<impl KvEngine, impl KvEngine>) -> InvokeContext {
         InvokeContext {
             region_id: store.get_region_id(),
             raft_state: store.raft_state.clone(),
@@ -504,8 +504,7 @@ fn init_last_term(
     }
 }
 
-// FIXME: Should E be EK (kv) or ER (raft)?
-pub struct PeerStorage<E, EK, ER> where E: KvEngine {
+pub struct PeerStorage<EK, ER> where EK: KvEngine {
     pub engines: KvEngines<EK, ER>,
 
     peer_id: u64,
@@ -517,7 +516,7 @@ pub struct PeerStorage<E, EK, ER> where E: KvEngine {
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_sched: Scheduler<RegionTask<E>>,
+    region_sched: Scheduler<RegionTask<EK>>,
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
@@ -526,7 +525,7 @@ pub struct PeerStorage<E, EK, ER> where E: KvEngine {
     pub tag: String,
 }
 
-impl<E, EK, ER> Storage for PeerStorage<E, EK, ER> where E: KvEngine, EK: KvEngine, ER: KvEngine {
+impl<EK, ER> Storage for PeerStorage<EK, ER> where EK: KvEngine, ER: KvEngine {
     fn initial_state(&self) -> raft::Result<RaftState> {
         self.initial_state()
     }
@@ -557,14 +556,14 @@ impl<E, EK, ER> Storage for PeerStorage<E, EK, ER> where E: KvEngine, EK: KvEngi
     }
 }
 
-impl<E, EK, ER> PeerStorage<E, EK, ER> where E: KvEngine, EK: KvEngine, ER: KvEngine {
+impl<EK, ER> PeerStorage<EK, ER> where EK: KvEngine, ER: KvEngine {
     pub fn new(
         engines: KvEngines<EK, ER>,
         region: &metapb::Region,
-        region_sched: Scheduler<RegionTask<E>>,
+        region_sched: Scheduler<RegionTask<EK>>,
         peer_id: u64,
         tag: String,
-    ) -> Result<PeerStorage<E, EK, ER>> {
+    ) -> Result<PeerStorage<EK, ER>> {
         debug!(
             "creating storage on specified path";
             "region_id" => region.get_id(),
@@ -1584,7 +1583,7 @@ mod tests {
 
     use super::*;
 
-    fn new_storage(sched: Scheduler<RegionTask<RocksEngine>>, path: &TempDir) -> PeerStorage<RocksEngine, RocksEngine, RocksEngine> {
+    fn new_storage(sched: Scheduler<RegionTask<RocksEngine>>, path: &TempDir) -> PeerStorage<RocksEngine, RocksEngine> {
         let kv_db =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));
@@ -1606,7 +1605,7 @@ mod tests {
     }
 
     impl ReadyContext {
-        fn new(s: &PeerStorage<RocksEngine, RocksEngine, RocksEngine>) -> ReadyContext {
+        fn new(s: &PeerStorage<RocksEngine, RocksEngine>) -> ReadyContext {
             ReadyContext {
                 kv_wb: s.engines.kv.write_batch(),
                 raft_wb: s.engines.raft.write_batch(),
@@ -1637,7 +1636,7 @@ mod tests {
         sched: Scheduler<RegionTask<RocksEngine>>,
         path: &TempDir,
         ents: &[Entry],
-    ) -> PeerStorage<RocksEngine, RocksEngine, RocksEngine> {
+    ) -> PeerStorage<RocksEngine, RocksEngine> {
         let mut store = new_storage(sched, path);
         let mut kv_wb = store.engines.kv.write_batch();
         let mut ctx = InvokeContext::new(&store);
@@ -1659,7 +1658,7 @@ mod tests {
         store
     }
 
-    fn append_ents(store: &mut PeerStorage<RocksEngine, RocksEngine, RocksEngine>, ents: &[Entry]) {
+    fn append_ents(store: &mut PeerStorage<RocksEngine, RocksEngine>, ents: &[Entry]) {
         let mut ctx = InvokeContext::new(store);
         let mut ready_ctx = ReadyContext::new(store);
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
@@ -1668,7 +1667,7 @@ mod tests {
         store.raft_state = ctx.raft_state;
     }
 
-    fn validate_cache(store: &PeerStorage<RocksEngine, RocksEngine, RocksEngine>, exp_ents: &[Entry]) {
+    fn validate_cache(store: &PeerStorage<RocksEngine, RocksEngine>, exp_ents: &[Entry]) {
         assert_eq!(store.cache.cache, exp_ents);
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
@@ -1712,7 +1711,7 @@ mod tests {
         }
     }
 
-    fn get_meta_key_count(store: &PeerStorage<RocksEngine, RocksEngine, RocksEngine>) -> usize {
+    fn get_meta_key_count(store: &PeerStorage<RocksEngine, RocksEngine>) -> usize {
         let region_id = store.get_region_id();
         let mut count = 0;
         let (meta_start, meta_end) = (
@@ -2426,7 +2425,7 @@ mod tests {
 
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines.c(), &region).unwrap();
-        let build_storage = || -> Result<PeerStorage<RocksEngine, RocksEngine, RocksEngine>> {
+        let build_storage = || -> Result<PeerStorage<RocksEngine, RocksEngine>> {
             PeerStorage::new(engines.c(), &region, sched.clone(), 0, "".to_owned())
         };
         let mut s = build_storage().unwrap();

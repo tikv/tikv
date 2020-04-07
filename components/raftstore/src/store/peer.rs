@@ -170,7 +170,7 @@ pub struct Peer {
     pub peer: metapb::Peer,
 
     /// The Raft state machine of this Peer.
-    pub raft_group: RawNode<PeerStorage<RocksEngine, RocksEngine, RocksEngine>>,
+    pub raft_group: RawNode<PeerStorage<RocksEngine, RocksEngine>>,
     /// The cache of meta information for Region's other Peers.
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
@@ -624,12 +624,12 @@ impl Peer {
     }
 
     #[inline]
-    pub fn get_store(&self) -> &PeerStorage<RocksEngine, RocksEngine, RocksEngine> {
+    pub fn get_store(&self) -> &PeerStorage<RocksEngine, RocksEngine> {
         self.raft_group.store()
     }
 
     #[inline]
-    pub fn mut_store(&mut self) -> &mut PeerStorage<RocksEngine, RocksEngine, RocksEngine> {
+    pub fn mut_store(&mut self) -> &mut PeerStorage<RocksEngine, RocksEngine> {
         self.raft_group.mut_store()
     }
 
