@@ -375,11 +375,11 @@ impl TiKVServer {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
+            Box::new(DBConfigManger::new(engines.kv.c().clone(), DBType::Kv)),
         );
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
+            Box::new(DBConfigManger::new(engines.raft.c().clone(), DBType::Raft)),
         );
 
         let engine = RaftKv::new(raft_router.clone());
