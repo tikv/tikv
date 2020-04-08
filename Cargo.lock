@@ -1085,6 +1085,7 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "coarsetime",
  "encryption",
  "engine",
  "engine_traits",
@@ -1092,6 +1093,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "prometheus",
+ "prometheus-static-metric",
  "rand 0.7.3",
  "rocksdb",
  "slog",
@@ -3007,6 +3009,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "coarsetime",
  "configuration",
  "crc32fast",
  "crossbeam",
