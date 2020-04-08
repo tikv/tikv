@@ -2,6 +2,18 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.0-rc] - 2020-04-08
++ Compatibility Changes
+  + Support the `pipelined` feature in pessimistic transactions, which improves the TPC-C performance by 20%. The risk is that the transaction commit might fail because of lock failure during the execution [#6984](https://github.com/tikv/tikv/pull/6984)
+  + Enable the `unify-read-pool` configuration item in new clusters by default and use the previous setting of this item in old clusters [#7059](https://github.com/tikv/tikv/pull/7059)
++ New Features
+  + Support the `pipelined` feature in pessimistic transactions, which improves the TPC-C performance by 20%. The risk is that the transaction commit might fail because of lock failure during the execution  [#6984](https://github.com/tikv/tikv/pull/6984)
+  + Support TLS in the HTTP port [#5393](https://github.com/tikv/tikv/pull/5393)
+  + Enable the `unify-read-pool` configuration item in new clusters by default and use the previous setting of this item in old clusters  [#7059](https://github.com/tikv/tikv/pull/7059)
++ Bug Fixes
+  + Fix the possible panic caused by transferring the leader when the Follower Read feature is enabled [#7101](https://github.com/tikv/tikv/pull/7101)
+
+
 ## [4.0.0-beta.2] - 2020-03-18
 + New Features
   + Support the configuration of persistent dynamic update [#6684](https://github.com/tikv/tikv/pull/6684)
