@@ -1,29 +1,26 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod};
-
-use super::metadata::*;
-use super::Backend;
-use crate::crypter::{self, AesCtrCrypter, Iv};
-use crate::{Error, Result};
-
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod};
+
+use super::{Backend, MemBackend};
+use crate::{crypter, Error, Iv, Result};
+
 pub struct FileBackend {
-    method: EncryptionMethod,
-    key: Vec<u8>,
+    mem_backend: MemBackend,
 }
 
 impl FileBackend {
-    pub fn new<P: AsRef<Path>>(method: EncryptionMethod, path: P) -> Result<FileBackend> {
+    pub fn new(method: EncryptionMethod, key_path: &Path) -> Result<FileBackend> {
         let key = match method {
             EncryptionMethod::Unknown => return Err(Error::UnknownEncryption),
             EncryptionMethod::Plaintext => vec![],
             _ => {
                 let key_len = crypter::get_method_key_length(method);
-                let mut file = File::open(path)?;
+                let mut file = File::open(key_path)?;
                 // Check file size to avoid reading a gigantic file accidentally.
                 let file_len = file.metadata()?.len() as usize;
                 if file_len != key_len * 2 + 1 {
@@ -57,78 +54,20 @@ impl FileBackend {
                 })?
             }
         };
-        Ok(FileBackend { method, key })
-    }
 
-    fn encrypt_content(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {
-        let mut content = EncryptedContent::default();
-        let iv_value = iv.as_slice().to_vec();
-        content
-            .mut_metadata()
-            .insert(MetadataKey::Iv.as_str().to_owned(), iv_value);
-        let method_value = encode_ecryption_method(self.method)?;
-        content.mut_metadata().insert(
-            MetadataKey::EncryptionMethod.as_str().to_owned(),
-            method_value,
-        );
-        let checksum = sha256(plaintext)?;
-        content
-            .mut_metadata()
-            .insert(MetadataKey::PlaintextSha256.as_str().to_owned(), checksum);
-        let key = &self.key;
-        let ciphertext = AesCtrCrypter::new(self.method, key, iv).encrypt(plaintext)?;
-        content.set_content(ciphertext);
-        Ok(content)
-    }
-
-    fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
-        let key = &self.key;
-        let iv_value = content
-            .get_metadata()
-            .get(MetadataKey::Iv.as_str())
-            .ok_or_else(|| {
-                Error::Other(format!("metadata {} not found", MetadataKey::Iv.as_str()).into())
-            })?;
-        let method_value = content
-            .get_metadata()
-            .get(MetadataKey::EncryptionMethod.as_str())
-            .ok_or_else(|| {
-                Error::Other(
-                    format!(
-                        "metadata {} not found",
-                        MetadataKey::EncryptionMethod.as_str()
-                    )
-                    .into(),
-                )
-            })?;
-        let iv = Iv::from_slice(iv_value.as_slice())?;
-        let method = decode_ecryption_method(method_value)?;
-        let checksum = content
-            .get_metadata()
-            .get(MetadataKey::PlaintextSha256.as_str())
-            .ok_or_else(|| Error::WrongMasterKey("sha256 checksum not found".to_owned().into()))?;
-        let ciphertext = content.get_content();
-        // For CTR modes, wrong master key would not lead to decrypt error, so we do not convert
-        // the underlying error to a WrongMasterKey error. Need to reconsider if we later support
-        // other encryption types.
-        let plaintext = AesCtrCrypter::new(method, key, iv).decrypt(ciphertext)?;
-        if *checksum != sha256(&plaintext)? {
-            return Err(Error::WrongMasterKey(
-                "sha256 checksum mismatch".to_owned().into(),
-            ));
-        }
-        Ok(plaintext)
+        let mem_backend = MemBackend::new(method, key)?;
+        Ok(FileBackend { mem_backend })
     }
 }
 
 impl Backend for FileBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
         let iv = Iv::new();
-        self.encrypt_content(plaintext, iv)
+        self.mem_backend.encrypt_content(plaintext, iv)
     }
 
     fn decrypt(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
-        self.decrypt_content(content)
+        self.mem_backend.decrypt_content(content)
     }
 
     fn is_secure(&self) -> bool {
@@ -142,6 +81,8 @@ mod tests {
     use matches::assert_matches;
     use std::{fs::File, io::Write, path::PathBuf};
     use tempfile::TempDir;
+
+    use super::super::metadata::MetadataKey;
 
     use super::*;
     use crate::*;
@@ -170,13 +111,13 @@ mod tests {
         .unwrap();
 
         let (key_path, _tmp_key_dir) = create_key_file("key");
-        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key_path).unwrap();
+        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, &key_path).unwrap();
 
         let iv = Vec::from_hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff").unwrap();
         let iv = Iv::from(iv.as_slice());
-        let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
+        let encrypted_content = backend.mem_backend.encrypt_content(&pt, iv).unwrap();
         assert_eq!(encrypted_content.get_content(), ct.as_slice());
-        let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
+        let plaintext = backend.decrypt(&encrypted_content).unwrap();
         assert_eq!(plaintext, pt);
     }
 
@@ -185,10 +126,10 @@ mod tests {
         let pt = vec![1u8, 2, 3];
 
         let (key_path, _tmp_key_dir) = create_key_file("key");
-        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, key_path).unwrap();
+        let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, &key_path).unwrap();
 
         let encrypted_content = backend.encrypt(&pt).unwrap();
-        let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
+        let plaintext = backend.decrypt(&encrypted_content).unwrap();
         assert_eq!(plaintext, pt);
 
         // Must checksum mismatch
@@ -198,7 +139,7 @@ mod tests {
             .get_mut(MetadataKey::PlaintextSha256.as_str())
             .unwrap()[0] += 1;
         assert_matches!(
-            backend.decrypt_content(&encrypted_content1).unwrap_err(),
+            backend.decrypt(&encrypted_content1).unwrap_err(),
             Error::WrongMasterKey(_)
         );
 
@@ -208,7 +149,7 @@ mod tests {
             .mut_metadata()
             .remove(MetadataKey::PlaintextSha256.as_str());
         assert_matches!(
-            backend.decrypt_content(&encrypted_content2).unwrap_err(),
+            backend.decrypt(&encrypted_content2).unwrap_err(),
             Error::WrongMasterKey(_)
         );
     }
