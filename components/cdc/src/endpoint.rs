@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use engine_rocks::RocksEngine;
-use futures::future::{lazy, Future};
+use futures::future::Future;
 use kvproto::cdcpb::*;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
@@ -21,7 +21,7 @@ use tikv::storage::txn::TxnEntryScanner;
 use tikv_util::collections::HashMap;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
-use tokio_threadpool::{Builder, Sender as PoolSender, ThreadPool};
+use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID};
@@ -287,11 +287,9 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
         let downstream_id = downstream.get_id();
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
-        let workers = self.workers.sender().clone();
         let batch_size = self.scan_batch_size;
 
         let init = Initializer {
-            workers,
             sched,
             region_id,
             downstream_id,
@@ -323,26 +321,39 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 region_epoch: request.take_region_epoch(),
             }
         };
-        if let Err(e) = self.raft_router.send(
-            region_id,
-            CasualMessage::CaptureChange {
-                cmd: change_cmd,
-                callback: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
-                    init.on_change_cmd(resp);
-                })),
-            },
-        ) {
-            warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
+        let (cb, fut) = tikv_util::future::paired_future_callback();
+        let scheduler = self.scheduler.clone();
+        let schedule_deregister = move |err| {
+            warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?err);
             let deregister = Deregister::Downstream {
                 region_id,
                 downstream_id,
                 conn_id,
-                err: Some(Error::Request(e.into())),
+                err: Some(err),
             };
-            if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
+            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("schedule cdc task failed"; "error" => ?e);
             }
+        };
+        if let Err(e) = self.raft_router.send(
+            region_id,
+            CasualMessage::CaptureChange {
+                cmd: change_cmd,
+                callback: Callback::Read(cb),
+            },
+        ) {
+            schedule_deregister(Error::Request(e.into()));
+            return;
         }
+        self.workers.spawn(
+            fut.map_err(move |e| {
+                schedule_deregister(Error::Other(box_err!(e)));
+            })
+            .and_then(move |resp| {
+                init.on_change_cmd(resp);
+                Ok(())
+            }),
+        );
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
@@ -432,7 +443,6 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
 }
 
 struct Initializer {
-    workers: PoolSender,
     sched: Scheduler<Task>,
 
     region_id: u64,
@@ -480,70 +490,62 @@ impl Initializer {
             "region_id" => region.get_id(),
             "downstream_id" => ?downstream_id);
 
-        // spawn the task to a thread pool.
         // TODO: Add a cancellation mechanism so that the scanning can be canceled if it doesn't
         // finish when the region is deregistered.
         let region_id = region.get_id();
-        self.workers
-            .spawn(lazy(move || {
-                let mut resolver = if build_resolver {
-                    Some(Resolver::new())
-                } else {
-                    None
-                };
+        let mut resolver = if build_resolver {
+            Some(Resolver::new())
+        } else {
+            None
+        };
 
-                fail_point!("cdc_incremental_scan_start");
+        fail_point!("cdc_incremental_scan_start");
 
-                // Time range: (checkpoint_ts, current]
-                let current = TimeStamp::max();
-                let mut scanner = ScannerBuilder::new(snap, current, false)
-                    .range(None, None)
-                    .build_delta_scanner(checkpoint_ts)
-                    .unwrap();
-                let mut done = false;
-                while !done {
-                    let entries =
-                        match Self::scan_batch(&mut scanner, batch_size, resolver.as_mut()) {
-                            Ok(res) => res,
-                            Err(e) => {
-                                error!("cdc scan entries failed"; "error" => ?e);
-                                // TODO: record in metrics.
-                                let deregister = Deregister::Downstream {
-                                    region_id,
-                                    downstream_id,
-                                    conn_id,
-                                    err: Some(e),
-                                };
-                                if let Err(e) = sched.schedule(Task::Deregister(deregister)) {
-                                    error!("schedule cdc task failed"; "error" => ?e);
-                                }
-                                return Ok(());
-                            }
-                        };
-                    // If the last element is None, it means scanning is finished.
-                    if let Some(None) = entries.last() {
-                        done = true;
-                    }
-                    debug!("cdc scan entries"; "len" => entries.len());
-                    fail_point!("before_schedule_incremental_scan");
-                    let scanned = Task::IncrementalScan {
+        // Time range: (checkpoint_ts, current]
+        let current = TimeStamp::max();
+        let mut scanner = ScannerBuilder::new(snap, current, false)
+            .range(None, None)
+            .build_delta_scanner(checkpoint_ts)
+            .unwrap();
+        let mut done = false;
+        while !done {
+            let entries = match Self::scan_batch(&mut scanner, batch_size, resolver.as_mut()) {
+                Ok(res) => res,
+                Err(e) => {
+                    error!("cdc scan entries failed"; "error" => ?e);
+                    // TODO: record in metrics.
+                    let deregister = Deregister::Downstream {
                         region_id,
                         downstream_id,
-                        entries,
+                        conn_id,
+                        err: Some(e),
                     };
-                    if let Err(e) = sched.schedule(scanned) {
-                        error!("schedule task failed"; "error" => ?e);
-                        return Ok(());
+                    if let Err(e) = sched.schedule(Task::Deregister(deregister)) {
+                        error!("schedule cdc task failed"; "error" => ?e);
                     }
+                    return;
                 }
+            };
+            // If the last element is None, it means scanning is finished.
+            if let Some(None) = entries.last() {
+                done = true;
+            }
+            debug!("cdc scan entries"; "len" => entries.len());
+            fail_point!("before_schedule_incremental_scan");
+            let scanned = Task::IncrementalScan {
+                region_id,
+                downstream_id,
+                entries,
+            };
+            if let Err(e) = sched.schedule(scanned) {
+                error!("schedule task failed"; "error" => ?e);
+                return;
+            }
+        }
 
-                if let Some(resolver) = resolver {
-                    Self::finish_building_resolver(resolver, region, sched);
-                }
-
-                Ok(())
-            }))
-            .unwrap();
+        if let Some(resolver) = resolver {
+            Self::finish_building_resolver(resolver, region, sched);
+        }
     }
 
     fn scan_batch<S: Snapshot>(
@@ -690,7 +692,6 @@ mod tests {
             .build();
 
         let initializer = Initializer {
-            workers: pool.sender().clone(),
             sched: receiver_worker.scheduler(),
 
             region_id: 1,
