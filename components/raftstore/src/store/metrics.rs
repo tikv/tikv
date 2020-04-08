@@ -1,6 +1,168 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
+use prometheus_static_metric::*;
+
+make_auto_flush_static_metric! {
+    pub label_enum ProposalType {
+        all,
+        local_read,
+        read_index,
+        unsafe_read_index,
+        normal,
+        transfer_leader,
+        conf_change,
+    }
+
+    pub label_enum AdminCmdType {
+        conf_change,
+        add_peer,
+        remove_peer,
+        add_learner,
+        batch_split : "batch-split",
+        prepare_merge,
+        commit_merge,
+        rollback_merge,
+        compact,
+    }
+
+    pub label_enum AdminCmdStatus {
+        reject_unsafe,
+        all,
+        success,
+    }
+
+    pub label_enum RaftReadyType {
+        message,
+        commit,
+        append,
+        snapshot,
+        pending_region,
+        has_ready_region,
+    }
+
+    pub label_enum MessageCounterType {
+        append,
+        append_resp,
+        prevote,
+        prevote_resp,
+        vote,
+        vote_resp,
+        snapshot,
+        request_snapshot,
+        heartbeat,
+        heartbeat_resp,
+        transfer_leader,
+        timeout_now,
+        read_index,
+        read_index_resp,
+    }
+
+    pub label_enum RaftDroppedMessage {
+        mismatch_store_id,
+        mismatch_region_epoch,
+        stale_msg,
+        region_overlap,
+        region_no_peer,
+        region_tombstone_peer,
+        region_nonexistent,
+        applying_snap,
+    }
+
+    pub label_enum SnapValidationType {
+        stale,
+        decode,
+        epoch,
+    }
+
+    pub label_enum RegionHashType {
+        verify,
+        compute,
+    }
+
+    pub label_enum RegionHashResult {
+        miss,
+        matched,
+        all,
+        failed,
+    }
+
+    pub label_enum CfNames {
+        default,
+        lock,
+        write,
+        raft,
+    }
+
+    pub label_enum RaftEntryType {
+        hit,
+        miss
+    }
+
+    pub label_enum RaftInvalidProposal {
+        mismatch_store_id,
+        region_not_found,
+        not_leader,
+        mismatch_peer_id,
+        stale_command,
+        epoch_not_match,
+        read_index_no_leader,
+        region_not_initialized,
+        is_applying_snapshot,
+    }
+    pub label_enum RaftEventDurationType {
+        compact_check,
+        pd_store_heartbeat,
+        snap_gc,
+        compact_lock_cf,
+        consistency_check,
+        cleanup_import_sst,
+    }
+
+    pub struct RaftEventDuration : LocalHistogram {
+        "type" => RaftEventDurationType
+    }
+    pub struct RaftInvalidProposalCount : LocalIntCounter {
+        "type" => RaftInvalidProposal
+    }
+    pub struct RaftEntryFetches : LocalIntCounter {
+        "type" => RaftEntryType
+    }
+    pub struct SnapCf : LocalHistogram {
+        "type" => CfNames,
+    }
+    pub struct SnapCfSize : LocalHistogram {
+        "type" => CfNames,
+    }
+    pub struct RegionHashCounter: LocalIntCounter {
+        "type" => RegionHashType,
+        "result" => RegionHashResult,
+    }
+    pub struct ProposalVec: LocalIntCounter {
+        "type" => ProposalType,
+    }
+
+    pub struct AdminCmdVec : LocalIntCounter {
+        "type" => AdminCmdType,
+        "status" => AdminCmdStatus,
+    }
+
+    pub struct RaftReadyVec : LocalIntCounter {
+        "type" => RaftReadyType,
+    }
+
+    pub struct MessageCounterVec : LocalIntCounter {
+        "type" => MessageCounterType,
+    }
+
+    pub struct RaftDropedVec : LocalIntCounter {
+        "type" => RaftDroppedMessage,
+    }
+
+    pub struct SnapValidVec : LocalIntCounter {
+        "type" => SnapValidationType
+    }
+}
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -9,6 +171,8 @@ lazy_static! {
             "Total number of proposal made.",
             &["type"]
         ).unwrap();
+    pub static ref PEER_PROPOSAL_COUNTER: ProposalVec =
+        auto_flush_from!(PEER_PROPOSAL_COUNTER_VEC, ProposalVec);
 
     pub static ref PEER_ADMIN_CMD_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -16,6 +180,8 @@ lazy_static! {
             "Total number of admin cmd processed.",
             &["type", "status"]
         ).unwrap();
+    pub static ref PEER_ADMIN_CMD_COUNTER: AdminCmdVec =
+        auto_flush_from!(PEER_ADMIN_CMD_COUNTER_VEC, AdminCmdVec);
 
     pub static ref PEER_APPEND_LOG_HISTOGRAM: Histogram =
         register_histogram!(
@@ -51,6 +217,8 @@ lazy_static! {
             "Total number of raft ready handled.",
             &["type"]
         ).unwrap();
+    pub static ref STORE_RAFT_READY_COUNTER: RaftReadyVec =
+        auto_flush_from!(STORE_RAFT_READY_COUNTER_VEC, RaftReadyVec);
 
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -58,6 +226,8 @@ lazy_static! {
             "Total number of raft ready sent messages.",
             &["type"]
         ).unwrap();
+    pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER: MessageCounterVec =
+        auto_flush_from!(STORE_RAFT_SENT_MESSAGE_COUNTER_VEC, MessageCounterVec);
 
     pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -65,6 +235,8 @@ lazy_static! {
             "Total number of raft dropped messages.",
             &["type"]
         ).unwrap();
+    pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER: RaftDropedVec =
+        auto_flush_from!(STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC, RaftDropedVec);
 
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
         register_int_gauge_vec!(
@@ -73,12 +245,14 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: IntCounterVec =
+    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_snapshot_validation_failure_total",
             "Total number of raftstore snapshot validation failure.",
             &["type"]
         ).unwrap();
+    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: SnapValidVec =
+        auto_flush_from!(STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER_VEC, SnapValidVec);
 
     pub static ref PEER_RAFT_PROCESS_DURATION: HistogramVec =
         register_histogram_vec!(
@@ -102,6 +276,8 @@ lazy_static! {
             "Total number of hash has been computed.",
             &["type", "result"]
         ).unwrap();
+    pub static ref REGION_HASH_COUNTER: RegionHashCounter =
+        auto_flush_from!(REGION_HASH_COUNTER_VEC, RegionHashCounter);
 
     pub static ref REGION_MAX_LOG_LAG: Histogram =
         register_histogram!(
@@ -146,22 +322,25 @@ lazy_static! {
             exponential_buckets(1024.0, 2.0, 30).unwrap()
         ).unwrap();
 
-    pub static ref SNAPSHOT_CF_KV_COUNT: HistogramVec =
+    pub static ref SNAPSHOT_CF_KV_COUNT_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_snapshot_cf_kv_count",
             "Total number of kv in each cf file of snapshot",
             &["type"],
             exponential_buckets(100.0, 2.0, 20).unwrap()
         ).unwrap();
+    pub static ref SNAPSHOT_CF_KV_COUNT: SnapCf =
+        auto_flush_from!(SNAPSHOT_CF_KV_COUNT_VEC, SnapCf);
 
-    pub static ref SNAPSHOT_CF_SIZE: HistogramVec =
+    pub static ref SNAPSHOT_CF_SIZE_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_snapshot_cf_size",
             "Total size of each cf file of snapshot",
             &["type"],
             exponential_buckets(1024.0, 2.0, 31).unwrap()
         ).unwrap();
-
+    pub static ref SNAPSHOT_CF_SIZE: SnapCfSize =
+        auto_flush_from!(SNAPSHOT_CF_SIZE_VEC, SnapCfSize);
     pub static ref SNAPSHOT_BUILD_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_build_time_duration_secs",
@@ -183,12 +362,14 @@ lazy_static! {
             exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
-    pub static ref RAFT_ENTRY_FETCHES: IntCounterVec =
+    pub static ref RAFT_ENTRY_FETCHES_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_entry_fetches",
             "Total number of raft entry fetches",
             &["type"]
         ).unwrap();
+    pub static ref RAFT_ENTRY_FETCHES: RaftEntryFetches =
+        auto_flush_from!(RAFT_ENTRY_FETCHES_VEC, RaftEntryFetches);
 
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
@@ -209,14 +390,18 @@ lazy_static! {
             "Total number of raft invalid proposal.",
             &["type"]
         ).unwrap();
+    pub static ref RAFT_INVALID_PROPOSAL_COUNTER: RaftInvalidProposalCount =
+        auto_flush_from!(RAFT_INVALID_PROPOSAL_COUNTER_VEC, RaftInvalidProposalCount);
 
-    pub static ref RAFT_EVENT_DURATION: HistogramVec =
+    pub static ref RAFT_EVENT_DURATION_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_event_duration",
             "Duration of raft store events.",
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
+    pub static ref RAFT_EVENT_DURATION: RaftEventDuration =
+        auto_flush_from!(RAFT_EVENT_DURATION_VEC, RaftEventDuration);
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(

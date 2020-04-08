@@ -58,6 +58,8 @@ use crate::store::{
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
+const REGION_SPLIT_SKIP_MAX_COUNT: u8 = 3;
+
 pub struct DestroyPeerJob {
     pub initialized: bool,
     pub async_remove: bool,
@@ -98,6 +100,8 @@ pub struct PeerFsm<E: KvEngine> {
     early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<E>>>,
     pub receiver: Receiver<PeerMsg<E>>,
+    /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
+    skip_split_count: u8,
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -162,6 +166,7 @@ impl<E: KvEngine> PeerFsm<E> {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
+                skip_split_count: 0,
             }),
         ))
     }
@@ -200,6 +205,7 @@ impl<E: KvEngine> PeerFsm<E> {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
+                skip_split_count: 0,
             }),
         ))
     }
@@ -2525,6 +2531,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         )
     }
 
+    #[inline]
+    fn region_split_skip_max_count(&self) -> u8 {
+        fail_point!("region_split_skip_max_count", |_| { u8::max_value() });
+        REGION_SPLIT_SKIP_MAX_COUNT
+    }
+
     fn on_split_region_check_tick(&mut self) {
         if !self.ctx.cfg.hibernate_regions {
             self.register_split_region_check_tick();
@@ -2552,6 +2564,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             return;
         }
+
+        // bulk insert too fast may cause snapshot stale very soon, worst case it stale before
+        // sending. so when snapshot is generating or sending, skip split check at most 3 times.
+        // There is a trade off between region size and snapshot success rate. Split check is
+        // triggered every 10 seconds. If a snapshot can't be generated in 30 seconds, it might be
+        // just too large to be generated. Split it into smaller size can help generation. check
+        // issue 330 for more info.
+        if self.fsm.peer.get_store().is_generating_snapshot()
+            && self.fsm.skip_split_count < self.region_split_skip_max_count()
+        {
+            self.fsm.skip_split_count += 1;
+            return;
+        }
+        self.fsm.skip_split_count = 0;
+
         let task =
             SplitCheckTask::split_check(self.fsm.peer.region().clone(), true, CheckPolicy::Scan);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
@@ -2903,9 +2930,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
     fn verify_and_store_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) -> bool {
         if expected_index < self.fsm.peer.consistency_state.index {
-            REGION_HASH_COUNTER_VEC
-                .with_label_values(&["verify", "miss"])
-                .inc();
+            REGION_HASH_COUNTER.verify.miss.inc();
             warn!(
                 "has scheduled a new hash, skip.";
                 "region_id" => self.fsm.region_id(),
@@ -2939,9 +2964,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "peer_id" => self.fsm.peer_id(),
                 "index" => self.fsm.peer.consistency_state.index
             );
-            REGION_HASH_COUNTER_VEC
-                .with_label_values(&["verify", "matched"])
-                .inc();
+            REGION_HASH_COUNTER.verify.matched.inc();
             self.fsm.peer.consistency_state.hash = vec![];
             return false;
         }
@@ -2950,9 +2973,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             // Maybe computing is too slow or computed result is dropped due to channel full.
             // If computing is too slow, miss count will be increased twice.
-            REGION_HASH_COUNTER_VEC
-                .with_label_values(&["verify", "miss"])
-                .inc();
+            REGION_HASH_COUNTER.verify.miss.inc();
             warn!(
                 "hash belongs to wrong index, skip.";
                 "region_id" => self.fsm.region_id(),

@@ -11,8 +11,8 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine::IterOption;
 use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
@@ -113,11 +113,11 @@ pub trait Snapshot: Send + Clone {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>>;
     fn get_properties(&self) -> Result<RocksTablePropertiesCollection> {
@@ -195,12 +195,6 @@ quick_error! {
             description(err.description())
             display("unknown error {:?}", err)
         }
-    }
-}
-
-impl From<engine::Error> for ErrorInner {
-    fn from(err: engine::Error) -> ErrorInner {
-        ErrorInner::Request(err.into())
     }
 }
 
@@ -377,7 +371,7 @@ pub mod tests {
     fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CfStatistics::default();
         cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -388,7 +382,7 @@ pub mod tests {
     fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CfStatistics::default();
         cursor
@@ -482,7 +476,7 @@ pub mod tests {
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CfStatistics::default();
         assert!(!iter
@@ -500,7 +494,7 @@ pub mod tests {
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
@@ -519,7 +513,7 @@ pub mod tests {
         }
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
@@ -535,7 +529,7 @@ pub mod tests {
     fn test_empty_seek<E: Engine>(engine: &E) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CfStatistics::default();
         assert!(!cursor
@@ -593,8 +587,8 @@ pub mod tests {
         start_idx: usize,
         step: usize,
     ) {
-        let mut cursor = snapshot.iter(IterOption::default(), mode).unwrap();
-        let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
+        let mut cursor = snapshot.iter(IterOptions::default(), mode).unwrap();
+        let mut near_cursor = snapshot.iter(IterOptions::default(), mode).unwrap();
         let limit = (SEEK_BOUND as usize * 10 + 50 - 1) * 2;
 
         for (_, mut i) in (start_idx..(SEEK_BOUND as usize * 30))
@@ -728,7 +722,7 @@ pub mod tests {
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Forward)
+            .iter(IterOptions::default(), ScanMode::Forward)
             .unwrap();
 
         let mut statistics = CfStatistics::default();

@@ -7,8 +7,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
-use engine::IterOption;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -112,7 +111,7 @@ pub struct BTreeEngineIterator {
 }
 
 impl BTreeEngineIterator {
-    pub fn new(tree: Arc<RwLockTree>, iter_opt: IterOption) -> BTreeEngineIterator {
+    pub fn new(tree: Arc<RwLockTree>, iter_opt: IterOptions) -> BTreeEngineIterator {
         let lower_bound = match iter_opt.lower_bound() {
             None => Unbounded,
             Some(key) => Included(Key::from_raw(key)),
@@ -219,14 +218,14 @@ impl Snapshot for BTreeEngineSnapshot {
             Some(v) => Ok(Some(v.clone())),
         }
     }
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
         self.iter_cf(CF_DEFAULT, iter_opt, mode)
     }
     #[inline]
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> EngineResult<Cursor<Self::Iter>> {
         let tree = self.inner_engine.get_cf(cf);
@@ -306,13 +305,13 @@ pub mod tests {
         let mut statistics = CfStatistics::default();
 
         // lower bound > upper bound, seek() returns false.
-        let mut iter_op = IterOption::default();
+        let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a7", 0);
         iter_op.set_upper_bound(b"a3", 0);
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
-        let mut iter_op = IterOption::default();
+        let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a3", 0);
         iter_op.set_upper_bound(b"a7", 0);
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
@@ -353,7 +352,7 @@ pub mod tests {
             must_put(&engine, k.as_slice(), v.as_slice());
         }
 
-        let iter_op = IterOption::default();
+        let iter_op = IterOptions::default();
         let tree = engine.get_cf(CF_DEFAULT);
         let mut iter = BTreeEngineIterator::new(tree, iter_op);
         assert!(!iter.valid().unwrap());

@@ -223,14 +223,10 @@ pub struct CacheQueryStats {
 impl CacheQueryStats {
     pub fn flush(&mut self) {
         if self.hit.get() > 0 {
-            RAFT_ENTRY_FETCHES
-                .with_label_values(&["hit"])
-                .inc_by(self.hit.replace(0) as i64);
+            RAFT_ENTRY_FETCHES.hit.inc_by(self.hit.replace(0) as i64);
         }
         if self.miss.get() > 0 {
-            RAFT_ENTRY_FETCHES
-                .with_label_values(&["miss"])
-                .inc_by(self.miss.replace(0) as i64);
+            RAFT_ENTRY_FETCHES.miss.inc_by(self.miss.replace(0) as i64);
         }
     }
 }
@@ -780,9 +776,7 @@ impl PeerStorage {
                 "truncated_index" => self.truncated_index(),
                 "request_index" => request_index,
             );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
-                .with_label_values(&["stale"])
-                .inc();
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.stale.inc();
             return false;
         }
 
@@ -794,9 +788,7 @@ impl PeerStorage {
                 "peer_id" => self.peer_id,
                 "err" => ?e,
             );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
-                .with_label_values(&["decode"])
-                .inc();
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.decode.inc();
             return false;
         }
         let snap_epoch = snap_data.get_region().get_region_epoch();
@@ -809,9 +801,7 @@ impl PeerStorage {
                 "snap_epoch" => ?snap_epoch,
                 "latest_epoch" => ?latest_epoch,
             );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
-                .with_label_values(&["epoch"])
-                .inc();
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.epoch.inc();
             return false;
         }
 
@@ -1094,6 +1084,15 @@ impl PeerStorage {
     pub fn is_applying_snapshot(&self) -> bool {
         match *self.snap_state.borrow() {
             SnapState::Applying(_) => true,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    pub fn is_generating_snapshot(&self) -> bool {
+        fail_point!("is_generating_snapshot", |_| { true });
+        match *self.snap_state.borrow() {
+            SnapState::Generating(_) => true,
             _ => false,
         }
     }

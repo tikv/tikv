@@ -48,6 +48,9 @@ impl CdcObserver {
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));
+        coprocessor_host
+            .registry
+            .register_region_change_observer(100, BoxRegionChangeObserver::new(self.clone()));
     }
 
     /// Subscribe an region, the observer will sink events of the region into
@@ -102,6 +105,30 @@ impl RoleObserver for CdcObserver {
             if self.is_subscribed(region_id) {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::NotLeader(region_id, None);
+                let deregister = Deregister::Region {
+                    region_id,
+                    err: CdcError::Request(store_err.into()),
+                };
+                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                    error!("schedule cdc task failed"; "error" => ?e);
+                }
+            }
+        }
+    }
+}
+
+impl RegionChangeObserver for CdcObserver {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        event: RegionChangeEvent,
+        _: StateRole,
+    ) {
+        if let RegionChangeEvent::Destroy = event {
+            let region_id = ctx.region().get_id();
+            if self.is_subscribed(region_id) {
+                // Unregister all downstreams.
+                let store_err = RaftStoreError::RegionNotFound(region_id);
                 let deregister = Deregister::Region {
                     region_id,
                     err: CdcError::Request(store_err.into()),

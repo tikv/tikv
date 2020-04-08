@@ -406,7 +406,6 @@ mod tests {
     use crate::store::PeerStorage;
     use crate::Result;
 
-    use engine::*;
     use engine_rocks::RocksEngine;
     use engine_traits::{CompactExt, KvEngines, MiscExt, Peekable, SyncMutable};
     use keys::data_key;
@@ -534,7 +533,7 @@ mod tests {
             Option<(&[u8], &[u8])>,
             Option<(&[u8], &[u8])>,
         )>| {
-            let iter_opt = IterOption::new(
+            let iter_opt = IterOptions::new(
                 lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 true,
@@ -655,7 +654,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let mut iter = snap.iter(IterOption::default());
+        let mut iter = snap.iter(IterOptions::default());
         assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
@@ -681,7 +680,7 @@ mod tests {
         assert_eq!(data.len(), 5);
         assert_eq!(data, base_data);
 
-        let mut iter = snap.iter(IterOption::default());
+        let mut iter = snap.iter(IterOptions::default());
         assert!(iter.seek(b"a1").unwrap());
 
         assert!(iter.seek_to_first().unwrap());
@@ -697,7 +696,7 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
-        let mut iter = snap.iter(IterOption::new(
+        let mut iter = snap.iter(IterOptions::new(
             None,
             Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
             true,
@@ -720,7 +719,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engines);
 
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
-        let mut iter_opt = IterOption::default();
+        let mut iter_opt = IterOptions::default();
         iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);
         assert!(iter.seek_to_last().unwrap());
