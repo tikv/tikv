@@ -32,4 +32,10 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
         panic!()
     }
+    fn get_target_file_size_base(&self) -> u64 {
+        panic!()
+    }
+    fn get_disable_auto_compactions(&self) -> bool {
+        panic!()
+    }
 }
