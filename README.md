@@ -118,6 +118,7 @@ Quick links:
 
 *   [Meeting notes](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
 *   [Zoom meeting link](https://zoom.us/my/cncftikvproject)
+*   [Add to my calendar](https://calendar.google.com/calendar/r/month/2020/4/23?eid=MXZiaDg4YmEwYW1rbDlwajRtdjIyb2w3ZTlfMjAyMDA0MjNUMDEwMDAwWiBsaW51eGZvdW5kYXRpb24ub3JnX281YXZqbHZ0MmNhZTlicTdhOTVlbWM0NzQwQGc&ctz=America/New_York&sf=true)
 
 ## Security
 
