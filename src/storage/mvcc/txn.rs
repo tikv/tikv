@@ -681,14 +681,11 @@ impl<S: Snapshot> MvccTxn<S> {
                         self.collapse_prev_rollback(primary_key.clone())?;
                     }
 
-                    // Insert a Rollback to Write CF in case that a stale prewrite command
-                    // is received after a cleanup command.
-                    // Pessimistic transactions prewrite successfully only if all its
-                    // pessimistic locks exist. So collapsing the rollback of a pessimistic
-                    // lock is safe. After a pessimistic transaction acquires all its locks,
-                    // it is impossible that neither a lock nor a write record is found.
-                    // Therefore, we don't need to protect the rollback here.
-                    let write = Write::new_rollback(ts, false);
+                    // Insert a Rollback to Write CF in case that a stale prewrite
+                    // command is received after a cleanup command.
+                    // The rollback must be protected, see more on
+                    // [issue #7364](https://github.com/tikv/tikv/issues/7364)
+                    let write = Write::new_rollback(ts, true);
                     self.put_write(primary_key, ts, write.as_ref().to_bytes());
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
@@ -1315,9 +1312,9 @@ mod tests {
 
         // Try to cleanup another transaction's lock. Does nothing.
         must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
-        // If there is no exisiting lock when cleanup, it cannot be a pessimistic transaction,
-        // so the rollback needn't be protected.
-        must_get_rollback_protected(&engine, k, ts(10, 1), false);
+        // If there is no exisiting lock when cleanup, it may be a pessimistic transaction,
+        // so the rollback should be protected.
+        must_get_rollback_protected(&engine, k, ts(10, 1), true);
         must_locked(&engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
@@ -1996,13 +1993,11 @@ mod tests {
         must_unlocked(&engine, k);
         must_get_commit_ts(&engine, k, 30, 31);
 
-        // Rollback collapsed.
+        // Rollback
         must_rollback_collapsed(&engine, k, 32);
         must_rollback_collapsed(&engine, k, 33);
         must_acquire_pessimistic_lock_err(&engine, k, k, 32, 32);
-        // Currently we cannot avoid this.
-        must_acquire_pessimistic_lock(&engine, k, k, 32, 34);
-        must_pessimistic_rollback(&engine, k, 32, 34);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 32, 34);
         must_unlocked(&engine, k);
 
         // Acquire lock when there is lock with different for_update_ts.
