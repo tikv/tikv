@@ -516,17 +516,13 @@ mod tests {
         // - col_0 + 1
 
         let group_by_exps = vec![
-            RpnExpressionBuilder::new_for_test()
-                .push_column_ref_for_test(4)
-                .build_for_test(),
-            RpnExpressionBuilder::new_for_test()
-                .push_constant_for_test(1)
-                .build_for_test(),
-            RpnExpressionBuilder::new_for_test()
-                .push_column_ref_for_test(0)
-                .push_constant_for_test(1.0)
-                .push_fn_call_for_test(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
-                .build_for_test(),
+            RpnExpressionBuilder::new().push_column_ref(4).build(),
+            RpnExpressionBuilder::new().push_constant(1).build(),
+            RpnExpressionBuilder::new()
+                .push_column_ref(0)
+                .push_constant(1.0)
+                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
+                .build(),
         ];
 
         let aggr_definitions = vec![
@@ -576,10 +572,10 @@ mod tests {
             .ensure_all_decoded(&mut ctx, &exec.schema()[3])
             .unwrap();
         r.physical_columns[4]
-            .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[4])
+            .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[4])
             .unwrap();
         r.physical_columns[5]
-            .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[5])
+            .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[5])
             .unwrap();
 
         // The row order is not defined. Let's sort it by the group by column before asserting.

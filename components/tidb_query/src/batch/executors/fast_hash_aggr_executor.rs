@@ -11,17 +11,17 @@ use tikv_util::collections::HashMap;
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
 
-use crate::interface::*;
-use crate::util::aggr_executor::*;
-use crate::util::hash_aggr_helper::HashAggregationHelper;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::collation::{match_template_collator, SortKey};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_vec_aggr::*;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use crate::aggr_fn::*;
+use crate::batch::executors::util::aggr_executor::*;
+use crate::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
+use crate::batch::interface::*;
+use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::codec::collation::{match_template_collator, SortKey};
+use crate::codec::data_type::*;
+use crate::expr::{EvalConfig, EvalContext};
+use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use crate::storage::IntervalRange;
+use crate::Result;
 
 pub macro match_template_hashable($t:tt, $($tail:tt)*) {
     match_template::match_template! {
@@ -294,7 +294,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                             if let Groups::Bytes(group) = &mut self.groups {
                                 match_template_collator!(
                                     TT,
-                                    match self.group_by_field_type.collation().map_err(tidb_query_datatype::codec::Error::from)? {
+                                    match self.group_by_field_type.collation().map_err(crate::codec::Error::from)? {
                                         Collation::TT => {
                                             #[allow(clippy::transmute_ptr_to_ptr)]
                                             let group: &mut HashMap<Option<SortKey<Bytes, TT>>, usize> =
@@ -451,12 +451,12 @@ mod tests {
     use tidb_query_datatype::FieldTypeTp;
     use tipb::ScalarFuncSig;
 
-    use crate::util::aggr_executor::tests::*;
-    use crate::util::mock_executor::MockExecutor;
-    use crate::BatchSlowHashAggregationExecutor;
-    use tidb_query_datatype::expr::EvalWarnings;
-    use tidb_query_vec_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
-    use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+    use crate::batch::executors::util::aggr_executor::tests::*;
+    use crate::batch::executors::util::mock_executor::MockExecutor;
+    use crate::batch::executors::BatchSlowHashAggregationExecutor;
+    use crate::expr::EvalWarnings;
+    use crate::rpn_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
+    use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
     use tipb::ExprType;
     use tipb_helper::ExprDefBuilder;
 
@@ -605,9 +605,9 @@ mod tests {
         use tipb_helper::ExprDefBuilder;
 
         let group_by_exp = || {
-            RpnExpressionBuilder::new_for_test()
-                .push_constant_for_test(1) // Group by a constant
-                .build_for_test()
+            RpnExpressionBuilder::new()
+                .push_constant(1) // Group by a constant
+                .build()
         };
 
         let aggr_definitions = || {
@@ -669,7 +669,7 @@ mod tests {
             assert_eq!(r.physical_columns.columns_len(), 5); // 4 result column, 1 group by column
 
             r.physical_columns[4]
-                .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[4])
+                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[4])
                 .unwrap();
 
             // Group by a constant, So should be only one group.
@@ -832,9 +832,7 @@ mod tests {
         let exec_fast_const = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                RpnExpressionBuilder::new_for_test()
-                    .push_constant_for_test(1)
-                    .build_for_test(),
+                RpnExpressionBuilder::new().push_constant(1).build(),
                 vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -852,9 +850,7 @@ mod tests {
         let exec_slow_const = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_constant_for_test(0)
-                    .build_for_test()],
+                vec![RpnExpressionBuilder::new().push_constant(0).build()],
                 vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -864,12 +860,8 @@ mod tests {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
                 vec![
-                    RpnExpressionBuilder::new_for_test()
-                        .push_column_ref_for_test(0)
-                        .build_for_test(),
-                    RpnExpressionBuilder::new_for_test()
-                        .push_constant_for_test(0)
-                        .build_for_test(),
+                    RpnExpressionBuilder::new().push_column_ref(0).build(),
+                    RpnExpressionBuilder::new().push_constant(0).build(),
                 ],
                 vec![Expr::default()],
                 MyParser,
@@ -924,9 +916,7 @@ mod tests {
         let exec_fast_col = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                RpnExpressionBuilder::new_for_test()
-                    .push_column_ref_for_test(0)
-                    .build_for_test(),
+                RpnExpressionBuilder::new().push_column_ref(0).build(),
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -935,9 +925,7 @@ mod tests {
         let exec_slow_col = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_column_ref_for_test(0)
-                    .build_for_test()],
+                vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -993,9 +981,7 @@ mod tests {
         let exec_fast_const = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                RpnExpressionBuilder::new_for_test()
-                    .push_constant_for_test(1)
-                    .build_for_test(),
+                RpnExpressionBuilder::new().push_constant(1).build(),
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -1004,9 +990,7 @@ mod tests {
         let exec_slow_const = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_constant_for_test(1)
-                    .build_for_test()],
+                vec![RpnExpressionBuilder::new().push_constant(1).build()],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -1034,7 +1018,7 @@ mod tests {
             assert_eq!(r.physical_columns.rows_len(), 1);
             assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
             r.physical_columns[0]
-                .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[0])
+                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[0])
                 .unwrap();
             assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(1)]);
         }
