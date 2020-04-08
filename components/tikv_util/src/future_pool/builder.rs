@@ -114,6 +114,8 @@ impl Builder {
         let env = super::Env {
             metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
+            metrics_pool_schedule_duration: FUTUREPOOL_SCHEDULE_DURATION_VEC
+                .with_label_values(&[name]),
         };
         let runner = FuturePoolRunner {
             inner: future::Runner::default(),
