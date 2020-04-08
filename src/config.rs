@@ -1497,6 +1497,9 @@ macro_rules! readpool_config {
             }
 
             pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+                if self.use_unified_pool() {
+                    return Ok(());
+                }
                 if self.high_concurrency == 0 {
                     return Err(format!(
                         "readpool.{}.high-concurrency should be > 0",
@@ -1599,6 +1602,11 @@ macro_rules! readpool_config {
                 assert!(invalid_cfg.validate().is_err());
                 invalid_cfg.max_tasks_per_worker_low = 100;
                 assert!(cfg.validate().is_ok());
+
+                let mut invalid_but_unified = cfg.clone();
+                invalid_but_unified.use_unified_pool = Some(true);
+                invalid_but_unified.low_concurrency = 0;
+                assert!(invalid_but_unified.validate().is_ok());
             }
         }
     };
@@ -1695,10 +1703,9 @@ impl ReadPoolConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.is_unified_pool_enabled() {
             self.unified.validate()?;
-        } else {
-            self.storage.validate()?;
-            self.coprocessor.validate()?;
         }
+        self.storage.validate()?;
+        self.coprocessor.validate()?;
         Ok(())
     }
 }
@@ -1759,28 +1766,6 @@ mod readpool_tests {
 
     #[test]
     fn test_unified_enabled() {
-        // Allow invalid storage and coprocessor config when yatp is used.
-        let unified = UnifiedReadPoolConfig::default();
-        assert!(unified.validate().is_ok());
-        let storage = StorageReadPoolConfig {
-            use_unified_pool: Some(true),
-            high_concurrency: 0,
-            ..Default::default()
-        };
-        assert!(storage.validate().is_err());
-        let coprocessor = CoprReadPoolConfig {
-            high_concurrency: 0,
-            ..Default::default()
-        };
-        assert!(coprocessor.validate().is_err());
-        let cfg = ReadPoolConfig {
-            unified,
-            storage,
-            coprocessor,
-        };
-        assert!(cfg.is_unified_pool_enabled());
-        assert!(cfg.validate().is_ok());
-
         // Yatp config must be valid when yatp is used.
         let unified = UnifiedReadPoolConfig {
             min_thread_count: 0,
@@ -1820,6 +1805,28 @@ mod readpool_tests {
 
         cfg.coprocessor.use_unified_pool = Some(false);
         assert!(!cfg.is_unified_pool_enabled());
+    }
+
+    #[test]
+    fn test_not_all_unified() {
+        let storage = StorageReadPoolConfig {
+            use_unified_pool: Some(false),
+            low_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(!storage.use_unified_pool());
+        let coprocessor = CoprReadPoolConfig {
+            use_unified_pool: Some(true),
+            ..Default::default()
+        };
+        assert!(coprocessor.use_unified_pool());
+        let cfg = ReadPoolConfig {
+            storage,
+            coprocessor,
+            ..Default::default()
+        };
+        assert!(cfg.is_unified_pool_enabled());
+        assert!(cfg.validate().is_err());
     }
 }
 
