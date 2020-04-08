@@ -7,7 +7,7 @@ lazy_static! {
     pub static ref CDC_RESOLVED_TS_GAP_HISTOGRAM: Histogram = register_histogram!(
         "tikv_cdc_resolved_ts_gap_seconds",
         "Bucketed histogram of the gap between cdc resolved ts and current tso",
-        exponential_buckets(0.0005, 2.0, 24).unwrap()
+        exponential_buckets(0.001, 2.0, 24).unwrap()
     )
     .unwrap();
     pub static ref CDC_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram!(
@@ -21,7 +21,7 @@ lazy_static! {
         "The region which has minimal resolved ts"
     )
     .unwrap();
-    pub static ref CDC_MIN_RESOLVED_TS: Gauge = register_gauge!(
+    pub static ref CDC_MIN_RESOLVED_TS: IntGauge = register_int_gauge!(
         "tikv_cdc_min_resolved_ts",
         "The minimal resolved ts for current regions"
     )
