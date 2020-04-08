@@ -2456,6 +2456,7 @@ where
         cb: Callback<E>,
     },
     #[cfg(any(test, feature = "testexport"))]
+    #[allow(clippy::type_complexity)]
     Validate(u64, Box<dyn FnOnce((&ApplyDelegate<E>, bool)) + Send>),
 }
 
