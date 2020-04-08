@@ -811,9 +811,9 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0);
         ep.run(Task::Register {
-            request: req.clone(),
+            request: req,
             downstream,
             conn_id,
         });
