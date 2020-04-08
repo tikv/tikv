@@ -43,6 +43,9 @@ pub use self::snap::{
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::worker::{DynamicConfig, FlowStatistics, FlowStatsReporter, PdTask};
+pub use self::worker::{
+    AutoSplitController, DynamicConfig, FlowStatistics, FlowStatsReporter, PdTask, QpsStats,
+    SplitConfig, SplitConfigManager,
+};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};

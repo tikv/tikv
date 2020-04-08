@@ -24,11 +24,15 @@ use raft::eraftpb::ConfChangeType;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
+use crate::store::metrics::*;
 use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
+use crate::store::worker::split_controller::{SplitInfo, TOP_N};
+use crate::store::worker::{AutoSplitController, QpsStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+
 use pd_client::metrics::*;
 use pd_client::{ConfigClient, Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -57,12 +61,19 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     // saves the flow statistics of different region.
     // TODO: maybe we need to return a Result later?
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
+
+    fn report_qps_stats(&self, qps_stats: QpsStats);
 }
 
 impl FlowStatsReporter for Scheduler<Task> {
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
+        }
+    }
+    fn report_qps_stats(&self, qps_stats: QpsStats) {
+        if let Err(e) = self.schedule(Task::QpsStats { qps_stats }) {
+            error!("Failed to send qps statistics"; "err" => ?e);
         }
     }
 }
@@ -91,6 +102,9 @@ pub enum Task {
         right_derive: bool,
         callback: Callback<RocksEngine>,
     },
+    AutoSplit {
+        split_infos: Vec<SplitInfo>,
+    },
     Heartbeat {
         term: u64,
         region: metapb::Region,
@@ -116,6 +130,9 @@ pub enum Task {
     },
     ReadStats {
         read_stats: HashMap<u64, FlowStatistics>,
+    },
+    QpsStats {
+        qps_stats: QpsStats,
     },
     DestroyPeer {
         region_id: u64,
@@ -193,6 +210,12 @@ impl Display for Task {
                 region.get_id(),
                 hex::encode_upper(&split_key),
             ),
+            Task::AutoSplit {
+                ..
+            } => write!(
+                f,
+                "to ask split region"
+            ),
             Task::AskBatchSplit {
                 ref region,
                 ref split_keys,
@@ -229,6 +252,9 @@ impl Display for Task {
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
+            Task::QpsStats { ref qps_stats } => {
+                write!(f, "get the qps statistics {:?}", qps_stats.region_infos)
+            }
             Task::DestroyPeer { ref region_id } => {
                 write!(f, "destroy peer of region {}", region_id)
             }
@@ -242,10 +268,13 @@ impl Display for Task {
                 cpu_usages, read_io_rates, write_io_rates,
             ),
             Task::RefreshConfig => write!(f, "refresh config"),
-            Task::GetConfig {..} => write!(f, "get config"),
+            Task::GetConfig { .. } => write!(f, "get config"),
         }
     }
 }
+
+const DEFAULT_QPS_INFO_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_COLLECT_INTERVAL: Duration = Duration::from_secs(1);
 
 #[inline]
 fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
@@ -259,11 +288,14 @@ fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         .collect()
 }
 
-struct StatsMonitor {
+pub struct StatsMonitor {
     scheduler: Scheduler<Task>,
     handle: Option<JoinHandle<()>>,
-    sender: Option<Sender<bool>>,
-    interval: Duration,
+    timer: Option<Sender<bool>>,
+    sender: Option<Sender<QpsStats>>,
+    thread_info_interval: Duration,
+    qps_info_interval: Duration,
+    collect_interval: Duration,
 }
 
 impl StatsMonitor {
@@ -271,39 +303,87 @@ impl StatsMonitor {
         StatsMonitor {
             scheduler,
             handle: None,
+            timer: None,
             sender: None,
-            interval,
+            thread_info_interval: interval,
+            qps_info_interval: DEFAULT_QPS_INFO_INTERVAL,
+            collect_interval: DEFAULT_COLLECT_INTERVAL,
         }
     }
 
-    pub fn start(&mut self) -> Result<(), io::Error> {
+    // Collecting thread information and obtaining qps information for auto split.
+    // They run together in the same thread by taking modulo at different intervals.
+    pub fn start(
+        &mut self,
+        mut auto_split_controller: AutoSplitController,
+    ) -> Result<(), io::Error> {
+        let mut timer_cnt = 0;
+        let collect_interval = self.collect_interval;
+        let thread_info_interval = self
+            .thread_info_interval
+            .div_duration_f64(self.collect_interval) as i32;
+        let qps_info_interval = self
+            .qps_info_interval
+            .div_duration_f64(self.collect_interval) as i32;
         let (tx, rx) = mpsc::channel();
-        let interval = self.interval;
+        self.timer = Some(tx);
+
+        let (sender, receiver) = mpsc::channel();
+        self.sender = Some(sender);
+
         let scheduler = self.scheduler.clone();
-        self.sender = Some(tx);
+
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
                 let mut thread_stats = ThreadInfoStatistics::new();
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
+                    if timer_cnt % thread_info_interval == 0 {
+                        thread_stats.record();
+                        let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
+                        let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
+                        let write_io_rates =
+                            convert_record_pairs(thread_stats.get_write_io_rates());
 
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                    thread_stats.record();
-
-                    let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
-                    let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
-                    let write_io_rates = convert_record_pairs(thread_stats.get_write_io_rates());
-
-                    let task = Task::StoreInfos {
-                        cpu_usages,
-                        read_io_rates,
-                        write_io_rates,
-                    };
-                    if let Err(e) = scheduler.schedule(task) {
-                        error!(
-                            "failed to send store infos to pd worker";
-                            "err" => ?e,
-                        );
+                        let task = Task::StoreInfos {
+                            cpu_usages,
+                            read_io_rates,
+                            write_io_rates,
+                        };
+                        if let Err(e) = scheduler.schedule(task) {
+                            error!(
+                                "failed to send store infos to pd worker";
+                                "err" => ?e,
+                            );
+                        }
                     }
+                    if timer_cnt % qps_info_interval == 0 {
+                        let mut others = vec![];
+                        while let Ok(other) = receiver.try_recv() {
+                            others.push(other);
+                        }
+                        let (top, split_infos) = auto_split_controller.flush(others);
+                        auto_split_controller.clear();
+                        let task = Task::AutoSplit { split_infos };
+                        if let Err(e) = scheduler.schedule(task) {
+                            error!(
+                                "failed to send split infos to pd worker";
+                                "err" => ?e,
+                            );
+                        }
+
+                        for i in 0..TOP_N {
+                            if i < top.len() {
+                                READ_QPS_TOPN
+                                    .with_label_values(&[&i.to_string()])
+                                    .set(top[i] as f64);
+                            } else {
+                                READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
+                            }
+                        }
+                    }
+                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
+                    auto_split_controller.refresh_cfg();
                 }
             })?;
 
@@ -316,11 +396,16 @@ impl StatsMonitor {
         if h.is_none() {
             return;
         }
+        drop(self.timer.take().unwrap());
         drop(self.sender.take().unwrap());
         if let Err(e) = h.unwrap().join() {
             error!("join stats collector failed"; "err" => ?e);
             return;
         }
+    }
+
+    pub fn get_sender(&self) -> &Option<Sender<QpsStats>> {
+        &self.sender
     }
 }
 
@@ -354,10 +439,11 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         db: RocksEngine,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
+        auto_split_controller: AutoSplitController,
     ) -> Runner<T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
-        if let Err(e) = stats_monitor.start() {
+        if let Err(e) = stats_monitor.start(auto_split_controller) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
@@ -747,7 +833,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                     let mut split_region = resp.take_split_region();
                     info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
                     let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
-                        CasualMessage::SplitRegion{
+                        CasualMessage::SplitRegion {
                             region_epoch: epoch,
                             split_keys: split_region.take_keys().into(),
                             callback: Callback::None,
@@ -793,6 +879,12 @@ impl<T: PdClient + ConfigClient> Runner<T> {
             peer_stat.read_keys += stats.read_keys as u64;
             self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
             self.store_stat.engine_total_keys_read += stats.read_keys as u64;
+        }
+    }
+
+    fn handle_qps_stats(&mut self, qps_stats: QpsStats) {
+        if let Some(sender) = self.stats_monitor.get_sender() {
+            sender.send(qps_stats).unwrap();
         }
     }
 
@@ -868,6 +960,23 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 right_derive,
                 callback,
             ),
+            Task::AutoSplit { split_infos } => {
+                for split_info in split_infos {
+                    if let Ok(Some(region)) =
+                        self.pd_client.get_region_by_id(split_info.region_id).wait()
+                    {
+                        self.handle_ask_split(
+                            handle,
+                            region,
+                            split_info.split_key,
+                            split_info.peer,
+                            true,
+                            Callback::None,
+                        );
+                    }
+                }
+            }
+
             Task::Heartbeat {
                 term,
                 region,
@@ -945,6 +1054,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 merge_source,
             } => self.handle_validate_peer(handle, region, peer, merge_source),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
+            Task::QpsStats { qps_stats } => self.handle_qps_stats(qps_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
             Task::StoreInfos {
                 cpu_usages,
@@ -1087,7 +1197,6 @@ fn send_destroy_peer_message(
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-    use std::time::Instant;
     use tikv_util::worker::FutureWorker;
 
     use super::*;
@@ -1104,7 +1213,8 @@ mod tests {
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
             let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
-            if let Err(e) = stats_monitor.start() {
+
+            if let Err(e) = stats_monitor.start(AutoSplitController::default()) {
                 error!("failed to start stats collector, error = {:?}", e);
             }
 

@@ -23,7 +23,7 @@ use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SplitCheckTask;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{DynamicConfig, PdTask};
+use raftstore::store::{AutoSplitController, DynamicConfig, PdTask};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
 use tikv_util::worker::Worker;
@@ -124,6 +124,7 @@ where
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
+        auto_split_controller: AutoSplitController,
         dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
@@ -160,6 +161,7 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
+            auto_split_controller,
             dyn_cfg,
         )?;
 
@@ -340,6 +342,7 @@ where
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
+        auto_split_controller: AutoSplitController,
         dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
@@ -366,6 +369,7 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
+            auto_split_controller,
             dyn_cfg,
         )?;
         Ok(())

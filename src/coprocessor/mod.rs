@@ -112,6 +112,12 @@ pub struct ReqContext {
     ///
     /// None means don't try to hit the cache.
     pub cache_match_version: Option<u64>,
+
+    /// The lower bound key in ranges of the request
+    pub lower_bound: Vec<u8>,
+
+    /// The upper bound key in ranges of the request
+    pub upper_bound: Vec<u8>,
 }
 
 impl ReqContext {
@@ -127,6 +133,14 @@ impl ReqContext {
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
+        let lower_bound = match ranges.first().as_ref() {
+            Some(range) => range.start.clone(),
+            None => vec![],
+        };
+        let upper_bound = match ranges.last().as_ref() {
+            Some(range) => range.end.clone(),
+            None => vec![],
+        };
         Self {
             tag,
             context,
@@ -138,6 +152,8 @@ impl ReqContext {
             ranges_len: ranges.len(),
             bypass_locks,
             cache_match_version,
+            lower_bound,
+            upper_bound,
         }
     }
 
