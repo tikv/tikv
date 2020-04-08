@@ -236,13 +236,15 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         // At this time, we must have current commit_ts <= ts. If commit_ts == ts,
         // we don't need to seek any more and we can just utilize `last_version`.
         if last_checked_commit_ts == ts {
-            self.write_cursor.prev(&mut self.statistics.write);
-            if let Ok(true) = self.write_cursor.valid() {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                self.can_be_cached =
-                    !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice());
+            if self.cfg.check_can_be_cached && self.can_be_cached {
+                self.write_cursor.prev(&mut self.statistics.write);
+                if self.write_cursor.valid()? {
+                    let current_key = self.write_cursor.key(&mut self.statistics.write);
+                    self.can_be_cached =
+                        !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice());
+                }
+                self.write_cursor.next(&mut self.statistics.write);
             }
-            self.write_cursor.next(&mut self.statistics.write);
             return Ok(self.handle_last_version(last_version, user_key)?);
         }
         assert!(ts > last_checked_commit_ts);
