@@ -238,12 +238,16 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         if last_checked_commit_ts == ts {
             if self.cfg.check_can_be_cached && self.can_be_cached {
                 self.write_cursor.prev(&mut self.statistics.write);
-                if self.write_cursor.valid()? {
+                if let Ok(true) = self.write_cursor.valid() {
                     let current_key = self.write_cursor.key(&mut self.statistics.write);
-                    self.can_be_cached =
-                        !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice());
+                    if Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
+                        self.can_be_cached = false;
+                    } else {
+                        *met_prev_user_key = true;
+                    }
+                } else {
+                    *met_prev_user_key = true;
                 }
-                self.write_cursor.next(&mut self.statistics.write);
             }
             return Ok(self.handle_last_version(last_version, user_key)?);
         }
