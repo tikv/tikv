@@ -250,6 +250,7 @@ impl Delegate {
         } else {
             &self.downstreams
         };
+        assert!(!downstreams.is_empty());
         for i in 0..downstreams.len() - 1 {
             downstreams[i].sink_event(change_data_event.clone(), size);
         }

@@ -181,24 +181,21 @@ fn test_merge() {
     let _source_tx = source_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Continue to commit merge
     fail::remove(fp);
-    let mut events = source_event(false);
-    if events.len() == 1 {
-        events.extend(source_event(false).into_iter());
-    }
-    assert_eq!(events.len(), 2, "{:?}", events);
-    match events.remove(0).event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+    loop {
+        let mut events = source_event(false);
+        assert_eq!(events.len(), 1, "{:?}", events);
+        match events.pop().unwrap().event.unwrap() {
+            Event_oneof_event::Error(err) => {
+                assert!(err.has_region_not_found(), "{:?}", err);
+                break;
+            }
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            _ => panic!("unknown event"),
         }
-        _ => panic!("unknown event"),
-    }
-    match events.pop().unwrap().event.unwrap() {
-        Event_oneof_event::Error(err) => {
-            assert!(err.has_region_not_found(), "{:?}", err);
-        }
-        _ => panic!("unknown event"),
     }
     let mut events = target_event(false);
     assert_eq!(events.len(), 1, "{:?}", events);
