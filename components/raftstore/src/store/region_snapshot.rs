@@ -24,7 +24,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot<E: KvEngine> {
-    snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
+    snap: <E::Snapshot as Snapshot>::SyncSnapshot,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
 }
@@ -43,7 +43,7 @@ where
     }
 
     pub fn from_snapshot(
-        snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
+        snap: <E::Snapshot as Snapshot>::SyncSnapshot,
         region: Region,
     ) -> RegionSnapshot<E> {
         RegionSnapshot {
@@ -141,10 +141,7 @@ where
     pub fn get_properties_cf(&self, cf: &str) -> Result<E::TablePropertiesCollection> {
         let start = keys::enc_start_key(&self.region);
         let end = keys::enc_end_key(&self.region);
-        let prop = self
-            .snap
-            .get_db()
-            .get_range_properties_cf(cf, &start, &end)?;
+        let prop = self.snap.get_range_properties_cf(cf, &start, &end)?;
         Ok(prop)
     }
 
@@ -282,7 +279,7 @@ where
     E: KvEngine,
 {
     pub fn new(
-        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
     ) -> RegionIterator<E> {
@@ -295,7 +292,7 @@ where
     }
 
     pub fn new_cf(
-        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
         cf: &str,

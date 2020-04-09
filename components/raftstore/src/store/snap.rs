@@ -177,6 +177,7 @@ where
 pub trait Snapshot<E: KvEngine>: GenericSnapshot {
     fn build(
         &mut self,
+        engine: &E,
         kv_snap: &E::Snapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
@@ -641,6 +642,7 @@ impl Snap {
 
     fn do_build<E: KvEngine>(
         &mut self,
+        engine: &E,
         kv_snap: &E::Snapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
@@ -651,7 +653,7 @@ impl Snap {
     {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(kv_snap.get_db()) {
+            match self.validate(engine) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
@@ -684,6 +686,7 @@ impl Snap {
             } else {
                 snap_io::build_sst_cf_file::<E>(
                     path,
+                    engine,
                     kv_snap,
                     cf_file.cf,
                     &begin_key,
@@ -743,6 +746,7 @@ where
 {
     fn build(
         &mut self,
+        engine: &E,
         kv_snap: &E::Snapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
@@ -750,7 +754,7 @@ where
         deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build::<E>(kv_snap, region, stat, deleter)?;
+        self.do_build::<E>(engine, kv_snap, region, stat, deleter)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;

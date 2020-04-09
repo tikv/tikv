@@ -61,6 +61,7 @@ where
 /// otherwise the file will be created and synchronized.
 pub fn build_sst_cf_file<E>(
     path: &str,
+    engine: &E,
     snap: &E::Snapshot,
     cf: CfName,
     start_key: &[u8],
@@ -70,7 +71,7 @@ pub fn build_sst_cf_file<E>(
 where
     E: KvEngine,
 {
-    let mut sst_writer = create_sst_file_writer::<E>(snap, cf, path)?;
+    let mut sst_writer = create_sst_file_writer::<E>(engine, snap, cf, path)?;
     let mut stats = BuildStatistics::default();
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
@@ -154,6 +155,7 @@ where
 }
 
 fn create_sst_file_writer<E>(
+    engine: &E,
     snap: &E::Snapshot,
     cf: CfName,
     path: &str,
@@ -161,7 +163,6 @@ fn create_sst_file_writer<E>(
 where
     E: KvEngine,
 {
-    let engine = snap.get_db();
     let builder = E::SstWriterBuilder::new().set_db(&engine).set_cf(cf);
     let writer = box_try!(builder.build(path));
     Ok(writer)
