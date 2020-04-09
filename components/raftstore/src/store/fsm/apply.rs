@@ -2335,6 +2335,7 @@ impl Debug for GenSnapTask {
     }
 }
 
+#[derive(Debug)]
 pub enum ChangeCmd {
     RegisterObserver {
         region_id: u64,
