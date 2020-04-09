@@ -3,7 +3,6 @@
 use std::io::Error as IoError;
 use std::{error, result};
 
-use encryption::Error as EncryptionError;
 use engine_traits::Error as EngineTraitError;
 use kvproto::backup::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -113,8 +112,6 @@ pub enum Error {
     ClusterID { current: u64, request: u64 },
     #[fail(display = "Invalid cf {}", cf)]
     InvalidCf { cf: String },
-    #[fail(display = "Encryption error {}", _0)]
-    Encryption(EncryptionError),
 }
 
 macro_rules! impl_from {
@@ -136,7 +133,6 @@ impl_from! {
     EngineError => Engine,
     EngineTraitError => EngineTrait,
     TxnError => Txn,
-    EncryptionError => Encryption,
 }
 
 pub type Result<T> = result::Result<T, Error>;

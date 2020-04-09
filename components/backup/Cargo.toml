@@ -42,7 +42,6 @@ failpoints = ["tikv/failpoints"]
 
 [dependencies]
 crc64fast = "0.1"
-encryption = { path = "../encryption" }
 engine = { path = "../engine" }
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }

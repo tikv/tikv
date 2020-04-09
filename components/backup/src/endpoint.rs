@@ -13,7 +13,6 @@ use engine_traits::{name_to_cf, CfName, IterOptions};
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
-use kvproto::encryptionpb::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
@@ -45,7 +44,6 @@ struct Request {
     end_ts: TimeStamp,
     limiter: Limiter,
     backend: StorageBackend,
-    encryption: EncryptionConfig,
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
     cf: CfName,
@@ -100,9 +98,8 @@ impl Task {
             cf: req.get_cf().to_owned(),
         })?;
 
-        // Check storage backend and encryption eagerly.
+        // Check storage backend eagerly.
         create_storage(req.get_storage_backend())?;
-        encryption::verify_encryption_config(req.get_encryption_config())?;
 
         let task = Task {
             request: Request {
@@ -111,7 +108,6 @@ impl Task {
                 start_ts: req.get_start_version().into(),
                 end_ts: req.get_end_version().into(),
                 backend: req.get_storage_backend().clone(),
-                encryption: req.get_encryption_config().clone(),
                 limiter,
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
@@ -265,7 +261,6 @@ impl BackupRange {
         engine: &E,
         db: Arc<DB>,
         storage: &LimitedStorage,
-        encryption: &EncryptionConfig,
         file_name: String,
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
@@ -282,7 +277,7 @@ impl BackupRange {
             Err(e) => return Err(e),
         };
         // Save sst files to storage.
-        match writer.save(&storage.storage, encryption) {
+        match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
                 error!("backup save file failed"; "error" => ?e);
@@ -296,7 +291,6 @@ impl BackupRange {
         engine: &E,
         db: Arc<DB>,
         storage: &LimitedStorage,
-        encryption: &EncryptionConfig,
         file_name: String,
         cf: CfName,
     ) -> Result<(Vec<File>, Statistics)> {
@@ -312,7 +306,7 @@ impl BackupRange {
             Err(e) => return Err(e),
         };
         // Save sst files to storage.
-        match writer.save(&storage.storage, encryption) {
+        match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
                 error!("backup save file failed"; "error" => ?e);
@@ -569,24 +563,9 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 let name = backup_file_name(store_id, &brange.region, key);
 
                 let res = if is_raw_kv {
-                    brange.backup_raw_kv_to_file(
-                        &engine,
-                        db.clone(),
-                        &storage,
-                        &request.encryption,
-                        name,
-                        cf,
-                    )
+                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf)
                 } else {
-                    brange.backup_to_file(
-                        &engine,
-                        db.clone(),
-                        &storage,
-                        &request.encryption,
-                        name,
-                        backup_ts,
-                        start_ts,
-                    )
+                    brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts)
                 };
                 match res {
                     Err(e) => {

@@ -9,13 +9,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use kvproto::backup::StorageBackend;
-use kvproto::{
-    encryptionpb::{EncryptionConfig, EncryptionMethod},
-    import_sstpb::*,
-};
+use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use encryption::{self, DecrypterReader, Iv};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterator, CF_WRITE};
 use engine_traits::{SeekKey, SstReader, SstWriter};
@@ -104,7 +100,6 @@ impl SSTImporter {
         &self,
         meta: &SstMeta,
         backend: &StorageBackend,
-        encryption: &EncryptionConfig,
         name: &str,
         rewrite_rule: &RewriteRule,
         speed_limiter: Limiter,
@@ -117,15 +112,7 @@ impl SSTImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        match self.do_download::<E>(
-            meta,
-            backend,
-            encryption,
-            name,
-            rewrite_rule,
-            speed_limiter,
-            sst_writer,
-        ) {
+        match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "range" => ?r);
                 Ok(r)
@@ -141,7 +128,6 @@ impl SSTImporter {
         &self,
         meta: &SstMeta,
         backend: &StorageBackend,
-        encryption: &EncryptionConfig,
         name: &str,
         rewrite_rule: &RewriteRule,
         speed_limiter: Limiter,
@@ -154,19 +140,6 @@ impl SSTImporter {
         // prepare to download the file from the external_storage
         let ext_storage = create_storage(backend)?;
         let ext_reader = ext_storage.read(name);
-
-        // encryption
-        encryption::verify_encryption_config(encryption)?;
-        let ext_reader = if encryption.method == EncryptionMethod::Plaintext {
-            ext_reader
-        } else {
-            Box::new(DecrypterReader::new(
-                ext_reader,
-                encryption,
-                Iv::from_slice(&meta.iv)?,
-            )?)
-        };
-
         let ext_reader = speed_limiter.limit(ext_reader);
 
         // do the I/O copy from external_storage to the local file.

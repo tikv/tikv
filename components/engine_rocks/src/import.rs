@@ -39,6 +39,7 @@ impl ImportExt for RocksEngine {
         Ok(())
     }
 
+    // TODO: rename it to `reset_global_seq`.
     fn validate_sst_for_ingestion<P: AsRef<Path>>(
         &self,
         cf: &Self::CFHandle,
