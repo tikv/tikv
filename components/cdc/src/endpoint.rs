@@ -414,9 +414,7 @@ impl<T: RaftStoreRouter> Endpoint<T> {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
                     let deregister = Deregister::Region { region_id, err: e };
-                    if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e);
-                    }
+                    self.on_deregister(deregister);
                 }
             } else {
                 debug!("stale region ready"; "region_id" => region.get_id(), "observe_id" => ?observe_id, "current_id" => ?delegate.id);
