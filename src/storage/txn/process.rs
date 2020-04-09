@@ -639,6 +639,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for_update_ts,
             wait_timeout,
             return_values,
+            min_commit_ts,
             ..
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
@@ -656,6 +657,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     lock_ttl,
                     for_update_ts,
                     return_values,
+                    min_commit_ts,
                 ) {
                     Ok(val) => {
                         if return_values {
