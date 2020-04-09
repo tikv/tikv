@@ -17,7 +17,7 @@ use tokio_core::reactor::Handle;
 
 use crate::server::metrics::*;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Snapshot, Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
 };
 use crate::storage::mvcc::{
     check_need_gc, check_region_need_gc, Error as MvccError, MvccReader, MvccTxn,
@@ -260,7 +260,7 @@ impl<E: Engine> GcRunner<E> {
                 return true;
             }
         };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, collection)
+        check_need_gc(safe_point, self.cfg.ratio_threshold, &collection)
     }
 
     /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress

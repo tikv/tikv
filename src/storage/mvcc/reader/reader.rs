@@ -377,7 +377,7 @@ impl<S: Snapshot> MvccReader<S> {
 pub fn check_need_gc(
     safe_point: TimeStamp,
     ratio_threshold: f64,
-    write_properties: RocksTablePropertiesCollection,
+    write_properties: &RocksTablePropertiesCollection,
 ) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
@@ -412,7 +412,7 @@ pub fn check_need_gc(
 
 fn get_mvcc_properties(
     safe_point: TimeStamp,
-    collection: RocksTablePropertiesCollection,
+    collection: &RocksTablePropertiesCollection,
 ) -> Option<MvccProperties> {
     if collection.is_empty() {
         return None;
@@ -448,7 +448,7 @@ pub fn check_region_need_gc<E: Engine, S: Snapshot>(
         Ok(v) => v,
         Err(_) => return true,
     };
-    check_need_gc(safe_point, ratio_threshold, prop)
+    check_need_gc(safe_point, ratio_threshold, &prop)
 }
 
 #[cfg(test)]
@@ -683,7 +683,7 @@ mod tests {
         region
     }
 
-    fn check_need_gc(
+    fn get_mvcc_properties_and_check_gc(
         db: Arc<DB>,
         region: Region,
         safe_point: impl Into<TimeStamp>,
@@ -691,16 +691,15 @@ mod tests {
     ) -> Option<MvccProperties> {
         let safe_point = safe_point.into();
 
-        //assert_eq!(check_region_need_gc(db.c(),safe_point, 1.0), need_gc);
         let start = keys::data_key(region.get_start_key());
         let end = keys::data_end_key(region.get_end_key());
         let collection = db
             .c()
             .get_range_properties_cf(CF_WRITE, &start, &end)
             .unwrap();
-        println!("is empty {}", collection.is_empty());
+        assert_eq!(check_need_gc(safe_point, 1.0, &collection), need_gc);
 
-        get_mvcc_properties(safe_point, collection)
+        get_mvcc_properties(safe_point, &collection)
     }
 
     #[test]
@@ -722,11 +721,15 @@ mod tests {
         // Put 2 keys.
         engine.put(&[1], 1, 1);
         engine.put(&[4], 2, 2);
-        assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
+        assert!(
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).is_none()
+        );
         engine.flush();
         // After this flush, we have a SST file without properties.
         // Without properties, we always need GC.
-        assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
+        assert!(
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).is_none()
+        );
     }
 
     #[test]
@@ -806,12 +809,15 @@ mod tests {
         // After this flush, we have a SST file w/ properties, plus the SST
         // file w/o properties from previous flush. We always need GC as
         // long as we can't get properties from any SST files.
-        assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
+        assert!(
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).is_none()
+        );
         engine.compact();
         // After this compact, the two SST files are compacted into a new
         // SST file with properties. Now all SST files have properties and
         // all keys have only one version, so we don't need gc.
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 10, false).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, false).unwrap();
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 4.into());
         assert_eq!(props.num_rows, 4);
@@ -827,7 +833,8 @@ mod tests {
         engine.flush();
         // After this flush, keys 5,6 in the new SST file have more than one
         // versions, so we need gc.
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 10, true).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).unwrap();
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 8.into());
         assert_eq!(props.num_rows, 6);
@@ -835,7 +842,8 @@ mod tests {
         assert_eq!(props.num_versions, 8);
         assert_eq!(props.max_row_versions, 2);
         // But if the `safe_point` is older than all versions, we don't need gc too.
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 0, false).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 0, false).unwrap();
         assert_eq!(props.min_ts, TimeStamp::max());
         assert_eq!(props.max_ts, TimeStamp::zero());
         assert_eq!(props.num_rows, 0);
@@ -849,7 +857,8 @@ mod tests {
         engine.compact();
         // After this compact, all versions of keys 5,6 are deleted,
         // no keys have more than one versions, so we don't need gc.
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 10, false).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, false).unwrap();
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 4.into());
         assert_eq!(props.num_rows, 4);
@@ -860,7 +869,8 @@ mod tests {
         // A single lock version need gc.
         engine.lock(&[7], 9, 9);
         engine.flush();
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 10, true).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).unwrap();
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 9.into());
         assert_eq!(props.num_rows, 5);
