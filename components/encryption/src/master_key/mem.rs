@@ -14,13 +14,10 @@ pub(crate) struct MemAesGcmBackend {
 impl MemAesGcmBackend {
     pub fn new(key: Vec<u8>) -> Result<MemAesGcmBackend> {
         if key.len() != AesGcmCrypter::KEY_LEN {
-            return Err(Error::Other(
-                format!(
-                    "encryption method and key length mismatch, expect {} get {}",
-                    AesGcmCrypter::KEY_LEN,
-                    key.len()
-                )
-                .into(),
+            return Err(box_err!(
+                "encryption method and key length mismatch, expect {} get {}",
+                AesGcmCrypter::KEY_LEN,
+                key.len()
             ));
         }
         Ok(MemAesGcmBackend { key })
@@ -47,13 +44,13 @@ impl MemAesGcmBackend {
             .get_metadata()
             .get(MetadataKey::Iv.as_str())
             .ok_or_else(|| {
-                Error::Other(format!("metadata {} not found", MetadataKey::Iv.as_str()).into())
+                Error::Other(box_err!("metadata {} not found", MetadataKey::Iv.as_str()))
             })?;
         let iv = Iv::from(iv_value.as_slice());
         let tag = content
             .get_metadata()
             .get(MetadataKey::AesGcmTag.as_str())
-            .ok_or_else(|| Error::WrongMasterKey("gcm tag not found".to_owned().into()))?;
+            .ok_or_else(|| Error::WrongMasterKey(box_err!("gcm tag not found")))?;
         let gcm_tag = AesGcmTag::from(tag.as_slice());
         let ciphertext = content.get_content();
         let plaintext = AesGcmCrypter::new(key, iv).decrypt(ciphertext, gcm_tag)?;

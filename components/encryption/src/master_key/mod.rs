@@ -103,7 +103,7 @@ pub mod tests {
             let mut mock = self.lock().unwrap();
             mock.encrypt_called += 1;
             if mock.encrypt_fail {
-                return Err(Error::Other("".to_owned().into()));
+                return Err(box_err!("mock error"));
             }
             mock.inner.encrypt(plaintext)
         }

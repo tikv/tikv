@@ -58,9 +58,7 @@ impl AwsKms {
 
     fn check_config(config: &KmsConfig) -> Result<()> {
         if config.key_id.is_empty() {
-            return Err(Error::Other(
-                "KMS key id can not be empty".to_owned().into(),
-            ));
+            return Err(box_err!("KMS key id can not be empty"));
         }
         Ok(())
     }
@@ -215,7 +213,7 @@ impl KmsBackend {
             AWS_KMS_VENDOR_NAME.to_vec(),
         );
         if inner.cached_ciphertext_key.is_empty() {
-            return Err(Error::Other("KMS ciphertext key not found".into()));
+            return Err(box_err!("KMS ciphertext key not found"));
         }
         content.metadata.insert(
             MetadataKey::KmsCiphertextKey.as_str().to_owned(),
@@ -230,12 +228,10 @@ impl KmsBackend {
             // For now, we only support AWS.
             Some(val) if val.as_slice() == AWS_KMS_VENDOR_NAME => (),
             other => {
-                return Err(Error::Other(
-                    format!(
-                        "KMS vendor mismatch expect {:?} got {:?}",
-                        AWS_KMS_VENDOR_NAME, other
-                    )
-                    .into(),
+                return Err(box_err!(
+                    "KMS vendor mismatch expect {:?} got {:?}",
+                    AWS_KMS_VENDOR_NAME,
+                    other
                 ))
             }
         }
@@ -243,7 +239,7 @@ impl KmsBackend {
         let mut inner = self.inner.lock().unwrap();
         let ciphertext_key = content.metadata.get(MetadataKey::KmsCiphertextKey.as_str());
         if ciphertext_key.is_none() {
-            return Err(Error::Other("KMS ciphertext key not found".into()));
+            return Err(box_err!("KMS ciphertext key not found"));
         }
         inner.maybe_update_backend(ciphertext_key)?;
         inner.backend.as_ref().unwrap().decrypt_content(content)

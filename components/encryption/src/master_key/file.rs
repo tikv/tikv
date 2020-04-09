@@ -22,34 +22,26 @@ impl FileBackend {
         // Check file size to avoid reading a gigantic file accidentally.
         let file_len = file.metadata()?.len() as usize;
         if file_len != key_len * 2 + 1 {
-            return Err(Error::Other(
-                format!(
-                    "mismatch master key file size, expected {}, actual {}.",
-                    key_len * 2 + 1,
-                    file_len,
-                )
-                .into(),
+            return Err(box_err!(
+                "mismatch master key file size, expected {}, actual {}.",
+                key_len * 2 + 1,
+                file_len
             ));
         }
         let mut content = vec![];
         let read_len = file.read_to_end(&mut content)?;
         if read_len != file_len {
-            return Err(Error::Other(
-                format!(
-                    "mismatch master key file size read, expected {}, actual {}",
-                    file_len, read_len
-                )
-                .into(),
+            return Err(box_err!(
+                "mismatch master key file size read, expected {}, actual {}",
+                file_len,
+                read_len
             ));
         }
         if content.last() != Some(&b'\n') {
-            return Err(Error::Other(
-                "master key file should end with newline.".to_owned().into(),
-            ));
+            return Err(box_err!("master key file should end with newline."));
         }
-        let key = hex::decode(&content[..file_len - 1]).map_err(|e| {
-            Error::Other(format!("failed to decode master key from file: {}", e).into())
-        })?;
+        let key = hex::decode(&content[..file_len - 1])
+            .map_err(|e| Error::Other(box_err!("failed to decode master key from file: {}", e)))?;
         let backend = MemAesGcmBackend::new(key)?;
         Ok(FileBackend { backend })
     }

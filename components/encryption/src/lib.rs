@@ -6,6 +6,8 @@ extern crate slog_global;
 extern crate failure;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
+extern crate tikv_util;
 
 mod config;
 mod crypter;

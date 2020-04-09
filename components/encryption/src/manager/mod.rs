@@ -265,9 +265,7 @@ impl Dicts {
             }
             return Ok(());
         }
-        Err(Error::Other(
-            format!("key id collides {} times!", generate_limit).into(),
-        ))
+        Err(box_err!("key id collides {} times!", generate_limit))
     }
 }
 
@@ -314,10 +312,8 @@ impl DataKeyManager {
             e
         })?;
         if method != EncryptionMethod::Plaintext && !master_key.is_secure() {
-            return Err(Error::Other(
+            return Err(box_err!(
                 "encryption is to enable but master key is either absent or insecure."
-                    .to_owned()
-                    .into(),
             ));
         }
         let mut dicts = match (
@@ -359,11 +355,8 @@ impl DataKeyManager {
                             }
                         })?
                         .ok_or_else(|| {
-                            Error::Other(
-                            "Fallback to previous master key but find dictionaries to be empty."
-                                .to_owned()
-                                .into(),
-                        )
+                            Error::Other(box_err!(
+                            "Fallback to previous master key but find dictionaries to be empty."))
                         })?;
                 // Rewrite key_dict after replace master key.
                 dicts.save_key_dict(master_key.as_ref())?;
