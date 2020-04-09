@@ -50,12 +50,10 @@ fn prefix_sum<F, T>(iter: Iter<T>, read: F) -> Vec<usize>
         F: Fn(&T) -> usize,
 {
     let mut pre_sum = vec![];
+    let mut sum = 0;
     for item in iter {
-        let last = match pre_sum.last() {
-            Some(last) => *last,
-            None => 0,
-        };
-        pre_sum.push(read(&item) + last);
+        sum += read(&item);
+        pre_sum.push(sum);
     }
     pre_sum
 }
@@ -210,12 +208,10 @@ impl Recorder {
 
             if order_start == Ordering::Greater && order_end == Ordering::Less {
                 sample.contained += 1;
+            } else if order_start != Ordering::Greater {
+                sample.right += 1;
             } else {
-                if order_start != Ordering::Greater {
-                    sample.right += 1;
-                } else if order_start == Ordering::Greater {
-                    sample.left += 1;
-                }
+                sample.left += 1;
             }
         }
     }
@@ -377,7 +373,6 @@ impl AutoSplitController {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,6 +410,16 @@ mod tests {
                 String::from_utf8(Vec::from(start_key)).unwrap(),
                 String::from_utf8(Vec::from(end_key)).unwrap()
             );
+        }
+    }
+
+    #[test]
+    fn test_pre_sum() {
+        let v = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let expect = vec![1, 3, 6, 10, 15, 21, 28, 36, 45];
+        let pre = prefix_sum(v.iter(), |x| x);
+        for i in 0..v.len() {
+            assert_eq!(expect[i], pre[i]);
         }
     }
 
