@@ -19,7 +19,9 @@ use crate::server::metrics::*;
 use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Snapshot, Statistics,
 };
-use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
+use crate::storage::mvcc::{
+    check_need_gc, check_region_need_gc, Error as MvccError, MvccReader, MvccTxn,
+};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
@@ -907,24 +909,6 @@ impl<E: Engine> GcWorker<E> {
             .ok_or_else(|| box_err!("applied_lock_collector not supported"))
             .and_then(move |c| c.stop_collecting(max_ts, callback))
     }
-}
-
-pub fn check_region_need_gc<E: Engine, S: Snapshot>(
-    engine: &E,
-    snap: S,
-    safe_point: TimeStamp,
-    ratio_threshold: f64,
-) -> bool {
-    let start = snap.lower_bound();
-    let end = snap.upper_bound();
-    if start.is_none() || end.is_none() {
-        return true;
-    }
-    let prop = match engine.get_properties_cf(CF_WRITE, start.unwrap(), end.unwrap()) {
-        Ok(v) => v,
-        Err(_) => return true,
-    };
-    check_need_gc(safe_point, ratio_threshold, prop)
 }
 
 #[cfg(test)]

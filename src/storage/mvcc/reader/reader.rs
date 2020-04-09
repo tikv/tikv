@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{Cursor, Engine, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
 use engine_rocks::properties::MvccProperties;
 use engine_rocks::RocksTablePropertiesCollection;
@@ -433,6 +433,24 @@ fn get_mvcc_properties(
     Some(props)
 }
 
+pub fn check_region_need_gc<E: Engine, S: Snapshot>(
+    engine: &E,
+    snap: S,
+    safe_point: TimeStamp,
+    ratio_threshold: f64,
+) -> bool {
+    let start = snap.lower_bound();
+    let end = snap.upper_bound();
+    if start.is_none() || end.is_none() {
+        return true;
+    }
+    let prop = match engine.get_properties_cf(CF_WRITE, start.unwrap(), end.unwrap()) {
+        Ok(v) => v,
+        Err(_) => return true,
+    };
+    check_need_gc(safe_point, ratio_threshold, prop)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,7 +462,7 @@ mod tests {
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{CFHandleExt, Mutable, Range, TablePropertiesExt, WriteBatchExt};
+    use engine_traits::{Mutable, TablePropertiesExt, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -671,12 +689,11 @@ mod tests {
         safe_point: impl Into<TimeStamp>,
         need_gc: bool,
     ) -> Option<MvccProperties> {
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region.clone());
-        let reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let safe_point = safe_point.into();
 
-        let start = region.get_start_key();
-        let end = region.get_end_key();
+        //assert_eq!(check_region_need_gc(db.c(),safe_point, 1.0), need_gc);
+        let start = keys::data_key(region.get_start_key());
+        let end = keys::data_end_key(region.get_end_key());
         let collection = db
             .c()
             .get_range_properties_cf(CF_WRITE, &start, &end)

@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
+use engine_traits::CfName;
 use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;
-use engine_traits::{CFHandleExt, CfName, Range};
 use engine_traits::{Peekable, TablePropertiesExt};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
@@ -375,8 +375,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         start: &[u8],
         end: &[u8],
     ) -> kv::Result<RocksTablePropertiesCollection> {
+        let start = keys::data_key(start);
+        let end = keys::data_end_key(end);
         self.engine
-            .get_range_properties_cf(cf, start, end)
+            .get_range_properties_cf(cf, &start, &end)
             .map_err(|e| e.into())
     }
 }
