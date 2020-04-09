@@ -5103,6 +5103,7 @@ version = "0.1.0"
 dependencies = [
  "protobuf",
  "protobuf-build",
+ "tikv_alloc",
 ]
 
 [[package]]

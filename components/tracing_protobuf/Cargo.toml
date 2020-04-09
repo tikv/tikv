@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 protobuf = "=2.8.0"
+tikv_alloc = { path = "../tikv_alloc" }
 
 [build-dependencies]
 protobuf-build = { version = "0.11", default-features = false }
