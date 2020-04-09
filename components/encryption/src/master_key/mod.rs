@@ -23,7 +23,7 @@ pub trait Backend: Sync + Send + 'static {
 }
 
 mod mem;
-use self::mem::MemBackend;
+use self::mem::MemAesGcmBackend;
 
 mod file;
 pub use self::file::FileBackend;
@@ -54,8 +54,8 @@ impl Backend for PlaintextBackend {
 pub(crate) fn create_backend(config: &MasterKeyConfig) -> Result<Arc<dyn Backend>> {
     Ok(match config {
         MasterKeyConfig::Plaintext => Arc::new(PlaintextBackend {}) as _,
-        MasterKeyConfig::File { method, path } => {
-            Arc::new(FileBackend::new(*method, Path::new(path))?) as _
+        MasterKeyConfig::File { config } => {
+            Arc::new(FileBackend::new(Path::new(&config.path))?) as _
         }
         MasterKeyConfig::Kms { config } => Arc::new(KmsBackend::new(config.clone())?) as _,
         #[cfg(test)]

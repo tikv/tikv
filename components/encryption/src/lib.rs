@@ -15,7 +15,7 @@ mod manager;
 mod master_key;
 
 pub use self::config::*;
-pub use self::crypter::{AesCtrCrypter, Iv};
+pub use self::crypter::{AesGcmCrypter, Iv};
 pub use self::encrypted_file::EncryptedFile;
 pub use self::errors::{Error, Result};
 pub use self::manager::DataKeyManager;

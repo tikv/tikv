@@ -296,7 +296,7 @@ impl DataKeyManager {
         Self::new(
             &config.master_key,
             &config.previous_master_key,
-            config.method,
+            config.data_encryption_method,
             config.data_key_rotation_period.into(),
             dict_path,
         )
@@ -453,7 +453,7 @@ impl EncryptionKeyManager for DataKeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Mock;
+    use crate::config::{FileCofnig, Mock};
     use crate::master_key::tests::MockBackend;
 
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
@@ -812,8 +812,9 @@ mod tests {
     fn test_key_manager_rotate_on_key_expose() {
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key = MasterKeyConfig::File {
-            method: EncryptionMethod::Aes256Ctr,
-            path: key_path.to_str().unwrap().to_owned(),
+            config: FileCofnig {
+                path: key_path.to_str().unwrap().to_owned(),
+            },
         };
         let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);
         let manager = manager.unwrap().unwrap();
@@ -857,8 +858,9 @@ mod tests {
     fn test_expose_keys_on_insecure_backend() {
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key = MasterKeyConfig::File {
-            method: EncryptionMethod::Aes256Ctr,
-            path: key_path.to_str().unwrap().to_owned(),
+            config: FileCofnig {
+                path: key_path.to_str().unwrap().to_owned(),
+            },
         };
 
         let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);

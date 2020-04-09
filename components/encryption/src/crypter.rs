@@ -56,41 +56,27 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
     }
 }
 
-pub enum Cipher {
-    Plaintext,
-    AesCtr(OCipher),
-}
-
-impl From<EncryptionMethod> for Cipher {
-    fn from(method: EncryptionMethod) -> Cipher {
-        match method {
-            EncryptionMethod::Plaintext => Cipher::Plaintext,
-            EncryptionMethod::Aes128Ctr => Cipher::AesCtr(OCipher::aes_128_ctr()),
-            EncryptionMethod::Aes192Ctr => Cipher::AesCtr(OCipher::aes_192_ctr()),
-            EncryptionMethod::Aes256Ctr => Cipher::AesCtr(OCipher::aes_256_ctr()),
-            unknown => panic!("bad EncryptionMethod {:?}", unknown),
-        }
-    }
-}
-
-// IV as an AES input, the length must be 16 btyes.
-const IV_LEN: usize = 16;
+// IV as an AES input, the length should be 12 btyes for GCM mode.
+const GCM_IV_LEN: usize = 12;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Iv {
-    iv: [u8; IV_LEN],
+    iv: [u8; GCM_IV_LEN],
 }
 
 impl Iv {
-    pub fn as_slice(&self) -> &[u8; IV_LEN] {
+    pub fn as_slice(&self) -> &[u8] {
         &self.iv
     }
 }
 
 impl<'a> From<&'a [u8]> for Iv {
     fn from(src: &'a [u8]) -> Iv {
-        assert_eq!(src.len(), IV_LEN, "Nonce + Counter must be 16 bytes");
-        let mut iv = [0; IV_LEN];
+        assert!(
+            src.len() >= GCM_IV_LEN,
+            "Nonce + Counter must be greater than 12 bytes"
+        );
+        let mut iv = [0; GCM_IV_LEN];
         iv.copy_from_slice(src);
         Iv { iv }
     }
@@ -101,44 +87,73 @@ impl Iv {
     pub fn new() -> Iv {
         use rand::{rngs::OsRng, RngCore};
 
-        let mut iv = [0u8; IV_LEN];
+        let mut iv = [0u8; GCM_IV_LEN];
         OsRng.fill_bytes(&mut iv);
 
         Iv { iv }
     }
 }
 
-pub struct AesCtrCrypter<'k> {
-    method: EncryptionMethod,
+// The length GCM tag must be 16 btyes.
+const GCM_TAG_LEN: usize = 16;
+
+#[derive(Default)]
+pub struct AesGcmTag([u8; GCM_TAG_LEN]);
+
+impl<'a> From<&'a [u8]> for AesGcmTag {
+    fn from(src: &'a [u8]) -> AesGcmTag {
+        assert!(src.len() >= GCM_TAG_LEN, "AES GCM tag must be 16 bytes");
+        let mut tag = [0; GCM_TAG_LEN];
+        tag.copy_from_slice(src);
+        AesGcmTag(tag)
+    }
+}
+
+impl AesGcmTag {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// An Aes256-GCM crypter.
+pub struct AesGcmCrypter<'k> {
     iv: Iv,
     key: &'k [u8],
 }
 
-impl<'k> AesCtrCrypter<'k> {
-    pub fn new(method: EncryptionMethod, key: &'k [u8], iv: Iv) -> AesCtrCrypter<'k> {
-        AesCtrCrypter { method, iv, key }
+impl<'k> AesGcmCrypter<'k> {
+    /// The key length of `AesGcmCrypter` is 32 bytes.
+    pub const KEY_LEN: usize = 32;
+
+    pub fn new(key: &'k [u8], iv: Iv) -> AesGcmCrypter<'k> {
+        AesGcmCrypter { iv, key }
     }
 
-    pub fn encrypt(&self, pt: &[u8]) -> Result<Vec<u8>> {
-        let cipher = Cipher::from(self.method);
-        match cipher {
-            Cipher::Plaintext => Ok(pt.to_owned()),
-            Cipher::AesCtr(c) => {
-                let ciphertext = symm::encrypt(c, self.key, Some(self.iv.as_slice()), &pt)?;
-                Ok(ciphertext)
-            }
-        }
+    pub fn encrypt(&self, pt: &[u8]) -> Result<(Vec<u8>, AesGcmTag)> {
+        let cipher = OCipher::aes_256_gcm();
+        let mut tag = AesGcmTag::default();
+        let ciphertext = symm::encrypt_aead(
+            cipher,
+            self.key,
+            Some(self.iv.as_slice()),
+            &[], /* AAD */
+            &pt,
+            &mut tag.0,
+        )?;
+        Ok((ciphertext, tag))
     }
 
-    pub fn decrypt(&self, ct: &[u8]) -> Result<Vec<u8>> {
-        let cipher = Cipher::from(self.method);
-        match cipher {
-            Cipher::Plaintext => Ok(ct.to_owned()),
-            Cipher::AesCtr(c) => {
-                let plaintext = symm::decrypt(c, self.key, Some(self.iv.as_slice()), &ct)?;
-                Ok(plaintext)
-            }
-        }
+    pub fn decrypt(&self, ct: &[u8], tag: AesGcmTag) -> Result<Vec<u8>> {
+        let cipher = OCipher::aes_256_gcm();
+        let plaintext = symm::decrypt_aead(
+            cipher,
+            self.key,
+            Some(self.iv.as_slice()),
+            &[], /* AAD */
+            &ct,
+            &tag.0,
+        )?;
+        Ok(plaintext)
     }
 }
 
@@ -163,68 +178,44 @@ mod tests {
         }
     }
 
-    fn aes_ctr_test(method: EncryptionMethod, pt: &str, ct: &str, key: &str, iv: &str) {
+    #[test]
+    fn test_ase_256_gcm() {
+        // See more http://csrc.nist.gov/groups/STM/cavp/documents/mac/gcmtestvectors.zip
+        //
+        // [Keylen = 256]
+        // [IVlen = 96]
+        // [PTlen = 256]
+        // [AADlen = 0]
+        // [Taglen = 128]
+        //
+        // Count = 0
+        // Key = c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139
+        // IV = cafabd9672ca6c79a2fbdc22
+        // CT = 84e5f23f95648fa247cb28eef53abec947dbf05ac953734618111583840bd980
+        // AAD =
+        // Tag = 79651c875f7941793d42bbd0af1cce7c
+        // PT = 25431587e9ecffc7c37f8d6d52a9bc3310651d46fb0e3bad2726c8f2db653749
+
+        let pt = "25431587e9ecffc7c37f8d6d52a9bc3310651d46fb0e3bad2726c8f2db653749";
+        let ct = "84e5f23f95648fa247cb28eef53abec947dbf05ac953734618111583840bd980";
+        let key = "c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139";
+        let iv = "cafabd9672ca6c79a2fbdc22";
+        let tag = "79651c875f7941793d42bbd0af1cce7c";
+
         let pt = Vec::from_hex(pt).unwrap();
         let ct = Vec::from_hex(ct).unwrap();
         let key = Vec::from_hex(key).unwrap();
         let iv = Vec::from_hex(iv).unwrap().as_slice().into();
+        let tag = Vec::from_hex(tag).unwrap();
 
-        let crypter = AesCtrCrypter::new(method, &key, iv);
-        let ciphertext = crypter.encrypt(&pt).unwrap();
+        let crypter = AesGcmCrypter::new(&key, iv);
+        let (ciphertext, gcm_tag) = crypter.encrypt(&pt).unwrap();
         assert_eq!(ciphertext, ct, "{}", hex::encode(&ciphertext));
-        let plaintext = crypter.decrypt(&ct).unwrap();
+        assert_eq!(gcm_tag.0.to_vec(), tag, "{}", hex::encode(&gcm_tag.0));
+        let plaintext = crypter.decrypt(&ct, gcm_tag).unwrap();
         assert_eq!(plaintext, pt, "{}", hex::encode(&plaintext));
-    }
 
-    #[test]
-    fn test_plaintext() {
-        // See more https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf
-        let pt = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411\
-                  e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
-        let ct = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411\
-                  e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
-        let key = "";
-        let iv = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff";
-
-        aes_ctr_test(EncryptionMethod::Plaintext, pt, ct, key, iv);
-    }
-
-    #[test]
-    fn test_ase_128_ctr() {
-        // See more https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf
-        let pt = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411\
-                  e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
-        let ct = "874d6191b620e3261bef6864990db6ce9806f66b7970fdff8617187bb9fffdff5ae4df3edbd5d35e\
-                  5b4f09020db03eab1e031dda2fbe03d1792170a0f3009cee";
-        let key = "2b7e151628aed2a6abf7158809cf4f3c";
-        let iv = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff";
-
-        aes_ctr_test(EncryptionMethod::Aes128Ctr, pt, ct, key, iv);
-    }
-
-    #[test]
-    fn test_ase_192_ctr() {
-        // See more https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf
-        let pt = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411\
-                  e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
-        let ct = "1abc932417521ca24f2b0459fe7e6e0b090339ec0aa6faefd5ccc2c6f4ce8e941e36b26bd1ebc670\
-                  d1bd1d665620abf74f78a7f6d29809585a97daec58c6b050";
-        let key = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
-        let iv = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff";
-
-        aes_ctr_test(EncryptionMethod::Aes192Ctr, pt, ct, key, iv);
-    }
-
-    #[test]
-    fn test_ase_256_ctr() {
-        // See more https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf
-        let pt = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411\
-                  e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
-        let ct = "601ec313775789a5b7a7f504bbf3d228f443e3ca4d62b59aca84e990cacaf5c52b0930daa23de94c\
-                  e87017ba2d84988ddfc9c58db67aada613c2dd08457941a6";
-        let key = "603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4";
-        let iv = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff";
-
-        aes_ctr_test(EncryptionMethod::Aes256Ctr, pt, ct, key, iv);
+        // Fail to decrypt with a wrong tag.
+        crypter.decrypt(&ct, AesGcmTag::default()).unwrap_err();
     }
 }
