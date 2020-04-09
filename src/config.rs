@@ -1808,7 +1808,7 @@ mod readpool_tests {
     }
 
     #[test]
-    fn test_not_all_unified() {
+    fn test_partially_unified() {
         let storage = StorageReadPoolConfig {
             use_unified_pool: Some(false),
             low_concurrency: 0,
@@ -1820,13 +1820,36 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(coprocessor.use_unified_pool());
-        let cfg = ReadPoolConfig {
+        let mut cfg = ReadPoolConfig {
             storage,
             coprocessor,
             ..Default::default()
         };
         assert!(cfg.is_unified_pool_enabled());
         assert!(cfg.validate().is_err());
+        cfg.storage.low_concurrency = 1;
+        assert!(cfg.validate().is_ok());
+
+        let storage = StorageReadPoolConfig {
+            use_unified_pool: Some(true),
+            ..Default::default()
+        };
+        assert!(storage.use_unified_pool());
+        let coprocessor = CoprReadPoolConfig {
+            use_unified_pool: Some(false),
+            low_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(!coprocessor.use_unified_pool());
+        let mut cfg = ReadPoolConfig {
+            storage,
+            coprocessor,
+            ..Default::default()
+        };
+        assert!(cfg.is_unified_pool_enabled());
+        assert!(cfg.validate().is_err());
+        cfg.coprocessor.low_concurrency = 1;
+        assert!(cfg.validate().is_ok());
     }
 }
 
