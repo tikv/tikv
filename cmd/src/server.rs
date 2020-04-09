@@ -31,7 +31,7 @@ use raftstore::{
 };
 use std::{
     convert::TryFrom,
-    fmt,
+    env, fmt,
     fs::File,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -64,6 +64,7 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
 };
+use walkdir::WalkDir;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -89,6 +90,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     let _m = Monitor::default();
 
+    tikv.check_conflict_addr();
     tikv.init_fs();
     tikv.init_yatp();
     tikv.init_engines();
@@ -121,6 +123,7 @@ struct TiKVServer {
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost>,
     to_stop: Vec<Box<dyn Stop>>,
+    lock_files: Vec<File>,
 }
 
 struct Engines {
@@ -179,6 +182,7 @@ impl TiKVServer {
             region_info_accessor,
             coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
+            lock_files: vec![],
         }
     }
 
@@ -284,6 +288,53 @@ impl TiKVServer {
         );
 
         pd_client
+    }
+
+    fn check_conflict_addr(&mut self) {
+        let cur_addr = &self.config.server.addr;
+        let cur_addr_vec: Vec<&str> = cur_addr.split(':').collect();
+        if cur_addr_vec.len() < 2 {
+            fatal!("tikv address has wrong format");
+        }
+        let cur_ip = cur_addr_vec.first().cloned().unwrap().trim();
+        let cur_port = cur_addr_vec.last().cloned().unwrap().trim();
+
+        let search_base = env::temp_dir().join("TIKV_LOCK_FILES");
+        std::fs::create_dir_all(&search_base).expect("create TIKV_LOCK_FILES failed");
+
+        for result in WalkDir::new(&search_base) {
+            if let Ok(dent) = result {
+                if !dent.file_type().is_file() {
+                    continue;
+                }
+                let file_path = dent.path();
+                if let Some(extension) = file_path.extension() {
+                    if extension != "tikv_lock" {
+                        continue;
+                    }
+                    let pattern = file_path
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .trim_end_matches(".tikv_lock")
+                        .to_owned();
+                    let pattern_addr: Vec<&str> = pattern.split(':').collect();
+                    if pattern_addr.len() < 2 {
+                        continue;
+                    }
+                    let ip = pattern_addr.first().cloned().unwrap().trim();
+                    let port = pattern_addr.last().cloned().unwrap().trim();
+                    if cur_port == port && cur_ip == ip || cur_ip == "0.0.0.0" || ip == "0.0.0.0" {
+                        let _ = try_lock_conflict_addr(file_path);
+                    }
+                }
+            }
+        }
+
+        let cur_path = search_base.join(format!("{}.tikv_lock", &cur_addr));
+        let cur_file = try_lock_conflict_addr(cur_path);
+        self.lock_files.push(cur_file);
     }
 
     fn init_fs(&self) {
@@ -852,6 +903,24 @@ fn check_system_config(config: &TiKvConfig) {
             "err" => %e
         );
     }
+}
+
+fn try_lock_conflict_addr<P: AsRef<Path>>(existed_path: P) -> File {
+    let f = File::create(existed_path.as_ref()).unwrap_or_else(|e| {
+        fatal!(
+            "failed to create lock at {}: {}",
+            existed_path.as_ref().display(),
+            e
+        )
+    });
+
+    if f.try_lock_exclusive().is_err() {
+        fatal!(
+            "lock {} failed, maybe another instance is binding with this address.",
+            existed_path.as_ref().display()
+        );
+    }
+    f
 }
 
 /// A small trait for components which can be trivially stopped. Lets us keep

@@ -82,6 +82,7 @@ tikv_util = { path = "../components/tikv_util" }
 toml = "0.4"
 txn_types = { path = "../components/txn_types" }
 vlog = "0.1.4"
+walkdir = "2.3"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
