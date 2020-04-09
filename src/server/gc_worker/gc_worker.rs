@@ -17,7 +17,7 @@ use tokio_core::reactor::Handle;
 
 use crate::server::metrics::*;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Snapshot, Statistics,
 };
 use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
 use pd_client::PdClient;
@@ -270,7 +270,7 @@ impl<E: Engine> GcRunner<E> {
     ) -> Result<(Vec<Key>, Option<Key>)> {
         let snapshot = self.get_snapshot(ctx)?;
         let mut reader = MvccReader::new(
-            snapshot,
+            snapshot.clone(),
             Some(ScanMode::Forward),
             !ctx.get_not_fill_cache(),
             ctx.get_isolation_level(),
@@ -280,7 +280,8 @@ impl<E: Engine> GcRunner<E> {
 
         // range start gc with from == None, and this is an optimization to
         // skip gc before scanning all data.
-        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.cfg.ratio_threshold);
+        let skip_gc = is_range_start
+            && !check_region_need_gc(&self.engine, snapshot, safe_point, self.cfg.ratio_threshold);
         let res = if skip_gc {
             GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
@@ -906,6 +907,24 @@ impl<E: Engine> GcWorker<E> {
             .ok_or_else(|| box_err!("applied_lock_collector not supported"))
             .and_then(move |c| c.stop_collecting(max_ts, callback))
     }
+}
+
+pub fn check_region_need_gc<E: Engine, S: Snapshot>(
+    engine: &E,
+    snap: S,
+    safe_point: TimeStamp,
+    ratio_threshold: f64,
+) -> bool {
+    let start = snap.lower_bound();
+    let end = snap.upper_bound();
+    if start.is_none() || end.is_none() {
+        return true;
+    }
+    let prop = match engine.get_properties_cf(CF_WRITE, start.unwrap(), end.unwrap()) {
+        Ok(v) => v,
+        Err(_) => return true,
+    };
+    check_need_gc(safe_point, ratio_threshold, prop)
 }
 
 #[cfg(test)]

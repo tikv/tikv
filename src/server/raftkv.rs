@@ -1,10 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
-use engine_traits::CfName;
 use engine_traits::IterOptions;
-use engine_traits::Peekable;
 use engine_traits::CF_DEFAULT;
+use engine_traits::{CFHandleExt, CfName, Range};
+use engine_traits::{Peekable, TablePropertiesExt};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
@@ -107,6 +107,7 @@ impl From<RaftServerError> for KvError {
 #[derive(Clone)]
 pub struct RaftKv<S: RaftStoreRouter + 'static> {
     router: S,
+    engine: RocksEngine,
 }
 
 pub enum CmdRes {
@@ -162,8 +163,8 @@ fn on_read_result(
 
 impl<S: RaftStoreRouter> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S) -> RaftKv<S> {
-        RaftKv { router }
+    pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
+        RaftKv { router, engine }
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -367,6 +368,17 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             e.into()
         })
     }
+
+    fn get_properties_cf(
+        &self,
+        cf: CfName,
+        start: &[u8],
+        end: &[u8],
+    ) -> kv::Result<RocksTablePropertiesCollection> {
+        self.engine
+            .get_range_properties_cf(cf, start, end)
+            .map_err(|e| e.into())
+    }
 }
 
 impl Snapshot for RegionSnapshot<RocksEngine> {
@@ -408,10 +420,6 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
             RegionSnapshot::iter_cf(self, cf, iter_opt)?,
             mode,
         ))
-    }
-
-    fn get_properties_cf(&self, cf: CfName) -> kv::Result<RocksTablePropertiesCollection> {
-        RegionSnapshot::get_properties_cf(self, cf).map_err(|e| e.into())
     }
 
     #[inline]

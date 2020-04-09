@@ -138,13 +138,6 @@ where
         Ok(())
     }
 
-    pub fn get_properties_cf(&self, cf: &str) -> Result<E::TablePropertiesCollection> {
-        let start = keys::enc_start_key(&self.region);
-        let end = keys::enc_end_key(&self.region);
-        let prop = self.snap.get_range_properties_cf(cf, &start, &end)?;
-        Ok(prop)
-    }
-
     #[inline]
     pub fn get_start_key(&self) -> &[u8] {
         self.region.get_start_key()

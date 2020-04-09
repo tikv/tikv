@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::KvEngine;
 use crate::iterable::Iterable;
 use crate::peekable::Peekable;
 use std::fmt::Debug;

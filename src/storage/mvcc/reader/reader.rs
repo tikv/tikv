@@ -370,15 +370,6 @@ impl<S: Snapshot> MvccReader<S> {
         }
         Ok(v)
     }
-
-    pub fn need_gc(&self, safe_point: TimeStamp, ratio_threshold: f64) -> bool {
-        let prop = match self.snapshot.get_properties_cf(CF_WRITE) {
-            Ok(v) => v,
-            Err(_) => return true,
-        };
-
-        check_need_gc(safe_point, ratio_threshold, prop)
-    }
 }
 
 // Returns true if it needs gc.
@@ -453,7 +444,7 @@ mod tests {
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{Mutable, WriteBatchExt};
+    use engine_traits::{CFHandleExt, Mutable, Range, TablePropertiesExt, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -680,14 +671,19 @@ mod tests {
         safe_point: impl Into<TimeStamp>,
         need_gc: bool,
     ) -> Option<MvccProperties> {
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region.clone());
         let reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let safe_point = safe_point.into();
-        assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
-        get_mvcc_properties(
-            safe_point,
-            reader.snapshot.get_properties_cf(CF_WRITE).unwrap(),
-        )
+
+        let start = region.get_start_key();
+        let end = region.get_end_key();
+        let collection = db
+            .c()
+            .get_range_properties_cf(CF_WRITE, &start, &end)
+            .unwrap();
+        println!("is empty {}", collection.is_empty());
+
+        get_mvcc_properties(safe_point, collection)
     }
 
     #[test]
