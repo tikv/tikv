@@ -117,6 +117,7 @@ struct TiKVServer {
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost>,
     to_stop: Vec<Box<dyn Stop>>,
+    lock_file: Option<File>,
 }
 
 struct Engines {
@@ -175,6 +176,7 @@ impl TiKVServer {
             region_info_accessor,
             coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
+            lock_file: None,
         }
     }
 
@@ -293,6 +295,7 @@ impl TiKVServer {
                 self.store_path.display()
             );
         }
+        self.lock_file = Some(f);
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
             fatal!(
