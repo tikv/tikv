@@ -111,9 +111,6 @@ fn test_ingest_sst() {
 
 #[test]
 fn test_ingest_sst_without_crc32() {
-    fail::cfg("raft_before_delete_sst", "sleep(1000)").unwrap();
-    defer!(fail::remove("raft_before_delete_sst"));
-
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
 
     let temp_dir = Builder::new()
