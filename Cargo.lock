@@ -1906,7 +1906,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#78042b285b75c1e427ac3dcf5559e1f8bcd340c9"
+source = "git+https://github.com/pingcap/kvproto.git#98f910b71904ff7190e26a483b242ad5d7330c31"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -4312,7 +4312,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.0-beta.2"
+version = "4.0.0-rc"
 dependencies = [
  "async-stream",
  "async-trait",
