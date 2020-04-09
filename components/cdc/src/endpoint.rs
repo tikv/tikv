@@ -418,7 +418,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let tso = self.pd_client.get_tso();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
-        let regions: Vec<u64> = self.capture_regions.keys().map(|k| *k).collect();
+        let regions: Vec<u64> = self.capture_regions.keys().copied().collect();
         let fut = tso.join(timeout.map_err(|_| unreachable!())).then(
             move |tso: pd_client::Result<(TimeStamp, ())>| {
                 // Ignore get tso errors since we will retry every `min_ts_interval`.
