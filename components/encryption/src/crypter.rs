@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(ivs.len(), 100);
 
         for iv in ivs {
-            let iv1 = Iv::from(&iv.as_slice()[..]);
+            let iv1 = Iv::from_slice(&iv.as_slice()[..]).unwrap();
             assert_eq!(iv.as_slice(), iv1.as_slice());
         }
     }
@@ -214,9 +214,9 @@ mod tests {
         let pt = Vec::from_hex(pt).unwrap();
         let ct = Vec::from_hex(ct).unwrap();
         let key = Vec::from_hex(key).unwrap();
-        let iv = Vec::from_hex(iv).unwrap().as_slice().into();
+        let iv = Vec::from_hex(iv).unwrap();
 
-        let crypter = AesCtrCrypter::new(method, &key, iv);
+        let crypter = AesCtrCrypter::new(method, &key, Iv::from_slice(&iv).unwrap());
         let ciphertext = crypter.encrypt(&pt).unwrap();
         assert_eq!(ciphertext, ct, "{}", hex::encode(&ciphertext));
         let plaintext = crypter.decrypt(&ct).unwrap();
