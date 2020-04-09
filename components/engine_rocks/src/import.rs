@@ -51,32 +51,36 @@ impl ImportExt for RocksEngine {
         let f = File::open(path)?;
 
         let meta = f.metadata()?;
-        if meta.len() != expected_size {
-            return Err(Error::Engine(format!(
-                "invalid size {} for {}, expected {}",
-                meta.len(),
-                path,
-                expected_size
-            )));
+        if expected_size > 0 {
+            // check sst file size when expected_size > 0
+            if meta.len() != expected_size {
+                return Err(Error::Engine(format!(
+                    "invalid size {} for {}, expected {}",
+                    meta.len(),
+                    path,
+                    expected_size
+                )));
+            }
         }
+        if expected_checksum > 0 {
+            let checksum = calc_crc32(path)?;
+            if checksum == expected_checksum {
+                return Ok(());
+            }
 
-        let checksum = calc_crc32(path)?;
-        if checksum == expected_checksum {
-            return Ok(());
-        }
+            // RocksDB may have modified the global seqno.
+            let cf = cf.as_inner();
+            set_external_sst_file_global_seq_no(&self.as_inner(), cf, path, 0)?;
+            f.sync_all()
+                .map_err(|e| format!("sync {}: {:?}", path, e))?;
 
-        // RocksDB may have modified the global seqno.
-        let cf = cf.as_inner();
-        set_external_sst_file_global_seq_no(&self.as_inner(), cf, path, 0)?;
-        f.sync_all()
-            .map_err(|e| format!("sync {}: {:?}", path, e))?;
-
-        let checksum = calc_crc32(path)?;
-        if checksum != expected_checksum {
-            return Err(Error::Engine(format!(
-                "invalid checksum {} for {}, expected {}",
-                checksum, path, expected_checksum
-            )));
+            let checksum = calc_crc32(path)?;
+            if checksum != expected_checksum {
+                return Err(Error::Engine(format!(
+                    "invalid checksum {} for {}, expected {}",
+                    checksum, path, expected_checksum
+                )));
+            }
         }
 
         Ok(())
