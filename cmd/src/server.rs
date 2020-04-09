@@ -294,7 +294,7 @@ impl TiKVServer {
         pd_client
     }
 
-    fn init_fs(&self) {
+    fn init_fs(&mut self) {
         let lock_path = self.store_path.join(Path::new("LOCK"));
 
         let f = File::create(lock_path.as_path())
