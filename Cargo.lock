@@ -392,6 +392,9 @@ name = "bytes"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bzip2-sys"
@@ -1016,22 +1019,33 @@ name = "encryption"
 version = "0.0.1"
 dependencies = [
  "byteorder",
+ "bytes 0.4.12",
  "crc32fast",
  "engine_traits",
  "failure",
+ "futures 0.3.4",
  "hex 0.4.2",
  "kvproto",
  "matches",
  "openssl",
  "protobuf",
  "rand 0.7.3",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kms",
+ "rusoto_mock",
+ "rusoto_util",
+ "rust-ini",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
+ "structopt",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
+ "tokio 0.2.13",
+ "toml",
 ]
 
 [[package]]
@@ -1071,6 +1085,7 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "coarsetime",
  "encryption",
  "engine",
  "engine_traits",
@@ -1078,6 +1093,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "prometheus",
+ "prometheus-static-metric",
  "rand 0.7.3",
  "rocksdb",
  "slog",
@@ -1500,9 +1516,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0eb5544c0e47a603130f1159773df46eb448c5649f7b4833c51f241c4e9fcbb"
+checksum = "a779eb8dc982fa4a552eb21e2962b2d927ea9037cb21be8645034c9e79ee4a29"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
@@ -1529,9 +1545,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.5.0"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48b1b6365d95c795aa3840b19c5364ad0a4bf82bfd48b2f9185719b9f8e614a7"
+checksum = "1b3080bdcfde08451cc7994f0b7c0c71c638629f8fb0049217af76a69d0742c3"
 dependencies = [
  "bindgen",
  "cc",
@@ -2993,6 +3009,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "coarsetime",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -3437,6 +3454,20 @@ dependencies = [
  "shlex",
  "tokio 0.2.13",
  "zeroize",
+]
+
+[[package]]
+name = "rusoto_kms"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "167c735c81ca560f7cd9914f99eabada7b5b66b3b14d7e4401507c68ebca02bb"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "futures 0.3.4",
+ "rusoto_core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4674,11 +4705,11 @@ dependencies = [
  "tokio-core",
  "tokio-executor",
  "tokio-sync",
- "tokio-threadpool",
  "tokio-timer",
  "toml",
  "url",
  "utime",
+ "yatp",
  "zeroize",
 ]
 
