@@ -4635,6 +4635,7 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "toml",
+ "tracing_protobuf",
  "txn_types",
  "url",
  "uuid",
@@ -5095,6 +5096,14 @@ name = "tower-service"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e987b6bf443f4b5b3b6f38704195592cca41c5bb7aedd3c3693c7081f8289860"
+
+[[package]]
+name = "tracing_protobuf"
+version = "0.1.0"
+dependencies = [
+ "protobuf",
+ "protobuf-build",
+]
 
 [[package]]
 name = "try-lock"

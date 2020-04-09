@@ -1,0 +1,6 @@
+syntax = "proto3";
+package tracing;
+
+message Dummy {
+    repeated string names = 1;
+}

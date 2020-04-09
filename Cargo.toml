@@ -132,6 +132,7 @@ tidb_query_vec_aggr = { path = "components/tidb_query_vec_aggr" }
 tidb_query_vec_executors = { path = "components/tidb_query_vec_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
+tracing_protobuf = { path = "components/tracing_protobuf" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["sync"] }
