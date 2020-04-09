@@ -1,8 +1,4 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
-
 use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
@@ -15,9 +11,7 @@ use kvproto::cdcpb::{
     ChangeDataRequest,
 };
 use kvproto::kvrpcpb::*;
-use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
-use raft::StateRole;
 use raftstore::coprocessor::{ObserverContext, RoleObserver};
 use test_raftstore::sleep_ms;
 
@@ -40,7 +34,7 @@ fn test_stale_resolver() {
         .wait()
         .unwrap();
     // Sleep for a while to wait the scan is done
-    thread::sleep(Duration::from_millis(200));
+    sleep_ms(200);
 
     let (k, v) = ("key1".to_owned(), "value".to_owned());
     // Prewrite
@@ -77,7 +71,7 @@ fn test_stale_resolver() {
     // Unblock the first scan
     fail::remove(fp);
     // Sleep for a while to wait the wrong resolver init
-    thread::sleep(Duration::from_millis(100));
+    sleep_ms(100);
     // Async commit
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let commit_resp =
