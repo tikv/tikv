@@ -440,7 +440,7 @@ impl<T> Drop for MustConsumeVec<T> {
 }
 
 /// Exit the whole process when panic.
-pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
+pub fn set_panic_hook(panic_abort: bool, data_dir: &str, panic_log_file: &str) {
     use std::panic;
     use std::process;
 
@@ -461,6 +461,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
 
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
+    let panic_log_file = panic_log_file.to_string();
     panic::set_hook(Box::new(move |info: &panic::PanicInfo<'_>| {
         use slog::Drain;
         if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
@@ -477,6 +478,10 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()));
             let bt = backtrace::Backtrace::new();
+
+            // redirect to stderr file
+            logger::redirect_panic_log(&panic_log_file);
+
             crit!("{}", msg;
                 "thread_name" => name,
                 "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
