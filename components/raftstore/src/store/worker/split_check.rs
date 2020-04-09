@@ -192,7 +192,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
             "start_key" => log_wrappers::Key(&start_key),
             "end_key" => log_wrappers::Key(&end_key),
         );
-        CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
+        CHECK_SPILT_COUNTER.all.inc();
 
         let mut host = self.coprocessor.new_split_checker_host(
             &self.cfg,
@@ -247,16 +247,14 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                 warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
             }
 
-            CHECK_SPILT_COUNTER_VEC
-                .with_label_values(&["success"])
-                .inc();
+            CHECK_SPILT_COUNTER.success.inc();
         } else {
             debug!(
                 "no need to send, split key not found";
                 "region_id" => region_id,
             );
 
-            CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
+            CHECK_SPILT_COUNTER.ignore.inc();
         }
     }
 
