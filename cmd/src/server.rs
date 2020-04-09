@@ -375,11 +375,11 @@ impl TiKVServer {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
+            Box::new(DBConfigManger::new(engines.kv.c().clone(), DBType::Kv)),
         );
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
+            Box::new(DBConfigManger::new(engines.raft.c().clone(), DBType::Raft)),
         );
 
         let engine = RaftKv::new(raft_router.clone());
@@ -396,7 +396,7 @@ impl TiKVServer {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
-            Some(engines.engines.kv.clone()),
+            Some(engines.engines.kv.c().clone()),
             Some(engines.raft_router.clone()),
             Some(self.region_info_accessor.clone()),
             self.config.gc.clone(),
@@ -560,8 +560,6 @@ impl TiKVServer {
             self.pd_client.clone(),
         );
 
-        let raft_router = node.get_router();
-
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -588,6 +586,7 @@ impl TiKVServer {
         }
 
         // Start CDC.
+        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
             self.pd_client.clone(),
             cdc_worker.scheduler(),
@@ -619,7 +618,7 @@ impl TiKVServer {
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
             engines.raft_router.clone(),
-            engines.engines.kv.clone(),
+            engines.engines.kv.c().clone(),
             servers.importer.clone(),
             self.security_mgr.clone(),
         );
