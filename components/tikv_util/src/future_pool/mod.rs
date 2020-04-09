@@ -280,7 +280,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        assert_eq!(rx.try_recv().unwrap(), 0);
+        assert_eq!(rx.recv_timeout(Duration::from_micros(50)).unwrap(), 0);
         assert!(rx.try_recv().is_err());
 
         // Tick is not emitted if there is no task
@@ -289,12 +289,12 @@ mod tests {
 
         // Tick is emitted since long enough time has passed
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        assert_eq!(rx.recv_timeout(Duration::from_micros(50)).unwrap(), 1);
         assert!(rx.try_recv().is_err());
 
         // Tick is emitted immediately after a long task
         spawn_future_and_wait(&pool, TICK_INTERVAL * 2);
-        assert_eq!(rx.try_recv().unwrap(), 2);
+        assert_eq!(rx.recv_timeout(Duration::from_micros(50)).unwrap(), 2);
         assert!(rx.try_recv().is_err());
     }
 
