@@ -93,6 +93,7 @@ pub enum Task {
         multi: Vec<CmdBatch>,
     },
     MinTS {
+        region_id: u64,
         min_ts: TimeStamp,
     },
     ResolverReady {
@@ -105,6 +106,7 @@ pub enum Task {
         downstream_id: DownstreamID,
         entries: Vec<Option<TxnEntry>>,
     },
+    RegisterMinTsEvent,
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
@@ -131,7 +133,13 @@ impl fmt::Debug for Task {
             Task::Deregister(deregister) => de.field("deregister", deregister).finish(),
             Task::OpenConn { ref conn } => de.field("conn_id", &conn.get_id()).finish(),
             Task::MultiBatch { multi } => de.field("multibatch", &multi.len()).finish(),
-            Task::MinTS { ref min_ts } => de.field("min_ts", min_ts).finish(),
+            Task::MinTS {
+                ref region_id,
+                ref min_ts,
+            } => de
+                .field("region_id", region_id)
+                .field("min_ts", min_ts)
+                .finish(),
             Task::ResolverReady { ref region_id, .. } => de.field("region_id", region_id).finish(),
             Task::IncrementalScan {
                 ref region_id,
@@ -142,6 +150,7 @@ impl fmt::Debug for Task {
                 .field("downstream", &downstream_id)
                 .field("scan_entries", &entries.len())
                 .finish(),
+            Task::RegisterMinTsEvent => de.finish(),
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
         }
     }
@@ -163,7 +172,7 @@ pub struct Endpoint<T> {
     workers: ThreadPool,
 }
 
-impl<T: RaftStoreRouter> Endpoint<T> {
+impl<T: 'static + RaftStoreRouter> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -310,20 +319,13 @@ impl<T: RaftStoreRouter> Endpoint<T> {
             // Subscribe the change events of the region.
             self.observer.subscribe_region(region_id);
 
-            ChangeCmd::RegisterObserver {
-                region_id,
-                region_epoch: request.take_region_epoch(),
-                enabled,
-            }
+            ChangeCmd::RegisterObserver { region_id, enabled }
         } else {
-            ChangeCmd::Snapshot {
-                region_id,
-                region_epoch: request.take_region_epoch(),
-            }
+            ChangeCmd::Snapshot { region_id }
         };
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let scheduler = self.scheduler.clone();
-        let schedule_deregister = move |err| {
+        let deregister_downstream = move |err| {
             warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?err);
             let deregister = Deregister::Downstream {
                 region_id,
@@ -335,19 +337,20 @@ impl<T: RaftStoreRouter> Endpoint<T> {
                 error!("schedule cdc task failed"; "error" => ?e);
             }
         };
-        if let Err(e) = self.raft_router.send(
+        if let Err(e) = self.raft_router.significant_send(
             region_id,
             SignificantMsg::CaptureChange {
                 cmd: change_cmd,
+                region_epoch: request.take_region_epoch(),
                 callback: Callback::Read(cb),
             },
         ) {
-            schedule_deregister(Error::Request(e.into()));
+            deregister_downstream(Error::Request(e.into()));
             return;
         }
         self.workers.spawn(
             fut.map_err(move |e| {
-                schedule_deregister(Error::Other(box_err!(e)));
+                deregister_downstream(Error::Other(box_err!(e)));
             })
             .and_then(move |resp| {
                 init.on_change_cmd(resp);
@@ -404,30 +407,52 @@ impl<T: RaftStoreRouter> Endpoint<T> {
         }
     }
 
-    fn on_min_ts(&mut self, min_ts: TimeStamp) {
-        for delegate in self.capture_regions.values_mut() {
+    fn on_min_ts(&mut self, region_id: u64, min_ts: TimeStamp) {
+        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             delegate.on_min_ts(min_ts);
         }
-        self.register_min_ts_event();
     }
 
     fn register_min_ts_event(&self) {
         let timeout = self.timer.delay(self.min_ts_interval);
         let tso = self.pd_client.get_tso();
         let scheduler = self.scheduler.clone();
+        let raft_router = self.raft_router.clone();
+        let regions: Vec<u64> = self.capture_regions.keys().map(|k| *k).collect();
         let fut = tso.join(timeout.map_err(|_| unreachable!())).then(
             move |tso: pd_client::Result<(TimeStamp, ())>| {
                 // Ignore get tso errors since we will retry every `min_ts_interval`.
                 let (min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
-                match scheduler.schedule(Task::MinTS { min_ts }) {
-                    Ok(_) | Err(ScheduleError::Stopped(_)) => Ok(()),
-                    // Must schedule `MinTS` event otherwise resolved ts can not
+                for region_id in regions {
+                    let scheduler_clone = scheduler.clone();
+                    if let Err(e) = raft_router.significant_send(
+                        region_id,
+                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                            if !resp.response.get_header().has_error() {
+                                match scheduler_clone.schedule(Task::MinTS { region_id, min_ts }) {
+                                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                                    Err(err) => panic!(
+                                        "failed to schedule min_ts event, min_ts: {}, error: {:?}",
+                                        min_ts, err
+                                    ),
+                                }
+                            }
+                        }))),
+                    ) {
+                        // TODO: should we try to deregister region here?
+                        warn!("send LeaderCallback for advancing resolved ts failed"; "err" => ?e, "min_ts" => min_ts);
+                    }
+                }
+                match scheduler.schedule(Task::RegisterMinTsEvent) {
+                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                    // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                     // advance normally.
-                    err => panic!(
-                        "failed to schedule min_ts event, min_ts: {}, error: {:?}",
-                        min_ts, err
+                    Err(err) => panic!(
+                        "failed to schedule regiester min ts event, error: {:?}",
+                        err
                     ),
                 }
+                Ok(())
             },
         );
         self.tso_worker.spawn(fut);
@@ -467,11 +492,9 @@ impl Initializer {
                 resp.response
             );
             let err = resp.response.take_header().take_error();
-            let deregister = Deregister::Downstream {
+            let deregister = Deregister::Region {
                 region_id: self.region_id,
-                downstream_id: self.downstream_id,
-                conn_id: self.conn_id,
-                err: Some(Error::Request(err)),
+                err: Error::Request(err),
             };
             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                 error!("schedule cdc task failed"; "error" => ?e);
@@ -612,11 +635,11 @@ impl Initializer {
     }
 }
 
-impl<T: RaftStoreRouter> Runnable<Task> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
-            Task::MinTS { min_ts } => self.on_min_ts(min_ts),
+            Task::MinTS { region_id, min_ts } => self.on_min_ts(region_id, min_ts),
             Task::Register {
                 request,
                 downstream,
@@ -637,6 +660,7 @@ impl<T: RaftStoreRouter> Runnable<Task> for Endpoint<T> {
             }
             Task::MultiBatch { multi } => self.on_multi_batch(multi),
             Task::OpenConn { conn } => self.on_open_conn(conn),
+            Task::RegisterMinTsEvent => self.register_min_ts_event(),
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
             }
