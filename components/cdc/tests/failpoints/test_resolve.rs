@@ -12,7 +12,6 @@ use kvproto::cdcpb::{
 };
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
-use raftstore::coprocessor::{ObserverContext, RoleObserver};
 use test_raftstore::sleep_ms;
 
 #[test]
