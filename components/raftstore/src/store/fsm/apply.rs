@@ -2366,13 +2366,11 @@ pub enum ChangeCmd {
     RegisterObserver {
         observe_id: ObserveID,
         region_id: u64,
-        region_epoch: RegionEpoch,
         enabled: Arc<AtomicBool>,
     },
     Snapshot {
         observe_id: ObserveID,
         region_id: u64,
-        region_epoch: RegionEpoch,
     },
 }
 
@@ -2389,6 +2387,7 @@ pub enum Msg {
     Snapshot(GenSnapTask),
     Change {
         cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
         cb: Callback<RocksEngine>,
     },
     #[cfg(any(test, feature = "testexport"))]
@@ -2777,13 +2776,13 @@ impl ApplyFsm {
         &mut self,
         apply_ctx: &mut ApplyContext<W>,
         cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
         cb: Callback<RocksEngine>,
     ) {
-        let (observe_id, region_id, region_epoch, enabled) = match cmd {
+        let (observe_id, region_id, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
                 observe_id,
                 region_id,
-                region_epoch,
                 enabled,
             } => {
                 assert!(!self
@@ -2791,13 +2790,12 @@ impl ApplyFsm {
                     .observe_cmd
                     .as_ref()
                     .map_or(false, |o| o.enabled.load(Ordering::SeqCst)));
-                (observe_id, region_id, region_epoch, Some(enabled))
+                (observe_id, region_id, Some(enabled))
             }
             ChangeCmd::Snapshot {
                 observe_id,
                 region_id,
-                region_epoch,
-            } => (observe_id, region_id, region_epoch, None),
+            } => (observe_id, region_id, None),
         };
 
         assert_eq!(self.delegate.region_id(), region_id);
@@ -2864,7 +2862,11 @@ impl ApplyFsm {
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
-                Some(Msg::Change { cmd, cb }) => self.handle_change(apply_ctx, cmd, cb),
+                Some(Msg::Change {
+                    cmd,
+                    region_epoch,
+                    cb,
+                }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
                 None => break,
@@ -3121,10 +3123,12 @@ impl ApplyRouter {
                 Msg::Change {
                     cmd: ChangeCmd::RegisterObserver { region_id, .. },
                     cb,
+                    ..
                 }
                 | Msg::Change {
                     cmd: ChangeCmd::Snapshot { region_id, .. },
                     cb,
+                    ..
                 } => {
                     warn!("target region is not found";
                             "region_id" => region_id);
@@ -4038,10 +4042,10 @@ mod tests {
         router.schedule_task(
             1,
             Msg::Change {
+                region_epoch: region_epoch.clone(),
                 cmd: ChangeCmd::RegisterObserver {
                     observe_id,
                     region_id: 1,
-                    region_epoch: region_epoch.clone(),
                     enabled: enabled.clone(),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
@@ -4100,10 +4104,10 @@ mod tests {
         router.schedule_task(
             2,
             Msg::Change {
+                region_epoch,
                 cmd: ChangeCmd::RegisterObserver {
                     observe_id,
                     region_id: 2,
-                    region_epoch,
                     enabled,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
@@ -4265,10 +4269,10 @@ mod tests {
         router.schedule_task(
             1,
             Msg::Change {
+                region_epoch: region_epoch.clone(),
                 cmd: ChangeCmd::RegisterObserver {
                     observe_id,
                     region_id: 1,
-                    region_epoch: region_epoch.clone(),
                     enabled: enabled.clone(),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
@@ -4419,10 +4423,10 @@ mod tests {
         router.schedule_task(
             1,
             Msg::Change {
+                region_epoch,
                 cmd: ChangeCmd::RegisterObserver {
                     observe_id,
                     region_id: 1,
-                    region_epoch,
                     enabled: Arc::new(AtomicBool::new(true)),
                 },
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
