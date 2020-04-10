@@ -50,7 +50,7 @@ impl<'a> EncryptedFile<'a> {
                 let plaintext = master_key.decrypt(&encrypted_content)?;
 
                 ENCRYPT_DECRPTION_FILE_HISTOGRAM
-                    .with_label_values(&["read"])
+                    .with_label_values(&[self.name, "read"])
                     .observe(start.elapsed().as_secs_f64());
 
                 Ok(plaintext)
@@ -88,7 +88,7 @@ impl<'a> EncryptedFile<'a> {
         base_dir.sync_all()?;
 
         ENCRYPT_DECRPTION_FILE_HISTOGRAM
-            .with_label_values(&["write"])
+            .with_label_values(&[self.name, "write"])
             .observe(start.elapsed().as_secs_f64());
 
         // TODO GC broken temp files if necessary.
