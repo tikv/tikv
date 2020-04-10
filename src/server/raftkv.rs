@@ -208,9 +208,28 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         reqs: Vec<Request>,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
-        fail_point!("raftkv_early_error_report", |_| Err(
-            RaftServerError::RegionNotFound(ctx.get_region_id()).into()
-        ));
+        #[cfg(feature = "failpoints")]
+        {
+            // If rid is some, only the specified region reports error.
+            // If rid is None, all regions report error.
+            let raftkv_early_error_report_fp = || -> Result<()> {
+                fail_point!("raftkv_early_error_report", |rid| {
+                    let region_id = ctx.get_region_id();
+                    rid.and_then(|rid| {
+                        let rid: u64 = rid.parse().unwrap();
+                        if rid == region_id {
+                            None
+                        } else {
+                            Some(())
+                        }
+                    })
+                    .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
+                });
+                Ok(())
+            };
+            raftkv_early_error_report_fp()?;
+        }
+
         let len = reqs.len();
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::default();
