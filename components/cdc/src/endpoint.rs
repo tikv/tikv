@@ -308,6 +308,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         };
         downstream.set_sink(conn.get_sink());
         if !conn.subscribe(request.get_region_id(), downstream.get_id()) {
+            error!("cdc duplicated request"; "region_id" => region_id, "conn_id" => ?conn.get_id(), "downstream_id" => ?downstream.get_id());
             downstream.sink_duplicate_error(request.get_region_id());
             return;
         }
@@ -617,6 +618,11 @@ impl Initializer {
                 return;
             }
         }
+
+        info!("finished async incremental scan";
+            "region_id" => region_id,
+            "downstream_id" => ?downstream_id,
+            "observe_id" => ?self.observe_id);
 
         if let Some(resolver) = resolver {
             Self::finish_building_resolver(self.observe_id, resolver, region, self.sched.clone());

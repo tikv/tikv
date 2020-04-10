@@ -80,6 +80,7 @@ impl Downstream {
     /// The size of `Error` and `ResolvedTS` are considered zero.
     pub fn sink_event(&self, mut change_data_event: Event, size: usize) {
         change_data_event.set_request_id(self.req_id);
+        info!("sink event", "event" => ?change_data_event, "downstream_id" => ?self.id);
         if self
             .sink
             .as_ref()
