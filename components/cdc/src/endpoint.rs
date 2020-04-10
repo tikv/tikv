@@ -587,7 +587,7 @@ impl Initializer {
             let entries = match Self::scan_batch(&mut scanner, self.batch_size, resolver.as_mut()) {
                 Ok(res) => res,
                 Err(e) => {
-                    error!("cdc scan entries failed"; "error" => ?e);
+                    error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
                     // TODO: record in metrics.
                     let deregister = Deregister::Downstream {
                         region_id,
@@ -596,7 +596,7 @@ impl Initializer {
                         err: Some(e),
                     };
                     if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e);
+                        error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
                     }
                     return;
                 }
@@ -613,7 +613,7 @@ impl Initializer {
                 entries,
             };
             if let Err(e) = self.sched.schedule(scanned) {
-                error!("schedule cdc task failed"; "error" => ?e);
+                error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
                 return;
             }
         }
