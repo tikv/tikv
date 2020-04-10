@@ -350,7 +350,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         self.src.can_be_cached()
     }
 }

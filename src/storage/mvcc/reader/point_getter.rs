@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::{default_not_found_error, Result};
+use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
@@ -15,6 +15,7 @@ pub struct PointGetterBuilder<S: Snapshot> {
     isolation_level: IsolationLevel,
     ts: TimeStamp,
     bypass_locks: TsSet,
+    check_has_newer_ts_data: bool,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
@@ -28,6 +29,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             isolation_level: IsolationLevel::Si,
             ts,
             bypass_locks: Default::default(),
+            check_has_newer_ts_data: false,
         }
     }
 
@@ -79,6 +81,16 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
+    /// Check whether there is data with newer ts. The result of `met_newer_ts_data` is Unknown
+    /// if this option is not set.
+    ///
+    /// Default is false.
+    #[inline]
+    pub fn check_has_newer_ts_data(mut self, enabled: bool) -> Self {
+        self.check_has_newer_ts_data = enabled;
+        self
+    }
+
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
         // If we only want to get single value, we can use prefix seek.
@@ -99,6 +111,11 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             isolation_level: self.isolation_level,
             ts: self.ts,
             bypass_locks: self.bypass_locks,
+            met_newer_ts_data: if self.check_has_newer_ts_data {
+                NewerTsCheckState::NotMetYet
+            } else {
+                NewerTsCheckState::Unknown
+            },
 
             statistics: Statistics::default(),
 
@@ -120,6 +137,7 @@ pub struct PointGetter<S: Snapshot> {
     isolation_level: IsolationLevel,
     ts: TimeStamp,
     bypass_locks: TsSet,
+    met_newer_ts_data: NewerTsCheckState,
 
     statistics: Statistics,
 
@@ -138,14 +156,17 @@ impl<S: Snapshot> PointGetter<S> {
         std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
+    /// Whether we met newer ts data.
+    /// The result is always `Unknown` if `check_has_newer_ts_data` is not set.
+    #[inline]
+    pub fn met_newer_ts_data(&self) -> NewerTsCheckState {
+        self.met_newer_ts_data
+    }
+
     /// Get the value of a user key.
     ///
     /// If `multi == false`, this function must be called only once. Future calls return nothing.
-    pub fn get(
-        &mut self,
-        user_key: &Key,
-        can_be_cached: Option<&mut bool>,
-    ) -> Result<Option<Value>> {
+    pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
         if !self.multi {
             // Protect from calling `get()` multiple times when `multi == false`.
             if self.drained {
@@ -155,35 +176,15 @@ impl<S: Snapshot> PointGetter<S> {
             }
         }
 
-        let mut can_be_cached_by_lock = true;
         match self.isolation_level {
             IsolationLevel::Si => {
                 // Check for locks that signal concurrent writes in Si.
-                let check_lock_res =
-                    self.load_and_check_lock(user_key, Some(&mut can_be_cached_by_lock));
-                if let Err(e) = check_lock_res {
-                    *can_be_cached.unwrap() = can_be_cached_by_lock;
-                    return Err(e);
-                }
+                self.load_and_check_lock(user_key)?;
             }
             IsolationLevel::Rc => {}
         }
 
-        let mut use_near_seek = false;
-        if can_be_cached_by_lock {
-            if let Some(true) = can_be_cached {
-                self.write_cursor.seek(
-                    &user_key.clone().append_ts(TimeStamp::max()),
-                    &mut self.statistics.write,
-                )?;
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                *can_be_cached.unwrap() =
-                    can_be_cached_by_lock && Key::decode_ts_from(current_key)? <= self.ts;
-                use_near_seek = true;
-            }
-        }
-
-        self.load_data(user_key, use_near_seek)
+        self.load_data(user_key)
     }
 
     /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
@@ -192,21 +193,15 @@ impl<S: Snapshot> PointGetter<S> {
     /// In common cases we expect to get nothing in lock cf. Using a `get_cf` instead of `seek`
     /// is fast in such cases due to no need for RocksDB to continue move and skip deleted entries
     /// until find a user key.
-    fn load_and_check_lock(
-        &mut self,
-        user_key: &Key,
-        can_be_cached: Option<&mut bool>,
-    ) -> Result<()> {
+    fn load_and_check_lock(&mut self, user_key: &Key) -> Result<()> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
 
         if let Some(ref lock_value) = lock_value {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
-            if let Some(can_be_cached) = can_be_cached {
-                if lock.ts > self.ts {
-                    *can_be_cached = false;
-                }
+            if lock.ts > self.ts && self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                self.met_newer_ts_data = NewerTsCheckState::Met;
             }
             lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks)
                 .map_err(Into::into)
@@ -219,17 +214,37 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
     /// from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key, use_near_seek: bool) -> Result<Option<Value>> {
+    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
+        let mut use_near_seek = false;
+        let mut seek_key = user_key.clone();
+
+        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+            seek_key = seek_key.append_ts(TimeStamp::max());
+            if !self
+                .write_cursor
+                .seek(&seek_key, &mut self.statistics.write)?
+            {
+                return Ok(None);
+            }
+            seek_key = seek_key.truncate_ts()?;
+            use_near_seek = true;
+
+            let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+            if !Key::is_user_key_eq(cursor_key, user_key.as_encoded().as_slice()) {
+                return Ok(None);
+            }
+            if Key::decode_ts_from(cursor_key)? > self.ts {
+                self.met_newer_ts_data = NewerTsCheckState::Met;
+            }
+        }
+
+        seek_key = seek_key.append_ts(self.ts);
         let data_found = if use_near_seek {
-            self.write_cursor.near_seek(
-                &user_key.clone().append_ts(self.ts),
-                &mut self.statistics.write,
-            )?
+            self.write_cursor
+                .near_seek(&seek_key, &mut self.statistics.write)?
         } else {
-            self.write_cursor.seek(
-                &user_key.clone().append_ts(self.ts),
-                &mut self.statistics.write,
-            )?
+            self.write_cursor
+                .seek(&seek_key, &mut self.statistics.write)?
         };
         if !data_found {
             return Ok(None);
@@ -335,57 +350,43 @@ mod tests {
     }
 
     fn must_get_key<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter
-            .get(&Key::from_raw(key), None)
-            .unwrap()
-            .is_some());
+        assert!(point_getter.get(&Key::from_raw(key)).unwrap().is_some());
     }
 
     fn must_get_value<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8], prefix: &[u8]) {
-        let val = point_getter
-            .get(&Key::from_raw(key), None)
-            .unwrap()
-            .unwrap();
+        let val = point_getter.get(&Key::from_raw(key)).unwrap().unwrap();
         assert!(val.starts_with(prefix));
     }
 
-    fn must_check_can_be_cached<E: Engine>(
+    fn must_met_newer_ts_data<E: Engine>(
         engine: &E,
         getter_ts: impl Into<TimeStamp>,
         key: &[u8],
         value: &[u8],
-        expected_can_be_cached: bool,
+        expected_met_newer_ts_data: bool,
     ) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut point_getter = PointGetterBuilder::new(snapshot, getter_ts.into())
             .isolation_level(IsolationLevel::Si)
+            .check_has_newer_ts_data(true)
             .build()
             .unwrap();
-        let mut can_be_cached = true;
-        let val = point_getter
-            .get(&Key::from_raw(key), Some(&mut can_be_cached))
-            .unwrap()
-            .unwrap();
+        let val = point_getter.get(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(val, value);
-        assert_eq!(expected_can_be_cached, can_be_cached);
-
-        let mut can_be_cached = false;
-        point_getter
-            .get(&Key::from_raw(key), Some(&mut can_be_cached))
-            .unwrap()
-            .unwrap();
-        assert_eq!(expected_can_be_cached, can_be_cached);
+        let expected = if expected_met_newer_ts_data {
+            NewerTsCheckState::Met
+        } else {
+            NewerTsCheckState::NotMetYet
+        };
+        assert_eq!(expected, point_getter.met_newer_ts_data());
     }
 
     fn must_get_none<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter
-            .get(&Key::from_raw(key), None)
-            .unwrap()
-            .is_none());
+        assert!(point_getter.get(&Key::from_raw(key)).unwrap().is_none());
     }
 
     fn must_get_err<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter.get(&Key::from_raw(key), None).is_err());
+        assert!(point_getter.get(&Key::from_raw(key)).is_err());
     }
 
     fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {
@@ -784,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn test_can_be_cached() {
+    fn test_met_newer_ts_data() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let (key, val1) = (b"foo", b"bar1");
@@ -795,14 +796,14 @@ mod tests {
         must_prewrite_put(&engine, key, val2, key, 30);
         must_commit(&engine, key, 30, 40);
 
-        must_check_can_be_cached(&engine, 20, key, val1, false);
-        must_check_can_be_cached(&engine, 30, key, val1, false);
-        must_check_can_be_cached(&engine, 40, key, val2, true);
-        must_check_can_be_cached(&engine, 50, key, val2, true);
+        must_met_newer_ts_data(&engine, 20, key, val1, true);
+        must_met_newer_ts_data(&engine, 30, key, val1, true);
+        must_met_newer_ts_data(&engine, 40, key, val2, false);
+        must_met_newer_ts_data(&engine, 50, key, val2, false);
 
         must_prewrite_lock(&engine, key, key, 60);
 
-        must_check_can_be_cached(&engine, 50, key, val2, false);
-        must_check_can_be_cached(&engine, 60, key, val2, true);
+        must_met_newer_ts_data(&engine, 50, key, val2, true);
+        must_met_newer_ts_data(&engine, 60, key, val2, false);
     }
 }

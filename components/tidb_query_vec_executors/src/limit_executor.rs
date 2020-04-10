@@ -61,7 +61,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     }
 
     #[inline]
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         self.src.can_be_cached()
     }
 }

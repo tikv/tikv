@@ -319,7 +319,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
     }
 
     #[inline]
-    pub fn can_be_cached(&mut self) -> bool {
+    pub fn can_be_cached(&self) -> bool {
         self.executor.can_be_cached()
     }
 }

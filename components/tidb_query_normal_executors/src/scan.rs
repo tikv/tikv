@@ -124,7 +124,7 @@ impl<S: Storage, T: InnerExecutor> Executor for ScanExecutor<S, T> {
     }
 
     #[inline]
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         self.scanner.can_be_cached()
     }
 }

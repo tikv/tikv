@@ -153,8 +153,9 @@ impl<T: Storage> RangesScanner<T> {
         range
     }
 
-    pub fn can_be_cached(&mut self) -> bool {
-        self.storage.can_be_cached()
+    #[inline]
+    pub fn can_be_cached(&self) -> bool {
+        self.storage.met_uncacheable_data() == Some(false)
     }
 
     fn update_scanned_range_from_new_point(&mut self, point: &PointRange) {

@@ -30,7 +30,7 @@ futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/innerr/kvproto.git", default-features = false, branch = "issue-6690" }
 lazy_static = "1.3"
 prometheus = { version = "0.8", default-features = false }
 quick-error = "1.2.2"

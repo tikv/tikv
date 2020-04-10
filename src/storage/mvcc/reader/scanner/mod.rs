@@ -14,7 +14,7 @@ use self::forward::{
 use crate::storage::kv::{
     CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics,
 };
-use crate::storage::mvcc::{default_not_found_error, Result};
+use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
 use crate::storage::txn::{Result as TxnResult, Scanner as StoreScanner};
 
 pub use self::forward::{test_util, DeltaScanner, EntryScanner};
@@ -96,12 +96,13 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
-    /// If this is true, can_be_cached() can be call when reading data
+    /// Check whether there is data with newer ts. The result of `met_newer_ts_data` is Unknown
+    /// if this option is not set.
     ///
     /// Default is false.
     #[inline]
-    pub fn set_check_can_be_cached(mut self, enabled: bool) -> Self {
-        self.0.check_can_be_cached = enabled;
+    pub fn check_has_newer_ts_data(mut self, enabled: bool) -> Self {
+        self.0.check_has_newer_ts_data = enabled;
         self
     }
 
@@ -175,6 +176,7 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
         }
     }
+
     /// Take out and reset the statistics collected so far.
     fn take_statistics(&mut self) -> Statistics {
         match self {
@@ -182,10 +184,13 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
             Scanner::Backward(scanner) => scanner.take_statistics(),
         }
     }
-    fn can_be_cached(&mut self) -> bool {
+
+    /// Returns whether data with newer ts is found. The result is meaningful only when
+    /// `check_has_newer_ts_data` is set to true.
+    fn met_newer_ts_data(&self) -> NewerTsCheckState {
         match self {
-            Scanner::Forward(scanner) => scanner.can_be_cached(),
-            Scanner::Backward(scanner) => scanner.can_be_cached(),
+            Scanner::Forward(scanner) => scanner.met_newer_ts_data(),
+            Scanner::Backward(scanner) => scanner.met_newer_ts_data(),
         }
     }
 }
@@ -211,7 +216,7 @@ pub struct ScannerConfig<S: Snapshot> {
 
     bypass_locks: TsSet,
 
-    check_can_be_cached: bool,
+    check_has_newer_ts_data: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -228,14 +233,14 @@ impl<S: Snapshot> ScannerConfig<S> {
             ts,
             desc,
             bypass_locks: Default::default(),
-            check_can_be_cached: false,
+            check_has_newer_ts_data: false,
         }
     }
 
     #[inline]
     fn scan_mode(&self) -> ScanMode {
         if self.desc {
-            ScanMode::Backward
+            ScanMode::Mixed
         } else {
             ScanMode::Forward
         }
@@ -579,13 +584,13 @@ mod tests {
         test_scan_bypass_locks_impl(true);
     }
 
-    fn must_check_can_be_cached<E: Engine>(
+    fn must_met_newer_ts_data<E: Engine>(
         engine: &E,
         scanner_ts: impl Into<TimeStamp>,
         key: &[u8],
-        value: &[u8],
+        value: Option<&[u8]>,
         desc: bool,
-        can_be_cached: bool,
+        expected_met_newer_ts_data: bool,
     ) {
         let mut scanner = ScannerBuilder::new(
             engine.snapshot(&Context::default()).unwrap(),
@@ -593,17 +598,28 @@ mod tests {
             desc,
         )
         .range(Some(Key::from_raw(key)), None)
-        .set_check_can_be_cached(true)
+        .check_has_newer_ts_data(true)
         .build()
         .unwrap();
 
-        let (k, v) = scanner.next().unwrap().unwrap();
-        assert_eq!(k, Key::from_raw(key));
-        assert_eq!(v, value);
-        assert_eq!(can_be_cached, scanner.can_be_cached());
+        let result = scanner.next().unwrap();
+        if let Some(value) = value {
+            let (k, v) = result.unwrap();
+            assert_eq!(k, Key::from_raw(key));
+            assert_eq!(v, value);
+        } else {
+            assert!(result.is_none());
+        }
+
+        let expected = if expected_met_newer_ts_data {
+            NewerTsCheckState::Met
+        } else {
+            NewerTsCheckState::NotMetYet
+        };
+        assert_eq!(expected, scanner.met_newer_ts_data());
     }
 
-    fn test_can_be_cached_impl(deep_write_seek: bool, desc: bool) {
+    fn test_met_newer_ts_data_impl(deep_write_seek: bool, desc: bool) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let (key, val1) = (b"foo", b"bar1");
 
@@ -620,23 +636,30 @@ mod tests {
         must_prewrite_put(&engine, key, val2, key, 300);
         must_commit(&engine, key, 300, 400);
 
-        must_check_can_be_cached(&engine, 100, key, val1, desc, false);
-        must_check_can_be_cached(&engine, 200, key, val1, desc, false);
-        must_check_can_be_cached(&engine, 300, key, val1, desc, false);
-        must_check_can_be_cached(&engine, 400, key, val2, desc, true);
-        must_check_can_be_cached(&engine, 500, key, val2, desc, true);
+        must_met_newer_ts_data(
+            &engine,
+            100,
+            key,
+            if deep_write_seek { Some(val1) } else { None },
+            desc,
+            true,
+        );
+        must_met_newer_ts_data(&engine, 200, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&engine, 300, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&engine, 400, key, Some(val2), desc, false);
+        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, false);
 
         must_prewrite_lock(&engine, key, key, 600);
 
-        must_check_can_be_cached(&engine, 500, key, val2, desc, false);
-        must_check_can_be_cached(&engine, 600, key, val2, desc, true);
+        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, true);
+        must_met_newer_ts_data(&engine, 600, key, Some(val2), desc, false);
     }
 
     #[test]
-    fn test_can_be_cached() {
-        test_can_be_cached_impl(false, false);
-        test_can_be_cached_impl(false, true);
-        test_can_be_cached_impl(true, false);
-        test_can_be_cached_impl(true, true);
+    fn test_met_newer_ts_data() {
+        test_met_newer_ts_data_impl(false, false);
+        test_met_newer_ts_data_impl(false, true);
+        test_met_newer_ts_data_impl(true, false);
+        test_met_newer_ts_data_impl(true, true);
     }
 }

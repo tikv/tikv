@@ -8,7 +8,7 @@ use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
-use crate::storage::mvcc::{Error, Result};
+use crate::storage::mvcc::{Error, NewerTsCheckState, Result};
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -34,7 +34,7 @@ pub struct BackwardKvScanner<S: Snapshot> {
     /// Is iteration started
     is_started: bool,
     statistics: Statistics,
-    can_be_cached: bool,
+    met_newer_ts_data: NewerTsCheckState,
 }
 
 impl<S: Snapshot> BackwardKvScanner<S> {
@@ -43,15 +43,18 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         lock_cursor: Cursor<S::Iter>,
         write_cursor: Cursor<S::Iter>,
     ) -> BackwardKvScanner<S> {
-        let can_be_cached = cfg.check_can_be_cached;
         BackwardKvScanner {
+            met_newer_ts_data: if cfg.check_has_newer_ts_data {
+                NewerTsCheckState::NotMetYet
+            } else {
+                NewerTsCheckState::Unknown
+            },
             cfg,
             lock_cursor,
             write_cursor,
             statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
-            can_be_cached,
         }
     }
 
@@ -60,8 +63,11 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
-    pub fn can_be_cached(&mut self) -> bool {
-        self.cfg.check_can_be_cached && self.can_be_cached
+    /// Whether we met newer ts data.
+    /// The result is always `Unknown` if `check_has_newer_ts_data` is not set.
+    #[inline]
+    pub fn met_newer_ts_data(&self) -> NewerTsCheckState {
+        self.met_newer_ts_data
     }
 
     /// Get the next key-value pair, in backward order.
@@ -143,8 +149,10 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        if lock.ts > self.cfg.ts && self.cfg.check_can_be_cached {
-                            self.can_be_cached = false;
+                        if lock.ts > self.cfg.ts
+                            && self.met_newer_ts_data == NewerTsCheckState::NotMetYet
+                        {
+                            self.met_newer_ts_data = NewerTsCheckState::Met;
                         }
                         result = lock
                             .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
@@ -214,8 +222,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 } else if last_checked_commit_ts > ts {
                     // Meet an unwanted version, use `last_version` as the return as well.
                     is_done = true;
-                    if self.cfg.check_can_be_cached {
-                        self.can_be_cached = false;
+                    if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                        self.met_newer_ts_data = NewerTsCheckState::Met;
                     }
                 }
             }
@@ -236,17 +244,16 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         // At this time, we must have current commit_ts <= ts. If commit_ts == ts,
         // we don't need to seek any more and we can just utilize `last_version`.
         if last_checked_commit_ts == ts {
-            if self.cfg.check_can_be_cached && self.can_be_cached {
+            if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                // move cursor backward again to check whether there are larger ts.
                 self.write_cursor.prev(&mut self.statistics.write);
-                if let Ok(true) = self.write_cursor.valid() {
+                if self.write_cursor.valid()? {
                     let current_key = self.write_cursor.key(&mut self.statistics.write);
                     if Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
-                        self.can_be_cached = false;
+                        self.met_newer_ts_data = NewerTsCheckState::Met;
                     } else {
                         *met_prev_user_key = true;
                     }
-                } else {
-                    *met_prev_user_key = true;
                 }
             }
             return Ok(self.handle_last_version(last_version, user_key)?);
@@ -256,34 +263,35 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         // After several `prev()`, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
 
-        // `user_key` must have reserved space here, so its clone has reserved space too. So no
-        // reallocation happens in `append_ts`.
-
-        // Check newer data if we need to do check_can_be_cached
+        // Check whether newer version exists.
         let mut use_near_seek = false;
-        if self.cfg.check_can_be_cached && self.can_be_cached {
-            let seek_key = user_key.clone().append_ts(TimeStamp::max());
+        let mut seek_key = user_key.clone();
+
+        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+            seek_key = seek_key.append_ts(TimeStamp::max());
             self.write_cursor
                 .internal_seek(&seek_key, &mut self.statistics.write)?;
-            use_near_seek = true;
             assert!(self.write_cursor.valid()?);
+            seek_key = seek_key.truncate_ts()?;
+            use_near_seek = true;
+
             let current_key = self.write_cursor.key(&mut self.statistics.write);
-            assert!(Key::is_user_key_eq(
+            debug_assert!(Key::is_user_key_eq(
                 current_key,
                 user_key.as_encoded().as_slice()
             ));
-            let max_ts = Key::decode_ts_from(current_key)?;
-            if max_ts > ts {
-                self.can_be_cached = false
+            let key_ts = Key::decode_ts_from(current_key)?;
+            if key_ts > ts {
+                self.met_newer_ts_data = NewerTsCheckState::Met
             }
         }
 
-        let seek_key = user_key.clone().append_ts(ts);
-
-        // TODO: Replace by cast + seek().
+        // `user_key` must have reserved space here, so its clone `seek_key` has reserved space
+        // too. Thus no reallocation happens in `append_ts`.
+        seek_key = seek_key.append_ts(ts);
         if use_near_seek {
             self.write_cursor
-                .near_seek_for_prev(&seek_key, &mut self.statistics.write)?;
+                .near_seek(&seek_key, &mut self.statistics.write)?;
         } else {
             self.write_cursor
                 .internal_seek(&seek_key, &mut self.statistics.write)?;
@@ -297,7 +305,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             let current_ts = {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 // We should never reach another user key.
-                assert!(Key::is_user_key_eq(
+                debug_assert!(Key::is_user_key_eq(
                     current_key,
                     user_key.as_encoded().as_slice()
                 ));

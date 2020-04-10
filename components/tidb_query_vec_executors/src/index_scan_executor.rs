@@ -111,7 +111,7 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         self.0.can_be_cached()
     }
 }
