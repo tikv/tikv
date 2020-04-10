@@ -261,11 +261,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) {
-        SNAP_COUNTER_VEC
-            .with_label_values(&["generate", "all"])
-            .inc();
-        let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
-        let timer = gen_histogram.start_coarse_timer();
+        SNAP_COUNTER.generate.all.inc();
+        let start = tikv_util::time::Instant::now();
 
         if let Err(e) = self.generate_snap(
             region_id,
@@ -278,10 +275,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             return;
         }
 
-        SNAP_COUNTER_VEC
-            .with_label_values(&["generate", "success"])
-            .inc();
-        timer.observe_duration();
+        SNAP_COUNTER.generate.success.inc();
+        SNAP_HISTOGRAM.generate.observe(start.elapsed_secs());
     }
 
     /// Applies snapshot data of the Region.
@@ -365,16 +360,15 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
-        SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
-        let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
-        let timer = apply_histogram.start_coarse_timer();
+        SNAP_COUNTER.apply.all.inc();
+        // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
+        // let timer = apply_histogram.start_coarse_timer();
+        let start = tikv_util::time::Instant::now();
 
         match self.apply_snap(region_id, Arc::clone(&status)) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
-                SNAP_COUNTER_VEC
-                    .with_label_values(&["apply", "success"])
-                    .inc();
+                SNAP_COUNTER.apply.success.inc();
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
@@ -382,18 +376,16 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
                 );
-                SNAP_COUNTER_VEC
-                    .with_label_values(&["apply", "abort"])
-                    .inc();
+                SNAP_COUNTER.apply.abort.inc();
             }
             Err(e) => {
                 error!("failed to apply snap!!!"; "err" => %e);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
-                SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
+                SNAP_COUNTER.apply.fail.inc();
             }
         }
 
-        timer.observe_duration();
+        SNAP_HISTOGRAM.apply.observe(start.elapsed_secs());
     }
 
     /// Cleans up the data within the range.
@@ -632,9 +624,7 @@ where
                 self.handle_pending_applies();
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
-                    SNAP_COUNTER_VEC
-                        .with_label_values(&["apply", "delay"])
-                        .inc();
+                    SNAP_COUNTER.apply.delay.inc()
                 }
             }
             Task::Destroy {

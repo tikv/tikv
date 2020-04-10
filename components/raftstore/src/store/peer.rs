@@ -744,6 +744,7 @@ impl Peer {
             if let LeaseState::Valid = state {
                 let mut resp = eraftpb::Message::default();
                 resp.set_msg_type(MessageType::MsgReadIndexResp);
+                resp.term = self.term();
                 resp.to = m.from;
                 resp.index = self.get_store().committed_index();
                 resp.set_entries(m.take_entries());
@@ -2013,7 +2014,6 @@ impl Peer {
             "request_id" => ?read.id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "uuid" => ?read.id,
         );
     }
 
@@ -2122,7 +2122,6 @@ impl Peer {
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "is_leader" => self.is_leader(),
-            "uuid" => ?id,
         );
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
