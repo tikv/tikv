@@ -57,11 +57,11 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
 }
 
 // IV as an AES input, the length should be 12 btyes for GCM mode.
-const GCM_IV_LEN: usize = 12;
+const GCM_IV_12: usize = 12;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Iv {
-    iv: [u8; GCM_IV_LEN],
+    iv: [u8; GCM_IV_12],
 }
 
 impl Iv {
@@ -73,10 +73,10 @@ impl Iv {
 impl<'a> From<&'a [u8]> for Iv {
     fn from(src: &'a [u8]) -> Iv {
         assert!(
-            src.len() >= GCM_IV_LEN,
+            src.len() >= GCM_IV_12,
             "Nonce + Counter must be greater than 12 bytes"
         );
-        let mut iv = [0; GCM_IV_LEN];
+        let mut iv = [0; GCM_IV_12];
         iv.copy_from_slice(src);
         Iv { iv }
     }
@@ -87,7 +87,7 @@ impl Iv {
     pub fn new() -> Iv {
         use rand::{rngs::OsRng, RngCore};
 
-        let mut iv = [0u8; GCM_IV_LEN];
+        let mut iv = [0u8; GCM_IV_12];
         OsRng.fill_bytes(&mut iv);
 
         Iv { iv }
@@ -97,7 +97,6 @@ impl Iv {
 // The length GCM tag must be 16 btyes.
 const GCM_TAG_LEN: usize = 16;
 
-#[derive(Default)]
 pub struct AesGcmTag([u8; GCM_TAG_LEN]);
 
 impl<'a> From<&'a [u8]> for AesGcmTag {
@@ -131,7 +130,7 @@ impl<'k> AesGcmCrypter<'k> {
 
     pub fn encrypt(&self, pt: &[u8]) -> Result<(Vec<u8>, AesGcmTag)> {
         let cipher = OCipher::aes_256_gcm();
-        let mut tag = AesGcmTag::default();
+        let mut tag = AesGcmTag([0u8; GCM_TAG_LEN]);
         let ciphertext = symm::encrypt_aead(
             cipher,
             self.key,
@@ -216,6 +215,8 @@ mod tests {
         assert_eq!(plaintext, pt, "{}", hex::encode(&plaintext));
 
         // Fail to decrypt with a wrong tag.
-        crypter.decrypt(&ct, AesGcmTag::default()).unwrap_err();
+        crypter
+            .decrypt(&ct, AesGcmTag([0u8; GCM_TAG_LEN]))
+            .unwrap_err();
     }
 }
