@@ -215,10 +215,6 @@ impl Delegate {
             let mut region_not_found = errorpb::RegionNotFound::default();
             region_not_found.set_region_id(self.region_id);
             cdc_err.set_region_not_found(region_not_found);
-            // panic!(
-            //     "region met unknown error region_id: {}, error: {:?}",
-            //     self.region_id, err
-            // );
         }
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = self.region_id;

@@ -470,6 +470,8 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             move |tso: pd_client::Result<(TimeStamp, ())>| {
                 // Ignore get tso errors since we will retry every `min_ts_interval`.
                 let (min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
+                // TODO: send a message to raftstore would consume too much cpu time,
+                // try to handle it outside raftstore.
                 for region_id in regions {
                     let scheduler_clone = scheduler.clone();
                     if let Err(e) = raft_router.significant_send(
