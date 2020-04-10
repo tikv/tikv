@@ -34,6 +34,7 @@ use std::{
     convert::TryFrom,
     env, fmt,
     fs::{self, File},
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::JoinHandle,
@@ -296,13 +297,14 @@ impl TiKVServer {
     }
 
     fn check_conflict_addr(&mut self) {
-        let cur_addr = &self.config.server.addr;
-        let cur_addr_vec: Vec<&str> = cur_addr.split(':').collect();
-        if cur_addr_vec.len() < 2 {
-            fatal!("tikv address has wrong format");
-        }
-        let cur_ip = cur_addr_vec.first().cloned().unwrap().trim();
-        let cur_port = cur_addr_vec.last().cloned().unwrap().trim();
+        let cur_addr: SocketAddr = self
+            .config
+            .server
+            .addr
+            .parse()
+            .expect("failed to parse into a socket address");
+        let cur_ip = cur_addr.ip();
+        let cur_port = cur_addr.port();
 
         let search_base = env::temp_dir().join("TIKV_LOCK_FILES");
         std::fs::create_dir_all(&search_base).expect("create TIKV_LOCK_FILES failed");
@@ -313,31 +315,21 @@ impl TiKVServer {
                     continue;
                 }
                 let file_path = entry.path();
-                if let Some(extension) = file_path.extension() {
-                    if extension != "tikv_lock" {
-                        continue;
-                    }
-                    let pattern = file_path
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .trim_end_matches(".tikv_lock")
-                        .to_owned();
-                    let pattern_addr: Vec<&str> = pattern.split(':').collect();
-                    if pattern_addr.len() < 2 {
-                        continue;
-                    }
-                    let ip = pattern_addr.first().cloned().unwrap().trim();
-                    let port = pattern_addr.last().cloned().unwrap().trim();
-                    if cur_port == port && cur_ip == ip || cur_ip == "0.0.0.0" || ip == "0.0.0.0" {
+                let file_name = file_path.file_name().unwrap().to_str().unwrap().to_owned();
+                if let Ok(addr) = file_name.parse::<SocketAddr>() {
+                    let ip = addr.ip();
+                    let port = addr.port();
+                    if cur_port == port && cur_ip == ip
+                        || cur_ip.is_unspecified()
+                        || ip.is_unspecified()
+                    {
                         let _ = try_lock_conflict_addr(file_path);
                     }
                 }
             }
         }
 
-        let cur_path = search_base.join(format!("{}.tikv_lock", &cur_addr));
+        let cur_path = search_base.join(cur_addr.to_string());
         let cur_file = try_lock_conflict_addr(cur_path);
         self.lock_files.push(cur_file);
     }
