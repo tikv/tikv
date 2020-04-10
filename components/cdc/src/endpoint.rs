@@ -487,7 +487,11 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                         }))),
                     ) {
                         // TODO: should we try to deregister region here?
-                        warn!("send LeaderCallback for advancing resolved ts failed"; "err" => ?e, "min_ts" => min_ts);
+                        warn!(
+                            "send LeaderCallback for advancing resolved ts failed";
+                            "err" => ?e,
+                            "min_ts" => min_ts,
+                        );
                     }
                 }
                 match scheduler.schedule(Task::RegisterMinTsEvent) {
