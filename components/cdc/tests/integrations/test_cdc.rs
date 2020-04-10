@@ -521,13 +521,15 @@ fn test_cdc_tso_failure() {
 
     // Make sure resolved ts can be advanced normally even with few tso failures.
     let mut counter = 0;
+    let mut previous_ts = 0;
     loop {
         // Even if there is no write,
         // resolved ts should be advanced regularly.
         for e in receive_event(true) {
             match e.event.unwrap() {
                 Event_oneof_event::ResolvedTs(ts) => {
-                    assert_ne!(0, ts);
+                    assert!(ts >= previous_ts);
+                    previous_ts = ts;
                     counter += 1;
                 }
                 _ => panic!("unknown event"),
