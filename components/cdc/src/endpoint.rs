@@ -10,9 +10,9 @@ use kvproto::cdcpb::*;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
+use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::ChangeCmd;
-use raftstore::store::msg::{Callback, CasualMessage, ReadResponse};
-use raftstore::store::transport::CasualRouter;
+use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
@@ -163,7 +163,7 @@ pub struct Endpoint<T> {
     workers: ThreadPool,
 }
 
-impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
+impl<T: RaftStoreRouter<RocksEngine>> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -323,9 +323,9 @@ impl<T: CasualRouter<RocksEngine>> Endpoint<T> {
                 region_epoch: request.take_region_epoch(),
             }
         };
-        if let Err(e) = self.raft_router.send(
+        if let Err(e) = self.raft_router.significant_send(
             region_id,
-            CasualMessage::CaptureChange {
+            SignificantMsg::CaptureChange {
                 cmd: change_cmd,
                 callback: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
                     init.on_change_cmd(resp);
@@ -610,7 +610,7 @@ impl Initializer {
     }
 }
 
-impl<T: CasualRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
+impl<T: RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
@@ -651,10 +651,13 @@ mod tests {
     use kvproto::cdcpb::event::Event as Event_oneof_event;
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::kvrpcpb::Context;
+    use raftstore::errors::Error as RaftStoreError;
+    use raftstore::store::msg::CasualMessage;
     use std::collections::BTreeMap;
     use std::fmt::Display;
-    use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
+    use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
     use tempfile::TempDir;
+    use test_raftstore::MockRaftStoreRouter;
     use test_raftstore::TestPdClient;
     use tikv::storage::kv::Engine;
     use tikv::storage::mvcc::tests::*;
@@ -778,12 +781,63 @@ mod tests {
     }
 
     #[test]
-    fn test_deregister() {
-        let (task_sched, _task_rx) = dummy_scheduler();
-        let (raft_tx, _raft_rx) = sync_channel::<(u64, CasualMessage<RocksEngine>)>(16);
+    fn test_raftstore_is_busy() {
+        let (task_sched, task_rx) = dummy_scheduler();
+        let raft_router = MockRaftStoreRouter::new();
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
-        let mut ep = Endpoint::new(pd_client, task_sched, raft_tx, observer);
+        let mut ep = Endpoint::new(pd_client, task_sched, raft_router.clone(), observer);
+        let (tx, _rx) = batch::unbounded(1);
+
+        // Fill the channel.
+        let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
+        loop {
+            if let Err(RaftStoreError::Transport(_)) =
+                raft_router.casual_send(1, CasualMessage::ClearRegionSize)
+            {
+                break;
+            }
+        }
+        // Make sure channel is full.
+        raft_router
+            .casual_send(1, CasualMessage::ClearRegionSize)
+            .unwrap_err();
+
+        let conn = Conn::new(tx);
+        let conn_id = conn.get_id();
+        ep.run(Task::OpenConn { conn });
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new("".to_string(), region_epoch, 0);
+        ep.run(Task::Register {
+            request: req,
+            downstream,
+            conn_id,
+        });
+        assert_eq!(ep.capture_regions.len(), 1);
+
+        for _ in 0..5 {
+            if let Ok(Some(Task::Deregister(Deregister::Downstream { err, .. }))) =
+                task_rx.recv_timeout(Duration::from_secs(1))
+            {
+                if let Some(Error::Request(err)) = err {
+                    assert!(!err.has_server_is_busy());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_deregister() {
+        let (task_sched, _task_rx) = dummy_scheduler();
+        let raft_router = MockRaftStoreRouter::new();
+        let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
+        let observer = CdcObserver::new(task_sched.clone());
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let mut ep = Endpoint::new(pd_client, task_sched, raft_router, observer);
         let (tx, rx) = batch::unbounded(1);
 
         let conn = Conn::new(tx);

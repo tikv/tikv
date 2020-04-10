@@ -124,7 +124,7 @@ impl TestSuite {
         cluster.run();
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.rl();
-            let raft_router = (*sim).get_router(*id).unwrap();
+            let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
             let mut cdc_endpoint =
                 cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), raft_router, cdc_ob);
