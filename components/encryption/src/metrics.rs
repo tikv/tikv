@@ -18,7 +18,7 @@ lazy_static::lazy_static! {
     pub static ref ENCRYPT_DECRPTION_FILE_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_encryption_write_read_file_duration_seconds",
         "Histogram of writing or reading file duration",
-        &["operation"],
+        &["type", "operation"],
         exponential_buckets(0.001, 2.0, 16).unwrap() // Up to 65.5 seconds
     ).unwrap();
     pub static ref ENCRYPTION_FILE_SIZE_GAUGE: IntGaugeVec = register_int_gauge_vec!(
