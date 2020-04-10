@@ -309,8 +309,8 @@ impl TiKVServer {
                     continue;
                 }
                 let file_path = entry.path();
-                let file_name = file_path.file_name().unwrap().to_str().unwrap().to_owned();
-                if let Ok(addr) = file_name.parse::<SocketAddr>() {
+                let file_name = file_path.file_name().unwrap().to_str().unwrap();
+                if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
                     let ip = addr.ip();
                     let port = addr.port();
                     if cur_port == port && cur_ip == ip
@@ -323,7 +323,7 @@ impl TiKVServer {
             }
         }
 
-        let cur_path = search_base.join(cur_addr.to_string());
+        let cur_path = search_base.join(cur_addr.to_string().replace(':', "_"));
         let cur_file = try_lock_conflict_addr(cur_path);
         self.lock_files.push(cur_file);
     }
