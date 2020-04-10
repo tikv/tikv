@@ -12,6 +12,7 @@ extern crate fail;
 mod delegate;
 mod endpoint;
 mod errors;
+mod metrics;
 mod observer;
 mod service;
 
