@@ -18,6 +18,7 @@ use kvproto::cdcpb::{
     Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventRow,
     EventRowOpType, Event_oneof_event,
 };
+use kvproto::errorpb;
 
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
@@ -203,20 +204,17 @@ impl Delegate {
         let mut change_data_event = Event::default();
         let mut cdc_err = EventError::default();
         let mut err = err.extract_error_header();
-        if err.has_region_not_found() {
-            let region_not_found = err.take_region_not_found();
-            cdc_err.set_region_not_found(region_not_found);
-        } else if err.has_not_leader() {
+        if err.has_not_leader() {
             let not_leader = err.take_not_leader();
             cdc_err.set_not_leader(not_leader);
         } else if err.has_epoch_not_match() {
             let epoch_not_match = err.take_epoch_not_match();
             cdc_err.set_epoch_not_match(epoch_not_match);
         } else {
-            panic!(
-                "region met unknown error region_id: {}, error: {:?}",
-                self.region_id, err
-            );
+            // TODO: Add more errors to the cdc protocol
+            let mut region_not_found = errorpb::RegionNotFound::default();
+            region_not_found.set_region_id(self.region_id);
+            cdc_err.set_region_not_found(region_not_found);
         }
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = self.region_id;
