@@ -208,7 +208,7 @@ impl Delegate {
             cdc_err.set_epoch_not_match(epoch_not_match);
         } else {
             // TODO: Add more errors to the cdc protocol
-            let mut region_not_found = errorpb::RegionNotFound::new();
+            let mut region_not_found = errorpb::RegionNotFound::default();
             region_not_found.set_region_id(self.region_id);
             cdc_err.set_region_not_found(region_not_found);
             // panic!(
