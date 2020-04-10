@@ -21,7 +21,6 @@ sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 failpoints = ["fail/failpoints", "raftstore/failpoints"]
 prost-codec = [
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",
@@ -36,7 +35,6 @@ prost-codec = [
   "encryption/prost-codec",
 ]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
@@ -66,7 +64,6 @@ batch-system = { path = "components/batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
 chrono = "0.4"
-coarsetime = "0.1"
 codec = { path = "components/codec" }
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
@@ -154,7 +151,7 @@ encryption = { path = "components/encryption" }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
-rev = "4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0"
+rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
@@ -173,7 +170,8 @@ raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
-prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "4b445b20ca1b0aa3f79c35b4885dc3ba716d30e0" }
+fail = { git = "https://github.com/tikv/fail-rs.git", rev = "2cf1175a1a5cc2c70bd20ebd45313afd69b558fc" }
+prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
