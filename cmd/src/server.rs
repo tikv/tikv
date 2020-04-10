@@ -343,7 +343,7 @@ impl TiKVServer {
         self.lock_files.push(cur_file);
     }
 
-    fn init_fs(&self) {
+    fn init_fs(&mut self) {
         let lock_path = self.store_path.join(Path::new("LOCK"));
 
         let f = File::create(lock_path.as_path())
@@ -354,6 +354,7 @@ impl TiKVServer {
                 self.store_path.display()
             );
         }
+        self.lock_files.push(f);
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
             fatal!(
@@ -611,8 +612,6 @@ impl TiKVServer {
             self.pd_client.clone(),
         );
 
-        let raft_router = node.get_router();
-
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -639,6 +638,7 @@ impl TiKVServer {
         }
 
         // Start CDC.
+        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
             self.pd_client.clone(),
             cdc_worker.scheduler(),
