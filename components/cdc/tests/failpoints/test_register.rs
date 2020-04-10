@@ -134,12 +134,7 @@ fn test_connections_register() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone().into_bytes();
     mutation.value = v.into_bytes();
-    suite.must_kv_prewrite(
-        region.get_id(),
-        vec![mutation],
-        k.clone().into_bytes(),
-        start_ts,
-    );
+    suite.must_kv_prewrite(region.get_id(), vec![mutation], k.into_bytes(), start_ts);
 
     let mut req = ChangeDataRequest::default();
     req.region_id = region.get_id();
