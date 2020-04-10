@@ -366,7 +366,8 @@ mod tests {
         expected_met_newer_ts_data: bool,
     ) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut point_getter = PointGetterBuilder::new(snapshot, getter_ts.into())
+        let ts = getter_ts.into();
+        let mut point_getter = PointGetterBuilder::new(snapshot.clone(), ts)
             .isolation_level(IsolationLevel::Si)
             .check_has_newer_ts_data(true)
             .build()
@@ -379,6 +380,15 @@ mod tests {
             NewerTsCheckState::NotMetYet
         };
         assert_eq!(expected, point_getter.met_newer_ts_data());
+
+        let mut point_getter = PointGetterBuilder::new(snapshot, ts)
+            .isolation_level(IsolationLevel::Si)
+            .check_has_newer_ts_data(false)
+            .build()
+            .unwrap();
+        let val = point_getter.get(&Key::from_raw(key)).unwrap().unwrap();
+        assert_eq!(val, value);
+        assert_eq!(NewerTsCheckState::Unknown, point_getter.met_newer_ts_data());
     }
 
     fn must_get_none<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
