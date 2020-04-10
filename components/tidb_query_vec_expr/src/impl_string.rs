@@ -6,6 +6,7 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
+use tidb_query_shared_expr::string::validate_target_len_for_pad;
 
 const SPACE: u8 = 0o40u8;
 
@@ -114,6 +115,33 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
             Vec::new()
         }
     }))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn lpad(arg: &Option<Bytes>, len: &Option<Int>, pad: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match (arg, len, pad) {
+        (Some(arg), Some(len), Some(pad)) => {
+            match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
+                None => Ok(None),
+                Some(0) => Ok(Some(b"".to_vec())),
+                Some(target_len) => {
+                    let r = if let Some(remain) = target_len.checked_sub(arg.len()) {
+                        pad.iter()
+                            .cycle()
+                            .take(remain)
+                            .chain(arg.iter())
+                            .copied()
+                            .collect::<Bytes>()
+                    } else {
+                        arg[..target_len].to_vec()
+                    };
+                    Ok(Some(r))
+                }
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 #[rpn_fn]
@@ -866,6 +894,81 @@ mod tests {
                 .evaluate(ScalarFuncSig::RTrim)
                 .unwrap();
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+    }
+
+    #[test]
+    fn test_lpad() {
+        let cases = vec![
+            (
+                Some(b"hello".to_vec()),
+                Some(0),
+                Some(b"h".to_vec()),
+                Some(b"".to_vec()),
+            ),
+            (
+                Some(b"hello".to_vec()),
+                Some(1),
+                Some(b"h".to_vec()),
+                Some(b"h".to_vec()),
+            ),
+            (Some(b"hello".to_vec()), Some(-1), Some(b"h".to_vec()), None),
+            (
+                Some(b"hello".to_vec()),
+                Some(3),
+                Some(b"".to_vec()),
+                Some(b"hel".to_vec()),
+            ),
+            (Some(b"hello".to_vec()), Some(8), Some(b"".to_vec()), None),
+            (
+                Some(b"hello".to_vec()),
+                Some(8),
+                Some(b"he".to_vec()),
+                Some(b"hehhello".to_vec()),
+            ),
+            (
+                Some(b"hello".to_vec()),
+                Some(9),
+                Some(b"he".to_vec()),
+                Some(b"hehehello".to_vec()),
+            ),
+            (
+                Some(b"hello".to_vec()),
+                Some(5),
+                Some("您好".as_bytes().to_vec()),
+                Some(b"hello".to_vec()),
+            ),
+            (Some(b"hello".to_vec()), Some(6), Some(b"".to_vec()), None),
+            (
+                Some(b"\x61\x76\x5e".to_vec()),
+                Some(2),
+                Some(b"\x35".to_vec()),
+                Some(b"\x61\x76".to_vec()),
+            ),
+            (
+                Some(b"\x61\x76\x5e".to_vec()),
+                Some(5),
+                Some(b"\x35".to_vec()),
+                Some(b"\x35\x35\x61\x76\x5e".to_vec()),
+            ),
+            (
+                Some(b"hello".to_vec()),
+                Some(i64::from(MAX_BLOB_WIDTH) + 1),
+                Some(b"he".to_vec()),
+                None,
+            ),
+            (None, Some(-1), Some(b"h".to_vec()), None),
+            (None, None, None, None),
+        ];
+
+        for (arg, len, pad, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(len)
+                .push_param(pad)
+                .evaluate(ScalarFuncSig::Lpad)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 
