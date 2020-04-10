@@ -178,6 +178,13 @@ pub enum SignificantMsg {
         // False means it came from target region.
         stale: bool,
     },
+    /// Capture the changes of the region.
+    CaptureChange {
+        cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
+        callback: Callback<RocksEngine>,
+    },
+    LeaderCallback(Callback<RocksEngine>),
 }
 
 /// Message that will be sent to a peer.
@@ -226,11 +233,6 @@ pub enum CasualMessage<E: KvEngine> {
     RegionOverlapped,
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
-    /// Capture the changes of the region.
-    CaptureChange {
-        cmd: ChangeCmd,
-        callback: Callback<RocksEngine>,
-    },
 
     /// A test only message, it is useful when we want to access
     /// peer's internal state.
@@ -272,7 +274,6 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
-            CasualMessage::CaptureChange { .. } => write!(fmt, "CaptureChange"),
             CasualMessage::Test(_) => write!(fmt, "Test"),
         }
     }
