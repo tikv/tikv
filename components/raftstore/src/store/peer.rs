@@ -8,9 +8,8 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{KvEngine, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use engine_rocks::RocksEngine;
+use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -251,7 +250,7 @@ impl Peer {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
         peer: metapb::Peer,
     ) -> Result<Peer> {
@@ -461,8 +460,8 @@ impl Peer {
         );
 
         // Set Tombstone state explicitly
-        let mut kv_wb = ctx.engines.kv.c().write_batch();
-        let mut raft_wb = ctx.engines.raft.c().write_batch();
+        let mut kv_wb = ctx.engines.kv.write_batch();
+        let mut raft_wb = ctx.engines.raft.write_batch();
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
         write_peer_state(
             &mut kv_wb,
@@ -473,8 +472,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
-        ctx.engines.kv.c().write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.c().write_opt(&raft_wb, &write_opts)?;
+        ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
+        ctx.engines.raft.write_opt(&raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -527,7 +526,7 @@ impl Peer {
         if self.raft_group.raft.election_elapsed + 1 < cfg.raft_election_timeout_ticks {
             return res;
         }
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
             // Only recent active peer is considerred, so that an isolated follower
@@ -607,11 +606,6 @@ impl Peer {
     #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer.get_id()
-    }
-
-    #[inline]
-    pub fn get_raft_status(&self) -> raft::StatusRef<'_> {
-        self.raft_group.status_ref()
     }
 
     #[inline]
@@ -750,6 +744,7 @@ impl Peer {
             if let LeaseState::Valid = state {
                 let mut resp = eraftpb::Message::default();
                 resp.set_msg_type(MessageType::MsgReadIndexResp);
+                resp.term = self.term();
                 resp.to = m.from;
                 resp.index = self.get_store().committed_index();
                 resp.set_entries(m.take_entries());
@@ -814,7 +809,7 @@ impl Peer {
     /// Collects all pending peers and update `peers_start_pending_time`.
     pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
         if status.progress.is_none() {
@@ -1826,7 +1821,7 @@ impl Peer {
             return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let total = status.progress.unwrap().voter_ids().len();
         if total == 1 {
             // It's always safe if there is only one node in the cluster.
@@ -1931,7 +1926,7 @@ impl Peer {
         peer: &metapb::Peer,
     ) -> Option<&'static str> {
         let peer_id = peer.get_id();
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let progress = status.progress.unwrap();
 
         if !progress.voter_ids().contains(&peer_id) {
@@ -2019,7 +2014,6 @@ impl Peer {
             "request_id" => ?read.id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "uuid" => ?read.id,
         );
     }
 
@@ -2128,7 +2122,6 @@ impl Peer {
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "is_leader" => self.is_leader(),
-            "uuid" => ?id,
         );
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
@@ -2151,7 +2144,7 @@ impl Peer {
     // For now, it is only used in merge.
     pub fn get_min_progress(&self) -> Result<u64> {
         let mut min = None;
-        if let Some(progress) = self.raft_group.status_ref().progress {
+        if let Some(progress) = self.raft_group.status().progress {
             for (id, pr) in progress.iter() {
                 // Reject merge if there is any pending request snapshot,
                 // because a target region may merge a source region which is in
@@ -2486,7 +2479,7 @@ impl Peer {
         read_index: Option<u64>,
     ) -> ReadResponse<RocksEngine> {
         let mut resp = ReadExecutor::new(
-            ctx.engines.kv.c().clone(),
+            ctx.engines.kv.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
         )

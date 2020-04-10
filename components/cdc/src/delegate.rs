@@ -22,19 +22,20 @@ use kvproto::cdcpb::{
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 use tikv::storage::txn::TxnEntry;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
+use crate::metrics::*;
 use crate::{Error, Result};
 
-static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
+static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -51,6 +52,8 @@ pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
     id: DownstreamID,
+    // The reqeust ID set by CDC to identify events corresponding different requests.
+    req_id: u64,
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
@@ -62,9 +65,10 @@ impl Downstream {
     ///
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
-    pub fn new(peer: String, region_epoch: RegionEpoch) -> Downstream {
+    pub fn new(peer: String, region_epoch: RegionEpoch, req_id: u64) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
+            req_id,
             peer,
             region_epoch,
             sink: None,
@@ -73,7 +77,8 @@ impl Downstream {
 
     /// Sink events to the downstream.
     /// The size of `Error` and `ResolvedTS` are considered zero.
-    pub fn sink_event(&self, change_data_event: Event, size: usize) {
+    pub fn sink_event(&self, mut change_data_event: Event, size: usize) {
+        change_data_event.set_request_id(self.req_id);
         if self
             .sink
             .as_ref()
@@ -109,8 +114,8 @@ impl Downstream {
 struct Pending {
     // Batch of RaftCommand observed from raftstore
     multi_batch: Vec<CmdBatch>,
-    downstreams: Vec<Downstream>,
-    scan: Vec<(DownstreamID, Vec<Option<TxnEntry>>)>,
+    cmd_bytes: usize,
+    pub downstreams: Vec<Downstream>,
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -118,6 +123,7 @@ struct Pending {
 /// It converts raft commands into CDC events and broadcast to downstreams.
 /// It also track trancation on the fly in order to compute resolved ts.
 pub struct Delegate {
+    pub id: ObserveID,
     pub region_id: u64,
     region: Option<Region>,
     pub downstreams: Vec<Downstream>,
@@ -132,6 +138,7 @@ impl Delegate {
     pub fn new(region_id: u64) -> Delegate {
         Delegate {
             region_id,
+            id: ObserveID::new(),
             downstreams: Vec::new(),
             resolver: None,
             region: None,
@@ -245,6 +252,12 @@ impl Delegate {
         } else {
             &self.downstreams
         };
+        assert!(
+            !downstreams.is_empty(),
+            "region {} miss downstream, event: {:?}",
+            self.region_id,
+            change_data_event,
+        );
         for i in 0..downstreams.len() - 1 {
             downstreams[i].sink_event(change_data_event.clone(), size);
         }
@@ -258,7 +271,8 @@ impl Delegate {
     pub fn on_region_ready(&mut self, resolver: Resolver, region: Region) -> Result<()> {
         assert!(
             self.resolver.is_none(),
-            "region resolver should not be ready"
+            "region {} resolver should not be ready",
+            self.region_id,
         );
         self.resolver = Some(resolver);
         self.region = Some(region);
@@ -267,29 +281,27 @@ impl Delegate {
             for downstream in pending.downstreams {
                 self.subscribe(downstream);
             }
-            for (downstream_id, entries) in pending.scan {
-                self.on_scan(downstream_id, entries);
-            }
             for batch in pending.multi_batch {
                 self.on_batch(batch)?;
             }
+            CDC_PENDING_CMD_BYTES_GAUGE.sub(pending.cmd_bytes as i64);
         }
         info!("region is ready"; "region_id" => self.region_id);
         Ok(())
     }
 
     /// Try advance and broadcast resolved ts.
-    pub fn on_min_ts(&mut self, min_ts: TimeStamp) {
+    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
         if self.resolver.is_none() {
             debug!("region resolver not ready";
                 "region_id" => self.region_id, "min_ts" => min_ts);
-            return;
+            return None;
         }
         debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
-            None => return,
+            None => return None,
         };
         debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
@@ -297,11 +309,21 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
         self.broadcast(change_data_event, 0);
+        CDC_RESOLVED_TS_GAP_HISTOGRAM
+            .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
+        Some(resolved_ts)
     }
 
     pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
+        // Stale CmdBatch, drop it sliently.
+        if batch.observe_id != self.id {
+            return Ok(());
+        }
         if let Some(pending) = self.pending.as_mut() {
+            let cmd_bytes = batch.size();
             pending.multi_batch.push(batch);
+            pending.cmd_bytes += cmd_bytes;
+            CDC_PENDING_CMD_BYTES_GAUGE.add(cmd_bytes as i64);
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
@@ -326,14 +348,15 @@ impl Delegate {
     }
 
     pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
-        if let Some(pending) = self.pending.as_mut() {
-            pending.scan.push((downstream_id, entries));
-            return;
-        }
-        let d = if let Some(d) = self.downstreams.iter_mut().find(|d| d.id == downstream_id) {
+        let downstreams = if let Some(pending) = self.pending.as_mut() {
+            &pending.downstreams
+        } else {
+            &self.downstreams
+        };
+        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
             d
         } else {
-            warn!("downstream not found"; "downstream_id" => ?downstream_id);
+            warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
             return;
         };
 
@@ -404,7 +427,7 @@ impl Delegate {
                 let mut change_data_event = Event::default();
                 change_data_event.region_id = self.region_id;
                 change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-                d.sink_event(change_data_event, s);
+                downstream.sink_event(change_data_event, s);
             }
         }
     }
@@ -543,7 +566,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            debug!("skip write record"; "write" => ?other);
+            debug!("skip write record"; "write" => ?other, "key" => hex::encode_upper(key));
             return true;
         }
     };
@@ -571,9 +594,10 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
         other => {
-            info!("skip lock record";
+            debug!("skip lock record";
                 "type" => ?other,
                 "start_ts" => ?lock.ts,
+                "key" => hex::encode_upper(key),
                 "for_update_ts" => ?lock.for_update_ts);
             return true;
         }
@@ -618,13 +642,14 @@ mod tests {
 
         let (sink, rx) = batch::unbounded(1);
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
-        let mut downstream = Downstream::new(String::new(), region_epoch);
+        let request_id = 123;
+        let mut downstream = Downstream::new(String::new(), region_epoch, request_id);
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
-        let mut resolver = Resolver::new();
+        let mut resolver = Resolver::new(region_id);
         resolver.init();
         delegate.on_region_ready(resolver, region).unwrap();
 
@@ -637,6 +662,9 @@ mod tests {
             rx_wrap.set(Some(rx));
             let mut events = events.unwrap();
             assert_eq!(events.len(), 1);
+            for e in &events {
+                assert_eq!(e.1.get_request_id(), request_id);
+            }
             let (_, change_data_event) = &mut events[0];
             let event = change_data_event.event.take().unwrap();
             match event {
@@ -737,7 +765,8 @@ mod tests {
 
         let (sink, rx) = batch::unbounded(1);
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
-        let mut downstream = Downstream::new(String::new(), region_epoch);
+        let request_id = 123;
+        let mut downstream = Downstream::new(String::new(), region_epoch, request_id);
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
@@ -754,6 +783,9 @@ mod tests {
             rx_wrap.set(Some(rx));
             let mut events = events.unwrap();
             assert_eq!(events.len(), 1);
+            for e in &events {
+                assert_eq!(e.1.get_request_id(), request_id);
+            }
             let (_, change_data_event) = &mut events[0];
             assert_eq!(change_data_event.region_id, region_id);
             assert_eq!(change_data_event.index, 0);
@@ -804,12 +836,6 @@ mod tests {
             None,
         ];
         delegate.on_scan(downstream_id, entries);
-        assert_eq!(delegate.pending.as_ref().unwrap().scan.len(), 1);
-
-        let mut resolver = Resolver::new();
-        resolver.init();
-        delegate.on_region_ready(resolver, region).unwrap();
-
         // Flush all pending entries.
         let mut row1 = EventRow::default();
         row1.start_ts = 1;
@@ -828,5 +854,9 @@ mod tests {
         let mut row3 = EventRow::default();
         set_event_row_type(&mut row3, EventLogType::Initialized);
         check_event(vec![row1, row2, row3]);
+
+        let mut resolver = Resolver::new(region_id);
+        resolver.init();
+        delegate.on_region_ready(resolver, region).unwrap();
     }
 }
