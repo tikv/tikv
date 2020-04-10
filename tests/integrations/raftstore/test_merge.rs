@@ -944,3 +944,51 @@ fn test_merge_isolated_store_with_no_target_peer() {
 
     must_get_equal(&cluster.get_engine(4), b"k345", b"v345");
 }
+
+// Test if a learner can be destroyed properly when it's isloated and removed
+// before its region merge to another region
+#[test]
+fn test_merge_isloated_not_in_merge_learner() {
+    let mut cluster = new_node_cluster(0, 5);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    let left_on_store1 = find_peer(&left, 1).unwrap().to_owned();
+    let right_on_store1 = find_peer(&right, 1).unwrap().to_owned();
+
+    pd_client.must_add_peer(left.get_id(), new_learner_peer(2, 2));
+    // ensure this learner exists
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    cluster.stop_node(2);
+
+    pd_client.must_remove_peer(left.get_id(), new_learner_peer(2, 2));
+
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 3));
+    pd_client.must_add_peer(left.get_id(), new_peer(4, 4));
+    pd_client.must_add_peer(left.get_id(), new_peer(5, 5));
+    pd_client.must_remove_peer(left.get_id(), left_on_store1);
+
+    pd_client.must_add_peer(right.get_id(), new_peer(3, 6));
+    pd_client.must_add_peer(right.get_id(), new_peer(4, 7));
+    pd_client.must_add_peer(right.get_id(), new_peer(5, 8));
+    pd_client.must_remove_peer(right.get_id(), right_on_store1);
+
+    pd_client.must_merge(left.get_id(), right.get_id());
+    pd_client.must_add_peer(right.get_id(), new_peer(2, 9));
+
+    cluster.must_put(b"k123", b"v123");
+
+    cluster.run_node(2).unwrap();
+
+    must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
+}
