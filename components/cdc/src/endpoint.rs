@@ -605,7 +605,7 @@ impl Initializer {
             if let Some(None) = entries.last() {
                 done = true;
             }
-            debug!("cdc scan entries"; "len" => entries.len());
+            debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
             let scanned = Task::IncrementalScan {
                 region_id,
