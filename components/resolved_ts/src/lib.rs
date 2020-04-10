@@ -1,5 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[macro_use]
+extern crate slog_global;
+
 use std::cmp;
 use std::collections::BTreeMap;
 use tikv_util::collections::HashSet;
@@ -8,6 +11,7 @@ use txn_types::TimeStamp;
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
 pub struct Resolver {
+    region_id: u64,
     // start_ts -> locked keys.
     locks: BTreeMap<TimeStamp, HashSet<Vec<u8>>>,
     // The timestamps that guarantees no more commit will happen before.
@@ -18,8 +22,9 @@ pub struct Resolver {
 }
 
 impl Resolver {
-    pub fn new() -> Resolver {
+    pub fn new(region_id: u64) -> Resolver {
         Resolver {
+            region_id,
             locks: BTreeMap::new(),
             resolved_ts: None,
             min_ts: TimeStamp::zero(),
@@ -39,6 +44,12 @@ impl Resolver {
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
+        debug!(
+            "track lock {}@{}, region {}",
+            hex::encode_upper(key.clone()),
+            start_ts,
+            self.region_id
+        );
         self.locks.entry(start_ts).or_default().insert(key);
     }
 
@@ -48,22 +59,31 @@ impl Resolver {
         commit_ts: Option<TimeStamp>,
         key: Vec<u8>,
     ) {
+        debug!(
+            "untrack lock {}@{}, commit@{}, region {}",
+            hex::encode_upper(key.clone()),
+            start_ts,
+            commit_ts.clone().unwrap_or_else(TimeStamp::zero),
+            self.region_id,
+        );
         if let Some(commit_ts) = commit_ts {
             assert!(
                 self.resolved_ts.map_or(true, |rts| commit_ts > rts),
-                "{}@{}, commit@{} > {:?}",
+                "{}@{}, commit@{} < {:?}, region {}",
                 hex::encode_upper(key),
                 start_ts,
                 commit_ts,
-                self.resolved_ts
+                self.resolved_ts,
+                self.region_id
             );
             assert!(
                 commit_ts > self.min_ts,
-                "{}@{}, commit@{} > {:?}",
+                "{}@{}, commit@{} < {:?}, region {}",
                 hex::encode_upper(key),
                 start_ts,
                 commit_ts,
-                self.min_ts
+                self.min_ts,
+                self.region_id
             );
         }
 
@@ -71,17 +91,21 @@ impl Resolver {
         // It's possible that rollback happens on a not existing transaction.
         assert!(
             entry.is_some() || commit_ts.is_none(),
-            "{}@{} is not tracked",
+            "{}@{}, commit@{} is not tracked, region {}",
             hex::encode_upper(key),
-            start_ts
+            start_ts,
+            commit_ts.unwrap_or_else(TimeStamp::zero),
+            self.region_id
         );
         if let Some(locked_keys) = entry {
             assert!(
-                locked_keys.remove(&key),
-                "{}@{} is not tracked, {:?}",
+                locked_keys.remove(&key) || commit_ts.is_none(),
+                "{}@{}, commit@{} is not tracked, region {}, {:?}",
                 hex::encode_upper(key),
                 start_ts,
-                locked_keys,
+                commit_ts.unwrap_or_else(TimeStamp::zero),
+                self.region_id,
+                locked_keys
             );
             if locked_keys.is_empty() {
                 self.locks.remove(&start_ts);
@@ -180,7 +204,7 @@ mod tests {
         ];
 
         for (i, case) in cases.into_iter().enumerate() {
-            let mut resolver = Resolver::new();
+            let mut resolver = Resolver::new(1);
             resolver.init();
             for e in case.clone() {
                 match e {
@@ -201,7 +225,7 @@ mod tests {
                 }
             }
 
-            let mut resolver = Resolver::new();
+            let mut resolver = Resolver::new(1);
             for e in case {
                 match e {
                     Event::Lock(start_ts, key) => {
