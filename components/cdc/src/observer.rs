@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use raft::StateRole;
 use raftstore::coprocessor::*;
+use raftstore::store::fsm::ObserveID;
 use raftstore::Error as RaftStoreError;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
@@ -47,6 +48,9 @@ impl CdcObserver {
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));
+        coprocessor_host
+            .registry
+            .register_region_change_observer(100, BoxRegionChangeObserver::new(self.clone()));
     }
 
     /// Subscribe an region, the observer will sink events of the region into
@@ -69,19 +73,22 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl CmdObserver for CdcObserver {
-    fn on_prepare_for_apply(&self, region_id: u64) {
-        self.cmd_batches.borrow_mut().push(CmdBatch::new(region_id));
+    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+        self.cmd_batches
+            .borrow_mut()
+            .push(CmdBatch::new(observe_id, region_id));
     }
 
-    fn on_apply_cmd(&self, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(region_id, cmd);
+            .push(observe_id, region_id, cmd);
     }
 
     fn on_flush_apply(&self) {
+        fail_point!("before_cdc_flush_apply");
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             if let Err(e) = self.sched.schedule(Task::MultiBatch { multi: batches }) {
@@ -110,6 +117,30 @@ impl RoleObserver for CdcObserver {
     }
 }
 
+impl RegionChangeObserver for CdcObserver {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        event: RegionChangeEvent,
+        _: StateRole,
+    ) {
+        if let RegionChangeEvent::Destroy = event {
+            let region_id = ctx.region().get_id();
+            if self.is_subscribed(region_id) {
+                // Unregister all downstreams.
+                let store_err = RaftStoreError::RegionNotFound(region_id);
+                let deregister = Deregister::Region {
+                    region_id,
+                    err: CdcError::Request(store_err.into()),
+                };
+                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                    error!("schedule cdc task failed"; "error" => ?e);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,9 +152,11 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
+        let observe_id = ObserveID::new();
 
-        observer.on_prepare_for_apply(0);
+        observer.on_prepare_for_apply(observe_id, 0);
         observer.on_apply_cmd(
+            observe_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );

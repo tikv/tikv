@@ -16,9 +16,7 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{
-    KvEngine, MiscExt, Peekable, Snapshot as SnapshotTrait, WriteBatch, WriteBatchVecExt,
-};
+use engine_traits::{KvEngine, MiscExt, Peekable, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -348,10 +346,10 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
 
-        if let Some(enabled) = &delegate.observe_cmd {
+        if let Some(observe_cmd) = &delegate.observe_cmd {
             let region_id = delegate.region_id();
-            if enabled.load(Ordering::Acquire) {
-                self.host.prepare_for_apply(region_id);
+            if observe_cmd.enabled.load(Ordering::Acquire) {
+                self.host.prepare_for_apply(observe_cmd.id, region_id);
             } else {
                 info!("region is no longer observerd";
                     "region_id" => region_id);
@@ -422,6 +420,9 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
+        // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
+        self.host.on_flush_apply();
+
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
         }
@@ -487,8 +488,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
                 );
             }
         }
-
-        self.host.on_flush_apply();
 
         let elapsed = t.elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
@@ -686,8 +685,8 @@ pub struct ApplyDelegate {
     /// The latest synced apply index.
     last_sync_apply_index: u64,
 
-    /// Indicates whether to observe executed cmds.
-    observe_cmd: Option<Arc<AtomicBool>>,
+    /// Info about cmd observer.
+    observe_cmd: Option<ObserveCmd>,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -977,9 +976,11 @@ impl ApplyDelegate {
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_cb(index, term, is_conf_change);
-        if self.observe_cmd.is_some() {
+        if let Some(observe_cmd) = self.observe_cmd.as_ref() {
             let cmd = Cmd::new(index, cmd, resp.clone());
-            apply_ctx.host.on_apply_cmd(self.region_id(), cmd);
+            apply_ctx
+                .host
+                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd);
         }
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
@@ -1661,9 +1662,7 @@ impl ApplyDelegate {
             |_| { unreachable!() }
         );
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["batch-split", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let split_reqs = req.get_splits();
         let right_derive = split_reqs.get_right_derive();
@@ -1753,9 +1752,7 @@ impl ApplyDelegate {
         });
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["batch-split", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
 
         Ok((
             resp,
@@ -1770,9 +1767,7 @@ impl ApplyDelegate {
     ) -> Result<(AdminResponse, ApplyResult)> {
         fail_point!("apply_before_prepare_merge");
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["prepare_merge", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
 
         let prepare_merge = req.get_prepare_merge();
         let index = prepare_merge.get_min_index();
@@ -1813,9 +1808,7 @@ impl ApplyDelegate {
             )
         });
         fail_point!("apply_after_prepare_merge");
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["prepare_merge", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
 
         Ok((
             AdminResponse::default(),
@@ -1854,9 +1847,7 @@ impl ApplyDelegate {
             apply_before_commit_merge();
         }
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["commit_merge", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.commit_merge.all.inc();
 
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
@@ -1961,9 +1952,7 @@ impl ApplyDelegate {
                 )
             });
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["commit_merge", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
 
         let resp = AdminResponse::default();
         Ok((
@@ -1980,9 +1969,7 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext<W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["rollback_merge", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
@@ -2008,9 +1995,7 @@ impl ApplyDelegate {
             )
         });
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["rollback_merge", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.rollback_merge.success.inc();
         let resp = AdminResponse::default();
         Ok((
             resp,
@@ -2026,9 +2011,7 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext<W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["compact", "all"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::default();
@@ -2072,9 +2055,7 @@ impl ApplyDelegate {
         // compact failure is safe to be omitted, no need to assert.
         compact_raft_log(&self.tag, apply_state, compact_index, compact_term)?;
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["compact", "success"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.compact.success.inc();
 
         Ok((
             resp,
@@ -2357,13 +2338,39 @@ impl Debug for GenSnapTask {
     }
 }
 
+static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+
+/// A unique identifier for checking stale observed commands.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct ObserveID(usize);
+
+impl ObserveID {
+    pub fn new() -> ObserveID {
+        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+struct ObserveCmd {
+    id: ObserveID,
+    enabled: Arc<AtomicBool>,
+}
+
+impl Debug for ObserveCmd {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObserveCmd").field("id", &self.id).finish()
+    }
+}
+
+#[derive(Debug)]
 pub enum ChangeCmd {
     RegisterObserver {
+        observe_id: ObserveID,
         region_id: u64,
         region_epoch: RegionEpoch,
         enabled: Arc<AtomicBool>,
     },
     Snapshot {
+        observe_id: ObserveID,
         region_id: u64,
         region_epoch: RegionEpoch,
     },
@@ -2772,8 +2779,9 @@ impl ApplyFsm {
         cmd: ChangeCmd,
         cb: Callback<RocksEngine>,
     ) {
-        let (region_id, region_epoch, enabled) = match cmd {
+        let (observe_id, region_id, region_epoch, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
+                observe_id,
                 region_id,
                 region_epoch,
                 enabled,
@@ -2782,13 +2790,14 @@ impl ApplyFsm {
                     .delegate
                     .observe_cmd
                     .as_ref()
-                    .map_or(false, |e| e.load(Ordering::Relaxed)));
-                (region_id, region_epoch, Some(enabled))
+                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)));
+                (observe_id, region_id, region_epoch, Some(enabled))
             }
             ChangeCmd::Snapshot {
+                observe_id,
                 region_id,
                 region_epoch,
-            } => (region_id, region_epoch, None),
+            } => (observe_id, region_id, region_epoch, None),
         };
 
         assert_eq!(self.delegate.region_id(), region_id);
@@ -2817,10 +2826,16 @@ impl ApplyFsm {
                 snapshot: None,
             },
         };
-        if enabled.is_some() {
+        if let Some(enabled) = enabled {
             // TODO(cdc): take observe_cmd when enabled is false.
-            self.delegate.observe_cmd = enabled;
+            self.delegate.observe_cmd = Some(ObserveCmd {
+                id: observe_id,
+                enabled,
+            });
+        } else if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
+            observe_cmd.id = observe_id;
         }
+
         cb.invoke_read(resp);
     }
 
@@ -3012,7 +3027,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
             coprocessor_host: builder.coprocessor_host.clone(),
             importer: builder.importer.clone(),
             region_scheduler: builder.region_scheduler.clone(),
-            engine: RocksEngine::from_db(builder.engines.kv.clone()),
+            engine: builder.engines.kv.clone(),
             _phantom: PhantomData,
             sender,
             router,
@@ -3667,16 +3682,18 @@ mod tests {
     }
 
     impl CmdObserver for ApplyObserver {
-        fn on_prepare_for_apply(&self, region_id: u64) {
-            self.cmd_batches.borrow_mut().push(CmdBatch::new(region_id));
+        fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+            self.cmd_batches
+                .borrow_mut()
+                .push(CmdBatch::new(observe_id, region_id));
         }
 
-        fn on_apply_cmd(&self, region_id: u64, cmd: Cmd) {
+        fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
             self.cmd_batches
                 .borrow_mut()
                 .last_mut()
                 .expect("should exist some cmd batch")
-                .push(region_id, cmd);
+                .push(observe_id, region_id, cmd);
         }
 
         fn on_flush_apply(&self) {
@@ -4017,10 +4034,12 @@ mod tests {
         router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 1, 2, 2)));
         // Register cmd observer to region 1.
         let enabled = Arc::new(AtomicBool::new(true));
+        let observe_id = ObserveID::new();
         router.schedule_task(
             1,
             Msg::Change {
                 cmd: ChangeCmd::RegisterObserver {
+                    observe_id,
                     region_id: 1,
                     region_epoch: region_epoch.clone(),
                     enabled: enabled.clone(),
@@ -4082,6 +4101,7 @@ mod tests {
             2,
             Msg::Change {
                 cmd: ChangeCmd::RegisterObserver {
+                    observe_id,
                     region_id: 2,
                     region_epoch,
                     enabled,
@@ -4241,10 +4261,12 @@ mod tests {
 
         router.schedule_task(1, Msg::Registration(reg.clone()));
         let enabled = Arc::new(AtomicBool::new(true));
+        let observe_id = ObserveID::new();
         router.schedule_task(
             1,
             Msg::Change {
                 cmd: ChangeCmd::RegisterObserver {
+                    observe_id,
                     region_id: 1,
                     region_epoch: region_epoch.clone(),
                     enabled: enabled.clone(),
@@ -4398,6 +4420,7 @@ mod tests {
             1,
             Msg::Change {
                 cmd: ChangeCmd::RegisterObserver {
+                    observe_id,
                     region_id: 1,
                     region_epoch,
                     enabled: Arc::new(AtomicBool::new(true)),

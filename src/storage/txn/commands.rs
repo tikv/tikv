@@ -108,6 +108,7 @@ impl From<PessimisticLockRequest> for TypedCommand<Result<PessimisticLockRes>> {
             req.get_for_update_ts().into(),
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_return_values(),
+            req.get_min_commit_ts().into(),
             req.take_context(),
         )
     }
@@ -386,6 +387,7 @@ command! {
         /// If it is true, TiKV will return values of the keys if no error, so TiDB can cache the values for
         /// later read in the same transaction.
         return_values: bool,
+        min_commit_ts: TimeStamp,
     }
 }
 
