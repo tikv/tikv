@@ -343,7 +343,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
         let cid = self.inner.gen_id();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
+        info!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
