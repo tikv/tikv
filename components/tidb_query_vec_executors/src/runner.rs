@@ -476,7 +476,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.out_most_executor.collect_storage_stats(dest);
     }
 
-    pub fn can_be_cached(&mut self) -> bool {
+    pub fn can_be_cached(&self) -> bool {
         self.out_most_executor.can_be_cached()
     }
 }

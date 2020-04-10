@@ -149,7 +149,7 @@ impl<Src: Executor> AggExecutor<Src> {
     }
 
     #[inline]
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         self.src.can_be_cached()
     }
 }
@@ -270,7 +270,7 @@ impl<Src: Executor> Executor for HashAggExecutor<Src> {
     }
 
     #[inline]
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         self.inner.can_be_cached()
     }
 }
@@ -334,7 +334,7 @@ impl<Src: Executor> Executor for StreamAggExecutor<Src> {
     }
 
     #[inline]
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         self.inner.can_be_cached()
     }
 }

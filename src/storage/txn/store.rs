@@ -6,7 +6,7 @@ use super::{Error, ErrorInner, Result};
 use crate::storage::kv::{Snapshot, Statistics};
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{
-    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, PointGetter,
+    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState, PointGetter,
     PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
@@ -19,14 +19,13 @@ pub trait Store: Send {
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
 
     /// Re-use last cursor to incrementally (if possible) fetch the provided key.
-    fn incremental_get(
-        &mut self,
-        key: &Key,
-        can_be_cached: Option<&mut bool>,
-    ) -> Result<Option<Value>>;
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>>;
 
     /// Take the statistics. Currently only available for `incremental_get`.
     fn incremental_get_take_statistics(&mut self) -> Statistics;
+
+    /// Whether there was data > ts during previous incremental gets.
+    fn incremental_get_met_newer_ts_data(&self) -> NewerTsCheckState;
 
     /// Fetch the provided set of keys.
     fn batch_get(
@@ -40,7 +39,7 @@ pub trait Store: Send {
         &self,
         desc: bool,
         key_only: bool,
-        check_can_be_cached: bool,
+        check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner>;
@@ -77,8 +76,8 @@ pub trait Scanner: Send {
         Ok(results)
     }
 
-    /// Return: is all the scanned data can be cached
-    fn can_be_cached(&mut self) -> bool;
+    /// Whether there was data > ts during previous scans.
+    fn met_newer_ts_data(&self) -> NewerTsCheckState;
 
     /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
@@ -196,6 +195,7 @@ pub struct SnapshotStore<S: Snapshot> {
     isolation_level: IsolationLevel,
     fill_cache: bool,
     bypass_locks: TsSet,
+    check_has_newer_ts_data: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
 }
@@ -210,16 +210,12 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .multi(false)
             .bypass_locks(self.bypass_locks.clone())
             .build()?;
-        let v = point_getter.get(key, None)?;
+        let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
         Ok(v)
     }
 
-    fn incremental_get(
-        &mut self,
-        key: &Key,
-        can_be_cached: Option<&mut bool>,
-    ) -> Result<Option<Value>> {
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
         if self.point_getter_cache.is_none() {
             self.point_getter_cache = Some(
                 PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
@@ -227,21 +223,31 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .isolation_level(self.isolation_level)
                     .multi(true)
                     .bypass_locks(self.bypass_locks.clone())
+                    .check_has_newer_ts_data(self.check_has_newer_ts_data)
                     .build()?,
             );
         }
-        Ok(self
-            .point_getter_cache
-            .as_mut()
-            .unwrap()
-            .get(key, can_be_cached)?)
+        Ok(self.point_getter_cache.as_mut().unwrap().get(key)?)
     }
 
+    #[inline]
     fn incremental_get_take_statistics(&mut self) -> Statistics {
         if self.point_getter_cache.is_none() {
             Statistics::default()
         } else {
             self.point_getter_cache.as_mut().unwrap().take_statistics()
+        }
+    }
+
+    #[inline]
+    fn incremental_get_met_newer_ts_data(&self) -> NewerTsCheckState {
+        if self.point_getter_cache.is_none() {
+            NewerTsCheckState::Unknown
+        } else {
+            self.point_getter_cache
+                .as_ref()
+                .unwrap()
+                .met_newer_ts_data()
         }
     }
 
@@ -272,7 +278,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             values.push(MaybeUninit::uninit());
         }
         for (original_order, key) in order_and_keys {
-            let value = point_getter.get(key, None).map_err(Error::from);
+            let value = point_getter.get(key).map_err(Error::from);
             unsafe {
                 values[original_order].as_mut_ptr().write(value);
             }
@@ -289,7 +295,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         &self,
         desc: bool,
         key_only: bool,
-        check_can_be_cached: bool,
+        check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<MvccScanner<S>> {
@@ -301,7 +307,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
-            .set_check_can_be_cached(check_can_be_cached)
+            .check_has_newer_ts_data(check_has_newer_ts_data)
             .build()?;
 
         Ok(scanner)
@@ -341,6 +347,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         isolation_level: IsolationLevel,
         fill_cache: bool,
         bypass_locks: TsSet,
+        check_has_newer_ts_data: bool,
     ) -> Self {
         SnapshotStore {
             snapshot,
@@ -348,6 +355,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             isolation_level,
             fill_cache,
             bypass_locks,
+            check_has_newer_ts_data,
 
             point_getter_cache: None,
         }
@@ -443,14 +451,7 @@ impl Store for FixtureStore {
     }
 
     #[inline]
-    fn incremental_get(
-        &mut self,
-        key: &Key,
-        can_be_cached: Option<&mut bool>,
-    ) -> Result<Option<Vec<u8>>> {
-        if let Some(can_be_cached) = can_be_cached {
-            *can_be_cached = true;
-        }
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Vec<u8>>> {
         let mut s = Statistics::default();
         self.get(key, &mut s)
     }
@@ -458,6 +459,11 @@ impl Store for FixtureStore {
     #[inline]
     fn incremental_get_take_statistics(&mut self) -> Statistics {
         Statistics::default()
+    }
+
+    #[inline]
+    fn incremental_get_met_newer_ts_data(&self) -> NewerTsCheckState {
+        NewerTsCheckState::Unknown
     }
 
     #[inline]
@@ -542,8 +548,9 @@ impl Scanner for FixtureStoreScanner {
         }
     }
 
-    fn can_be_cached(&mut self) -> bool {
-        true
+    #[inline]
+    fn met_newer_ts_data(&self) -> NewerTsCheckState {
+        NewerTsCheckState::Unknown
     }
 
     #[inline]
@@ -640,6 +647,7 @@ mod tests {
                 IsolationLevel::Si,
                 true,
                 Default::default(),
+                false,
             )
         }
     }
@@ -861,6 +869,7 @@ mod tests {
             IsolationLevel::Si,
             true,
             Default::default(),
+            false,
         );
         let bound_a = Key::from_encoded(b"a".to_vec());
         let bound_b = Key::from_encoded(b"b".to_vec());
@@ -906,6 +915,7 @@ mod tests {
             IsolationLevel::Si,
             true,
             Default::default(),
+            false,
         );
         assert!(store2.scanner(false, false, false, None, None).is_ok());
         assert!(store2

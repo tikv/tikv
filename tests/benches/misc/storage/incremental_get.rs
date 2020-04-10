@@ -40,6 +40,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<RocksSyncSnapshot>, Vec<Key>) {
         IsolationLevel::Si,
         true,
         Default::default(),
+        false,
     );
 
     // Keys are given in order, and are far away from each other to simulate a normal table lookup
@@ -67,7 +68,7 @@ fn bench_table_lookup_mvcc_incremental_get(b: &mut Bencher) {
     let (mut store, keys) = table_lookup_gen_data();
     b.iter(|| {
         for key in &keys {
-            black_box(store.incremental_get(key, None).unwrap());
+            black_box(store.incremental_get(key).unwrap());
         }
     })
 }

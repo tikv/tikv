@@ -50,7 +50,7 @@ pub trait BatchExecutor: Send {
 
     fn take_scanned_range(&mut self) -> IntervalRange;
 
-    fn can_be_cached(&mut self) -> bool;
+    fn can_be_cached(&self) -> bool;
 
     fn collect_summary(
         self,
@@ -89,7 +89,7 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).take_scanned_range()
     }
 
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         (**self).can_be_cached()
     }
 }
@@ -125,7 +125,7 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
         self.inner.take_scanned_range()
     }
 
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         self.inner.can_be_cached()
     }
 }

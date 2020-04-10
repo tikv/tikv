@@ -66,7 +66,7 @@ impl<Src: Executor> Executor for LimitExecutor<Src> {
     }
 
     #[inline]
-    fn can_be_cached(&mut self) -> bool {
+    fn can_be_cached(&self) -> bool {
         self.src.can_be_cached()
     }
 }
