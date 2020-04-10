@@ -33,7 +33,7 @@ use raftstore::{
 use std::{
     convert::TryFrom,
     env, fmt,
-    fs::File,
+    fs::{self, File},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::JoinHandle,
@@ -65,7 +65,6 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
 };
-use walkdir::WalkDir;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -308,12 +307,12 @@ impl TiKVServer {
         let search_base = env::temp_dir().join("TIKV_LOCK_FILES");
         std::fs::create_dir_all(&search_base).expect("create TIKV_LOCK_FILES failed");
 
-        for result in WalkDir::new(&search_base) {
-            if let Ok(dent) = result {
-                if !dent.file_type().is_file() {
+        for result in fs::read_dir(&search_base).unwrap() {
+            if let Ok(entry) = result {
+                if !entry.file_type().unwrap().is_file() {
                     continue;
                 }
-                let file_path = dent.path();
+                let file_path = entry.path();
                 if let Some(extension) = file_path.extension() {
                     if extension != "tikv_lock" {
                         continue;
