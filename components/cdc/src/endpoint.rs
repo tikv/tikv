@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -362,11 +363,9 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             "region_id" => region_id,
             "conn_id" => ?conn.get_id(),
             "downstream_id" => ?downstream.get_id());
-        let mut enabled = None;
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
             let d = Delegate::new(region_id);
-            enabled = Some(d.enabled());
             is_new_delegate = true;
             d
         });
@@ -384,7 +383,9 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             batch_size,
             observe_id: delegate.id,
             checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: enabled.is_some(),
+            build_resolver: is_new_delegate,
+            // TODO: make the cancellation at Downstream level instead of Region level.
+            cancel: delegate.enabled(),
         };
         if !delegate.subscribe(downstream) {
             conn.unsubscribe(request.get_region_id());
@@ -393,7 +394,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             }
             return;
         }
-        let change_cmd = if let Some(enabled) = enabled {
+        let change_cmd = if is_new_delegate {
             // The region has never been registered.
             // Subscribe the change events of the region.
             let old_id = self.observer.subscribe_region(region_id, delegate.id);
@@ -408,7 +409,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             ChangeCmd::RegisterObserver {
                 observe_id: delegate.id,
                 region_id,
-                enabled,
+                enabled: delegate.enabled(),
             }
         } else {
             ChangeCmd::Snapshot {
@@ -598,6 +599,7 @@ struct Initializer {
     batch_size: usize,
 
     build_resolver: bool,
+    cancel: Arc<AtomicBool>,
 }
 
 impl Initializer {
@@ -633,8 +635,6 @@ impl Initializer {
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id);
 
-        // TODO: Add a cancellation mechanism so that the scanning can be canceled if it doesn't
-        // finish when the region is deregistered.
         let mut resolver = if self.build_resolver {
             Some(Resolver::new(region_id))
         } else {
@@ -652,6 +652,13 @@ impl Initializer {
             .unwrap();
         let mut done = false;
         while !done {
+            if !self.cancel.load(Ordering::SeqCst) {
+                info!("async incremental scan canceled";
+                    "region_id" => region_id,
+                    "downstream_id" => ?downstream_id,
+                    "observe_id" => ?self.observe_id);
+                return;
+            }
             let entries = match Self::scan_batch(&mut scanner, self.batch_size, resolver.as_mut()) {
                 Ok(res) => res,
                 Err(e) => {
@@ -872,6 +879,7 @@ mod tests {
             batch_size: 1,
 
             build_resolver: true,
+            cancel: Arc::new(AtomicBool::new(true)),
         };
 
         (receiver_worker, pool, initializer, rx)
@@ -934,12 +942,25 @@ mod tests {
         check_result();
 
         initializer.build_resolver = false;
-        initializer.async_incremental_scan(snap, region);
+        initializer.async_incremental_scan(snap.clone(), region.clone());
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
             match task {
                 Ok(Task::IncrementalScan { .. }) => continue,
+                Ok(t) => panic!("unepxected task {} received", t),
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(e) => panic!("unexpected err {:?}", e),
+            }
+        }
+
+        // Test cancellation.
+        initializer.cancel.store(false, Ordering::SeqCst);
+        initializer.async_incremental_scan(snap, region);
+
+        loop {
+            let task = rx.recv_timeout(Duration::from_secs(1));
+            match task {
                 Ok(t) => panic!("unepxected task {} received", t),
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(e) => panic!("unexpected err {:?}", e),
