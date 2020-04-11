@@ -19,10 +19,10 @@ enum TrackerState {
     Initialized,
 
     /// The tracker is notified that the task is scheduled on a thread pool and start running.
-    Scheduled,
+    Scheduled(Instant),
 
     /// The tracker is notified that the snapshot needed by the task is ready.
-    SnapshotRetrieved,
+    SnapshotRetrieved(Instant),
 
     /// The tracker is notified that all items just began.
     AllItemsBegan,
@@ -44,8 +44,6 @@ enum TrackerState {
 #[derive(Debug)]
 pub struct Tracker {
     request_begin_at: Instant,
-    scheduled_at: Instant,
-    snapshot_finished_at: Instant,
     item_begin_at: Instant,
     perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
 
@@ -73,8 +71,6 @@ impl Tracker {
         let now = Instant::now_coarse();
         Tracker {
             request_begin_at: now,
-            scheduled_at: now,
-            snapshot_finished_at: now,
             item_begin_at: now,
             perf_statistics_start: None,
 
@@ -97,24 +93,28 @@ impl Tracker {
         assert_eq!(self.current_stage, TrackerState::Initialized);
         let now = Instant::now_coarse();
         self.schedule_wait_time = now - self.request_begin_at;
-        self.scheduled_at = now;
-        self.current_stage = TrackerState::Scheduled;
+        self.current_stage = TrackerState::Scheduled(now);
     }
 
     pub fn on_snapshot_finished(&mut self) {
-        assert_eq!(self.current_stage, TrackerState::Scheduled);
-        let now = Instant::now_coarse();
-        self.snapshot_wait_time = now - self.scheduled_at;
-        self.wait_time = now - self.request_begin_at;
-        self.snapshot_finished_at = now;
-        self.current_stage = TrackerState::SnapshotRetrieved;
+        if let TrackerState::Scheduled(at) = self.current_stage {
+            let now = Instant::now_coarse();
+            self.snapshot_wait_time = now - at;
+            self.wait_time = now - self.request_begin_at;
+            self.current_stage = TrackerState::SnapshotRetrieved(now);
+        } else {
+            unreachable!()
+        }
     }
 
     pub fn on_begin_all_items(&mut self) {
-        assert_eq!(self.current_stage, TrackerState::SnapshotRetrieved);
-        let now = Instant::now_coarse();
-        self.handler_build_time = now - self.snapshot_finished_at;
-        self.current_stage = TrackerState::AllItemsBegan;
+        if let TrackerState::SnapshotRetrieved(at) = self.current_stage {
+            let now = Instant::now_coarse();
+            self.handler_build_time = now - at;
+            self.current_stage = TrackerState::AllItemsBegan;
+        } else {
+            unreachable!()
+        }
     }
 
     pub fn on_begin_item(&mut self) {
@@ -297,10 +297,10 @@ impl Drop for Tracker {
         if self.current_stage == TrackerState::Initialized {
             self.on_scheduled();
         }
-        if self.current_stage == TrackerState::Scheduled {
+        if let TrackerState::Scheduled(_) = self.current_stage {
             self.on_snapshot_finished();
         }
-        if self.current_stage == TrackerState::SnapshotRetrieved {
+        if let TrackerState::SnapshotRetrieved(_) = self.current_stage {
             self.on_begin_all_items();
         }
         if self.current_stage == TrackerState::ItemBegan {
