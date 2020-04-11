@@ -433,18 +433,12 @@ mod tests {
         // If it's non-pessimistic-txn, no clean up.
         let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
         lock_mgr.wake_up(10.into(), None, 10.into(), false);
-        assert_eq!(
-            TASK_COUNTER_METRICS.clean_up.get(),
-            prev_clean_up
-        );
+        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
         // If the txn doesn't wait for locks, no clean up.
         let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
         lock_mgr.wake_up(10.into(), None, 10.into(), true);
-        assert_eq!(
-            TASK_COUNTER_METRICS.clean_up.get(),
-            prev_clean_up
-        );
+        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
         // If timeout is negative, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
@@ -462,10 +456,7 @@ mod tests {
             0,
             200,
         );
-        assert_eq!(
-            TASK_COUNTER_METRICS.wait_for.get(),
-            prev_wait_for,
-        );
+        assert_eq!(TASK_COUNTER_METRICS.wait_for.get(), prev_wait_for,);
     }
 
     #[bench]

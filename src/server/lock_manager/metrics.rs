@@ -2,7 +2,6 @@
 
 use prometheus::*;
 use prometheus_static_metric::*;
-use tikv_util::metrics::TLSMetricGroup;
 
 make_auto_flush_static_metric! {
     pub struct LocalTaskCounter: LocalIntCounter {
@@ -78,4 +77,3 @@ lazy_static! {
     pub static ref ERROR_COUNTER_METRICS: LocalErrorCounter =
         auto_flush_from!(ERROR_COUNTER_VEC,LocalErrorCounter);
 }
-

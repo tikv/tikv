@@ -187,13 +187,13 @@ impl DetectTable {
                 }
             }
         }
-            TASK_COUNTER_METRICS.clean_up_wait_for.inc();
+        TASK_COUNTER_METRICS.clean_up_wait_for.inc();
     }
 
     /// Removes the entries of the transaction.
     fn clean_up(&mut self, txn_ts: TimeStamp) {
         self.wait_for_map.remove(&txn_ts);
-            TASK_COUNTER_METRICS.clean_up.inc();
+        TASK_COUNTER_METRICS.clean_up.inc();
     }
 
     /// Clears the whole detect table.
