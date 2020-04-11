@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use engine::{rocks, DB};
+use engine_rocks::Compat;
 use raftstore::coprocessor::{
     config::{Config, SplitCheckConfigManager},
     CoprocessorHost,
@@ -31,7 +32,7 @@ fn tmp_engine() -> Arc<DB> {
 fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
     let (router, _) = sync_channel(1);
     let runner = Runner::new(
-        engine,
+        engine.c().clone(),
         router.clone(),
         CoprocessorHost::new(router),
         cfg.coprocessor.clone(),
@@ -39,7 +40,7 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
     let mut worker: Worker<Task> = Worker::new("split-check-config");
     worker.start(runner).unwrap();
 
-    let mut cfg_controller = ConfigController::new(cfg, Default::default());
+    let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
     cfg_controller.register(
         Module::Coprocessor,
         Box::new(SplitCheckConfigManager(worker.scheduler())),

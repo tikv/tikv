@@ -115,6 +115,10 @@ impl ServerCluster {
     pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter {
         self.metas.get(&node_id).unwrap().raw_apply_router.clone()
     }
+
+    pub fn get_server_router(&self, node_id: u64) -> SimulateStoreTransport {
+        self.metas.get(&node_id).unwrap().sim_router.clone()
+    }
 }
 
 impl Simulator for ServerCluster {
@@ -171,7 +175,7 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            Some(engines.kv.clone()),
+            Some(engines.kv.c().clone()),
             Some(raft_router.clone()),
             Some(region_info_accessor.clone()),
             cfg.gc.clone(),
@@ -188,6 +192,7 @@ impl Simulator for ServerCluster {
         )?;
         self.storages.insert(node_id, raft_engine);
 
+        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
@@ -196,8 +201,9 @@ impl Simulator for ServerCluster {
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
             sim_router.clone(),
-            Arc::clone(&engines.kv),
+            engines.kv.c().clone(),
             Arc::clone(&importer),
+            security_mgr.clone(),
         );
         // Create Debug service.
         let pool = futures_cpupool::Builder::new()
@@ -211,16 +217,16 @@ impl Simulator for ServerCluster {
             raft_router,
             gc_worker.get_config_manager(),
             false,
+            security_mgr.clone(),
         );
 
         // Create deadlock service.
-        let deadlock_service = lock_mgr.deadlock_service();
+        let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
-        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
@@ -284,11 +290,11 @@ impl Simulator for ServerCluster {
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
         let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
-        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default());
+        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            Arc::clone(&engines.kv),
+            engines.kv.c().clone(),
             router.clone(),
             coprocessor_host.clone(),
             cfg.coprocessor.clone(),

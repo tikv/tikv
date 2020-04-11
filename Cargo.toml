@@ -21,7 +21,6 @@ sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 failpoints = ["fail/failpoints", "raftstore/failpoints"]
 prost-codec = [
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",
@@ -30,12 +29,12 @@ prost-codec = [
   "raft/prost-codec",
   "raftstore/prost-codec",
   "sst_importer/prost-codec",
-  "tidb_query/prost-codec",
+  "tidb_query_datatype/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
+  "encryption/prost-codec",
 ]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
@@ -44,11 +43,16 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "raftstore/protobuf-codec",
   "sst_importer/protobuf-codec",
-  "tidb_query/protobuf-codec",
+  "tidb_query_datatype/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
+  "encryption/protobuf-codec"
 ]
 testexport = ["raftstore/testexport"]
+
+# for testing configure propegate to other crates
+# https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
+testing = []
 
 [lib]
 name = "tikv"
@@ -65,7 +69,7 @@ configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
-derive_more = "0.15.0"
+derive_more = "0.99.3"
 engine = { path = "components/engine" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
@@ -80,7 +84,7 @@ futures-locks = "0.1"
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
-hex = "0.3"
+hex = "0.4"
 itertools = "0.8"
 openssl = "0.10"
 tokio-openssl = "0.2"
@@ -103,7 +107,7 @@ protobuf = "2.8"
 quick-error = "1.2.2"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore" }
-rand = "0.6.5"
+rand = "0.7.3"
 regex = "1.3"
 rev_lines = "0.2.1"
 serde = { version = "1.0", features = ["derive"] }
@@ -111,12 +115,20 @@ serde_derive = "1.0"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
-slog_derive = "0.1"
+slog_derive = "0.2"
 parking_lot = "0.10"
+prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
 sst_importer = { path = "components/sst_importer" }
 sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tempfile = "3.0"
-tidb_query = { path = "components/tidb_query" }
+tidb_query_datatype = { path = "components/tidb_query_datatype" }
+tidb_query_common = { path = "components/tidb_query_common" }
+tidb_query_shared_expr = { path = "components/tidb_query_shared_expr" }
+tidb_query_normal_expr = { path = "components/tidb_query_normal_expr" }
+tidb_query_normal_executors = { path = "components/tidb_query_normal_executors" }
+tidb_query_vec_expr = { path = "components/tidb_query_vec_expr" }
+tidb_query_vec_aggr = { path = "components/tidb_query_vec_aggr" }
+tidb_query_vec_executors = { path = "components/tidb_query_vec_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
 time = "0.1"
@@ -132,14 +144,14 @@ tokio-timer = "0.2"
 toml = "0.4"
 txn_types = { path = "components/txn_types" }
 url = "2"
-uuid = { version = "0.7", features = ["serde", "v4"] }
+uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 into_other = { path = "components/into_other" }
-prometheus = {version = "0.8", features = ["nightly", "push", "process"]}
+encryption = { path = "components/encryption" }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
-rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
+rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
@@ -149,7 +161,7 @@ panic_hook = { path = "components/panic_hook" }
 test_sst_importer = { path = "components/test_sst_importer" }
 test_util = { path = "components/test_util" }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
-zipf = "5.0.1"
+zipf = "6.1.0"
 hyper-openssl = "0.7"
 
 [patch.crates-io]
@@ -158,6 +170,8 @@ raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
+fail = { git = "https://github.com/tikv/fail-rs.git", rev = "2cf1175a1a5cc2c70bd20ebd45313afd69b558fc" }
+prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
@@ -177,15 +191,21 @@ members = [
   "components/test_util",
   "components/tikv_alloc",
   "components/match_template",
+  "components/engine_traits/tests",
   "components/codec",
   "components/configuration",
   "components/panic_hook",
   "components/tipb_helper",
   "components/log_wrappers",
   "components/tikv_util",
-  "components/tidb_query",
   "components/tidb_query_datatype",
+  "components/tidb_query_common",
   "components/tidb_query_codegen",
+  "components/tidb_query_normal_expr",
+  "components/tidb_query_normal_executors",
+  "components/tidb_query_vec_expr",
+  "components/tidb_query_vec_aggr",
+  "components/tidb_query_vec_executors",
   "components/pd_client",
   "components/external_storage",
   "components/backup",
@@ -197,6 +217,7 @@ members = [
   "components/cdc",
   "components/raftstore",
   "components/into_other",
+  "components/encryption",
 ]
 default-members = ["cmd"]
 

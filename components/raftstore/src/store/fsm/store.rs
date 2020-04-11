@@ -2,12 +2,10 @@
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine::rocks;
-use engine::DB;
-use engine_rocks::{Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch};
+use engine_rocks::{RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec};
 use engine_traits::{
-    CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
-    WriteOptions,
+    CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
+    WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -59,7 +57,6 @@ use crate::store::{
     SnapshotDeleter, StoreMsg, StoreTick,
 };
 use crate::Result;
-use engine::Engines;
 use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{ConfigClient, PdClient};
@@ -80,7 +77,7 @@ pub const PENDING_VOTES_CAP: usize = 20;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo {
-    pub engine: Arc<DB>,
+    pub engine: RocksEngine,
     pub capacity: u64,
 }
 
@@ -224,7 +221,7 @@ pub struct PollContext<T, C: 'static> {
     pub pd_client: Arc<C>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub engines: Engines,
+    pub engines: KvEngines<RocksEngine, RocksEngine>,
     pub kv_wb: RocksWriteBatch,
     pub raft_wb: RocksWriteBatch,
     pub pending_count: usize,
@@ -404,7 +401,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
         let elapsed = t.elapsed();
         RAFT_EVENT_DURATION
-            .with_label_values(&[tick.tag()])
+            .get(tick.tag())
             .observe(duration_to_sec(elapsed) as f64);
         slow_log!(
             elapsed,
@@ -518,14 +515,13 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx
                 .engines
                 .kv
-                .c()
                 .write_opt(&self.poll_ctx.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
-                self.poll_ctx.kv_wb = self.poll_ctx.engines.kv.c().write_batch_with_cap(4 * 1024);
+                self.poll_ctx.kv_wb = self.poll_ctx.engines.kv.write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.kv_wb.clear();
             }
@@ -542,19 +538,13 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx
                 .engines
                 .raft
-                .c()
                 .write_opt(&self.poll_ctx.raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
-                self.poll_ctx.raft_wb = self
-                    .poll_ctx
-                    .engines
-                    .raft
-                    .c()
-                    .write_batch_with_cap(4 * 1024);
+                self.poll_ctx.raft_wb = self.poll_ctx.engines.raft.write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.raft_wb.clear();
             }
@@ -750,7 +740,7 @@ pub struct RaftPollerBuilder<T, C> {
     trans: T,
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
-    pub engines: Engines,
+    pub engines: KvEngines<RocksEngine, RocksEngine>,
     applying_snap_count: Arc<AtomicUsize>,
 }
 
@@ -762,7 +752,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
-        let kv_engine = Arc::clone(&self.engines.kv);
+        let kv_engine = self.engines.kv.clone();
         let store_id = self.store.get_id();
         let mut total_count = 0;
         let mut tombstone_count = 0;
@@ -770,75 +760,73 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut region_peers = vec![];
 
         let t = Instant::now();
-        let mut kv_wb = self.engines.kv.c().write_batch();
-        let mut raft_wb = self.engines.raft.c().write_batch();
+        let mut kv_wb = self.engines.kv.write_batch();
+        let mut raft_wb = self.engines.raft.write_batch();
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
-        kv_engine
-            .c()
-            .scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
-                let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
-                if suffix != keys::REGION_STATE_SUFFIX {
-                    return Ok(true);
-                }
+        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
 
-                total_count += 1;
+            total_count += 1;
 
-                let mut local_state = RegionLocalState::default();
-                local_state.merge_from_bytes(value)?;
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(value)?;
 
-                let region = local_state.get_region();
-                if local_state.get_state() == PeerState::Tombstone {
-                    tombstone_count += 1;
-                    debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
-                    self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
-                    return Ok(true);
-                }
-                if local_state.get_state() == PeerState::Applying {
-                    // in case of restart happen when we just write region state to Applying,
-                    // but not write raft_local_state to raft rocksdb in time.
-                    box_try!(peer_storage::recover_from_applying_state(
-                        &self.engines,
-                        &mut raft_wb,
-                        region_id
-                    ));
-                    applying_count += 1;
-                    applying_regions.push(region.clone());
-                    return Ok(true);
-                }
-
-                let (tx, mut peer) = box_try!(PeerFsm::create(
-                    store_id,
-                    &self.cfg.value(),
-                    self.region_scheduler.clone(),
-                    self.engines.clone(),
-                    region,
+            let region = local_state.get_region();
+            if local_state.get_state() == PeerState::Tombstone {
+                tombstone_count += 1;
+                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
+                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
+                return Ok(true);
+            }
+            if local_state.get_state() == PeerState::Applying {
+                // in case of restart happen when we just write region state to Applying,
+                // but not write raft_local_state to raft rocksdb in time.
+                box_try!(peer_storage::recover_from_applying_state(
+                    &self.engines,
+                    &mut raft_wb,
+                    region_id
                 ));
-                if local_state.get_state() == PeerState::Merging {
-                    info!("region is merging"; "region" => ?region, "store_id" => store_id);
-                    merging_count += 1;
-                    peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
-                }
-                meta.region_ranges.insert(enc_end_key(region), region_id);
-                meta.regions.insert(region_id, region.clone());
-                // No need to check duplicated here, because we use region id as the key
-                // in DB.
-                region_peers.push((tx, peer));
-                self.coprocessor_host.on_region_changed(
-                    region,
-                    RegionChangeEvent::Create,
-                    StateRole::Follower,
-                );
-                Ok(true)
-            })?;
+                applying_count += 1;
+                applying_regions.push(region.clone());
+                return Ok(true);
+            }
+
+            let (tx, mut peer) = box_try!(PeerFsm::create(
+                store_id,
+                &self.cfg.value(),
+                self.region_scheduler.clone(),
+                self.engines.clone(),
+                region,
+            ));
+            if local_state.get_state() == PeerState::Merging {
+                info!("region is merging"; "region" => ?region, "store_id" => store_id);
+                merging_count += 1;
+                peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
+            }
+            meta.region_ranges.insert(enc_end_key(region), region_id);
+            meta.regions.insert(region_id, region.clone());
+            // No need to check duplicated here, because we use region id as the key
+            // in DB.
+            region_peers.push((tx, peer));
+            self.coprocessor_host.on_region_changed(
+                region,
+                RegionChangeEvent::Create,
+                StateRole::Follower,
+            );
+            Ok(true)
+        })?;
 
         if !kv_wb.is_empty() {
-            self.engines.kv.c().write(&kv_wb).unwrap();
+            self.engines.kv.write(&kv_wb).unwrap();
             self.engines.kv.sync_wal().unwrap();
         }
         if !raft_wb.is_empty() {
-            self.engines.raft.c().write(&raft_wb).unwrap();
+            self.engines.raft.write(&raft_wb).unwrap();
             self.engines.raft.sync_wal().unwrap();
         }
 
@@ -882,7 +870,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     ) {
         let region = origin_state.get_region();
         let raft_key = keys::raft_state_key(region.get_id());
-        let raft_state = match self.engines.raft.c().get_msg(&raft_key).unwrap() {
+        let raft_state = match self.engines.raft.get_msg(&raft_key).unwrap() {
             // it has been cleaned up.
             None => return,
             Some(value) => value,
@@ -908,7 +896,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        rocks::util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
+        self.engines.kv.roughly_cleanup_ranges(&ranges)?;
 
         info!(
             "cleans up garbage data";
@@ -953,8 +941,8 @@ where
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
-            kv_wb: self.engines.kv.c().write_batch(),
-            raft_wb: self.engines.raft.c().write_batch_with_cap(4 * 1024),
+            kv_wb: self.engines.kv.write_batch(),
+            raft_wb: self.engines.raft.write_batch_with_cap(4 * 1024),
             pending_count: 0,
             sync_log: false,
             has_ready: false,
@@ -1012,7 +1000,7 @@ impl RaftBatchSystem {
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
@@ -1067,11 +1055,20 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        self.start_system(workers, region_peers, builder, dyn_cfg)?;
+        let engine = builder.engines.kv.clone();
+        if engine.support_write_batch_vec() {
+            self.start_system::<T, C, RocksWriteBatchVec>(workers, region_peers, builder, dyn_cfg)?;
+        } else {
+            self.start_system::<T, C, RocksWriteBatch>(workers, region_peers, builder, dyn_cfg)?;
+        }
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
+    fn start_system<
+        T: Transport + 'static,
+        C: PdClient + ConfigClient + 'static,
+        W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
+    >(
         &mut self,
         mut workers: Workers,
         region_peers: Vec<SenderFsmPair<RocksEngine>>,
@@ -1087,7 +1084,7 @@ impl RaftBatchSystem {
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::new(
+        let apply_poller_builder = ApplyPollerBuilder::<W>::new(
             &builder,
             ApplyNotifier::Router(self.router.clone()),
             self.apply_router.clone(),
@@ -1150,7 +1147,7 @@ impl RaftBatchSystem {
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let compact_runner = CompactRunner::new(Arc::clone(&engines.kv));
+        let compact_runner = CompactRunner::new(engines.kv.clone());
         let cleanup_sst_runner = CleanupSSTRunner::new(
             store.get_id(),
             self.router.clone(),
@@ -1165,7 +1162,7 @@ impl RaftBatchSystem {
             Arc::clone(&pd_client),
             dyn_cfg,
             self.router.clone(),
-            Arc::clone(&engines.kv),
+            engines.kv,
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
         );
@@ -1242,7 +1239,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // Check if the target peer is tombstone.
         let state_key = keys::region_state_key(region_id);
         let local_state: RegionLocalState =
-            match self.ctx.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)? {
+            match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)? {
                 Some(state) => state,
                 None => return Ok(false),
             };
@@ -1550,7 +1547,13 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return;
         }
 
-        if rocks::util::auto_compactions_is_disabled(&self.ctx.engines.kv) {
+        if self
+            .ctx
+            .engines
+            .kv
+            .auto_compactions_is_disabled()
+            .expect("cf")
+        {
             debug!(
                 "skip compact check when disabled auto compactions";
                 "store_id" => self.fsm.store.id,
@@ -1672,7 +1675,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         );
 
         let store_info = StoreInfo {
-            engine: Arc::clone(&self.ctx.engines.kv),
+            engine: self.ctx.engines.kv.clone(),
             capacity: self.ctx.cfg.capacity.0,
         };
 

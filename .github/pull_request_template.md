@@ -4,51 +4,44 @@ Thank you for contributing to TiKV!
 If you haven't already, please read TiKV's [CONTRIBUTING](https://github.com/tikv/tikv/blob/master/CONTRIBUTING.md) document.
 
 If you're unsure about anything, just ask; somebody should be along to answer within a day or two.
+
+PR Title Format:
+1. module [, module2, module3]: what's changed
+2. *: what's changed
 -->
 
-###  What have you changed?
+### What problem does this PR solve?
 
-Please explain in detail what the changes are in this PR and why they are needed:
+Issue Number: close #xxx <!-- REMOVE this line if no issue to close -->
 
-- Summarize your change
-- How does this PR work? Include a brief introduction for any changed logic (optional)
-- Separately describe each logical change (optional)
-- Describe any limitations of the current code (optional)
+Problem Summary:
 
-Don't assume reviewers understand the original issue.
+### What is changed and how it works?
 
-###  What is the type of the changes?
-<!--
-Pick one of the following and delete the others:
--->
-- New feature (a change which adds functionality)
-- Improvement (a change which is an improvement to an existing feature)
-- Bugfix (a change which fixes an issue)
-- Engineering (engineering change which doesn't change any feature or fix any issue)
-- Misc (other changes)
+Proposal: [xxx](url) <!-- REMOVE this line if not applicable -->
 
-###  How is the PR tested?
-<!--
-Please select the tests that you ran to verify your changes:
--->
+What's Changed:
+
+### Related changes
+
+- PR to update `pingcap/docs`/`pingcap/docs-cn`:
+- PR to update `pingcap/tidb-ansible`:
+- Need to cherry-pick to the release branch
+
+### Check List <!--REMOVE the items that are not applicable-->
+
+Tests <!-- At least one of them must be included. -->
+
 - Unit test
 - Integration test
 - Manual test (add detailed scripts or steps below)
 - No code
 
-###  Does this PR affect documentation (docs) or should it be mentioned in the release notes?
-<!--
-- If there is a document change, please file a PR in ([docs](https://github.com/tikv/website/tree/master/content)) and add the PR number here.
-- If this PR should be mentioned in the release note, please update the [release notes](https://github.com/tikv/tikv/blob/master/CHANGELOG.md).
--->
+Side effects
 
-###  Does this PR affect `tidb-ansible`?
-<!--
-If there is a configuration or metrics change, please file a PR in [tidb-ansible](https://github.com/pingcap/tidb-ansible), and add the PR number here.
--->
-###  Refer to a related PR or issue link (optional)
+- Performance regression
+    - Consumes more CPU
+    - Consumes more MEM
+- Breaking backward compatibility
 
-###  Benchmark result if necessary (optional)
-
-###  Any examples? (optional)
-
+### Release note <!-- bugfixes or new feature need a release note -->

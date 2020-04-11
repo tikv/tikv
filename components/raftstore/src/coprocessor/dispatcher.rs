@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::DB;
 use engine_rocks::RocksEngine;
-use engine_traits::CfName;
+use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use std::marker::PhantomData;
 
 use std::mem;
 use std::ops::Deref;
@@ -78,6 +78,55 @@ macro_rules! impl_box_observer {
     };
 }
 
+// This is the same as impl_box_observer_g except $ob has a typaram
+macro_rules! impl_box_observer_g {
+    ($name:ident, $ob: ident, $wrapper: ident) => {
+        pub struct $name<E>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
+        impl<E: 'static + Send> $name<E> {
+            pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
+                $name(Box::new($wrapper {
+                    inner: observer,
+                    _phantom: PhantomData,
+                }))
+            }
+        }
+        impl<E: 'static> Clone for $name<E> {
+            fn clone(&self) -> $name<E> {
+                $name((**self).box_clone())
+            }
+        }
+        impl<E> Deref for $name<E> {
+            type Target = Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>;
+
+            fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send> {
+                &self.0
+            }
+        }
+
+        struct $wrapper<E, T: $ob<E> + Clone> {
+            inner: T,
+            _phantom: PhantomData<E>,
+        }
+        impl<E: 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver for $wrapper<E, T> {
+            type Ob = dyn $ob<E>;
+            fn inner(&self) -> &Self::Ob {
+                &self.inner as _
+            }
+
+            fn inner_mut(&mut self) -> &mut Self::Ob {
+                &mut self.inner as _
+            }
+
+            fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
+                Box::new($wrapper {
+                    inner: self.inner.clone(),
+                    _phantom: PhantomData,
+                })
+            }
+        }
+    };
+}
+
 impl_box_observer!(BoxAdminObserver, AdminObserver, WrappedAdminObserver);
 impl_box_observer!(BoxQueryObserver, QueryObserver, WrappedQueryObserver);
 impl_box_observer!(
@@ -85,7 +134,7 @@ impl_box_observer!(
     ApplySnapshotObserver,
     WrappedApplySnapshotObserver
 );
-impl_box_observer!(
+impl_box_observer_g!(
     BoxSplitCheckObserver,
     SplitCheckObserver,
     WrappedSplitCheckObserver
@@ -99,16 +148,36 @@ impl_box_observer!(
 impl_box_observer!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 
 /// Registry contains all registered coprocessors.
-#[derive(Default, Clone)]
-pub struct Registry {
+#[derive(Clone)]
+pub struct Registry<E>
+where
+    E: KvEngine,
+{
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
-    split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
+    split_check_observers: Vec<Entry<BoxSplitCheckObserver<E>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver>>,
     // TODO: add endpoint
+}
+
+impl<E> Default for Registry<E>
+where
+    E: KvEngine,
+{
+    fn default() -> Registry<E> {
+        Registry {
+            admin_observers: Default::default(),
+            query_observers: Default::default(),
+            apply_snapshot_observers: Default::default(),
+            split_check_observers: Default::default(),
+            role_observers: Default::default(),
+            region_change_observers: Default::default(),
+            cmd_observers: Default::default(),
+        }
+    }
 }
 
 macro_rules! push {
@@ -124,7 +193,10 @@ macro_rules! push {
     };
 }
 
-impl Registry {
+impl<E> Registry<E>
+where
+    E: KvEngine,
+{
     pub fn register_admin_observer(&mut self, priority: u32, ao: BoxAdminObserver) {
         push!(priority, ao, self.admin_observers);
     }
@@ -141,7 +213,7 @@ impl Registry {
         push!(priority, aso, self.apply_snapshot_observers);
     }
 
-    pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver) {
+    pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver<E>) {
         push!(priority, sco, self.split_check_observers);
     }
 
@@ -205,7 +277,7 @@ macro_rules! loop_ob {
 /// Admin and invoke all coprocessors.
 #[derive(Default, Clone)]
 pub struct CoprocessorHost {
-    pub registry: Registry,
+    pub registry: Registry<RocksEngine>,
 }
 
 impl CoprocessorHost {
@@ -324,10 +396,10 @@ impl CoprocessorHost {
         &self,
         cfg: &'a Config,
         region: &Region,
-        engine: &Arc<DB>,
+        engine: &RocksEngine,
         auto_split: bool,
         policy: CheckPolicy,
-    ) -> SplitCheckerHost<'a> {
+    ) -> SplitCheckerHost<'a, RocksEngine> {
         let mut host = SplitCheckerHost::new(auto_split, cfg);
         loop_ob!(
             region,
@@ -354,13 +426,20 @@ impl CoprocessorHost {
         );
     }
 
-    pub fn prepare_for_apply(&self, region_id: u64) {
+    pub fn prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
         for cmd_ob in &self.registry.cmd_observers {
-            cmd_ob.observer.inner().on_prepare_for_apply(region_id)
+            cmd_ob
+                .observer
+                .inner()
+                .on_prepare_for_apply(observe_id, region_id);
         }
     }
 
-    pub fn on_apply_cmd(&self, region_id: u64, cmd: Cmd) {
+    pub fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+        assert!(
+            !self.registry.cmd_observers.is_empty(),
+            "CmdObserver is not registered"
+        );
         for i in 0..self.registry.cmd_observers.len() - 1 {
             self.registry
                 .cmd_observers
@@ -368,7 +447,7 @@ impl CoprocessorHost {
                 .unwrap()
                 .observer
                 .inner()
-                .on_apply_cmd(region_id, cmd.clone())
+                .on_apply_cmd(observe_id, region_id, cmd.clone())
         }
         self.registry
             .cmd_observers
@@ -376,7 +455,7 @@ impl CoprocessorHost {
             .unwrap()
             .observer
             .inner()
-            .on_apply_cmd(region_id, cmd)
+            .on_apply_cmd(observe_id, region_id, cmd)
     }
 
     pub fn on_flush_apply(&self) {
@@ -405,6 +484,7 @@ impl CoprocessorHost {
 mod tests {
     use crate::coprocessor::*;
     use std::sync::atomic::*;
+    use std::sync::Arc;
 
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
@@ -507,10 +587,10 @@ mod tests {
     }
 
     impl CmdObserver for TestCoprocessor {
-        fn on_prepare_for_apply(&self, _: u64) {
+        fn on_prepare_for_apply(&self, _: ObserveID, _: u64) {
             self.called.fetch_add(11, Ordering::SeqCst);
         }
-        fn on_apply_cmd(&self, _: u64, _: Cmd) {
+        fn on_apply_cmd(&self, _: ObserveID, _: u64, _: Cmd) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
         fn on_flush_apply(&self) {
@@ -583,9 +663,14 @@ mod tests {
         assert_all!(&[&ob.called], &[45]);
         host.pre_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
-        host.prepare_for_apply(0);
+        let observe_id = ObserveID::new();
+        host.prepare_for_apply(observe_id, 0);
         assert_all!(&[&ob.called], &[66]);
-        host.on_apply_cmd(0, Cmd::new(0, RaftCmdRequest::default(), query_resp));
+        host.on_apply_cmd(
+            observe_id,
+            0,
+            Cmd::new(0, RaftCmdRequest::default(), query_resp),
+        );
         assert_all!(&[&ob.called], &[78]);
         host.on_flush_apply();
         assert_all!(&[&ob.called], &[91]);

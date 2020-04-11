@@ -9,7 +9,7 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
 use engine::*;
-use engine_rocks::Compat;
+use engine_rocks::{CloneCompat, Compat};
 use engine_traits::{Peekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
@@ -74,7 +74,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     // now another node at same time begin bootstrap node, but panic after prepared bootstrap
     // now rocksDB must have some prepare data
-    bootstrap_store(&engines, 0, 1).unwrap();
+    bootstrap_store(&engines.c(), 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
     assert!(engine
         .c()
@@ -96,7 +96,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::new(SSTImporter::new(dir).unwrap())
     };
 
-    let cfg_controller = ConfigController::new(cfg.clone(), Default::default());
+    let cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
     let config_client = ConfigHandler::start(
         cfg.server.advertise_addr,
         cfg_controller,

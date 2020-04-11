@@ -216,11 +216,11 @@ impl Simulator for NodeCluster {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader =
             LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
-        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default());
+        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            Arc::clone(&engines.kv),
+            engines.kv.c().clone(),
             router.clone(),
             coprocessor_host.clone(),
             cfg.coprocessor.clone(),

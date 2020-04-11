@@ -1,0 +1,30 @@
+[package]
+name = "tidb_query_vec_executors"
+version = "0.0.1"
+edition = "2018"
+publish = false
+description = "A vector query engine to run TiDB pushed down executors"
+
+[dependencies]
+codec = { path = "../codec" }
+hex = "0.3"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+match_template = { path = "../match_template" }
+servo_arc = "0.1.1"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+smallvec = "0.6"
+tidb_query_datatype = { path = "../tidb_query_datatype" }
+tidb_query_common = { path = "../tidb_query_common" }
+tidb_query_vec_expr = { path = "../tidb_query_vec_expr" }
+tidb_query_vec_aggr = { path = "../tidb_query_vec_aggr" }
+tikv_util = { path = "../tikv_util" }
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+
+[dependencies.yatp]
+git = "https://github.com/tikv/yatp.git"
+
+[dev-dependencies]
+failure = "0.1"
+tipb_helper = { path = "../tipb_helper" }
+tidb_query_codegen = { path = "../tidb_query_codegen" }

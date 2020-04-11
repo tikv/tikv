@@ -12,9 +12,8 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-use engine::rocks::util::*;
-use engine::rocks::DB;
 use engine_rocks::RocksEngine;
+use engine_traits::MiscExt;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -330,7 +329,7 @@ pub struct Runner<T: PdClient + ConfigClient> {
     pd_client: Arc<T>,
     config_handler: Box<dyn DynamicConfig>,
     router: RaftRouter<RocksEngine>,
-    db: Arc<DB>,
+    db: RocksEngine,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -352,7 +351,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         pd_client: Arc<T>,
         config_handler: Box<dyn DynamicConfig>,
         router: RaftRouter<RocksEngine>,
-        db: Arc<DB>,
+        db: RocksEngine,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
     ) -> Runner<T> {
@@ -558,7 +557,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
 
         // already include size of snapshot files
         let used_size =
-            stats.get_used_size() + get_engine_used_size(Arc::clone(&store_info.engine));
+            stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
         stats.set_used_size(used_size);
 
         let mut available = if capacity > used_size {

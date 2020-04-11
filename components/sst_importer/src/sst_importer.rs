@@ -15,8 +15,7 @@ use uuid::{Builder as UuidBuilder, Uuid};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterator, CF_WRITE};
 use engine_traits::{SeekKey, SstReader, SstWriter};
-use external_storage::{create_storage, url_of_backend};
-use futures_executor::block_on;
+use external_storage::{block_on_external_io, create_storage, url_of_backend};
 use futures_util::io::{copy, AllowStdIo};
 use keys;
 use tikv_util::time::Limiter;
@@ -140,15 +139,16 @@ impl SSTImporter {
 
         // prepare to download the file from the external_storage
         let ext_storage = create_storage(backend)?;
-        let ext_reader = ext_storage
-            .read(name)
-            .map_err(|e| Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e))?;
+        let ext_reader = ext_storage.read(name);
         let ext_reader = speed_limiter.limit(ext_reader);
 
         // do the I/O copy from external_storage to the local file.
         {
             let mut file_writer = AllowStdIo::new(File::create(&path.temp)?);
-            let file_length = block_on(copy(ext_reader, &mut file_writer))?;
+            let file_length =
+                block_on_external_io(copy(ext_reader, &mut file_writer)).map_err(|e| {
+                    Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e)
+                })?;
             if meta.length != 0 && meta.length != file_length {
                 let reason = format!("length {}, expect {}", file_length, meta.length);
                 return Err(Error::FileCorrupted(path.temp, reason));
@@ -400,7 +400,10 @@ impl ImportDir {
         engine.prepare_sst_for_ingestion(&path.save, &path.clone)?;
         let length = meta.get_length();
         let crc32 = meta.get_crc32();
-        if length != 0 || crc32 != 0 {
+        // FIXME perform validate_sst_for_ingestion after we can handle sst file size correctly.
+        // currently we can not handle sst file size after rewrite,
+        // we need re-compute length & crc32 and fill back to sstMeta.
+        if length != 0 && crc32 != 0 {
             // we only validate if the length and CRC32 are explicitly provided.
             engine.validate_sst_for_ingestion(cf, &path.clone, length, crc32)?;
             IMPORTER_INGEST_BYTES.observe(length as _)
