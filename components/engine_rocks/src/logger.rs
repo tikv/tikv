@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use libc::{self, c_char};
+use libc;
 use rocksdb::{DBInfoLogLevel as InfoLogLevel, Logger};
 use std::ffi::VaList;
 use std::mem;
@@ -9,7 +9,7 @@ use std::mem;
 pub struct RocksdbLogger();
 
 impl Logger for RocksdbLogger {
-    fn logv(&self, log_level: InfoLogLevel, format: *const c_char, ap: VaList) {
+    fn logv(&self, log_level: InfoLogLevel, format: &str, ap: VaList) {
         const BUF_SIZE: usize = 1024;
         let mut buffer = Vec::<u8>::with_capacity(BUF_SIZE);
         let buffer_ptr = buffer.as_mut_ptr();
@@ -21,7 +21,7 @@ impl Logger for RocksdbLogger {
             let bytes_written = libc::snprintf(
                 buffer_ptr as *mut libc::c_char,
                 BUF_SIZE as libc::size_t,
-                format,
+                format.as_ptr() as *const i8,
                 ap,
             ) as usize;
 
