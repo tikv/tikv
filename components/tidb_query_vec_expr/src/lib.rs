@@ -225,6 +225,10 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     Ok(match value {
         // impl_arithmetic
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
+        ScalarFuncSig::PlusIntUnsignedUnsigned => arithmetic_fn_meta::<UintUintPlus>(),
+        ScalarFuncSig::PlusIntUnsignedSigned => arithmetic_fn_meta::<UintIntPlus>(),
+        ScalarFuncSig::PlusIntSignedUnsigned => arithmetic_fn_meta::<IntUintPlus>(),
+        ScalarFuncSig::PlusIntSignedSigned => arithmetic_fn_meta::<IntIntPlus>(),
         ScalarFuncSig::PlusReal => arithmetic_fn_meta::<RealPlus>(),
         ScalarFuncSig::PlusDecimal => arithmetic_fn_meta::<DecimalPlus>(),
         ScalarFuncSig::MinusInt => map_int_sig(value, children, minus_mapper)?,
@@ -504,6 +508,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::HexStrArg => hex_str_arg_fn_meta(),
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
+        ScalarFuncSig::Lpad => lpad_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
         ScalarFuncSig::Replace => replace_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
