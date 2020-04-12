@@ -50,9 +50,9 @@ pub struct Tracker {
     // Intermediate results
     current_stage: TrackerState,
     wait_time: Duration,          // Total wait time
-    schedule_wait_time: Duration, // Wait time spend on waiting for scheduling
-    snapshot_wait_time: Duration, // Wait time spend on waiting for a snapshot
-    handler_build_time: Duration, // Time spend on building the handler, not included in total wait time
+    schedule_wait_time: Duration, // Wait time spent on waiting for scheduling
+    snapshot_wait_time: Duration, // Wait time spent on waiting for a snapshot
+    handler_build_time: Duration, // Time spent on building the handler (not included in total wait time)
     req_time: Duration,
     item_process_time: Duration,
     total_process_time: Duration,
