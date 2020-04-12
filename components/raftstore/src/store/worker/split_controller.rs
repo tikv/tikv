@@ -61,7 +61,7 @@ fn prefix_sum<F, T>(iter: Iter<T>, read: F) -> Vec<usize>
 // It will return sample_num numbers by sample from lists.
 // The list in the lists has the length of N1, N2, N3 ... Np ... NP in turn.
 // Their prefix sum is pre_sum and we can get mut list from lists by get_mut.
-// Take a random number d from [1, N]. If d <N1, select a data in the first list with a equal probability without replacement;
+// Take a random number d from [1, N]. If d < N1, select a data in the first list with an equal probability without replacement;
 // If N1 <= d <(N1 + N2), then select a data in the second list with equal probability without replacement;
 // and so on, repeat m times, and finally select sample_num pieces of data from lists.
 fn sample<F, T>(
@@ -118,6 +118,7 @@ impl RegionInfo {
     }
 
     fn add_key_ranges(&mut self, key_ranges: Vec<KeyRange>) {
+        self.qps += key_ranges.len();
         for key_range in key_ranges {
             if self.key_ranges.len() < self.sample_num {
                 self.key_ranges.push(key_range);
@@ -127,7 +128,6 @@ impl RegionInfo {
                     self.key_ranges[i] = key_range;
                 }
             }
-            self.qps += 1;
         }
     }
 
@@ -304,12 +304,13 @@ impl AutoSplitController {
         let mut split_infos = Vec::default();
         let mut top = BinaryHeap::with_capacity(TOP_N as usize);
 
-        let mut region_info_mat = HashMap::default();
+        // collect from different thread
+        let mut region_infos_map = HashMap::default(); // regionID-regionInfos
         let capacity = others.len();
         for other in others {
             for (region_id, region_info) in other.region_infos {
                 if region_info.key_ranges.len() >= self.cfg.sample_num {
-                    let region_infos = region_info_mat
+                    let region_infos = region_infos_map
                         .entry(region_id)
                         .or_insert_with(|| Vec::with_capacity(capacity));
                     region_infos.push(region_info);
@@ -317,7 +318,7 @@ impl AutoSplitController {
             }
         }
 
-        for (region_id, region_infos) in region_info_mat {
+        for (region_id, region_infos) in region_infos_map {
             let pre_sum = prefix_sum(region_infos.iter(), RegionInfo::get_qps);
 
             let qps = *pre_sum.last().unwrap(); // region_infos is not empty
@@ -417,7 +418,7 @@ mod tests {
     fn test_pre_sum() {
         let v = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
         let expect = vec![1, 3, 6, 10, 15, 21, 28, 36, 45];
-        let pre = prefix_sum(v.iter(), |x| x);
+        let pre = prefix_sum(v.iter(), |x| *x);
         for i in 0..v.len() {
             assert_eq!(expect[i], pre[i]);
         }
