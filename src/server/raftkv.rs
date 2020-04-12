@@ -1,8 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::IterOption;
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
 use engine_traits::CfName;
+use engine_traits::IterOptions;
 use engine_traits::Peekable;
 use engine_traits::CF_DEFAULT;
 use kvproto::errorpb;
@@ -208,9 +208,28 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         reqs: Vec<Request>,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
-        fail_point!("raftkv_early_error_report", |_| Err(
-            RaftServerError::RegionNotFound(ctx.get_region_id()).into()
-        ));
+        #[cfg(feature = "failpoints")]
+        {
+            // If rid is some, only the specified region reports error.
+            // If rid is None, all regions report error.
+            let raftkv_early_error_report_fp = || -> Result<()> {
+                fail_point!("raftkv_early_error_report", |rid| {
+                    let region_id = ctx.get_region_id();
+                    rid.and_then(|rid| {
+                        let rid: u64 = rid.parse().unwrap();
+                        if rid == region_id {
+                            None
+                        } else {
+                            Some(())
+                        }
+                    })
+                    .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
+                });
+                Ok(())
+            };
+            raftkv_early_error_report_fp()?;
+        }
+
         let len = reqs.len();
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::default();
@@ -388,7 +407,7 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
@@ -398,7 +417,7 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(

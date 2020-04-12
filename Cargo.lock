@@ -211,7 +211,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -392,6 +392,9 @@ name = "bytes"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bzip2-sys"
@@ -471,9 +474,12 @@ dependencies = [
  "failure",
  "futures 0.1.29",
  "grpcio",
+ "hex 0.4.2",
  "kvproto",
+ "lazy_static",
  "panic_hook",
  "pd_client",
+ "prometheus",
  "raft",
  "raftstore",
  "resolved_ts",
@@ -578,6 +584,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -585,7 +592,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "libc",
@@ -1015,18 +1022,33 @@ name = "encryption"
 version = "0.0.1"
 dependencies = [
  "byteorder",
+ "bytes 0.4.12",
  "crc32fast",
  "engine_traits",
  "failure",
- "hex 0.3.2",
+ "futures 0.3.4",
+ "hex 0.4.2",
  "kvproto",
+ "matches",
  "openssl",
  "protobuf",
  "rand 0.7.3",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kms",
+ "rusoto_mock",
+ "rusoto_util",
+ "rust-ini",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
+ "structopt",
  "tempfile",
  "tikv_alloc",
+ "tikv_util",
+ "tokio 0.2.13",
+ "toml",
 ]
 
 [[package]]
@@ -1034,15 +1056,12 @@ name = "engine"
 version = "0.0.1"
 dependencies = [
  "configuration",
+ "encryption",
  "engine_traits",
- "hex 0.4.0",
- "kvproto",
+ "hex 0.4.2",
  "lazy_static",
  "prometheus",
- "prost",
  "protobuf",
- "quick-error",
- "raft",
  "rocksdb",
  "serde",
  "serde_derive",
@@ -1069,26 +1088,32 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "coarsetime",
+ "encryption",
  "engine",
  "engine_traits",
+ "keys",
  "kvproto",
  "lazy_static",
  "prometheus",
+ "prometheus-static-metric",
  "rand 0.7.3",
  "rocksdb",
  "slog",
  "slog-global",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
+ "txn_types",
 ]
 
 [[package]]
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.0",
+ "hex 0.4.2",
  "protobuf",
  "quick-error",
  "slog",
@@ -1494,9 +1519,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0eb5544c0e47a603130f1159773df46eb448c5649f7b4833c51f241c4e9fcbb"
+checksum = "a779eb8dc982fa4a552eb21e2962b2d927ea9037cb21be8645034c9e79ee4a29"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
@@ -1523,9 +1548,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.5.0"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48b1b6365d95c795aa3840b19c5364ad0a4bf82bfd48b2f9185719b9f8e614a7"
+checksum = "1b3080bdcfde08451cc7994f0b7c0c71c638629f8fb0049217af76a69d0742c3"
 dependencies = [
  "bindgen",
  "cc",
@@ -1600,9 +1625,9 @@ checksum = "805026a5d0141ffc30abb3be3173848ad46a1b1664fe632428479619a3644d77"
 
 [[package]]
 name = "hex"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "023b39be39e3a2da62a94feb433e91e8bcd37676fbc8bea371daf52b7a769a3e"
+checksum = "644f9158b2f133fd50f5fb3242878846d9eb792e445c893805ff0e3824006e35"
 
 [[package]]
 name = "hmac"
@@ -1922,7 +1947,7 @@ dependencies = [
  "byteorder",
  "derive_more 0.99.3",
  "failure",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "panic_hook",
  "tikv_alloc",
@@ -1954,6 +1979,18 @@ name = "libc"
 version = "0.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
+
+[[package]]
+name = "libflate"
+version = "0.1.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9135df43b1f5d0e333385cb6e7897ecd1a43d7d11b91ac003f4d2c2d2401fdd"
+dependencies = [
+ "adler32",
+ "crc32fast",
+ "rle-decode-fast",
+ "take_mut",
+]
 
 [[package]]
 name = "libfuzzer-sys"
@@ -1988,7 +2025,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2007,7 +2044,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2068,7 +2105,7 @@ dependencies = [
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.0",
+ "hex 0.4.2",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2570,7 +2607,7 @@ version = "0.1.0"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
@@ -2765,6 +2802,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "procfs"
+version = "0.7.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e767ab205e4b292ea2c8e9fa454efe7e66e35026432eef34fed7daa763136d09"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "hex 0.4.2",
+ "lazy_static",
+ "libc",
+ "libflate",
+]
+
+[[package]]
 name = "procinfo"
 version = "0.4.2"
 source = "git+https://github.com/tikv/procinfo-rs?rev=5125fc1a69496b73b26b3c08b6e8afc3c665a56e#5125fc1a69496b73b26b3c08b6e8afc3c665a56e"
@@ -2795,6 +2846,7 @@ dependencies = [
  "fnv",
  "lazy_static",
  "libc",
+ "procfs",
  "protobuf",
  "reqwest",
  "spin",
@@ -2960,6 +3012,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "coarsetime",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -2971,7 +3024,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-executor",
  "futures-util",
- "hex 0.4.0",
+ "hex 0.4.2",
  "into_other",
  "keys",
  "kvproto",
@@ -2981,6 +3034,7 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
+ "prometheus-static-metric",
  "prost",
  "protobuf",
  "quick-error",
@@ -3324,7 +3378,9 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.0",
+ "hex 0.4.2",
+ "slog",
+ "slog-global",
  "tikv_util",
  "txn_types",
 ]
@@ -3342,9 +3398,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 
 [[package]]
+name = "rle-decode-fast"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
+
+[[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c39275a7119809ce18365b391d586ea38adb7cd9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3400,6 +3462,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_kms"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "167c735c81ca560f7cd9914f99eabada7b5b66b3b14d7e4401507c68ebca02bb"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "futures 0.3.4",
+ "rusoto_core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rusoto_mock"
 version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3436,7 +3512,7 @@ dependencies = [
  "base64 0.12.0",
  "bytes 0.5.3",
  "futures 0.3.4",
- "hex 0.4.0",
+ "hex 0.4.2",
  "hmac",
  "http 0.2.0",
  "hyper 0.13.3",
@@ -3820,7 +3896,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4128,7 +4204,7 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "pd_client",
@@ -4199,6 +4275,7 @@ dependencies = [
  "criterion-cpu-time",
  "criterion-papi",
  "crossbeam",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -4208,7 +4285,7 @@ dependencies = [
  "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "panic_hook",
@@ -4479,7 +4556,6 @@ dependencies = [
  "bitflags",
  "byteorder",
  "chrono",
- "coarsetime",
  "codec",
  "configuration",
  "crc32fast",
@@ -4501,7 +4577,7 @@ dependencies = [
  "futures-locks",
  "futures-util",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "hyper 0.12.35",
  "hyper-openssl",
  "into_other",
@@ -4608,7 +4684,7 @@ dependencies = [
  "futures-cpupool",
  "fxhash",
  "grpcio",
- "hex 0.4.0",
+ "hex 0.4.2",
  "lazy_static",
  "libc",
  "log",
@@ -4634,11 +4710,11 @@ dependencies = [
  "tokio-core",
  "tokio-executor",
  "tokio-sync",
- "tokio-threadpool",
  "tokio-timer",
  "toml",
  "url",
  "utime",
+ "yatp",
  "zeroize",
 ]
 
@@ -5052,7 +5128,7 @@ dependencies = [
  "codec",
  "derive-new",
  "farmhash",
- "hex 0.4.0",
+ "hex 0.4.2",
  "kvproto",
  "quick-error",
  "slog",

@@ -21,7 +21,6 @@ sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 failpoints = ["fail/failpoints", "raftstore/failpoints"]
 prost-codec = [
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",
@@ -36,7 +35,6 @@ prost-codec = [
   "encryption/prost-codec",
 ]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
@@ -66,7 +64,6 @@ batch-system = { path = "components/batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
 chrono = "0.4"
-coarsetime = "0.1"
 codec = { path = "components/codec" }
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"

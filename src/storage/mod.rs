@@ -43,8 +43,8 @@ use crate::storage::{
     },
     types::StorageCallbackType,
 };
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
+use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
@@ -802,7 +802,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOption::default();
+        let mut option = IterOptions::default();
         if let Some(end) = end_key {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
@@ -840,7 +840,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOption::default();
+        let mut option = IterOptions::default();
         if let Some(end) = end_key {
             option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
@@ -3862,15 +3862,17 @@ mod tests {
             return_values: bool,
         ) -> PessimisticLockCommand {
             let primary = keys[0].0.clone().to_raw().unwrap();
+            let for_update_ts: TimeStamp = for_update_ts.into();
             commands::AcquirePessimisticLock::new(
                 keys,
                 primary,
                 start_ts.into(),
                 3000,
                 false,
-                for_update_ts.into(),
+                for_update_ts,
                 None,
                 return_values,
+                for_update_ts.next(),
                 Context::default(),
             )
         }

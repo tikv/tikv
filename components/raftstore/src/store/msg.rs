@@ -16,6 +16,7 @@ use raft::SnapshotStatus;
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::fsm::PeerFsm;
+use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
@@ -138,14 +139,14 @@ pub enum StoreTick {
 
 impl StoreTick {
     #[inline]
-    pub fn tag(self) -> &'static str {
+    pub fn tag(self) -> RaftEventDurationType {
         match self {
-            StoreTick::CompactCheck => "compact_check",
-            StoreTick::PdStoreHeartbeat => "pd_store_heartbeat",
-            StoreTick::SnapGc => "snap_gc",
-            StoreTick::CompactLockCf => "compact_lock_cf",
-            StoreTick::ConsistencyCheck => "consistency_check",
-            StoreTick::CleanupImportSST => "cleanup_import_sst",
+            StoreTick::CompactCheck => RaftEventDurationType::compact_check,
+            StoreTick::PdStoreHeartbeat => RaftEventDurationType::pd_store_heartbeat,
+            StoreTick::SnapGc => RaftEventDurationType::snap_gc,
+            StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
+            StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
+            StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
         }
     }
 }
@@ -177,6 +178,13 @@ pub enum SignificantMsg {
         // False means it came from target region.
         stale: bool,
     },
+    /// Capture the changes of the region.
+    CaptureChange {
+        cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
+        callback: Callback<RocksEngine>,
+    },
+    LeaderCallback(Callback<RocksEngine>),
 }
 
 /// Message that will be sent to a peer.
@@ -225,11 +233,6 @@ pub enum CasualMessage<E: KvEngine> {
     RegionOverlapped,
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
-    /// Capture the changes of the region.
-    CaptureChange {
-        cmd: ChangeCmd,
-        callback: Callback<RocksEngine>,
-    },
 
     /// A test only message, it is useful when we want to access
     /// peer's internal state.
@@ -271,7 +274,6 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
-            CasualMessage::CaptureChange { .. } => write!(fmt, "CaptureChange"),
             CasualMessage::Test(_) => write!(fmt, "Test"),
         }
     }
