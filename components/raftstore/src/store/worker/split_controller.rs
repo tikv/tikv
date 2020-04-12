@@ -46,8 +46,8 @@ impl Sample {
 
 // It will return prefix sum of iter. `read` is a function to be used to read data from iter.
 fn prefix_sum<F, T>(iter: Iter<T>, read: F) -> Vec<usize>
-    where
-        F: Fn(&T) -> usize,
+where
+    F: Fn(&T) -> usize,
 {
     let mut pre_sum = vec![];
     let mut sum = 0;
@@ -70,8 +70,8 @@ fn sample<F, T>(
     mut lists: Vec<T>,
     get_mut: F,
 ) -> Vec<KeyRange>
-    where
-        F: Fn(&mut T) -> &mut Vec<KeyRange>,
+where
+    F: Fn(&mut T) -> &mut Vec<KeyRange>,
 {
     let mut rng = rand::thread_rng();
     let mut key_ranges = vec![];
