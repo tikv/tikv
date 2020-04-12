@@ -11,7 +11,6 @@ use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
 
 use crate::db_vector::RocksDBVector;
-use crate::engine::RocksEngine;
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::RocksEngineIterator;
@@ -35,7 +34,7 @@ impl RocksSnapshot {
     }
 }
 
-impl Snapshot<RocksEngine> for RocksSnapshot {
+impl Snapshot for RocksSnapshot {
     type SyncSnapshot = RocksSyncSnapshot;
 
     fn cf_names(&self) -> Vec<&str> {
@@ -44,10 +43,6 @@ impl Snapshot<RocksEngine> for RocksSnapshot {
 
     fn into_sync(self) -> RocksSyncSnapshot {
         RocksSyncSnapshot(Arc::new(self))
-    }
-
-    fn get_db(&self) -> &RocksEngine {
-        RocksEngine::from_ref(&self.db)
     }
 }
 

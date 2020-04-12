@@ -385,7 +385,10 @@ impl TiKVServer {
             Box::new(DBConfigManger::new(engines.raft.c().clone(), DBType::Raft)),
         );
 
-        let engine = RaftKv::new(raft_router.clone());
+        let engine = RaftKv::new(
+            raft_router.clone(),
+            RocksEngine::from_db(engines.kv.clone()),
+        );
 
         self.engines = Some(Engines {
             engines,
