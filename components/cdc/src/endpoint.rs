@@ -385,7 +385,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             checkpoint_ts: checkpoint_ts.into(),
             build_resolver: is_new_delegate,
             // TODO: make the cancellation at Downstream level instead of Region level.
-            cancel: delegate.enabled(),
+            proceed: delegate.enabled(),
         };
         if !delegate.subscribe(downstream) {
             conn.unsubscribe(request.get_region_id());
@@ -599,7 +599,7 @@ struct Initializer {
     batch_size: usize,
 
     build_resolver: bool,
-    cancel: Arc<AtomicBool>,
+    proceed: Arc<AtomicBool>,
 }
 
 impl Initializer {
@@ -652,7 +652,7 @@ impl Initializer {
             .unwrap();
         let mut done = false;
         while !done {
-            if !self.cancel.load(Ordering::SeqCst) {
+            if !self.proceed.load(Ordering::SeqCst) {
                 info!("async incremental scan canceled";
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,
@@ -879,7 +879,7 @@ mod tests {
             batch_size: 1,
 
             build_resolver: true,
-            cancel: Arc::new(AtomicBool::new(true)),
+            proceed: Arc::new(AtomicBool::new(true)),
         };
 
         (receiver_worker, pool, initializer, rx)
@@ -955,7 +955,7 @@ mod tests {
         }
 
         // Test cancellation.
-        initializer.cancel.store(false, Ordering::SeqCst);
+        initializer.proceed.store(false, Ordering::SeqCst);
         initializer.async_incremental_scan(snap, region);
 
         loop {
