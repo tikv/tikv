@@ -1086,8 +1086,8 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
- "configuration",
  "coarsetime",
+ "configuration",
  "encryption",
  "engine",
  "engine_traits",
