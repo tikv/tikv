@@ -46,7 +46,7 @@ impl MemAesGcmBackend {
             .ok_or_else(|| {
                 Error::Other(box_err!("metadata {} not found", MetadataKey::Iv.as_str()))
             })?;
-        let iv = Iv::from(iv_value.as_slice());
+        let iv = Iv::from_slice(iv_value.as_slice())?;
         let tag = content
             .get_metadata()
             .get(MetadataKey::AesGcmTag.as_str())
@@ -76,7 +76,7 @@ mod tests {
         let iv = Vec::from_hex("cafabd9672ca6c79a2fbdc22").unwrap();
 
         let backend = MemAesGcmBackend::new(key).unwrap();
-        let iv = Iv::from(iv.as_slice());
+        let iv = Iv::from_slice(iv.as_slice()).unwrap();
         let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
         assert_eq!(encrypted_content.get_content(), ct.as_slice());
         let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
@@ -90,7 +90,7 @@ mod tests {
             .unwrap();
 
         let backend = MemAesGcmBackend::new(key).unwrap();
-        let encrypted_content = backend.encrypt_content(&pt, Iv::new()).unwrap();
+        let encrypted_content = backend.encrypt_content(&pt, Iv::new_gcm()).unwrap();
         let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
         assert_eq!(plaintext, pt);
 

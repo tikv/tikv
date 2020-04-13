@@ -142,7 +142,7 @@ impl Dicts {
 
     fn new_file(&mut self, fname: &str, method: EncryptionMethod) -> Result<&FileInfo> {
         let mut file = FileInfo::default();
-        file.iv = Iv::new().as_slice().to_vec();
+        file.iv = Iv::new_ctr().as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
         file.method = compat(method);
         self.file_dict.files.insert(fname.to_owned(), file);

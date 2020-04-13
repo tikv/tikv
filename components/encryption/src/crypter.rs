@@ -3,6 +3,7 @@
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
+use rand::{rngs::OsRng, RngCore};
 
 use crate::Result;
 
@@ -56,41 +57,54 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
     }
 }
 
-// IV as an AES input, the length should be 12 btyes for GCM mode.
+// IV's the length should be 12 btyes for GCM mode.
 const GCM_IV_12: usize = 12;
+// IV's the length should be 16 btyes for CTR mode.
+const CTR_IV_16: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Iv {
-    iv: [u8; GCM_IV_12],
+pub enum Iv {
+    Gcm([u8; GCM_IV_12]),
+    Ctr([u8; CTR_IV_16]),
 }
 
 impl Iv {
-    pub fn as_slice(&self) -> &[u8] {
-        &self.iv
-    }
-}
-
-impl<'a> From<&'a [u8]> for Iv {
-    fn from(src: &'a [u8]) -> Iv {
-        assert!(
-            src.len() >= GCM_IV_12,
-            "Nonce + Counter must be greater than 12 bytes"
-        );
-        let mut iv = [0; GCM_IV_12];
-        iv.copy_from_slice(src);
-        Iv { iv }
-    }
-}
-
-impl Iv {
-    /// Generate a nonce and a counter randomly.
-    pub fn new() -> Iv {
-        use rand::{rngs::OsRng, RngCore};
-
+    /// Generate a random IV for AES-GCM.
+    pub fn new_gcm() -> Iv {
         let mut iv = [0u8; GCM_IV_12];
         OsRng.fill_bytes(&mut iv);
+        Iv::Gcm(iv)
+    }
 
-        Iv { iv }
+    /// Generate a random IV for AES-CTR.
+    pub fn new_ctr() -> Iv {
+        let mut iv = [0u8; CTR_IV_16];
+        OsRng.fill_bytes(&mut iv);
+        Iv::Ctr(iv)
+    }
+
+    pub fn from_slice(src: &[u8]) -> Result<Iv> {
+        if src.len() == CTR_IV_16 {
+            let mut iv = [0; CTR_IV_16];
+            iv.copy_from_slice(src);
+            Ok(Iv::Ctr(iv))
+        } else if src.len() == GCM_IV_12 {
+            let mut iv = [0; GCM_IV_12];
+            iv.copy_from_slice(src);
+            Ok(Iv::Gcm(iv))
+        } else {
+            Err(box_err!(
+                "Nonce + Counter must be 12/16 bytes, {}",
+                src.len()
+            ))
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            Iv::Ctr(iv) => iv,
+            Iv::Gcm(iv) => iv,
+        }
     }
 }
 
@@ -165,14 +179,18 @@ mod tests {
     #[test]
     fn test_iv() {
         let mut ivs = Vec::with_capacity(100);
-        for _ in 0..100 {
-            ivs.push(Iv::new());
+        for c in 0..100 {
+            if c % 2 == 0 {
+                ivs.push(Iv::new_ctr());
+            } else {
+                ivs.push(Iv::new_gcm());
+            }
         }
         ivs.dedup_by(|a, b| a.as_slice() == b.as_slice());
         assert_eq!(ivs.len(), 100);
 
         for iv in ivs {
-            let iv1 = Iv::from(&iv.as_slice()[..]);
+            let iv1 = Iv::from_slice(&iv.as_slice()[..]).unwrap();
             assert_eq!(iv.as_slice(), iv1.as_slice());
         }
     }
@@ -204,7 +222,7 @@ mod tests {
         let pt = Vec::from_hex(pt).unwrap();
         let ct = Vec::from_hex(ct).unwrap();
         let key = Vec::from_hex(key).unwrap();
-        let iv = Vec::from_hex(iv).unwrap().as_slice().into();
+        let iv = Iv::from_slice(Vec::from_hex(iv).unwrap().as_slice()).unwrap();
         let tag = Vec::from_hex(tag).unwrap();
 
         let crypter = AesGcmCrypter::new(&key, iv);
