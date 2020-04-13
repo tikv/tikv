@@ -1,24 +1,31 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::ExternalStorage;
+use super::{
+    util::{error_stream, AsyncReadAsSyncStreamOfBytes},
+    ExternalStorage,
+};
+
+use std::{
+    convert::TryInto,
+    io::{Error, ErrorKind, Result},
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use futures::executor::block_on;
-use futures::io::{empty, AsyncRead};
-use futures01::stream::Stream;
-use futures_util::compat::Stream01CompatExt;
-use futures_util::io::{AsyncReadExt, Cursor};
+use futures_util::{
+    io::{AsyncRead, Cursor},
+    stream::{StreamExt, TryStreamExt},
+};
 use http::Method;
 use kvproto::backup::Gcs as Config;
 use reqwest::{Body, Client};
-use std::convert::TryInto;
-use std::io::{Error, ErrorKind, Read, Result};
-use std::sync::Arc;
-use tame_gcs::common::{PredefinedAcl, StorageClass};
-use tame_gcs::objects::{InsertObjectOptional, Metadata, Object};
-use tame_gcs::types::BucketName;
+use tame_gcs::{
+    common::{PredefinedAcl, StorageClass},
+    objects::{InsertObjectOptional, Metadata, Object},
+    types::{BucketName, ObjectId},
+};
 use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
-use tokio::codec::{BytesCodec, FramedRead};
 
 // GCS compatible storage
 #[derive(Clone)]
@@ -75,7 +82,7 @@ impl GCSStorage {
         key.to_owned()
     }
 
-    fn convert_request<R>(&self, mut req: http::Request<R>) -> Result<reqwest::Request>
+    fn convert_request<R: 'static>(&self, req: http::Request<R>) -> Result<reqwest::Request>
     where
         R: AsyncRead + Send + Unpin,
     {
@@ -92,29 +99,20 @@ impl GCSStorage {
         };
         Ok(builder
             .headers(req.headers().clone())
-            .body(Body::wrap_stream(
-                FramedRead::new(req.body().compat(), BytesCodec::new())
-                    .map(|bytes| bytes.freeze())
-                    .compat(),
-            ))
+            .body(Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(
+                req.into_body(),
+            )))
             .build()
             .map_err(|e| Error::new(ErrorKind::Other, format!("failed to build request: {}", e)))?)
     }
 
-    fn convert_response(&self, mut res: reqwest::Response) -> Result<http::Response<Bytes>> {
-        let mut builder = http::Response::builder();
-        builder.status(res.status()).version(res.version());
-        let headers = builder.headers_mut().ok_or_else(|| {
-            Error::new(
-                ErrorKind::Other,
-                format!("failed to build response header."),
-            )
-        })?;
-        headers.extend(
-            res.headers()
-                .into_iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
+    fn convert_response(&self, res: reqwest::Response) -> Result<http::Response<Bytes>> {
+        let mut builder = http::Response::builder()
+            .status(res.status())
+            .version(res.version());
+        for (key, value) in res.headers().iter() {
+            builder = builder.header(key, value);
+        }
         // Use blocking IO, since conver_response is only used to read access token.
         let content = block_on(res.bytes())
             .map_err(|e| Error::new(ErrorKind::Other, format!("failed to read response: {}", e)))?;
@@ -141,7 +139,6 @@ impl GCSStorage {
                 scope_hash,
                 ..
             } => {
-                // Convert http::Request<Vec<u8>> into http::Request<dyn AsyncRead>
                 let (parts, body) = request.into_parts();
                 let read_body = Cursor::new(body);
                 let new_request = http::Request::from_parts(parts, read_body);
@@ -172,7 +169,7 @@ impl GCSStorage {
         Ok(())
     }
 
-    fn make_request<R>(
+    fn make_request<R: 'static>(
         &self,
         mut req: http::Request<R>,
         scope: tame_gcs::Scopes,
@@ -182,30 +179,33 @@ impl GCSStorage {
     {
         self.set_auth(&mut req, scope)?;
         let request = self.convert_request(req)?;
-        let mut response = block_on(self.client.execute(request))
+        let response = block_on(self.client.execute(request))
             .map_err(|e| Error::new(ErrorKind::Other, format!("make request fail: {}", e)))?;
         if !response.status().is_success() {
+            let status = response.status();
             let text = block_on(response.text()).map_err(|e| {
                 Error::new(
                     ErrorKind::Other,
                     format!(
                         "request failed and failed to read error message, status: {}, error: {}",
-                        response.status(),
-                        e
+                        status, e
                     ),
                 )
             })?;
             return Err(Error::new(
                 ErrorKind::Other,
-                format!(
-                    "request failed. status: {}, text: {}",
-                    response.status(),
-                    text
-                ),
+                format!("request failed. status: {}, text: {}", status, text),
             ));
         }
 
         Ok(response)
+    }
+
+    fn error_to_async_read<E>(kind: ErrorKind, e: E) -> Box<dyn AsyncRead + Unpin>
+    where
+        E: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        Box::new(error_stream(Error::new(kind, e)).into_async_read())
     }
 }
 
@@ -275,17 +275,39 @@ impl ExternalStorage for GCSStorage {
         Ok(())
     }
 
-    fn read(&self, name: &str) -> Result<Box<dyn AsyncRead + Unpin>> {
-        // let oid = ObjectId {
-        //     bucket: self.config.bucket.clone(),
-        //     name: self.maybe_prefix_key(name),
-        // };
-        // debug!("read file from GCS storage"; "key" => %oid.name);
-        // let req = Object::download(oid, None /*optional*/)?;
-        // let res = self.make_request(req, tame_gcs::Scopes::Read)?;
-        //
-        // Box::new(res)
-
-        Ok(Box::new(empty()))
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin> {
+        let bucket = self.config.bucket.clone();
+        let name = self.maybe_prefix_key(name);
+        debug!("read file from GCS storage"; "key" => %name);
+        match ObjectId::new(bucket, name) {
+            Err(e) => GCSStorage::error_to_async_read(ErrorKind::InvalidInput, e),
+            Ok(oid) => {
+                match Object::download(&oid, None /*optional*/) {
+                    Err(e) => GCSStorage::error_to_async_read(ErrorKind::Other, e),
+                    Ok(request) => {
+                        let (parts, _) = request.into_parts();
+                        match self.make_request(
+                            http::Request::from_parts(parts, futures_util::io::empty()),
+                            tame_gcs::Scopes::ReadOnly,
+                        ) {
+                            Err(e) => GCSStorage::error_to_async_read(ErrorKind::Other, e),
+                            Ok(response) => Box::new(
+                                response
+                                    .bytes_stream()
+                                    .map(|result| {
+                                        result.map_err(|e| {
+                                            Error::new(
+                                                ErrorKind::Other,
+                                                format!("download from gcs error {}", e),
+                                            )
+                                        })
+                                    })
+                                    .into_async_read(),
+                            ),
+                        }
+                    }
+                }
+            }
+        }
     }
 }
