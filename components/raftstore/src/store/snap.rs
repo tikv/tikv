@@ -14,8 +14,8 @@ use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
 use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::metapb::Region;
@@ -177,6 +177,7 @@ where
 pub trait Snapshot<E: KvEngine>: GenericSnapshot {
     fn build(
         &mut self,
+        engine: &E,
         kv_snap: &E::Snapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
@@ -641,6 +642,7 @@ impl Snap {
 
     fn do_build<E: KvEngine>(
         &mut self,
+        engine: &E,
         kv_snap: &E::Snapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
@@ -651,7 +653,7 @@ impl Snap {
     {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(kv_snap.get_db()) {
+            match self.validate(engine) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
@@ -684,6 +686,7 @@ impl Snap {
             } else {
                 snap_io::build_sst_cf_file::<E>(
                     path,
+                    engine,
                     kv_snap,
                     cf_file.cf,
                     &begin_key,
@@ -743,6 +746,7 @@ where
 {
     fn build(
         &mut self,
+        engine: &E,
         kv_snap: &E::Snapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
@@ -750,7 +754,7 @@ where
         deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build::<E>(kv_snap, region, stat, deleter)?;
+        self.do_build::<E>(engine, kv_snap, region, stat, deleter)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -1725,6 +1729,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
+            db.c(),
             &snapshot,
             &region,
             &mut snap_data,
@@ -1863,6 +1868,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
+            db.c(),
             &snapshot,
             &region,
             &mut snap_data,
@@ -1884,6 +1890,7 @@ pub mod tests {
 
         Snapshot::<RocksEngine>::build(
             &mut s2,
+            db.c(),
             &snapshot,
             &region,
             &mut snap_data,
@@ -2035,7 +2042,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
-        let snapshot = RocksSnapshot::new(db);
+        let snapshot = RocksSnapshot::new(db.clone());
 
         let dir = Builder::new()
             .prefix("test-snap-corruption")
@@ -2059,6 +2066,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
+            db.c(),
             &snapshot,
             &region,
             &mut snap_data,
@@ -2086,6 +2094,7 @@ pub mod tests {
         assert!(!s2.exists());
         Snapshot::<RocksEngine>::build(
             &mut s2,
+            db.c(),
             &snapshot,
             &region,
             &mut snap_data,
@@ -2159,7 +2168,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
-        let snapshot = RocksSnapshot::new(db);
+        let snapshot = RocksSnapshot::new(db.clone());
 
         let dir = Builder::new()
             .prefix("test-snap-corruption-meta")
@@ -2183,6 +2192,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
+            db.c(),
             &snapshot,
             &region,
             &mut snap_data,
@@ -2210,6 +2220,7 @@ pub mod tests {
         assert!(!s2.exists());
         Snapshot::<RocksEngine>::build(
             &mut s2,
+            db.c(),
             &snapshot,
             &region,
             &mut snap_data,
@@ -2286,7 +2297,8 @@ pub mod tests {
             .prefix("test-snap-mgr-delete-temp-files-v2-db")
             .tempdir()
             .unwrap();
-        let snapshot = RocksSnapshot::new(open_test_db(&db_dir.path(), None, None).unwrap());
+        let db = open_test_db(&db_dir.path(), None, None).unwrap();
+        let snapshot = RocksSnapshot::new(db.clone());
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(mgr);
@@ -2304,6 +2316,7 @@ pub mod tests {
         let mut stat = SnapshotStatistics::new();
         Snapshot::<RocksEngine>::build(
             &mut s1,
+            db.c(),
             &snapshot,
             &region,
             &mut snap_data,
@@ -2395,7 +2408,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&src_db_dir.path(), None, None).unwrap();
-        let snapshot = RocksSnapshot::new(db);
+        let snapshot = RocksSnapshot::new(db.clone());
 
         let key = SnapKey::new(1, 1, 1);
         let region = gen_test_region(1, 1, 1);
@@ -2409,6 +2422,7 @@ pub mod tests {
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
         s1.build(
+            db.c(),
             &snapshot,
             &region,
             &mut snap_data,
@@ -2473,7 +2487,7 @@ pub mod tests {
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build::<_>(snapfiles_path.path().to_str().unwrap(), None);
-        let snapshot = RocksSnapshot::new(engine.kv);
+        let snapshot = RocksSnapshot::new(engine.kv.clone());
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
@@ -2484,6 +2498,7 @@ pub mod tests {
                 .get_snapshot_for_building::<RocksEngine>(&recv_key)
                 .unwrap();
             s.build(
+                engine.kv.c(),
                 &snapshot,
                 &gen_test_region(100, 1, 1),
                 &mut snap_data,
@@ -2515,6 +2530,7 @@ pub mod tests {
             let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
             s.build(
+                &engine.kv.c(),
                 &snapshot,
                 &region,
                 &mut snap_data,

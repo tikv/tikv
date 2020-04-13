@@ -33,8 +33,9 @@ use raftstore::{
 };
 use std::{
     convert::TryFrom,
-    fmt,
-    fs::File,
+    env, fmt,
+    fs::{self, File},
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::JoinHandle,
@@ -91,6 +92,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     let _m = Monitor::default();
 
+    tikv.check_conflict_addr();
     tikv.init_fs();
     tikv.init_yatp();
     tikv.init_encryption();
@@ -127,6 +129,7 @@ struct TiKVServer {
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost>,
     to_stop: Vec<Box<dyn Stop>>,
+    lock_files: Vec<File>,
 }
 
 struct Engines {
@@ -186,6 +189,7 @@ impl TiKVServer {
             region_info_accessor,
             coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
+            lock_files: vec![],
         }
     }
 
@@ -293,7 +297,45 @@ impl TiKVServer {
         pd_client
     }
 
-    fn init_fs(&self) {
+    fn check_conflict_addr(&mut self) {
+        let cur_addr: SocketAddr = self
+            .config
+            .server
+            .addr
+            .parse()
+            .expect("failed to parse into a socket address");
+        let cur_ip = cur_addr.ip();
+        let cur_port = cur_addr.port();
+
+        let search_base = env::temp_dir().join("TIKV_LOCK_FILES");
+        std::fs::create_dir_all(&search_base).expect("create TIKV_LOCK_FILES failed");
+
+        for result in fs::read_dir(&search_base).unwrap() {
+            if let Ok(entry) = result {
+                if !entry.file_type().unwrap().is_file() {
+                    continue;
+                }
+                let file_path = entry.path();
+                let file_name = file_path.file_name().unwrap().to_str().unwrap();
+                if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
+                    let ip = addr.ip();
+                    let port = addr.port();
+                    if cur_port == port && cur_ip == ip
+                        || cur_ip.is_unspecified()
+                        || ip.is_unspecified()
+                    {
+                        let _ = try_lock_conflict_addr(file_path);
+                    }
+                }
+            }
+        }
+
+        let cur_path = search_base.join(cur_addr.to_string().replace(':', "_"));
+        let cur_file = try_lock_conflict_addr(cur_path);
+        self.lock_files.push(cur_file);
+    }
+
+    fn init_fs(&mut self) {
         let lock_path = self.store_path.join(Path::new("LOCK"));
 
         let f = File::create(lock_path.as_path())
@@ -304,6 +346,7 @@ impl TiKVServer {
                 self.store_path.display()
             );
         }
+        self.lock_files.push(f);
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
             fatal!(
@@ -383,7 +426,10 @@ impl TiKVServer {
             Box::new(DBConfigManger::new(engines.raft.c().clone(), DBType::Raft)),
         );
 
-        let engine = RaftKv::new(raft_router.clone());
+        let engine = RaftKv::new(
+            raft_router.clone(),
+            RocksEngine::from_db(engines.kv.clone()),
+        );
 
         self.engines = Some(Engines {
             engines,
@@ -571,8 +617,6 @@ impl TiKVServer {
             self.pd_client.clone(),
         );
 
-        let raft_router = node.get_router();
-
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -600,14 +644,16 @@ impl TiKVServer {
         }
 
         // Start CDC.
+        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
             self.pd_client.clone(),
             cdc_worker.scheduler(),
             raft_router,
             cdc_ob,
         );
+        let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
-            .start(cdc_endpoint)
+            .start_with_timer(cdc_endpoint, cdc_timer)
             .unwrap_or_else(|e| fatal!("failed to start cdc: {}", e));
         self.to_stop.push(cdc_worker);
 
@@ -869,6 +915,24 @@ fn check_system_config(config: &TiKvConfig) {
             "err" => %e
         );
     }
+}
+
+fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
+    let f = File::create(path.as_ref()).unwrap_or_else(|e| {
+        fatal!(
+            "failed to create lock at {}: {}",
+            path.as_ref().display(),
+            e
+        )
+    });
+
+    if f.try_lock_exclusive().is_err() {
+        fatal!(
+            "{} already in use, maybe another instance is binding with this address.",
+            path.as_ref().file_name().unwrap().to_str().unwrap()
+        );
+    }
+    f
 }
 
 /// A small trait for components which can be trivially stopped. Lets us keep

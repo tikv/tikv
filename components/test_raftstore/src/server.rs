@@ -114,6 +114,10 @@ impl ServerCluster {
     pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter {
         self.metas.get(&node_id).unwrap().raw_apply_router.clone()
     }
+
+    pub fn get_server_router(&self, node_id: u64) -> SimulateStoreTransport {
+        self.metas.get(&node_id).unwrap().sim_router.clone()
+    }
 }
 
 impl Simulator for ServerCluster {
@@ -145,7 +149,7 @@ impl Simulator for ServerCluster {
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
-        let raft_engine = RaftKv::new(sim_router.clone());
+        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.c().clone());
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone());
@@ -166,7 +170,7 @@ impl Simulator for ServerCluster {
             raft_engine.clone(),
         ));
 
-        let engine = RaftKv::new(sim_router.clone());
+        let engine = RaftKv::new(sim_router.clone(), engines.kv.c().clone());
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
