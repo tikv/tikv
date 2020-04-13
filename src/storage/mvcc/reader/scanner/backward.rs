@@ -149,9 +149,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        if lock.ts > self.cfg.ts
-                            && self.met_newer_ts_data == NewerTsCheckState::NotMetYet
-                        {
+                        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                             self.met_newer_ts_data = NewerTsCheckState::Met;
                         }
                         result = lock

@@ -198,9 +198,11 @@ impl<S: Snapshot> PointGetter<S> {
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
 
         if let Some(ref lock_value) = lock_value {
-            self.met_newer_ts_data = NewerTsCheckState::Met;
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
+            if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                self.met_newer_ts_data = NewerTsCheckState::Met;
+            }
             lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks)
                 .map_err(Into::into)
         } else {
