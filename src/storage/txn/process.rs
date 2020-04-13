@@ -794,7 +794,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let mut scan_key = scan_key.take();
             let mut write_size = 0;
             let rows = key_locks.len();
-            // txn's start_ts => ReleasedLocks
+            // Map txn's start_ts to ReleasedLocks
             let mut released_locks = HashMap::default();
             for (current_key, current_lock) in key_locks {
                 txn.set_start_ts(current_lock.ts);

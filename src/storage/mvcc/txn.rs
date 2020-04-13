@@ -18,10 +18,13 @@ pub struct GcInfo {
     pub is_completed: bool,
 }
 
+/// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.
+/// It's used by `LockManager` to wake up transactions waiting for these locks.
 #[derive(Default, Debug)]
 pub struct ReleasedLock {
-    // None means the lock is not released(not exist) or no need to calculate the hash.
+    /// None means the lock is not released(not exist) or no need to calculate the hash.
     pub hash: Option<u64>,
+    /// Whether it is a pessimistic lock.
     pub pessimistic: bool,
 }
 
@@ -42,7 +45,7 @@ pub struct MvccTxn<S: Snapshot> {
     // collapse continuous rollbacks.
     collapse_rollback: bool,
     // Whether to calculate the lock hash when a lock is released. If there are transactions
-    // waiting for locks released, we need lock hashes to wake up them.
+    // waiting for locks released, we need lock hashes to wake them up.
     calc_lock_hash: bool,
 }
 
