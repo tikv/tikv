@@ -420,6 +420,7 @@ impl Snap {
         to_build: bool,
         deleter: Box<dyn SnapshotDeleter>,
         limiter: Limiter,
+        encryption_key_manager: Option<Arc<DataKeyManager>>,
     ) -> RaftStoreResult<Self> {
         let dir_path = dir.into();
         if !dir_path.exists() {
@@ -468,7 +469,7 @@ impl Snap {
             size_track,
             limiter,
             hold_tmp_files: false,
-            encryption_key_manager: None,
+            encryption_key_manager,
         };
 
         // load snapshot meta if meta_file exists
@@ -500,8 +501,9 @@ impl Snap {
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
         limiter: Limiter,
+        mgr: Option<Arc<DataKeyManager>>,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, size_track, true, true, deleter, limiter)?;
+        let mut s = Self::new(dir, key, size_track, true, true, deleter, limiter, mgr)?;
         s.init_for_building()?;
         Ok(s)
     }
@@ -511,6 +513,7 @@ impl Snap {
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
+        mgr: Option<Arc<DataKeyManager>>,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(
             dir,
@@ -520,6 +523,7 @@ impl Snap {
             false,
             deleter,
             Limiter::new(INFINITY),
+            mgr,
         )?;
 
         if !s.exists() {
@@ -543,8 +547,9 @@ impl Snap {
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
         limiter: Limiter,
+        mgr: Option<Arc<DataKeyManager>>,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, size_track, false, false, deleter, limiter)?;
+        let mut s = Self::new(dir, key, size_track, false, false, deleter, limiter, mgr)?;
         s.set_snapshot_meta(snapshot_meta)?;
         if s.exists() {
             return Ok(s);
@@ -570,7 +575,23 @@ impl Snap {
                 encrypter: None,
                 written_size: 0,
                 write_digest: crc32fast::Hasher::new(),
-            })
+            });
+
+            if let Some(mgr) = s.encryption_key_manager.as_ref() {
+                let path = cf_file.path.to_str().unwrap();
+                let enc_info = mgr.new_file(path)?;
+                let mthd = encryption_method_from_db_encryption_method(enc_info.method);
+                if mthd != EncryptionMethod::Plaintext {
+                    let mut enc_cfg = EncryptionConfig::default();
+                    enc_cfg.set_method(mthd);
+                    enc_cfg.set_key(enc_info.key);
+                    let file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
+                    file_for_recving.encrypter = Some(
+                        create_crypter(&enc_cfg, Mode::Encrypt, Some(&enc_info.iv))
+                            .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
+                    );
+                }
+            }
         }
         Ok(s)
     }
@@ -580,6 +601,7 @@ impl Snap {
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
+        mgr: Option<Arc<DataKeyManager>>,
     ) -> RaftStoreResult<Self> {
         let s = Self::new(
             dir,
@@ -589,6 +611,7 @@ impl Snap {
             false,
             deleter,
             Limiter::new(INFINITY),
+            mgr,
         )?;
         Ok(s)
     }
@@ -633,8 +656,7 @@ impl Snap {
                     meta.get_cf()
                 ));
             }
-            // Here `encryption_key_manager` is not passed in, so skip the check.
-            // Later `validate` will be called, so it's OK.
+            // `validate` will be called when sending, so skip the check here is OK.
             cf_file.size = meta.get_size();
             cf_file.checksum = meta.get_checksum();
         }
@@ -669,7 +691,6 @@ impl Snap {
 
     fn validate(&self, engine: &impl KvEngine, for_send: bool) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
-            error!("validating cf {} for {:?}", cf_file.cf, self.key);
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
                 // this is checked when loading the snapshot meta.
@@ -1056,7 +1077,7 @@ impl Write for Snap {
             return Ok(0);
         }
 
-        let mut next_buf = buf;
+        let (mut next_buf, mut written_bytes) = (buf, 0);
         while self.cf_index < self.cf_files.len() {
             let cf_file = &mut self.cf_files[self.cf_index];
             if cf_file.size == 0 {
@@ -1078,6 +1099,7 @@ impl Write for Snap {
                 .write_digest
                 .update(&next_buf[0..write_len]);
             file_for_recving.written_size += write_len as u64;
+            written_bytes += write_len;
 
             let file = AllowStdIo::new(&mut file_for_recving.file);
             let mut file = self.limiter.clone().limit(file);
@@ -1099,11 +1121,10 @@ impl Write for Snap {
                 next_buf = &next_buf[write_len..]
             }
             if finished {
-                return Ok(write_len);
+                break;
             }
         }
-        let n = buf.len() - next_buf.len();
-        Ok(n)
+        Ok(written_bytes)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -1309,14 +1330,14 @@ impl SnapManager {
             let core = self.core.rl();
             (core.base.clone(), Arc::clone(&core.snap_size))
         };
-        let mut f = Snap::new_for_building(
+        let f = Snap::new_for_building(
             dir,
             key,
             snap_size,
             Box::new(self.clone()),
             self.limiter.clone(),
+            self.encryption_key_manager.clone(),
         )?;
-        f.encryption_key_manager = self.encryption_key_manager.clone();
         Ok(Box::new(f))
     }
 
@@ -1330,8 +1351,8 @@ impl SnapManager {
             key,
             Arc::clone(&core.snap_size),
             Box::new(self.clone()),
+            self.encryption_key_manager.clone(),
         )?;
-        s.encryption_key_manager = self.encryption_key_manager.clone();
         let key_manager = match self.encryption_key_manager.as_ref() {
             Some(m) => m,
             None => return Ok(Box::new(s)),
@@ -1355,44 +1376,27 @@ impl SnapManager {
         let core = self.core.rl();
         let mut snapshot_data = RaftSnapshotData::default();
         snapshot_data.merge_from_bytes(data)?;
-        let mut f = Snap::new_for_receiving(
+        let f = Snap::new_for_receiving(
             &core.base,
             key,
             snapshot_data.take_meta(),
             Arc::clone(&core.snap_size),
             Box::new(self.clone()),
             self.limiter.clone(),
+            self.encryption_key_manager.clone(),
         )?;
-        f.encryption_key_manager = self.encryption_key_manager.clone();
-        if let Some(mgr) = f.encryption_key_manager.as_ref() {
-            for cf_file in &mut f.cf_files {
-                let path = cf_file.path.to_str().unwrap();
-                let enc_info = mgr.new_file(path)?;
-                let mthd = encryption_method_from_db_encryption_method(enc_info.method);
-                if mthd != EncryptionMethod::Plaintext {
-                    let mut enc_cfg = EncryptionConfig::default();
-                    enc_cfg.set_method(mthd);
-                    enc_cfg.set_key(enc_info.key);
-                    let file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
-                    file_for_recving.encrypter = Some(
-                        create_crypter(&enc_cfg, Mode::Encrypt, Some(&enc_info.iv))
-                            .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
-                    );
-                }
-            }
-        }
         Ok(Box::new(f))
     }
 
     fn get_concrete_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snap>> {
         let core = self.core.rl();
-        let mut s = Snap::new_for_applying(
+        let s = Snap::new_for_applying(
             &core.base,
             key,
             Arc::clone(&core.snap_size),
             Box::new(self.clone()),
+            self.encryption_key_manager.clone(),
         )?;
-        s.encryption_key_manager = self.encryption_key_manager.clone();
         if !s.exists() {
             return Err(RaftStoreError::Other(From::from(format!(
                 "snapshot of {:?} not exists.",
@@ -1874,6 +1878,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         // Ensure that this snapshot file doesn't exist before being built.
@@ -1908,6 +1913,7 @@ pub mod tests {
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
+            None,
         )
         .unwrap();
         assert!(s2.exists());
@@ -1927,6 +1933,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         assert!(!s3.exists());
@@ -1949,7 +1956,8 @@ pub mod tests {
 
         // Ensure a snapshot could be applied to DB.
         let mut s4 =
-            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter).unwrap();
+            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter, None)
+                .unwrap();
         assert!(s4.exists());
 
         let dst_db_dir = Builder::new()
@@ -2014,6 +2022,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         assert!(!s1.exists());
@@ -2038,6 +2047,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2166,6 +2176,7 @@ pub mod tests {
             key,
             Arc::clone(&size_track),
             deleter.clone(),
+            None,
         )
         .unwrap();
         assert!(from.exists());
@@ -2177,6 +2188,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter,
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
 
@@ -2210,6 +2222,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         assert!(!s1.exists());
@@ -2230,10 +2243,14 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(
-            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
-                .is_err()
-        );
+        assert!(Snap::new_for_sending(
+            dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter.clone(),
+            None
+        )
+        .is_err());
 
         let mut s2 = Snap::new_for_building(
             dir.path(),
@@ -2241,6 +2258,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         assert!(!s2.exists());
@@ -2303,6 +2321,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .is_err());
         assert!(
@@ -2334,6 +2353,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         assert!(!s1.exists());
@@ -2354,10 +2374,14 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(
-            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
-                .is_err()
-        );
+        assert!(Snap::new_for_sending(
+            dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter.clone(),
+            None
+        )
+        .is_err());
 
         let mut s2 = Snap::new_for_building(
             dir.path(),
@@ -2365,6 +2389,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         assert!(!s2.exists());
@@ -2408,6 +2433,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter,
             Limiter::new(INFINITY),
+            None,
         )
         .is_err());
     }
@@ -2456,6 +2482,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         let mut region = gen_test_region(1, 1, 1);
@@ -2472,7 +2499,8 @@ pub mod tests {
         )
         .unwrap();
         let mut s =
-            Snap::new_for_sending(&path, &key1, Arc::clone(&size_track), deleter.clone()).unwrap();
+            Snap::new_for_sending(&path, &key1, Arc::clone(&size_track), deleter.clone(), None)
+                .unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = Snap::new_for_receiving(
             &path,
@@ -2481,6 +2509,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
@@ -2496,6 +2525,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
         let s4 = Snap::new_for_receiving(
@@ -2505,6 +2535,7 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter,
             Limiter::new(INFINITY),
+            None,
         )
         .unwrap();
 
