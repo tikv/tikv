@@ -617,16 +617,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coarsetime"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
-dependencies = [
- "lazy_static",
- "libc",
-]
-
-[[package]]
 name = "codec"
 version = "0.0.1"
 dependencies = [
@@ -1088,7 +1078,6 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
- "coarsetime",
  "encryption",
  "engine",
  "engine_traits",
@@ -3012,7 +3001,6 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
- "coarsetime",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -4672,7 +4660,6 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
- "coarsetime",
  "codec",
  "configuration",
  "crc32fast",
