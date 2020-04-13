@@ -4,7 +4,7 @@ use std::fmt;
 use std::time::Instant;
 
 use engine_rocks::RocksEngine;
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
@@ -37,6 +37,9 @@ pub struct WriteResponse {
 
 pub type ReadCallback<E> = Box<dyn FnOnce(ReadResponse<E>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
+
+// callback(snapshot, applied_index, applied_term, Region)
+pub type SnapshotCallback<E: KvEngine> = Box<dyn FnOnce(E::Snapshot, &metapb::Region, u64, u64) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,

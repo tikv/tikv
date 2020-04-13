@@ -33,7 +33,7 @@ use uuid::Builder as UuidBuilder;
 use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::*;
-use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
+use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg, SnapshotCallback};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::store::util::KeysInfoFormatter;
@@ -2390,6 +2390,9 @@ pub enum Msg {
         region_epoch: RegionEpoch,
         cb: Callback<RocksEngine>,
     },
+    SnapshotTask {
+        cb: SnapshotCallback<RocksEngine::Snapshot>,
+    },
     #[cfg(any(test, feature = "testexport"))]
     Validate(u64, Box<dyn FnOnce((&ApplyDelegate, bool)) + Send>),
 }
@@ -2436,6 +2439,7 @@ impl Debug for Msg {
                 cmd: ChangeCmd::Snapshot { region_id, .. },
                 ..
             } => write!(f, "[region {}] cmd snapshot", region_id),
+            Msg::SnapshotTask {..} => write!(f, "get a snapshot task"),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -2862,6 +2866,7 @@ impl ApplyFsm {
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
+                Some(Msg::SnapshotTask(cb)) => self.handle_snapshot_task(apply_ctx, cb),
                 Some(Msg::Change {
                     cmd,
                     region_epoch,
