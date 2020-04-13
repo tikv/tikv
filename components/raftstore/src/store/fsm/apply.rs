@@ -2776,11 +2776,17 @@ impl ApplyFsm {
                 region_id,
                 enabled,
             } => {
-                assert!(!self
-                    .delegate
-                    .observe_cmd
-                    .as_ref()
-                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)));
+                assert!(
+                    !self
+                        .delegate
+                        .observe_cmd
+                        .as_ref()
+                        .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
+                    "{} observer already exists {:?} {:?}",
+                    self.delegate.tag,
+                    self.delegate.observe_cmd,
+                    observe_id
+                );
                 (observe_id, region_id, Some(enabled))
             }
             ChangeCmd::Snapshot {
