@@ -3,7 +3,7 @@
 pub mod util;
 
 pub use rocksdb::{
-    run_ldb_tool, BlockBasedOptions, CFHandle, Cache, ColumnFamilyOptions, CompactOptions,
+    run_ldb_tool, run_sst_dump_tool, BlockBasedOptions, CFHandle, Cache, ColumnFamilyOptions, CompactOptions,
     CompactionJobInfo, CompactionPriority, DBBottommostLevelCompaction, DBCompactionStyle,
     DBCompressionType, DBEntryType, DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode,
     DBStatisticsTickerType, DBTitanDBBlobRunMode, Env, EventListener, IngestExternalFileOptions,

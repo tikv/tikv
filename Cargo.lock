@@ -591,6 +591,7 @@ dependencies = [
  "fs2",
  "futures 0.1.29",
  "futures-cpupool",
+ "gag",
  "grpcio",
  "hex 0.4.2",
  "keys",
@@ -1470,6 +1471,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gag"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cc0b9f53275dc5fada808f1d2f82e3688a6c14d735633d1590b7be8eb2307b5"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2025,7 +2036,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=sst_dump#60d889271c77cba9680cd0699542738acef8c76e"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2044,7 +2055,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=sst_dump#60d889271c77cba9680cd0699542738acef8c76e"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3406,7 +3417,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=sst_dump#60d889271c77cba9680cd0699542738acef8c76e"
 dependencies = [
  "libc",
  "librocksdb_sys",
