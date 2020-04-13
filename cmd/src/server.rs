@@ -126,6 +126,7 @@ struct TiKVServer {
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost>,
     to_stop: Vec<Box<dyn Stop>>,
+    lock_file: Option<File>,
 }
 
 struct Engines {
@@ -185,6 +186,7 @@ impl TiKVServer {
             region_info_accessor,
             coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
+            lock_file: None,
         }
     }
 
@@ -292,7 +294,7 @@ impl TiKVServer {
         pd_client
     }
 
-    fn init_fs(&self) {
+    fn init_fs(&mut self) {
         let lock_path = self.store_path.join(Path::new("LOCK"));
 
         let f = File::create(lock_path.as_path())
@@ -303,6 +305,7 @@ impl TiKVServer {
                 self.store_path.display()
             );
         }
+        self.lock_file = Some(f);
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
             fatal!(
@@ -382,7 +385,10 @@ impl TiKVServer {
             Box::new(DBConfigManger::new(engines.raft.c().clone(), DBType::Raft)),
         );
 
-        let engine = RaftKv::new(raft_router.clone());
+        let engine = RaftKv::new(
+            raft_router.clone(),
+            RocksEngine::from_db(engines.kv.clone()),
+        );
 
         self.engines = Some(Engines {
             engines,
@@ -560,8 +566,6 @@ impl TiKVServer {
             self.pd_client.clone(),
         );
 
-        let raft_router = node.get_router();
-
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -588,14 +592,16 @@ impl TiKVServer {
         }
 
         // Start CDC.
+        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
             self.pd_client.clone(),
             cdc_worker.scheduler(),
             raft_router,
             cdc_ob,
         );
+        let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
-            .start(cdc_endpoint)
+            .start_with_timer(cdc_endpoint, cdc_timer)
             .unwrap_or_else(|e| fatal!("failed to start cdc: {}", e));
         self.to_stop.push(cdc_worker);
 
