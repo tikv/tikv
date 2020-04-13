@@ -148,7 +148,6 @@ store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
-quorum-algorithm = "integration-on-half-fail"
 perf-level = 5
 
 [coprocessor]

@@ -16,7 +16,7 @@ use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType,
+    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType,
     StatusResponse,
 };
 use kvproto::raft_serverpb::{
@@ -372,7 +372,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
-            CasualMessage::CaptureChange { cmd, callback } => self.on_capture_change(cmd, callback),
             CasualMessage::Test(cb) => cb(self.fsm),
         }
     }
@@ -501,17 +500,34 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_split_region_check_tick();
     }
 
-    fn on_capture_change(&mut self, cmd: ChangeCmd, cb: Callback<RocksEngine>) {
-        if !self.fsm.peer.is_leader() {
-            cb.invoke_with_response(new_error(Error::NotLeader(
-                self.region_id(),
-                self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
-            )));
-            return;
-        }
-        self.ctx
-            .apply_router
-            .schedule_task(self.region_id(), ApplyTask::Change { cmd, cb })
+    fn on_capture_change(
+        &mut self,
+        cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
+        cb: Callback<RocksEngine>,
+    ) {
+        let region_id = self.region_id();
+        let msg =
+            new_read_index_request(region_id, region_epoch.clone(), self.fsm.peer.peer.clone());
+        let apply_router = self.ctx.apply_router.clone();
+        self.propose_raft_command(
+            msg,
+            Callback::Read(Box::new(move |resp| {
+                // Return the error
+                if resp.response.get_header().has_error() {
+                    cb.invoke_read(resp);
+                    return;
+                }
+                apply_router.schedule_task(
+                    region_id,
+                    ApplyTask::Change {
+                        cmd,
+                        region_epoch,
+                        cb,
+                    },
+                )
+            })),
+        );
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
@@ -547,6 +563,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
+            SignificantMsg::CaptureChange {
+                cmd,
+                region_epoch,
+                callback,
+            } => self.on_capture_change(cmd, region_epoch, callback),
+            SignificantMsg::LeaderCallback(cb) => {
+                self.on_leader_callback(cb);
+            }
         }
     }
 
@@ -573,6 +597,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "status" => ?status,
         );
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
+    }
+
+    fn on_leader_callback(&mut self, cb: Callback<RocksEngine>) {
+        let msg = new_read_index_request(
+            self.region_id(),
+            self.region().get_region_epoch().clone(),
+            self.fsm.peer.peer.clone(),
+        );
+        self.propose_raft_command(msg, cb);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -3020,6 +3053,20 @@ pub fn maybe_destroy_source(
         }
     }
     false
+}
+
+pub fn new_read_index_request(
+    region_id: u64,
+    region_epoch: RegionEpoch,
+    peer: metapb::Peer,
+) -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::default();
+    request.mut_header().set_region_id(region_id);
+    request.mut_header().set_region_epoch(region_epoch);
+    request.mut_header().set_peer(peer);
+    let mut cmd = Request::default();
+    cmd.set_cmd_type(CmdType::ReadIndex);
+    request
 }
 
 pub fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {

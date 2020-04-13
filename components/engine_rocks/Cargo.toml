@@ -34,11 +34,16 @@ time = "0.1"
 configuration = { path = "../configuration" }
 serde = "1.0"
 serde_derive = "1.0"
+coarsetime = "0.1"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
-features = ["encryption"]
+features = ["encryption", "static_libcpp"]
+
+[dependencies.prometheus-static-metric]
+git = "https://github.com/tikv/rust-prometheus.git"
+rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
 
 [dev-dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }

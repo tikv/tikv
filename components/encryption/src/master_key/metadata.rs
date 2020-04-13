@@ -12,11 +12,15 @@ pub enum MetadataKey {
     Iv,
     EncryptionMethod,
     PlaintextSha256,
+    KmsVendor,
+    KmsCiphertextKey,
 }
 
 const METADATA_KEY_IV: &str = "IV";
 const METADATA_KEY_ENCRYPTION_METHOD: &str = "encryption_method";
 const METADATA_KEY_PLAINTEXT_SHA256: &str = "plaintext_sha256";
+const METADATA_KEY_KMS_VENDOR: &str = "kms_vendor";
+const METADATA_KEY_KMS_ENCRYPTED_KEY: &str = "kms_ciphertext_key";
 
 impl MetadataKey {
     pub fn as_str(self) -> &'static str {
@@ -24,6 +28,8 @@ impl MetadataKey {
             MetadataKey::Iv => METADATA_KEY_IV,
             MetadataKey::EncryptionMethod => METADATA_KEY_ENCRYPTION_METHOD,
             MetadataKey::PlaintextSha256 => METADATA_KEY_PLAINTEXT_SHA256,
+            MetadataKey::KmsVendor => METADATA_KEY_KMS_VENDOR,
+            MetadataKey::KmsCiphertextKey => METADATA_KEY_KMS_ENCRYPTED_KEY,
         }
     }
 }

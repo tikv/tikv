@@ -27,6 +27,7 @@ time = "0.1"
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
+features = ["static_libcpp"]
 
 [dev-dependencies]
 tempfile = "3.0"

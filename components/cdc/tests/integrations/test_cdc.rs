@@ -75,8 +75,6 @@ fn test_cdc_basic() {
         _ => panic!("unknown event"),
     }
 
-    // Commit
-    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut counter = 0;
     loop {
         // Even if there is no write,
@@ -90,6 +88,8 @@ fn test_cdc_basic() {
             break;
         }
     }
+    // Commit
+    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
     let mut events = receive_event(false);
     assert_eq!(events.len(), 1);
@@ -140,6 +140,8 @@ fn test_cdc_basic() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         _ => panic!("unknown event"),
     }
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(200);
     scheduler
         .schedule(Task::Validate(
             1,
@@ -210,7 +212,8 @@ fn test_cdc_not_leader() {
         }
         _ => panic!("unknown event"),
     }
-
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(200);
     // There must be a delegate.
     let scheduler = suite
         .endpoints
@@ -389,6 +392,9 @@ fn test_cdc_scan() {
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut events = receive_event(false);
+    if events.len() == 1 {
+        events.extend(receive_event(false).into_iter());
+    }
     assert_eq!(events.len(), 2, "{:?}", events);
     match events.remove(0).event.unwrap() {
         // Batch size is set to 2.
@@ -515,13 +521,15 @@ fn test_cdc_tso_failure() {
 
     // Make sure resolved ts can be advanced normally even with few tso failures.
     let mut counter = 0;
+    let mut previous_ts = 0;
     loop {
         // Even if there is no write,
         // resolved ts should be advanced regularly.
         for e in receive_event(true) {
             match e.event.unwrap() {
                 Event_oneof_event::ResolvedTs(ts) => {
-                    assert_ne!(0, ts);
+                    assert!(ts >= previous_ts);
+                    previous_ts = ts;
                     counter += 1;
                 }
                 _ => panic!("unknown event"),

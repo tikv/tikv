@@ -38,16 +38,15 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use encryption::EncryptionConfig;
 use engine::rocks::util::{
-    db_exist, get_cf_handle, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-    NoopSliceTransform,
+    db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
-use engine::DB;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
-    RangePropertiesCollectorFactory, RocksEventListener, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
+use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient, Error as PdError};
@@ -1176,12 +1175,12 @@ pub enum DBType {
 }
 
 pub struct DBConfigManger {
-    db: Arc<DB>,
+    db: RocksEngine,
     db_type: DBType,
 }
 
 impl DBConfigManger {
-    pub fn new(db: Arc<DB>, db_type: DBType) -> Self {
+    pub fn new(db: RocksEngine, db_type: DBType) -> Self {
         DBConfigManger { db, db_type }
     }
 }
@@ -1194,7 +1193,7 @@ impl DBConfigManger {
 
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
         self.validate_cf(cf)?;
-        let handle = get_cf_handle(&self.db, cf)?;
+        let handle = self.db.cf_handle(cf)?;
         self.db.set_options_cf(handle, opts)?;
         // Write config to metric
         for (cfg_name, cfg_value) in opts {
@@ -1214,7 +1213,7 @@ impl DBConfigManger {
 
     fn set_block_cache_size(&self, cf: &str, size: ReadableSize) -> Result<(), Box<dyn Error>> {
         self.validate_cf(cf)?;
-        let handle = get_cf_handle(&self.db, cf)?;
+        let handle = self.db.cf_handle(cf)?;
         let opt = self.db.get_options_cf(handle);
         opt.set_block_cache_capacity(size.0)?;
         // Write config to metric
@@ -2642,6 +2641,7 @@ mod tests {
 
     use super::*;
     use engine::rocks::util::new_engine_opt;
+    use engine_traits::DBOptions as DBOptionsTrait;
     use kvproto::configpb::Version;
     use slog::Level;
     use std::cmp::Ordering;
@@ -2831,10 +2831,10 @@ mod tests {
         assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
     }
 
-    fn new_engines(cfg: TiKvConfig) -> (Arc<DB>, ConfigController) {
+    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let engine = Arc::new(
+        let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
                 path,
                 DBOptions::new(),
@@ -2846,7 +2846,7 @@ mod tests {
                 ],
             )
             .unwrap(),
-        );
+        ));
 
         let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
         cfg_controller.register(
