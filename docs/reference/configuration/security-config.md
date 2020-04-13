@@ -19,3 +19,7 @@ The path to the file that contains the PEM encoding of the server’s certificat
 ## key-path = "/path/to/key.pem"
 
 The path to the file that contains the PEM encoding of the server’s private key.
+
+## cert-allowed-cn = [Name1, Name2]
+
+The name list used to verify the common name in client’s certificates. Verification is not enabled if this field is empty.
