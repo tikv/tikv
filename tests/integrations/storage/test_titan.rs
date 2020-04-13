@@ -7,13 +7,14 @@ use std::thread;
 use std::time::Duration;
 
 use engine::rocks;
-use engine::rocks::util::compact_files_in_range;
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Writable};
 use engine::Engines;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
-use engine_traits::{MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    CompactExt, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE,
+};
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
 use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
@@ -216,7 +217,7 @@ fn test_delete_files_in_range_for_titan() {
 
     // Flush and compact the kvs into L6.
     db.flush(true).unwrap();
-    compact_files_in_range(&db, None, None, None).unwrap();
+    db.c().compact_files_in_range(None, None, None).unwrap();
     let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
     let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
@@ -259,7 +260,9 @@ fn test_delete_files_in_range_for_titan() {
     db.flush(true).unwrap();
     db.put(b"2", b"2").unwrap();
     db.flush(true).unwrap();
-    compact_files_in_range(db, Some(b"0"), Some(b"3"), Some(1)).unwrap();
+    db.c()
+        .compact_files_in_range(Some(b"0"), Some(b"3"), Some(1))
+        .unwrap();
 
     // Now the LSM structure of default cf is:
     // memtable: [put(b_7, blob4)] (because of Titan GC)
@@ -342,6 +345,7 @@ fn test_delete_files_in_range_for_titan() {
     let limiter = Limiter::new(INFINITY);
     build_sst_cf_file::<RocksEngine>(
         &default_sst_file_path.to_str().unwrap(),
+        engines.kv.c(),
         &RocksSnapshot::new(Arc::clone(&engines.kv)),
         CF_DEFAULT,
         b"",
@@ -351,6 +355,7 @@ fn test_delete_files_in_range_for_titan() {
     .unwrap();
     build_sst_cf_file::<RocksEngine>(
         &write_sst_file_path.to_str().unwrap(),
+        engines.kv.c(),
         &RocksSnapshot::new(Arc::clone(&engines.kv)),
         CF_WRITE,
         b"",
@@ -367,13 +372,13 @@ fn test_delete_files_in_range_for_titan() {
     let engines1 = new_temp_engine(&dir1);
     apply_sst_cf_file(
         &default_sst_file_path.to_str().unwrap(),
-        engines1.kv.c(),
+        &engines1.kv,
         CF_DEFAULT,
     )
     .unwrap();
     apply_sst_cf_file(
         &write_sst_file_path.to_str().unwrap(),
-        engines1.kv.c(),
+        &engines1.kv,
         CF_WRITE,
     )
     .unwrap();
@@ -383,7 +388,7 @@ fn test_delete_files_in_range_for_titan() {
     r.mut_peers().push(Peer::default());
     r.set_start_key(b"a".to_vec());
     r.set_end_key(b"z".to_vec());
-    let snapshot = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&engines1.kv), r);
+    let snapshot = RegionSnapshot::<RocksEngine>::from_raw(engines1.kv.clone(), r);
     let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
         .range(Some(Key::from_raw(b"a")), None)
         .build()

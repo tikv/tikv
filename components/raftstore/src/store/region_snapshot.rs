@@ -1,9 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::DB;
-use engine::{self, IterOption};
-use engine_rocks::Compat;
-use engine_traits::{KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot};
+use engine_traits::{
+    IterOptions, KvEngine, KvEngines, Peekable, ReadOptions, Result as EngineResult, Snapshot,
+};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,7 +24,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot<E: KvEngine> {
-    snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
+    snap: <E::Snapshot as Snapshot>::SyncSnapshot,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
 }
@@ -39,12 +38,12 @@ where
         RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
     }
 
-    pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot<RocksEngine> {
-        RegionSnapshot::from_snapshot(db.c().snapshot().into_sync(), region)
+    pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksEngine> {
+        RegionSnapshot::from_snapshot(db.snapshot().into_sync(), region)
     }
 
     pub fn from_snapshot(
-        snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
+        snap: <E::Snapshot as Snapshot>::SyncSnapshot,
         region: Region,
     ) -> RegionSnapshot<E> {
         RegionSnapshot {
@@ -85,11 +84,11 @@ where
         }
     }
 
-    pub fn iter(&self, iter_opt: IterOption) -> RegionIterator<E> {
+    pub fn iter(&self, iter_opt: IterOptions) -> RegionIterator<E> {
         RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
     }
 
-    pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator<E>> {
+    pub fn iter_cf(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<E>> {
         Ok(RegionIterator::new_cf(
             &self.snap,
             Arc::clone(&self.region),
@@ -106,7 +105,7 @@ where
     {
         let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
         let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
+        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
 
@@ -124,7 +123,7 @@ where
     {
         let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
         let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
+        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
@@ -137,16 +136,6 @@ where
             it_valid = f(it.key(), it.value())? && it.next()?;
         }
         Ok(())
-    }
-
-    pub fn get_properties_cf(&self, cf: &str) -> Result<E::TablePropertiesCollection> {
-        let start = keys::enc_start_key(&self.region);
-        let end = keys::enc_end_key(&self.region);
-        let prop = self
-            .snap
-            .get_db()
-            .get_range_properties_cf(cf, &start, &end)?;
-        Ok(prop)
     }
 
     #[inline]
@@ -253,7 +242,7 @@ pub struct RegionIterator<E: KvEngine> {
     region: Arc<Region>,
 }
 
-fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
     let region_start_key = keys::enc_start_key(region);
     if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_lower_bound_prefix(keys::DATA_PREFIX_KEY);
@@ -265,7 +254,7 @@ fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
     }
 }
 
-fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_upper_bound(iter_opt: &mut IterOptions, region: &Region) {
     let region_end_key = keys::enc_end_key(region);
     if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
@@ -283,9 +272,9 @@ where
     E: KvEngine,
 {
     pub fn new(
-        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
         region: Arc<Region>,
-        mut iter_opt: IterOption,
+        mut iter_opt: IterOptions,
     ) -> RegionIterator<E> {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
@@ -296,9 +285,9 @@ where
     }
 
     pub fn new_cf(
-        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
         region: Arc<Region>,
-        mut iter_opt: IterOption,
+        mut iter_opt: IterOptions,
         cf: &str,
     ) -> RegionIterator<E> {
         update_lower_bound(&mut iter_opt, &region);
@@ -380,28 +369,24 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
     }
 }
 
-pub fn new_temp_engine(path: &tempfile::TempDir) -> engine::Engines {
+pub fn new_temp_engine(path: &tempfile::TempDir) -> KvEngines<RocksEngine, RocksEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));
     let shared_block_cache = false;
-    engine::Engines::new(
-        Arc::new(
-            engine::rocks::util::new_engine(
-                path.path().to_str().unwrap(),
-                None,
-                engine_traits::ALL_CFS,
-                None,
-            )
-            .unwrap(),
-        ),
-        Arc::new(
-            engine::rocks::util::new_engine(
-                raft_path.to_str().unwrap(),
-                None,
-                &[engine_traits::CF_DEFAULT],
-                None,
-            )
-            .unwrap(),
-        ),
+    KvEngines::new(
+        engine_rocks::util::new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            engine_traits::ALL_CFS,
+            None,
+        )
+        .unwrap(),
+        engine_rocks::util::new_engine(
+            raft_path.to_str().unwrap(),
+            None,
+            &[engine_traits::CF_DEFAULT],
+            None,
+        )
+        .unwrap(),
         shared_block_cache,
     )
 }
@@ -411,12 +396,8 @@ mod tests {
     use crate::store::PeerStorage;
     use crate::Result;
 
-    use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::Writable;
-    use engine::Engines;
-    use engine::*;
-    use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{Peekable, SyncMutable};
+    use engine_rocks::RocksEngine;
+    use engine_traits::{CompactExt, KvEngines, MiscExt, Peekable, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -426,12 +407,14 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
+    fn new_peer_storage(engines: KvEngines<RocksEngine, RocksEngine>, r: &Region) -> PeerStorage {
         let (sched, _) = worker::dummy_scheduler();
         PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
-    fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+    fn load_default_dataset(
+        engines: KvEngines<RocksEngine, RocksEngine>,
+    ) -> (PeerStorage, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -453,7 +436,9 @@ mod tests {
         (store, base_data)
     }
 
-    fn load_multiple_levels_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+    fn load_multiple_levels_dataset(
+        engines: KvEngines<RocksEngine, RocksEngine>,
+    ) -> (PeerStorage, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -488,7 +473,7 @@ mod tests {
                 db.put(&data_key(k), k).unwrap();
                 db.flush(true).unwrap();
                 data.push((k.to_vec(), k.to_vec()));
-                compact_files_in_range(&db, Some(&data_key(k)), Some(&data_key(k)), Some(level))
+                db.compact_files_in_range(Some(&data_key(k)), Some(&data_key(k)), Some(level))
                     .unwrap();
             }
         }
@@ -508,7 +493,7 @@ mod tests {
         let store = new_peer_storage(engines.clone(), &r);
 
         let key3 = b"key3";
-        engines.kv.c().put_msg(&data_key(key3), &r).expect("");
+        engines.kv.put_msg(&data_key(key3), &r).expect("");
 
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
         let v3 = snap.get_msg(key3).expect("");
@@ -538,7 +523,7 @@ mod tests {
             Option<(&[u8], &[u8])>,
             Option<(&[u8], &[u8])>,
         )>| {
-            let iter_opt = IterOption::new(
+            let iter_opt = IterOptions::new(
                 lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 true,
@@ -659,7 +644,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let mut iter = snap.iter(IterOption::default());
+        let mut iter = snap.iter(IterOptions::default());
         assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
@@ -685,7 +670,7 @@ mod tests {
         assert_eq!(data.len(), 5);
         assert_eq!(data, base_data);
 
-        let mut iter = snap.iter(IterOption::default());
+        let mut iter = snap.iter(IterOptions::default());
         assert!(iter.seek(b"a1").unwrap());
 
         assert!(iter.seek_to_first().unwrap());
@@ -701,7 +686,7 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
-        let mut iter = snap.iter(IterOption::new(
+        let mut iter = snap.iter(IterOptions::new(
             None,
             Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
             true,
@@ -724,7 +709,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engines);
 
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
-        let mut iter_opt = IterOption::default();
+        let mut iter_opt = IterOptions::default();
         iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);
         assert!(iter.seek_to_last().unwrap());

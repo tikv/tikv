@@ -38,18 +38,22 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-async = "2.3"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 slog-term = "2.4"
+sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tikv_alloc = { path = "../tikv_alloc" }
 time = "0.1"
 tokio-core = "0.1"
 tokio-executor = "0.1"
 tokio-sync = "0.1.7"
-tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
+tempfile = "3.0"
 url = "2"
 zeroize = { version = "1.1", features = ["alloc"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+
+[dependencies.yatp]
+git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
 futures-cpupool = "0.1"

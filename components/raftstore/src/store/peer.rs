@@ -8,9 +8,8 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{KvEngine, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use engine_rocks::RocksEngine;
+use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -37,7 +36,7 @@ use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, QuorumAlgorithm, ReadResponse, RegionSnapshot};
+use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -49,7 +48,9 @@ use tikv_util::worker::Scheduler;
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
 use super::metrics::*;
-use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
+use super::peer_storage::{
+    write_peer_state, ApplySnapResult, CheckApplyingSnapStatus, InvokeContext, PeerStorage,
+};
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
@@ -249,7 +250,7 @@ impl Peer {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
         peer: metapb::Peer,
     ) -> Result<Peer> {
@@ -263,7 +264,7 @@ impl Peer {
 
         let applied_index = ps.applied_index();
 
-        let mut raft_cfg = raft::Config {
+        let raft_cfg = raft::Config {
             id: peer.get_id(),
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
@@ -277,10 +278,6 @@ impl Peer {
             pre_vote: cfg.prevote,
             ..Default::default()
         };
-
-        if let QuorumAlgorithm::IntegrationOnHalfFail = cfg.quorum_algorithm {
-            raft_cfg.quorum_fn = util::integration_on_half_fail_quorum_fn;
-        }
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
@@ -459,8 +456,8 @@ impl Peer {
         );
 
         // Set Tombstone state explicitly
-        let mut kv_wb = ctx.engines.kv.c().write_batch();
-        let mut raft_wb = ctx.engines.raft.c().write_batch();
+        let mut kv_wb = ctx.engines.kv.write_batch();
+        let mut raft_wb = ctx.engines.raft.write_batch();
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
         write_peer_state(
             &mut kv_wb,
@@ -471,8 +468,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
-        ctx.engines.kv.c().write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.c().write_opt(&raft_wb, &write_opts)?;
+        ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
+        ctx.engines.raft.write_opt(&raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -525,7 +522,7 @@ impl Peer {
         if self.raft_group.raft.election_elapsed + 1 < cfg.raft_election_timeout_ticks {
             return res;
         }
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
             // Only recent active peer is considerred, so that an isolated follower
@@ -605,11 +602,6 @@ impl Peer {
     #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer.get_id()
-    }
-
-    #[inline]
-    pub fn get_raft_status(&self) -> raft::StatusRef<'_> {
-        self.raft_group.status_ref()
     }
 
     #[inline]
@@ -748,6 +740,7 @@ impl Peer {
             if let LeaseState::Valid = state {
                 let mut resp = eraftpb::Message::default();
                 resp.set_msg_type(MessageType::MsgReadIndexResp);
+                resp.term = self.term();
                 resp.to = m.from;
                 resp.index = self.get_store().committed_index();
                 resp.set_entries(m.take_entries());
@@ -812,7 +805,7 @@ impl Peer {
     /// Collects all pending peers and update `peers_start_pending_time`.
     pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
         if status.progress.is_none() {
@@ -1098,16 +1091,22 @@ impl Peer {
         if self.pending_remove {
             return None;
         }
-        if self.mut_store().check_applying_snap() {
-            // If we continue to handle all the messages, it may cause too many messages because
-            // leader will send all the remaining messages to this follower, which can lead
-            // to full message queue under high load.
-            debug!(
-                "still applying snapshot, skip further handling";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            return None;
+        match self.mut_store().check_applying_snap() {
+            CheckApplyingSnapStatus::Applying => {
+                // If we continue to handle all the messages, it may cause too many messages because
+                // leader will send all the remaining messages to this follower, which can lead
+                // to full message queue under high load.
+                debug!(
+                    "still applying snapshot, skip further handling";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            }
+            CheckApplyingSnapStatus::Success => {
+                self.post_pending_read_index_on_replica(ctx);
+            }
+            CheckApplyingSnapStatus::Idle => {}
         }
 
         if !self.pending_messages.is_empty() {
@@ -1751,25 +1750,6 @@ impl Peer {
         self.proposals.push(meta);
     }
 
-    /// Count the number of the healthy nodes.
-    /// A node is healthy when
-    /// 1. it's the leader of the Raft group, which has the latest logs
-    /// 2. it's a follower, and it does not lag behind the leader a lot.
-    ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
-    ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn count_healthy_node<'a, I>(&self, progress: I) -> usize
-    where
-        I: Iterator<Item = (&'a u64, &'a Progress)>,
-    {
-        let mut healthy = 0;
-        for (_, pr) in progress {
-            if pr.matched >= self.get_store().truncated_index() {
-                healthy += 1;
-            }
-        }
-        healthy
-    }
-
     /// Validate the `ConfChange` request and check whether it's safe to
     /// propose the specified conf change request.
     /// It's safe iff at least the quorum of the Raft group is still healthy
@@ -1818,13 +1798,15 @@ impl Peer {
             return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
-        let status = self.raft_group.status_ref();
-        let total = status.progress.unwrap().voter_ids().len();
-        if total == 1 {
-            // It's always safe if there is only one node in the cluster.
-            return Ok(());
-        }
-        let mut progress = status.progress.unwrap().clone();
+        let (total, mut progress) = {
+            let status = self.raft_group.status();
+            let total = status.progress.unwrap().voter_ids().len();
+            if total == 1 {
+                // It's always safe if there is only one node in the cluster.
+                return Ok(());
+            }
+            (total, status.progress.unwrap().clone())
+        };
 
         match change_type {
             ConfChangeType::AddNode => {
@@ -1839,17 +1821,9 @@ impl Peer {
                 return Ok(());
             }
         }
-        let healthy = self.count_healthy_node(progress.voters());
-        let voters_len = progress.voter_ids().len();
-        let quorum_after_change = match ctx.cfg.quorum_algorithm {
-            QuorumAlgorithm::IntegrationOnHalfFail => {
-                let majority = raft::majority(voters_len);
-                let custom = util::integration_on_half_fail_quorum_fn(voters_len);
-                cmp::min(voters_len, cmp::max(majority, custom))
-            }
-            QuorumAlgorithm::Majority => raft::majority(voters_len),
-        };
-        if healthy >= quorum_after_change {
+        let promoted_commit_index =
+            progress.maximal_committed_index(self.raft_group.raft.quorum_fn());
+        if promoted_commit_index >= self.get_store().truncated_index() {
             return Ok(());
         }
 
@@ -1863,18 +1837,18 @@ impl Peer {
             "peer_id" => self.peer.get_id(),
             "request" => ?change_peer,
             "total" => total,
-            "healthy" => healthy,
-            "quorum_after_change" => quorum_after_change,
+            "after" => progress.voter_ids().len(),
+            "truncated_index" => self.get_store().truncated_index(),
+            "promoted_commit_index" => promoted_commit_index,
         );
         // Waking it up to replicate logs to candidate.
         self.should_wake_up = true;
         Err(box_err!(
-            "unsafe to perform conf change {:?}, total {}, healthy {}, quorum after \
-             change {}",
+            "unsafe to perform conf change {:?}, total {}, truncated index {}, promoted commit index {}",
             change_peer,
             total,
-            healthy,
-            quorum_after_change
+            self.get_store().truncated_index(),
+            promoted_commit_index
         ))
     }
 
@@ -1923,7 +1897,7 @@ impl Peer {
         peer: &metapb::Peer,
     ) -> Option<&'static str> {
         let peer_id = peer.get_id();
-        let status = self.raft_group.status_ref();
+        let status = self.raft_group.status();
         let progress = status.progress.unwrap();
 
         if !progress.voter_ids().contains(&peer_id) {
@@ -2011,7 +1985,6 @@ impl Peer {
             "request_id" => ?read.id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "uuid" => ?read.id,
         );
     }
 
@@ -2120,7 +2093,6 @@ impl Peer {
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "is_leader" => self.is_leader(),
-            "uuid" => ?id,
         );
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
@@ -2143,7 +2115,7 @@ impl Peer {
     // For now, it is only used in merge.
     pub fn get_min_progress(&self) -> Result<u64> {
         let mut min = None;
-        if let Some(progress) = self.raft_group.status_ref().progress {
+        if let Some(progress) = self.raft_group.status().progress {
             for (id, pr) in progress.iter() {
                 // Reject merge if there is any pending request snapshot,
                 // because a target region may merge a source region which is in
@@ -2478,7 +2450,7 @@ impl Peer {
         read_index: Option<u64>,
     ) -> ReadResponse<RocksEngine> {
         let mut resp = ReadExecutor::new(
-            ctx.engines.kv.c().clone(),
+            ctx.engines.kv.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
         )
@@ -2756,7 +2728,7 @@ impl RequestInspector for Peer {
 pub struct ReadExecutor<E: KvEngine> {
     check_epoch: bool,
     engine: E,
-    snapshot: Option<<E::Snapshot as Snapshot<E>>::SyncSnapshot>,
+    snapshot: Option<<E::Snapshot as Snapshot>::SyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }

@@ -1,13 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{Cursor, Engine, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine::IterOption;
+use engine_rocks::properties::MvccProperties;
 use engine_rocks::RocksTablePropertiesCollection;
-use engine_traits::{TableProperties, TablePropertiesCollection};
+use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use raftstore::coprocessor::properties::MvccProperties;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -69,7 +68,7 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(val);
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, self.fill_cache);
+            let iter_opt = IterOptions::new(None, None, self.fill_cache);
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
@@ -92,7 +91,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
+            let iter_opt = IterOptions::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
@@ -130,7 +129,7 @@ impl<S: Snapshot> MvccReader<S> {
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
-                let iter_opt = IterOption::new(None, None, self.fill_cache);
+                let iter_opt = IterOptions::new(None, None, self.fill_cache);
                 let iter = self
                     .snapshot
                     .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
@@ -138,7 +137,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
         } else {
             // use prefix bloom filter
-            let iter_opt = IterOption::default()
+            let iter_opt = IterOptions::default()
                 .use_prefix_seek()
                 .set_prefix_same_as_start(true);
             let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
@@ -233,7 +232,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
+            let iter_opt = IterOptions::new(None, None, true);
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
             self.data_cursor = Some(iter);
         }
@@ -242,7 +241,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
+            let iter_opt = IterOptions::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
@@ -253,7 +252,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
+            let iter_opt = IterOptions::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
@@ -327,7 +326,7 @@ impl<S: Snapshot> MvccReader<S> {
         mut start: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
-        let iter_opt = IterOption::new(None, None, self.fill_cache);
+        let iter_opt = IterOptions::new(None, None, self.fill_cache);
         let scan_mode = self.get_scan_mode(false);
         let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
         let mut keys = vec![];
@@ -371,15 +370,6 @@ impl<S: Snapshot> MvccReader<S> {
         }
         Ok(v)
     }
-
-    pub fn need_gc(&self, safe_point: TimeStamp, ratio_threshold: f64) -> bool {
-        let prop = match self.snapshot.get_properties_cf(CF_WRITE) {
-            Ok(v) => v,
-            Err(_) => return true,
-        };
-
-        check_need_gc(safe_point, ratio_threshold, prop)
-    }
 }
 
 // Returns true if it needs gc.
@@ -387,7 +377,7 @@ impl<S: Snapshot> MvccReader<S> {
 pub fn check_need_gc(
     safe_point: TimeStamp,
     ratio_threshold: f64,
-    write_properties: RocksTablePropertiesCollection,
+    write_properties: &RocksTablePropertiesCollection,
 ) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
@@ -422,7 +412,7 @@ pub fn check_need_gc(
 
 fn get_mvcc_properties(
     safe_point: TimeStamp,
-    collection: RocksTablePropertiesCollection,
+    collection: &RocksTablePropertiesCollection,
 ) -> Option<MvccProperties> {
     if collection.is_empty() {
         return None;
@@ -443,6 +433,24 @@ fn get_mvcc_properties(
     Some(props)
 }
 
+pub fn check_region_need_gc<E: Engine, S: Snapshot>(
+    engine: &E,
+    snap: S,
+    safe_point: TimeStamp,
+    ratio_threshold: f64,
+) -> bool {
+    let start = snap.lower_bound();
+    let end = snap.upper_bound();
+    if start.is_none() || end.is_none() {
+        return true;
+    }
+    let prop = match engine.get_properties_cf(CF_WRITE, start.unwrap(), end.unwrap()) {
+        Ok(v) => v,
+        Err(_) => return true,
+    };
+    check_need_gc(safe_point, ratio_threshold, &prop)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,13 +460,12 @@ mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::DB;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
-    use engine::IterOption;
+    use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{Mutable, WriteBatchExt};
+    use engine_traits::{Mutable, TablePropertiesExt, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use raftstore::store::RegionSnapshot;
     use std::ops::Bound;
     use std::sync::Arc;
@@ -516,7 +523,7 @@ mod tests {
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap =
-                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+                RegionSnapshot::<RocksEngine>::from_raw(self.db.c().clone(), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             txn.prewrite(m, pk, false, 0, 0, TimeStamp::default())
                 .unwrap();
@@ -530,7 +537,7 @@ mod tests {
             start_ts: impl Into<TimeStamp>,
         ) {
             let snap =
-                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+                RegionSnapshot::<RocksEngine>::from_raw(self.db.c().clone(), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             txn.pessimistic_prewrite(
                 m,
@@ -554,10 +561,18 @@ mod tests {
             for_update_ts: impl Into<TimeStamp>,
         ) {
             let snap =
-                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+                RegionSnapshot::<RocksEngine>::from_raw(self.db.c().clone(), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into(), false)
-                .unwrap();
+            txn.acquire_pessimistic_lock(
+                k,
+                pk,
+                false,
+                0,
+                for_update_ts.into(),
+                false,
+                TimeStamp::zero(),
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -568,7 +583,7 @@ mod tests {
             commit_ts: impl Into<TimeStamp>,
         ) {
             let snap =
-                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+                RegionSnapshot::<RocksEngine>::from_raw(self.db.c().clone(), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             txn.commit(Key::from_raw(pk), commit_ts.into()).unwrap();
             self.write(txn.into_modifies());
@@ -576,7 +591,7 @@ mod tests {
 
         fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap =
-                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+                RegionSnapshot::<RocksEngine>::from_raw(self.db.c().clone(), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             txn.collapse_rollback(false);
             txn.rollback(Key::from_raw(pk)).unwrap();
@@ -586,7 +601,7 @@ mod tests {
         fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
             loop {
                 let snap = RegionSnapshot::<RocksEngine>::from_raw(
-                    Arc::clone(&self.db),
+                    self.db.c().clone(),
                     self.region.clone(),
                 );
                 let mut txn = MvccTxn::new(snap, safe_point.into(), true);
@@ -668,20 +683,23 @@ mod tests {
         region
     }
 
-    fn check_need_gc(
+    fn get_mvcc_properties_and_check_gc(
         db: Arc<DB>,
         region: Region,
         safe_point: impl Into<TimeStamp>,
         need_gc: bool,
     ) -> Option<MvccProperties> {
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
-        let reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let safe_point = safe_point.into();
-        assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
-        get_mvcc_properties(
-            safe_point,
-            reader.snapshot.get_properties_cf(CF_WRITE).unwrap(),
-        )
+
+        let start = keys::data_key(region.get_start_key());
+        let end = keys::data_end_key(region.get_end_key());
+        let collection = db
+            .c()
+            .get_range_properties_cf(CF_WRITE, &start, &end)
+            .unwrap();
+        assert_eq!(check_need_gc(safe_point, 1.0, &collection), need_gc);
+
+        get_mvcc_properties(safe_point, &collection)
     }
 
     #[test]
@@ -703,11 +721,15 @@ mod tests {
         // Put 2 keys.
         engine.put(&[1], 1, 1);
         engine.put(&[4], 2, 2);
-        assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
+        assert!(
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).is_none()
+        );
         engine.flush();
         // After this flush, we have a SST file without properties.
         // Without properties, we always need GC.
-        assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
+        assert!(
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).is_none()
+        );
     }
 
     #[test]
@@ -732,7 +754,7 @@ mod tests {
         engine.put(&[12], 11, 12);
         engine.flush();
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region);
 
         let tests = vec![
             // set nothing.
@@ -755,7 +777,7 @@ mod tests {
         ];
 
         for (_, &(min, max, ref res)) in tests.iter().enumerate() {
-            let mut iopt = IterOption::default();
+            let mut iopt = IterOptions::default();
             iopt.set_hint_min_ts(min);
             iopt.set_hint_max_ts(max);
 
@@ -787,12 +809,15 @@ mod tests {
         // After this flush, we have a SST file w/ properties, plus the SST
         // file w/o properties from previous flush. We always need GC as
         // long as we can't get properties from any SST files.
-        assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
+        assert!(
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).is_none()
+        );
         engine.compact();
         // After this compact, the two SST files are compacted into a new
         // SST file with properties. Now all SST files have properties and
         // all keys have only one version, so we don't need gc.
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 10, false).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, false).unwrap();
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 4.into());
         assert_eq!(props.num_rows, 4);
@@ -808,7 +833,8 @@ mod tests {
         engine.flush();
         // After this flush, keys 5,6 in the new SST file have more than one
         // versions, so we need gc.
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 10, true).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).unwrap();
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 8.into());
         assert_eq!(props.num_rows, 6);
@@ -816,7 +842,8 @@ mod tests {
         assert_eq!(props.num_versions, 8);
         assert_eq!(props.max_row_versions, 2);
         // But if the `safe_point` is older than all versions, we don't need gc too.
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 0, false).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 0, false).unwrap();
         assert_eq!(props.min_ts, TimeStamp::max());
         assert_eq!(props.max_ts, TimeStamp::zero());
         assert_eq!(props.num_rows, 0);
@@ -830,7 +857,8 @@ mod tests {
         engine.compact();
         // After this compact, all versions of keys 5,6 are deleted,
         // no keys have more than one versions, so we don't need gc.
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 10, false).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, false).unwrap();
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 4.into());
         assert_eq!(props.num_rows, 4);
@@ -841,7 +869,8 @@ mod tests {
         // A single lock version need gc.
         engine.lock(&[7], 9, 9);
         engine.flush();
-        let props = check_need_gc(Arc::clone(&db), region.clone(), 10, true).unwrap();
+        let props =
+            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).unwrap();
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 9.into());
         assert_eq!(props.num_rows, 5);
@@ -882,7 +911,7 @@ mod tests {
         engine.prewrite_pessimistic_lock(m, k, 45);
         engine.commit(k, 45, 50);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
@@ -960,7 +989,7 @@ mod tests {
         engine.prewrite_pessimistic_lock(m, k, 1);
         engine.commit(k, 1, 4);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 2.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 3.into());
@@ -1004,7 +1033,7 @@ mod tests {
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.
         // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3 Rollback].
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region.clone());
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         let k = Key::from_raw(k);
@@ -1035,11 +1064,11 @@ mod tests {
 
         let (commit_ts, write) = reader.seek_write(&k, 3.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 3.into());
-        assert_eq!(write, Write::new(WriteType::Rollback, 3.into(), None));
+        assert_eq!(write, Write::new_rollback(3.into(), true));
 
         let (commit_ts, write) = reader.seek_write(&k, 16.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 7.into());
-        assert_eq!(write, Write::new(WriteType::Rollback, 7.into(), None));
+        assert_eq!(write, Write::new_rollback(7.into(), true));
 
         let (commit_ts, write) = reader.seek_write(&k, 6.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 5.into());
@@ -1056,7 +1085,7 @@ mod tests {
         engine.prewrite(m2, k2, 1);
         engine.commit(k2, 1, 2);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         let (commit_ts, write) = reader
@@ -1073,7 +1102,7 @@ mod tests {
 
         // Test seek_write touches region's end.
         let region1 = make_region(1, vec![], Key::from_raw(b"k1").into_encoded());
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region1);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region1);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
@@ -1123,7 +1152,7 @@ mod tests {
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 24);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
@@ -1186,7 +1215,7 @@ mod tests {
         engine.prewrite(Mutation::Put((Key::from_raw(k2), v.to_vec())), k1, 5);
         engine.prewrite(Mutation::Lock(Key::from_raw(k3)), k1, 5);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region.clone());
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Ignore the lock if read ts is less than the lock version
         assert!(reader.check_lock(&Key::from_raw(k1), 4.into()).is_ok());
@@ -1207,7 +1236,7 @@ mod tests {
 
         // Commit the primary lock only
         engine.commit(k1, 5, 7);
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region.clone());
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Then reading the primary key should succeed
         assert!(reader.check_lock(&Key::from_raw(k1), 6.into()).is_ok());
@@ -1219,7 +1248,7 @@ mod tests {
 
         // Pessimistic locks
         engine.acquire_pessimistic_lock(Key::from_raw(k4), k4, 9, 9);
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Pessimistic locks don't block any read operation
         assert!(reader.check_lock(&Key::from_raw(k4), 10.into()).is_ok());
@@ -1313,7 +1342,7 @@ mod tests {
         // Creates a reader and scan locks,
         let check_scan_lock =
             |start_key: Option<Key>, limit, expect_res: &[_], expect_is_remain| {
-                let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+                let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region.clone());
                 let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
                 let res = reader
                     .scan_locks(start_key.as_ref(), |l| l.ts <= 10.into(), limit)
@@ -1371,7 +1400,7 @@ mod tests {
         let m = Mutation::Put((Key::from_raw(k), long_value.to_vec()));
         engine.prewrite(m, k, 10);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.clone(), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region.clone());
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let key = Key::from_raw(k);
 
@@ -1395,7 +1424,7 @@ mod tests {
 
         // Commit the long value
         engine.commit(k, 10, 11);
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         for &skip_lock_check in &[false, true] {
             assert_eq!(
