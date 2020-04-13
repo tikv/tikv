@@ -2864,11 +2864,7 @@ impl ApplyFsm {
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
-                Some(Msg::Snapshot {
-                    cb,
-                    sync,
-                    region_id,
-                }) => self.handle_snapshot(apply_ctx, cb, sync),
+                Some(Msg::Snapshot { cb, sync, .. }) => self.handle_snapshot(apply_ctx, cb, sync),
                 Some(Msg::Change {
                     cmd,
                     region_epoch,

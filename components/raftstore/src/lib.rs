@@ -20,6 +20,8 @@ extern crate serde_derive;
 extern crate slog_global;
 #[macro_use]
 extern crate tikv_util;
+#[macro_use]
+extern crate derivative;
 
 #[cfg(test)]
 extern crate test;

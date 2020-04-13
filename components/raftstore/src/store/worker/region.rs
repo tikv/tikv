@@ -9,12 +9,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::CF_RAFT;
-use engine_traits::{KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
-use raft::eraftpb::Snapshot as RaftSnapshot;
-
 use crate::coprocessor::CoprocessorHost;
 use crate::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
@@ -24,7 +18,14 @@ use crate::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
 use crate::store::transport::CasualRouter;
 use crate::store::{
     self, check_abort, ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
+    SnapshotCallback,
 };
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::CF_RAFT;
+use engine_traits::{KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt};
+use kvproto::metapb::Region;
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use raft::eraftpb::Snapshot as RaftSnapshot;
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
@@ -45,7 +46,8 @@ pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
 /// Region related task
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub enum Task {
     Gen {
         region_id: u64,
@@ -65,6 +67,14 @@ pub enum Task {
         region_id: u64,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
+    },
+    InMemSnapshotGen {
+        region: Region,
+        kv_snap: RocksSnapshot,
+        last_applied_state: RaftApplyState,
+        last_applied_index_term: u64,
+        #[derivative(Debug = "ignore")]
+        cb: SnapshotCallback<RocksEngine>,
     },
 }
 
@@ -94,6 +104,9 @@ impl Display for Task {
                 hex::encode_upper(start_key),
                 hex::encode_upper(end_key)
             ),
+            Task::InMemSnapshotGen { ref region, .. } => {
+                write!(f, "In-Memory Snapshot gen for {}", region.get_id())
+            }
         }
     }
 }
@@ -618,6 +631,20 @@ where
                         notifier,
                     );
                 });
+            }
+            Task::InMemSnapshotGen {
+                region,
+                last_applied_index_term,
+                last_applied_state,
+                kv_snap,
+                cb,
+            } => {
+                cb(
+                    Ok(kv_snap),
+                    &region,
+                    &last_applied_state,
+                    last_applied_index_term,
+                );
             }
             task @ Task::Apply { .. } => {
                 // to makes sure appling snapshots in order.

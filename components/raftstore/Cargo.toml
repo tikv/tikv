@@ -40,6 +40,7 @@ byteorder = "1.2"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.7.2"
+derivative = "2.1.1"
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
 fail = "0.3"

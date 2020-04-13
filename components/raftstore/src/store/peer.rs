@@ -1433,7 +1433,7 @@ impl Peer {
         let region_id = self.region_id;
         let peer_id = self.peer.get_id();
         let cb: SnapshotCallback<RocksEngine> =
-            Box::new(move |snap_ret, region, apply_state, applied_index_term| {
+            Box::new(move |snap_ret, _region, apply_state, applied_index_term| {
                 if let Ok(snap) = snap_ret {
                     if let Err(e) = snap_task.generate_and_schedule_snapshot(
                         snap,
@@ -1445,7 +1445,7 @@ impl Peer {
                         "schedule snapshot failed";
                             "error" => ?e,
                             "region_id" => region_id,
-                            //"peer_id" => self.delegate.id()
+                            "peer_id" => peer_id,
                         );
                     }
                 }
