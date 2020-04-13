@@ -901,19 +901,19 @@ fn check_system_config(config: &TiKvConfig) {
     }
 }
 
-fn try_lock_conflict_addr<P: AsRef<Path>>(existed_path: P) -> File {
-    let f = File::create(existed_path.as_ref()).unwrap_or_else(|e| {
+fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
+    let f = File::create(path.as_ref()).unwrap_or_else(|e| {
         fatal!(
             "failed to create lock at {}: {}",
-            existed_path.as_ref().display(),
+            path.as_ref().display(),
             e
         )
     });
 
     if f.try_lock_exclusive().is_err() {
         fatal!(
-            "lock {} failed, maybe another instance is binding with this address.",
-            existed_path.as_ref().display()
+            "{} already in use, maybe another instance is binding with this address.",
+            path.as_ref().file_name().unwrap().to_str().unwrap()
         );
     }
     f
