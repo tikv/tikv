@@ -2840,7 +2840,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/renkai/rust-prometheus.git?rev=fc3d4d8b925b6fa88e3a39e5fc169be04f114699#fc3d4d8b925b6fa88e3a39e5fc169be04f114699"
+source = "git+https://github.com/renkai/rust-prometheus.git?rev=68ba4dbbfbfec6888d9b05cd8e6df795eedc31e9#68ba4dbbfbfec6888d9b05cd8e6df795eedc31e9"
 dependencies = [
  "cfg-if",
  "fnv",
