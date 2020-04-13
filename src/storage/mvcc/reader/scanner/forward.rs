@@ -252,13 +252,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             };
 
             if has_lock {
-                // TODO: here we parse lock_value twice, maybe we could pass `lock_value` to `handle_lock`?
                 if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                    let lock_value = self.cursors.lock.value(&mut self.statistics.lock);
-                    let lock = Lock::parse(lock_value)?;
-                    if lock.ts > self.cfg.ts {
-                        self.met_newer_ts_data = NewerTsCheckState::Met;
-                    }
+                    self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
                 current_user_key = match self.scan_policy.handle_lock(
                     current_user_key,
