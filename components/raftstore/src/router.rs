@@ -112,7 +112,7 @@ impl ServerRaftStoreRouter {
 }
 
 #[inline]
-fn handle_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
+pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
     match e {
         TrySendError::Full(_) => RaftStoreError::Transport(DiscardReason::Full),
         TrySendError::Disconnected(_) => RaftStoreError::RegionNotFound(region_id),
@@ -124,7 +124,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         let region_id = msg.get_region_id();
         self.router
             .send_raft_message(msg)
-            .map_err(|e| handle_error(region_id, e))
+            .map_err(|e| handle_send_error(region_id, e))
     }
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()> {
@@ -136,7 +136,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
             let region_id = cmd.request.get_header().get_region_id();
             self.router
                 .send_raft_command(cmd)
-                .map_err(|e| handle_error(region_id, e))
+                .map_err(|e| handle_send_error(region_id, e))
         }
     }
 
@@ -156,7 +156,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))
-            .map_err(|e| handle_error(region_id, e))
+            .map_err(|e| handle_send_error(region_id, e))
     }
 
     fn broadcast_unreachable(&self, store_id: u64) {

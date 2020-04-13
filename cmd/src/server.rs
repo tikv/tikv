@@ -443,9 +443,7 @@ impl TiKVServer {
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
-        let is_unified = self.config.readpool.is_unified();
-
-        let unified_read_pool = if is_unified {
+        let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
@@ -455,7 +453,7 @@ impl TiKVServer {
             None
         };
 
-        let storage_read_pool_handle = if is_unified {
+        let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let storage_read_pools = ReadPool::from(storage::build_read_pool(
@@ -492,7 +490,7 @@ impl TiKVServer {
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.
-        let cop_read_pool_handle = if is_unified {
+        let cop_read_pool_handle = if self.config.readpool.coprocessor.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
             let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
@@ -564,8 +562,6 @@ impl TiKVServer {
             self.pd_client.clone(),
         );
 
-        let raft_router = node.get_router();
-
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -592,14 +588,16 @@ impl TiKVServer {
         }
 
         // Start CDC.
+        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
             self.pd_client.clone(),
             cdc_worker.scheduler(),
             raft_router,
             cdc_ob,
         );
+        let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
-            .start(cdc_endpoint)
+            .start_with_timer(cdc_endpoint, cdc_timer)
             .unwrap_or_else(|e| fatal!("failed to start cdc: {}", e));
         self.to_stop.push(cdc_worker);
 
