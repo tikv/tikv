@@ -22,7 +22,7 @@ use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as EngineSnapshot};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
-use kvproto::encryptionpb::EncryptionConfig;
+use kvproto::encryptionpb::{EncryptionConfig, EncryptionMethod};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -289,19 +289,28 @@ fn enc_err_to_raftstore(e: EncryptionError) -> RaftStoreError {
     RaftStoreError::Snapshot(box_err!(e))
 }
 
-fn get_decrypter(
+fn get_decrypter_reader(
     file: &str,
     encryption_key_manager: &DataKeyManager,
-) -> RaftStoreResult<DecrypterReader<File>> {
+) -> RaftStoreResult<Box<dyn Read + Send>> {
     let enc_info = encryption_key_manager.get_file(file)?;
-    let mut enc_cfg = EncryptionConfig::default();
     let mthd = encryption_method_from_db_encryption_method(enc_info.method);
+    debug!(
+        "get_decrypter_reader gets enc_infor for {:?}, method: {:?}", file, mthd;
+        "key" => hex::encode_upper(&enc_info.key),
+        "iv" => hex::encode_upper(&enc_info.iv),
+    );
+    if mthd == EncryptionMethod::Plaintext {
+        let f = File::open(file)?;
+        return Ok(Box::new(f) as Box<dyn Read + Send>);
+    }
+    let mut enc_cfg = EncryptionConfig::default();
     enc_cfg.set_method(mthd);
     enc_cfg.set_key(enc_info.key.clone());
     let iv = Iv::from_slice(&enc_info.iv).map_err(enc_err_to_raftstore)?;
-
     let f = File::open(file)?;
-    DecrypterReader::new(f, &enc_cfg, iv).map_err(enc_err_to_raftstore)
+    let r = DecrypterReader::new(f, &enc_cfg, iv).map_err(enc_err_to_raftstore)?;
+    Ok(Box::new(r) as Box<dyn Read + Send>)
 }
 
 fn calc_checksum_and_size(
@@ -311,7 +320,7 @@ fn calc_checksum_and_size(
     let (checksum, size) = if let Some(mgr) = encryption_key_manager {
         // Crc32 and file size need to be calculated based on decrypted contents.
         let file_name = path.to_str().unwrap();
-        let mut r = get_decrypter(file_name, &mgr)?;
+        let mut r = get_decrypter_reader(file_name, &mgr)?;
         calc_crc32_and_size(&mut r)?
     } else {
         (calc_crc32(path)?, get_file_size(path)?)
@@ -359,20 +368,24 @@ fn check_file_size_and_checksum(
     Ok(())
 }
 
+struct CfFileForRecving {
+    file: File,
+    encrypter: Option<(Cipher, Crypter)>,
+    written_size: u64,
+    write_digest: crc32fast::Hasher,
+}
+
 #[derive(Default)]
 pub struct CfFile {
     pub cf: CfName,
     pub path: PathBuf,
     pub tmp_path: PathBuf,
     pub clone_path: PathBuf,
-    pub file: Option<File>,
-    pub encrypted_file: Option<DecrypterReader<File>>,
-    pub encrypter: Option<(Cipher, Crypter)>, // cipher and crypter.
+    file_for_sending: Option<Box<dyn Read + Send>>,
+    file_for_recving: Option<CfFileForRecving>,
     pub kv_count: u64,
     pub size: u64,
-    pub written_size: u64,
     pub checksum: u32,
-    pub write_digest: Option<crc32fast::Hasher>,
 }
 
 #[derive(Default)]
@@ -387,7 +400,6 @@ struct MetaFile {
 
 pub struct Snap {
     key: SnapKey,
-    is_sending: bool,
     display_path: String,
     dir_path: PathBuf,
     cf_files: Vec<CfFile>,
@@ -448,7 +460,6 @@ impl Snap {
 
         let mut s = Snap {
             key: key.clone(),
-            is_sending,
             display_path,
             dir_path,
             cf_files,
@@ -519,7 +530,7 @@ impl Snap {
             // initialize cf file size and reader
             if cf_file.size > 0 {
                 let file = File::open(&cf_file.path)?;
-                cf_file.file = Some(file);
+                cf_file.file_for_sending = Some(Box::new(file) as Box<dyn Read + Send>);
             }
         }
         Ok(s)
@@ -554,8 +565,12 @@ impl Snap {
                 .write(true)
                 .create_new(true)
                 .open(&cf_file.tmp_path)?;
-            cf_file.file = Some(f);
-            cf_file.write_digest = Some(crc32fast::Hasher::new());
+            cf_file.file_for_recving = Some(CfFileForRecving {
+                file: f,
+                encrypter: None,
+                written_size: 0,
+                write_digest: crc32fast::Hasher::new(),
+            })
         }
         Ok(s)
     }
@@ -949,14 +964,11 @@ impl GenericSnapshot for Snap {
             }
 
             // Check each cf file has been fully written, and the checksum matches.
-            {
-                let mut file = cf_file.file.take().unwrap();
-                file.flush()?;
-                if !self.is_sending {
-                    file.sync_all()?;
-                }
-            }
-            if cf_file.written_size != cf_file.size {
+            let mut file_for_recving = cf_file.file_for_recving.take().unwrap();
+            file_for_recving.file.flush()?;
+            file_for_recving.file.sync_all()?;
+
+            if file_for_recving.written_size != cf_file.size {
                 return Err(io::Error::new(
                     ErrorKind::Other,
                     format!(
@@ -964,12 +976,13 @@ impl GenericSnapshot for Snap {
                          real size {}, expected size {}",
                         cf_file.path.display(),
                         cf_file.cf,
-                        cf_file.written_size,
+                        file_for_recving.written_size,
                         cf_file.size
                     ),
                 ));
             }
-            let checksum = cf_file.write_digest.clone().unwrap().finalize();
+
+            let checksum = file_for_recving.write_digest.finalize();
             if checksum != cf_file.checksum {
                 return Err(io::Error::new(
                     ErrorKind::Other,
@@ -989,6 +1002,7 @@ impl GenericSnapshot for Snap {
             self.size_track.fetch_add(cf_file.size, Ordering::SeqCst);
         }
         sync_dir(&self.dir_path)?;
+
         // write meta file
         let v = self.meta_file.meta.write_to_bytes()?;
         {
@@ -1022,20 +1036,13 @@ impl Read for Snap {
                 self.cf_index += 1;
                 continue;
             }
-            let read_res = if let Some(file) = cf_file.file.as_mut() {
-                file.read(buf)
-            } else {
-                let file = cf_file.encrypted_file.as_mut().unwrap();
-                file.read(buf)
-            };
-            match read_res {
+            let reader = cf_file.file_for_sending.as_mut().unwrap();
+            match reader.read(buf) {
                 Ok(0) => {
                     // EOF. Switch to next file.
                     self.cf_index += 1;
                 }
-                Ok(n) => {
-                    return Ok(n);
-                }
+                Ok(n) => return Ok(n),
                 e => return e,
             }
         }
@@ -1057,25 +1064,27 @@ impl Write for Snap {
                 continue;
             }
 
-            let left = (cf_file.size - cf_file.written_size) as usize;
+            let mut file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
+
+            let left = (cf_file.size - file_for_recving.written_size) as usize;
             assert!(left > 0 && !next_buf.is_empty());
-
-            let file = AllowStdIo::new(cf_file.file.as_mut().unwrap());
-            let mut file = self.limiter.clone().limit(file);
-            let digest = cf_file.write_digest.as_mut().unwrap();
-
             let (write_len, switch, finished) = match next_buf.len().cmp(&left) {
                 CmpOrdering::Greater => (left, true, false),
                 CmpOrdering::Equal => (left, true, true),
                 CmpOrdering::Less => (next_buf.len(), false, true),
             };
 
-            digest.update(&next_buf[0..write_len]);
-            cf_file.written_size += write_len as u64;
-            if plain_file_used(cf_file.cf) || cf_file.encrypter.is_none() {
+            file_for_recving
+                .write_digest
+                .update(&next_buf[0..write_len]);
+            file_for_recving.written_size += write_len as u64;
+
+            let file = AllowStdIo::new(&mut file_for_recving.file);
+            let mut file = self.limiter.clone().limit(file);
+            if plain_file_used(cf_file.cf) || file_for_recving.encrypter.is_none() {
                 block_on(file.write_all(&next_buf[0..write_len]))?;
             } else {
-                let (cipher, crypter) = cf_file.encrypter.as_mut().unwrap();
+                let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
                 let mut encrypt_buffer = vec![0; write_len + cipher.block_size()];
                 let mut bytes = crypter.update(&next_buf[0..write_len], &mut encrypt_buffer)?;
                 if switch {
@@ -1099,8 +1108,8 @@ impl Write for Snap {
 
     fn flush(&mut self) -> io::Result<()> {
         if let Some(cf_file) = self.cf_files.get_mut(self.cf_index) {
-            let file = cf_file.file.as_mut().unwrap();
-            file.flush()?;
+            let file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
+            file_for_recving.file.flush()?;
         }
         Ok(())
     }
@@ -1332,23 +1341,8 @@ impl SnapManager {
                 continue;
             }
             let p = cf_file.path.to_str().unwrap();
-            if let Ok(enc_info) = key_manager.get_file(p) {
-                let mut enc_cfg = EncryptionConfig::default();
-                let mthd = encryption_method_from_db_encryption_method(enc_info.method);
-                enc_cfg.set_method(mthd);
-                enc_cfg.set_key(enc_info.key.clone());
-                let iv = Iv::from_slice(&enc_info.iv).unwrap();
-                let f = cf_file.file.take().unwrap();
-                let reader = DecrypterReader::new(f, &enc_cfg, iv).unwrap();
-                cf_file.encrypted_file = Some(reader);
-                debug!(
-                    "enc_infor for {:?}: method: {:?}, key: {:?}, iv: {:?}",
-                    cf_file.path,
-                    &enc_info.method,
-                    hex::encode_upper(&enc_info.key),
-                    hex::encode_upper(&enc_info.iv),
-                );
-            }
+            let reader = get_decrypter_reader(p, key_manager)?;
+            cf_file.file_for_sending = Some(reader);
         }
         Ok(Box::new(s))
     }
@@ -1374,12 +1368,17 @@ impl SnapManager {
             for cf_file in &mut f.cf_files {
                 let path = cf_file.path.to_str().unwrap();
                 let enc_info = mgr.new_file(path)?;
-                let mut enc_cfg = EncryptionConfig::default();
                 let mthd = encryption_method_from_db_encryption_method(enc_info.method);
-                enc_cfg.set_method(mthd);
-                enc_cfg.set_key(enc_info.key);
-                let crypter = create_crypter(&enc_cfg, Mode::Encrypt, Some(&enc_info.iv)).unwrap();
-                cf_file.encrypter = Some(crypter);
+                if mthd != EncryptionMethod::Plaintext {
+                    let mut enc_cfg = EncryptionConfig::default();
+                    enc_cfg.set_method(mthd);
+                    enc_cfg.set_key(enc_info.key);
+                    let file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
+                    file_for_recving.encrypter = Some(
+                        create_crypter(&enc_cfg, Mode::Encrypt, Some(&enc_info.iv))
+                            .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
+                    );
+                }
             }
         }
         Ok(Box::new(f))
