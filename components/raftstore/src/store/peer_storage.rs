@@ -1424,6 +1424,7 @@ pub fn clear_meta(
 
 pub fn do_snapshot<E>(
     mgr: SnapManager,
+    engine: &E,
     kv_snap: E::Snapshot,
     region_id: u64,
     last_applied_index_term: u64,
@@ -1490,6 +1491,7 @@ where
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
     s.build(
+        engine,
         &kv_snap,
         state.get_region(),
         &mut snap_data,
