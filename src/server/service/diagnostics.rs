@@ -798,12 +798,13 @@ mod log {
     use futures::stream::{iter_ok, Stream};
     use itertools::Itertools;
     use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
+    use lazy_static::lazy_static;
     use nom::bytes::complete::{tag, take};
     use nom::character::complete::{alpha1, space0, space1};
     use nom::sequence::tuple;
     use nom::*;
     use rev_lines;
-    use tikv_util::logger::DATETIME_ROTATE_SUFFIX;
+    use regex::Regex;
 
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
@@ -991,6 +992,10 @@ mod log {
         }
     }
 
+    lazy_static! {
+        static ref NUM_REGEX: Regex = Regex::new(r"^\d{4}").unwrap();
+    }
+
     // Returns true if target 'filename' is part of given 'log_file'
     fn is_log_file(filename: &str, log_file: &str) -> bool {
         // for not rotated nomral file
@@ -1000,7 +1005,7 @@ mod log {
 
         // for rotated *.<rotated-datetime> file
         if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
-            if NaiveDateTime::parse_from_str(res, DATETIME_ROTATE_SUFFIX).is_ok() {
+            if NUM_REGEX.is_match(res) {
                 return true;
             }
         }
