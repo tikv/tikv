@@ -944,3 +944,43 @@ fn test_merge_isolated_store_with_no_target_peer() {
 
     must_get_equal(&cluster.get_engine(4), b"k345", b"v345");
 }
+
+/// Test whether a isolated peer can recover when two other regions merge to its region
+#[test]
+fn test_merge_cascade_merge_isolated() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    region = pd_client.get_region(b"k2").unwrap();
+    cluster.must_split(&region, b"k3");
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k3", b"v3");
+
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    let r1 = pd_client.get_region(b"k1").unwrap();
+    let r2 = pd_client.get_region(b"k2").unwrap();
+    let r3 = pd_client.get_region(b"k3").unwrap();
+
+    // r1, r3 both merge to r2
+    pd_client.must_merge(r1.get_id(), r2.get_id());
+    pd_client.must_merge(r3.get_id(), r2.get_id());
+
+    cluster.must_put(b"k4", b"v4");
+
+    cluster.clear_send_filters();
+
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}

@@ -2613,11 +2613,11 @@ impl ApplyFsm {
     fn resume_pending<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
         ctx: &mut ApplyContext<W>,
-    ) -> bool {
+    ) {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {
-                return false;
+                return;
             }
             self.delegate.ready_source_region_id = source_region_id;
         }
@@ -2636,19 +2636,13 @@ impl ApplyFsm {
                 // It can either be executing another `CommitMerge` in pending_msgs
                 // or has been written too much data.
                 s.pending_msgs = state.pending_msgs;
-                return false;
+                return;
             }
         }
 
         if !state.pending_msgs.is_empty() {
             self.handle_tasks(ctx, &mut state.pending_msgs);
         }
-
-        if self.delegate.yield_state.is_some() {
-            return false;
-        }
-
-        true
     }
 
     fn logs_up_to_date_for_merge<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
@@ -2927,8 +2921,13 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm, Contro
                 // query the length.
                 expected_msg_count = Some(normal.receiver.len());
             }
-            if !normal.resume_pending(&mut self.apply_ctx) {
+            normal.resume_pending(&mut self.apply_ctx);
+            if normal.delegate.wait_merge_state.is_some() {
+                // Wait for a new message
                 return expected_msg_count;
+            } else if normal.delegate.yield_state.is_some() {
+                // Wait for next round
+                return None;
             }
             expected_msg_count = None;
         }
