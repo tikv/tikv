@@ -182,9 +182,10 @@ impl<E: Engine> Endpoint<E> {
                 if start_ts == 0 {
                     start_ts = dag.get_start_ts_fallback();
                 }
+                let tag = if table_scan { "select" } else { "index" };
 
                 req_ctx = ReqContext::new(
-                    make_tag(table_scan),
+                    tag,
                     context,
                     ranges.as_slice(),
                     self.max_handle_duration,
@@ -228,8 +229,13 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = analyze.get_start_ts_fallback();
                 }
 
+                let tag = if table_scan {
+                    "analyze_table"
+                } else {
+                    "analyze_index"
+                };
                 req_ctx = ReqContext::new(
-                    make_tag(table_scan),
+                    tag,
                     context,
                     ranges.as_slice(),
                     self.max_handle_duration,
@@ -254,8 +260,13 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = checksum.get_start_ts_fallback();
                 }
 
+                let tag = if table_scan {
+                    "checksum_table"
+                } else {
+                    "checksum_index"
+                };
                 req_ctx = ReqContext::new(
-                    make_tag(table_scan),
+                    tag,
                     context,
                     ranges.as_slice(),
                     self.max_handle_duration,
@@ -315,6 +326,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<coppb::Response> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
+        tracker.on_scheduled();
         tracker.req_ctx.deadline.check()?;
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
@@ -324,6 +336,7 @@ impl<E: Engine> Endpoint<E> {
         }
         .await?;
         // When snapshot is retrieved, deadline may exceed.
+        tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
 
         let mut handler = if tracker.req_ctx.cache_match_version.is_some()
@@ -426,6 +439,7 @@ impl<E: Engine> Endpoint<E> {
 
             // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
+            tracker.on_scheduled();
             tracker.req_ctx.deadline.check()?;
 
             // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
@@ -435,6 +449,7 @@ impl<E: Engine> Endpoint<E> {
             }
             .await?;
             // When snapshot is retrieved, deadline may exceed.
+            tracker.on_snapshot_finished();
             tracker.req_ctx.deadline.check()?;
 
             let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
@@ -523,14 +538,6 @@ impl<E: Engine> Endpoint<E> {
             .try_flatten() // Stream<Resp, Error>
             .or_else(|e| futures03::future::ok(make_error_response(e))) // Stream<Resp, ()>
             .compat()
-    }
-}
-
-fn make_tag(is_table_scan: bool) -> &'static str {
-    if is_table_scan {
-        "select"
-    } else {
-        "index"
     }
 }
 
