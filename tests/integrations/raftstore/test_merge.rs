@@ -968,11 +968,18 @@ fn test_merge_cascade_merge_isolated() {
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 
-    cluster.add_send_filter(IsolationFilterFactory::new(3));
-
     let r1 = pd_client.get_region(b"k1").unwrap();
     let r2 = pd_client.get_region(b"k2").unwrap();
     let r3 = pd_client.get_region(b"k3").unwrap();
+
+    let r1_on_store1 = find_peer(&r1, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(r1.get_id(), r1_on_store1);
+    let r2_on_store2 = find_peer(&r2, 2).unwrap().to_owned();
+    cluster.must_transfer_leader(r2.get_id(), r2_on_store2);
+    let r3_on_store1 = find_peer(&r3, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(r3.get_id(), r3_on_store1);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
 
     // r1, r3 both merge to r2
     pd_client.must_merge(r1.get_id(), r2.get_id());
