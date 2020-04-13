@@ -14,6 +14,7 @@ mod errors;
 mod manager;
 mod master_key;
 mod read;
+mod write;
 
 pub use self::config::*;
 pub use self::crypter::*;
@@ -22,3 +23,4 @@ pub use self::errors::{Error, Result};
 pub use self::manager::DataKeyManager;
 pub use self::master_key::{Backend, FileBackend, KmsBackend};
 pub use self::read::{create_crypter, DecrypterReader, EncrypterReader};
+pub use self::write::EncrypterWriter;
