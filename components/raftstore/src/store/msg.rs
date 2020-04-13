@@ -4,13 +4,13 @@ use std::fmt;
 use std::time::Instant;
 
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::KvEngine;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{RaftApplyState, RaftMessage};
 use raft::SnapshotStatus;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -19,6 +19,7 @@ use crate::store::fsm::PeerFsm;
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
+use crate::Result;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
 
@@ -39,7 +40,9 @@ pub type ReadCallback<E> = Box<dyn FnOnce(ReadResponse<E>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 // callback(snapshot, applied_index, applied_term, Region)
-pub type SnapshotCallback<E: KvEngine> = Box<dyn FnOnce(E::Snapshot, &metapb::Region, u64, u64) + Send>;
+pub type SnapshotCallback<E> = Box<
+    dyn FnOnce(Result<<E as KvEngine>::Snapshot>, &metapb::Region, &RaftApplyState, u64) + Send,
+>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,

@@ -279,7 +279,6 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     timer: Option<Instant>,
     host: CoprocessorHost,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
     notifier: Notifier,
     engine: RocksEngine,
@@ -307,7 +306,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
         tag: String,
         host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-        region_scheduler: Scheduler<RegionTask>,
         engine: RocksEngine,
         router: ApplyRouter,
         notifier: Notifier,
@@ -318,7 +316,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             timer: None,
             host,
             importer,
-            region_scheduler,
             engine,
             router,
             notifier,
@@ -2287,6 +2284,7 @@ pub struct CatchUpLogs {
 
 pub struct GenSnapTask {
     pub(crate) region_id: u64,
+    //pub(crate) peer_id: u64,
     commit_index: u64,
     snap_notifier: SyncSender<RaftSnapshot>,
 }
@@ -2294,11 +2292,13 @@ pub struct GenSnapTask {
 impl GenSnapTask {
     pub fn new(
         region_id: u64,
+        //peer_id: u64,
         commit_index: u64,
         snap_notifier: SyncSender<RaftSnapshot>,
     ) -> GenSnapTask {
         GenSnapTask {
             region_id,
+            //peer_id,
             commit_index,
             snap_notifier,
         }
@@ -2384,14 +2384,15 @@ pub enum Msg {
     LogsUpToDate(CatchUpLogs),
     Noop,
     Destroy(Destroy),
-    Snapshot(GenSnapTask),
     Change {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
         cb: Callback<RocksEngine>,
     },
-    SnapshotTask {
-        cb: SnapshotCallback<RocksEngine::Snapshot>,
+    Snapshot {
+        cb: SnapshotCallback<RocksEngine>,
+        region_id: u64,
+        sync: bool,
     },
     #[cfg(any(test, feature = "testexport"))]
     Validate(u64, Box<dyn FnOnce((&ApplyDelegate, bool)) + Send>),
@@ -2428,7 +2429,7 @@ impl Debug for Msg {
             Msg::LogsUpToDate(_) => write!(f, "logs are updated"),
             Msg::Noop => write!(f, "noop"),
             Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
-            Msg::Snapshot(GenSnapTask { region_id, .. }) => {
+            Msg::Snapshot { region_id, .. } => {
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
             Msg::Change {
@@ -2439,7 +2440,6 @@ impl Debug for Msg {
                 cmd: ChangeCmd::Snapshot { region_id, .. },
                 ..
             } => write!(f, "[region {}] cmd snapshot", region_id),
-            Msg::SnapshotTask {..} => write!(f, "get a snapshot task"),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -2722,19 +2722,28 @@ impl ApplyFsm {
     fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
         apply_ctx: &mut ApplyContext<W>,
-        snap_task: GenSnapTask,
+        cb: SnapshotCallback<RocksEngine>,
+        sync: bool,
     ) {
+        let applied_index = self.delegate.apply_state.get_applied_index();
         if self.delegate.pending_remove || self.delegate.stopped {
+            let e = Err(box_err!("transfer leader won't exec"));
+            cb(
+                e,
+                &self.delegate.region,
+                &self.delegate.apply_state,
+                self.delegate.applied_index_term,
+            );
             return;
         }
-        let applied_index = self.delegate.apply_state.get_applied_index();
-        assert!(snap_task.commit_index() <= applied_index);
-        let mut need_sync = apply_ctx
-            .apply_res
-            .iter()
-            .any(|res| res.region_id == self.delegate.region_id())
-            && self.delegate.last_sync_apply_index != applied_index;
-        (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
+        let mut need_sync = sync;
+        if need_sync {
+            need_sync = apply_ctx
+                .apply_res
+                .iter()
+                .any(|res| res.region_id == self.delegate.region_id())
+                && self.delegate.last_sync_apply_index != applied_index;
+        }
         if need_sync {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
@@ -2752,23 +2761,13 @@ impl ApplyFsm {
             // TODO: Update it only when `flush()` returns true.
             self.delegate.last_sync_apply_index = applied_index;
         }
-
-        if let Err(e) = snap_task.generate_and_schedule_snapshot(
-            apply_ctx.engine.snapshot(),
+        let snap = apply_ctx.engine.snapshot();
+        cb(
+            Ok(snap),
+            &self.delegate.region,
+            &self.delegate.apply_state,
             self.delegate.applied_index_term,
-            self.delegate.apply_state.clone(),
-            &apply_ctx.region_scheduler,
-        ) {
-            error!(
-                "schedule snapshot failed";
-                "error" => ?e,
-                "region_id" => self.delegate.region_id(),
-                "peer_id" => self.delegate.id()
-            );
-        }
-        self.delegate
-            .pending_request_snapshot_count
-            .fetch_sub(1, Ordering::SeqCst);
+        );
         fail_point!(
             "apply_on_handle_snapshot_finish_1_1",
             self.delegate.id == 1 && self.delegate.region_id() == 1,
@@ -2865,8 +2864,11 @@ impl ApplyFsm {
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
-                Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
-                Some(Msg::SnapshotTask(cb)) => self.handle_snapshot_task(apply_ctx, cb),
+                Some(Msg::Snapshot {
+                    cb,
+                    sync,
+                    region_id,
+                }) => self.handle_snapshot(apply_ctx, cb, sync),
                 Some(Msg::Change {
                     cmd,
                     region_epoch,
@@ -3015,7 +3017,6 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask>,
     engine: RocksEngine,
     sender: Notifier,
     router: ApplyRouter,
@@ -3033,7 +3034,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
             cfg: builder.cfg.clone(),
             coprocessor_host: builder.coprocessor_host.clone(),
             importer: builder.importer.clone(),
-            region_scheduler: builder.region_scheduler.clone(),
             engine: builder.engines.kv.clone(),
             _phantom: PhantomData,
             sender,
@@ -3055,7 +3055,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> HandlerBuilder<ApplyFsm, Con
                 self.tag.clone(),
                 self.coprocessor_host.clone(),
                 self.importer.clone(),
-                self.region_scheduler.clone(),
                 self.engine.clone(),
                 self.router.clone(),
                 self.sender.clone(),
@@ -3110,7 +3109,7 @@ impl ApplyRouter {
                     );
                     return;
                 }
-                Msg::Snapshot(_) => {
+                Msg::Snapshot { .. } => {
                     warn!(
                         "region is removed before taking snapshot, are we shutting down?";
                         "region_id" => region_id
@@ -3351,7 +3350,6 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let (_tmp, engine) = create_tmp_engine("apply-basic");
         let (_dir, importer) = create_tmp_importer("apply-basic");
-        let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let builder = super::Builder::<RocksWriteBatch> {
@@ -3359,7 +3357,6 @@ mod tests {
             cfg,
             coprocessor_host: CoprocessorHost::default(),
             importer,
-            region_scheduler,
             sender,
             _phantom: PhantomData,
             engine: engine.clone(),
@@ -3727,7 +3724,6 @@ mod tests {
             .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
-        let (region_scheduler, _) = dummy_scheduler();
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
@@ -3735,7 +3731,6 @@ mod tests {
             tag: "test-store".to_owned(),
             cfg,
             sender,
-            region_scheduler,
             _phantom: PhantomData,
             coprocessor_host: host,
             importer: importer.clone(),
@@ -3985,7 +3980,6 @@ mod tests {
             .register_cmd_observer(1, BoxCmdObserver::new(obs));
 
         let (tx, rx) = mpsc::channel();
-        let (region_scheduler, _) = dummy_scheduler();
         let sender = Notifier::Sender(tx);
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
@@ -3994,7 +3988,6 @@ mod tests {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
             sender,
-            region_scheduler,
             coprocessor_host: host,
             importer,
             engine,
@@ -4252,7 +4245,6 @@ mod tests {
         obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
         host.registry
             .register_cmd_observer(1, BoxCmdObserver::new(obs));
-        let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let builder = super::Builder::<RocksWriteBatch> {
@@ -4260,7 +4252,6 @@ mod tests {
             cfg,
             sender,
             importer,
-            region_scheduler,
             _phantom: PhantomData,
             coprocessor_host: host,
             engine: engine.clone(),

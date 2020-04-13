@@ -517,7 +517,7 @@ pub struct PeerStorage {
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_sched: Scheduler<RegionTask>,
+    pub region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,

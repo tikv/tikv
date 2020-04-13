@@ -32,11 +32,12 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
+use crate::store::fsm::GenSnapTask;
 use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
+use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot, SnapshotCallback};
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -1180,10 +1181,7 @@ impl Peer {
         {
             // Generating snapshot task won't set ready for raft group.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-                self.pending_request_snapshot_count
-                    .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+                self.schedule_snapshot(gen_task, ctx);
             }
             return None;
         }
@@ -1405,10 +1403,7 @@ impl Peer {
             // Always sending snapshot task behind apply task, so it gets latest
             // snapshot.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-                self.pending_request_snapshot_count
-                    .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+                self.schedule_snapshot(gen_task, ctx);
             }
         }
 
@@ -1428,6 +1423,42 @@ impl Peer {
             self.raft_group.advance_append(ready);
         }
         self.proposals.gc();
+    }
+
+    fn schedule_snapshot<T, C>(&self, snap_task: GenSnapTask, ctx: &mut PollContext<T, C>) {
+        let pending_request_snapshot_count = self.pending_request_snapshot_count.clone();
+        self.pending_request_snapshot_count
+            .fetch_add(1, Ordering::SeqCst);
+        let scheduler = self.get_store().region_sched.clone();
+        let region_id = self.region_id;
+        let peer_id = self.peer.get_id();
+        let cb: SnapshotCallback<RocksEngine> =
+            Box::new(move |snap_ret, region, apply_state, applied_index_term| {
+                if let Ok(snap) = snap_ret {
+                    if let Err(e) = snap_task.generate_and_schedule_snapshot(
+                        snap,
+                        applied_index_term,
+                        apply_state.clone(),
+                        &scheduler,
+                    ) {
+                        error!(
+                        "schedule snapshot failed";
+                            "error" => ?e,
+                            "region_id" => region_id,
+                            //"peer_id" => self.delegate.id()
+                        );
+                    }
+                }
+                pending_request_snapshot_count.fetch_sub(1, Ordering::SeqCst);
+            });
+        ctx.apply_router.schedule_task(
+            self.region_id,
+            ApplyTask::Snapshot {
+                cb,
+                sync: true,
+                region_id: self.region_id,
+            },
+        );
     }
 
     fn response_read<T, C>(
