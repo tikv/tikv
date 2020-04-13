@@ -100,6 +100,10 @@ impl ScalarFunc {
             | ScalarFuncSig::ModReal
             | ScalarFuncSig::ModDecimal
             | ScalarFuncSig::ModInt
+            | ScalarFuncSig::ModIntUnsignedUnsigned
+            | ScalarFuncSig::ModIntUnsignedSigned
+            | ScalarFuncSig::ModIntSignedUnsigned
+            | ScalarFuncSig::ModIntSignedSigned
             | ScalarFuncSig::BitAndSig
             | ScalarFuncSig::BitOrSig
             | ScalarFuncSig::BitXorSig
@@ -639,6 +643,10 @@ dispatch_call! {
         IntDivideInt => int_divide_int,
         IntDivideDecimal => int_divide_decimal,
         ModInt => mod_int,
+        ModIntUnsignedUnsigned => mod_int,
+        ModIntUnsignedSigned => mod_int,
+        ModIntSignedUnsigned => mod_int,
+        ModIntSignedSigned => mod_int,
 
         Hour => hour,
         Minute => minute,
