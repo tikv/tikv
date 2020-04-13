@@ -1067,10 +1067,10 @@ mod tests {
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
-        let downstream = Downstream::new("".to_string(), region_epoch, 0);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
         let new_downstream_id = downstream.get_id();
         ep.run(Task::Register {
-            request: req,
+            request: req.clone(),
             downstream,
             conn_id,
         });
@@ -1090,7 +1090,7 @@ mod tests {
             region_id: 1,
             downstream_id: new_downstream_id,
             conn_id,
-            err: Some(Error::Request(err_header)),
+            err: Some(Error::Request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
         let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
@@ -1100,5 +1100,26 @@ mod tests {
             _ => panic!("unknown event"),
         }
         assert_eq!(ep.capture_regions.len(), 0);
+
+        // Stale deregister should be filtered.
+        let downstream = Downstream::new("".to_string(), region_epoch, 0);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(ep.capture_regions.len(), 1);
+        let deregister = Deregister::Region {
+            region_id: 1,
+            // A stale ObserveID (different from the actual one).
+            observe_id: ObserveID::new(),
+            err: Error::Request(err_header),
+        };
+        ep.run(Task::Deregister(deregister));
+        match rx.recv_timeout(Duration::from_millis(500)) {
+            Err(_) => (),
+            _ => panic!("unknown event"),
+        }
+        assert_eq!(ep.capture_regions.len(), 1);
     }
 }
