@@ -474,9 +474,12 @@ dependencies = [
  "failure",
  "futures 0.1.29",
  "grpcio",
+ "hex 0.4.2",
  "kvproto",
+ "lazy_static",
  "panic_hook",
  "pd_client",
+ "prometheus",
  "raft",
  "raftstore",
  "resolved_ts",
@@ -1085,6 +1088,7 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "coarsetime",
  "encryption",
  "engine",
  "engine_traits",
@@ -1092,6 +1096,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "prometheus",
+ "prometheus-static-metric",
  "rand 0.7.3",
  "rocksdb",
  "slog",
@@ -1514,9 +1519,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0eb5544c0e47a603130f1159773df46eb448c5649f7b4833c51f241c4e9fcbb"
+checksum = "a779eb8dc982fa4a552eb21e2962b2d927ea9037cb21be8645034c9e79ee4a29"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
@@ -1543,9 +1548,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.5.0"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48b1b6365d95c795aa3840b19c5364ad0a4bf82bfd48b2f9185719b9f8e614a7"
+checksum = "1b3080bdcfde08451cc7994f0b7c0c71c638629f8fb0049217af76a69d0742c3"
 dependencies = [
  "bindgen",
  "cc",
@@ -3007,6 +3012,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "coarsetime",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -3033,6 +3039,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "rand 0.6.5",
  "serde",
  "serde_derive",
  "slog",
@@ -3373,6 +3380,8 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "slog",
+ "slog-global",
  "tikv_util",
  "txn_types",
 ]
@@ -4702,11 +4711,11 @@ dependencies = [
  "tokio-core",
  "tokio-executor",
  "tokio-sync",
- "tokio-threadpool",
  "tokio-timer",
  "toml",
  "url",
  "utime",
+ "yatp",
  "zeroize",
 ]
 

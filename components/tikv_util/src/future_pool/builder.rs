@@ -2,9 +2,13 @@
 
 use std::sync::Arc;
 
-use tokio_threadpool::Builder as TokioBuilder;
+use yatp::pool::CloneRunnerBuilder;
+use yatp::queue::QueueType;
+use yatp::task::future;
+use yatp::Builder as YatpBuilder;
 
 use super::metrics::*;
+use crate::future_pool::FuturePoolRunner;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -24,21 +28,25 @@ impl Config {
 }
 
 pub struct Builder {
-    inner_builder: TokioBuilder,
     name_prefix: Option<String>,
-    on_tick: Option<Box<dyn Fn() + Send + Sync>>,
-    // for accessing pool_size config since Tokio doesn't offer such getter.
+    on_tick: Option<Arc<dyn Fn() + Send + Sync>>,
+    before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+    after_start: Option<Arc<dyn Fn() + Send + Sync>>,
+    // for accessing pool_size config since yatp doesn't offer such getter.
     pool_size: usize,
+    stack_size: usize,
     max_tasks: usize,
 }
 
 impl Builder {
     pub fn new() -> Self {
         Self {
-            inner_builder: TokioBuilder::new(),
             name_prefix: None,
             on_tick: None,
+            before_stop: None,
+            after_start: None,
             pool_size: 0,
+            stack_size: 0,
             max_tasks: std::usize::MAX,
         }
     }
@@ -54,19 +62,17 @@ impl Builder {
 
     pub fn pool_size(&mut self, val: usize) -> &mut Self {
         self.pool_size = val;
-        self.inner_builder.pool_size(val);
         self
     }
 
     pub fn stack_size(&mut self, val: usize) -> &mut Self {
-        self.inner_builder.stack_size(val);
+        self.stack_size = val;
         self
     }
 
     pub fn name_prefix(&mut self, val: impl Into<String>) -> &mut Self {
         let name = val.into();
-        self.name_prefix = Some(name.clone());
-        self.inner_builder.name_prefix(name);
+        self.name_prefix = Some(name);
         self
     }
 
@@ -74,7 +80,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_tick = Some(Box::new(f));
+        self.on_tick = Some(Arc::new(f));
         self
     }
 
@@ -82,7 +88,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.inner_builder.before_stop(f);
+        self.before_stop = Some(Arc::new(f));
         self
     }
 
@@ -90,7 +96,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.inner_builder.after_start(f);
+        self.after_start = Some(Arc::new(f));
         self
     }
 
@@ -105,12 +111,25 @@ impl Builder {
         } else {
             "future_pool"
         };
-        let env = Arc::new(super::Env {
-            on_tick: self.on_tick.take(),
+        let env = super::Env {
             metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
-        });
-        let pool = Arc::new(self.inner_builder.build());
+        };
+        let runner = FuturePoolRunner {
+            inner: future::Runner::default(),
+            before_stop: self.before_stop.clone(),
+            after_start: self.after_start.clone(),
+            on_tick: self.on_tick.clone(),
+            env: env.clone(),
+        };
+        // If zero `pool_size` or `stack_size` is passed in, yatp will keep its default
+        // configuration unchanged.
+        let pool = Arc::new(
+            YatpBuilder::new(name)
+                .max_thread_count(self.pool_size)
+                .stack_size(self.stack_size)
+                .build_with_queue_and_runner(QueueType::SingleLevel, CloneRunnerBuilder(runner)),
+        );
         super::FuturePool {
             pool,
             env,

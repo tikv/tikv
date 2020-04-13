@@ -188,6 +188,11 @@ impl Lock {
             return Ok(());
         }
 
+        if self.min_commit_ts > ts {
+            // Ignore lock when min_commit_ts > ts
+            return Ok(());
+        }
+
         if bypass_locks.contains(self.ts) {
             return Ok(());
         }
@@ -434,7 +439,19 @@ mod tests {
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        lock.check_ts_conflict(&key, TimeStamp::max(), &empty)
+        lock.clone()
+            .check_ts_conflict(&key, TimeStamp::max(), &empty)
+            .unwrap_err();
+
+        // Ignore the lock if read ts is less than min_commit_ts
+        lock.min_commit_ts = 150.into();
+        lock.clone()
+            .check_ts_conflict(&key, 140.into(), &empty)
+            .unwrap();
+        lock.clone()
+            .check_ts_conflict(&key, 150.into(), &empty)
+            .unwrap_err();
+        lock.check_ts_conflict(&key, 160.into(), &empty)
             .unwrap_err();
     }
 }
