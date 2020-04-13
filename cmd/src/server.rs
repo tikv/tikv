@@ -385,7 +385,10 @@ impl TiKVServer {
             Box::new(DBConfigManger::new(engines.raft.c().clone(), DBType::Raft)),
         );
 
-        let engine = RaftKv::new(raft_router.clone());
+        let engine = RaftKv::new(
+            raft_router.clone(),
+            RocksEngine::from_db(engines.kv.clone()),
+        );
 
         self.engines = Some(Engines {
             engines,
@@ -596,8 +599,9 @@ impl TiKVServer {
             raft_router,
             cdc_ob,
         );
+        let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
-            .start(cdc_endpoint)
+            .start_with_timer(cdc_endpoint, cdc_timer)
             .unwrap_or_else(|e| fatal!("failed to start cdc: {}", e));
         self.to_stop.push(cdc_worker);
 
