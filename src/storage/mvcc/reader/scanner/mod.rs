@@ -652,7 +652,7 @@ mod tests {
         must_prewrite_lock(&engine, key, key, 600);
 
         must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, true);
-        must_met_newer_ts_data(&engine, 600, key, Some(val2), desc, false);
+        must_met_newer_ts_data(&engine, 600, key, Some(val2), desc, true);
     }
 
     #[test]
