@@ -935,6 +935,69 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             );
         }));
     }
+
+    fn ver_get(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerGetRequest,
+        _sink: UnarySink<VerGetResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_batch_get(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerBatchGetRequest,
+        _sink: UnarySink<VerBatchGetResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_mut(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerMutRequest,
+        _sink: UnarySink<VerMutResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_batch_mut(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerBatchMutRequest,
+        _sink: UnarySink<VerBatchMutResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_scan(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerScanRequest,
+        _sink: UnarySink<VerScanResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_delete_range(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerDeleteRangeRequest,
+        _sink: UnarySink<VerDeleteRangeResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn batch_coprocessor(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: BatchRequest,
+        _sink: ServerStreamingSink<BatchResponse>,
+    ) {
+        unimplemented!()
+    }
 }
 
 fn response_batch_commands_request<F>(
@@ -1050,6 +1113,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         RawScan, future_raw_scan(storage), raw_scan;
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
+        VerGet, future_ver_get(storage), ver_get;
+        VerBatchGet, future_ver_batch_get(storage), ver_batch_get;
+        VerMut, future_ver_mut(storage), ver_mut;
+        VerBatchMut, future_ver_batch_mut(storage), ver_batch_mut;
+        VerScan, future_ver_scan(storage), ver_scan;
+        VerDeleteRange, future_ver_delete_range(storage), ver_delete_range;
         Coprocessor, future_cop(cop, Some(peer.to_string())), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
@@ -1498,6 +1567,60 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
         }
         resp
     })
+}
+
+// unimplemented
+fn future_ver_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerGetRequest,
+) -> impl Future<Item = VerGetResponse, Error = Error> {
+    let resp = VerGetResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_batch_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerBatchGetRequest,
+) -> impl Future<Item = VerBatchGetResponse, Error = Error> {
+    let resp = VerBatchGetResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerMutRequest,
+) -> impl Future<Item = VerMutResponse, Error = Error> {
+    let resp = VerMutResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_batch_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerBatchMutRequest,
+) -> impl Future<Item = VerBatchMutResponse, Error = Error> {
+    let resp = VerBatchMutResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_scan<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerScanRequest,
+) -> impl Future<Item = VerScanResponse, Error = Error> {
+    let resp = VerScanResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_delete_range<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerDeleteRangeRequest,
+) -> impl Future<Item = VerDeleteRangeResponse, Error = Error> {
+    let resp = VerDeleteRangeResponse::default();
+    future::ok(resp)
 }
 
 fn future_cop<E: Engine>(
