@@ -62,6 +62,7 @@ prost = { version = "0.6", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.2"
 raft = { version = "0.6.0-alpha", default-features = false }
+rand = "0.6.5"
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

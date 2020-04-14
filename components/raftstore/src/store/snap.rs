@@ -481,7 +481,7 @@ impl Snap {
                     "snapshot" => %s.path(),
                     "err" => ?e,
                 );
-                if !retry_delete_snapshot(&deleter, key, &s) {
+                if !retry_delete_snapshot(&*deleter as &dyn SnapshotDeleter, key, &s) {
                     warn!(
                         "failed to delete snapshot because it's already registered elsewhere";
                         "snapshot" => %s.path(),
@@ -775,7 +775,7 @@ impl Snap {
                         "snapshot" => %self.path(),
                         "err" => ?e,
                     );
-                    if !retry_delete_snapshot(&deleter, &self.key, self) {
+                    if !retry_delete_snapshot(&*deleter as &dyn SnapshotDeleter, &self.key, self) {
                         error!(
                             "failed to delete corrupted snapshot because it's \
                              already registered elsewhere";
