@@ -662,7 +662,7 @@ impl Initializer {
             .unwrap();
         let mut done = false;
         while !done {
-            if self.downstream_state.load(Ordering::SeqCst) == DownstreamState::Normal as u8 {
+            if self.downstream_state.load(Ordering::SeqCst) != DownstreamState::Normal as u8 {
                 info!("async incremental scan canceled";
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,

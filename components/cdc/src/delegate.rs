@@ -127,6 +127,19 @@ impl Downstream {
 #[derive(Default)]
 struct Pending {
     pub downstreams: Vec<Downstream>,
+    pub locks: Vec<PendingLock>,
+}
+
+enum PendingLock {
+    Track {
+        key: Vec<u8>,
+        start_ts: TimeStamp,
+    },
+    Untrack {
+        key: Vec<u8>,
+        start_ts: TimeStamp,
+        commit_ts: Option<TimeStamp>,
+    },
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -296,20 +309,32 @@ impl Delegate {
     }
 
     /// Install a resolver and notify downstreams this region if ready to serve.
-    pub fn on_region_ready(&mut self, resolver: Resolver, region: Region) -> Result<()> {
+    pub fn on_region_ready(&mut self, mut resolver: Resolver, region: Region) -> Result<()> {
         assert!(
             self.resolver.is_none(),
             "region {} resolver should not be ready",
             self.region_id,
         );
-        self.resolver = Some(resolver);
+        // Mark the delegate as initialized.
         self.region = Some(region);
         if let Some(pending) = self.pending.take() {
             // Re-subscribe pending downstreams.
             for downstream in pending.downstreams {
                 self.subscribe(downstream);
             }
+
+            for lock in pending.locks {
+                match lock {
+                    PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
+                    PendingLock::Untrack {
+                        key,
+                        start_ts,
+                        commit_ts,
+                    } => resolver.untrack_lock(start_ts, commit_ts, key),
+                }
+            }
         }
+        self.resolver = Some(resolver);
         info!("region is ready"; "region_id" => self.region_id);
         Ok(())
     }
@@ -477,18 +502,30 @@ impl Delegate {
 
                     // In order to advance resolved ts,
                     // we must untrack inflight txns if they are committed.
-                    assert!(self.resolver.is_some(), "region resolver should be ready");
-                    let resolver = self.resolver.as_mut().unwrap();
                     let commit_ts = if row.commit_ts == 0 {
                         None
                     } else {
                         Some(row.commit_ts)
                     };
-                    resolver.untrack_lock(
-                        row.start_ts.into(),
-                        commit_ts.map(Into::into),
-                        row.key.clone(),
-                    );
+                    match self.resolver {
+                        Some(ref mut resolver) => resolver.untrack_lock(
+                            row.start_ts.into(),
+                            commit_ts.map(Into::into),
+                            row.key.clone(),
+                        ),
+                        None => {
+                            assert!(self.pending.is_some(), "region resolver not ready");
+                            self.pending
+                                .as_mut()
+                                .unwrap()
+                                .locks
+                                .push(PendingLock::Untrack {
+                                    key: row.key.clone(),
+                                    start_ts: row.start_ts.into(),
+                                    commit_ts: commit_ts.map(Into::into),
+                                });
+                        }
+                    }
 
                     let r = rows.insert(row.key.clone(), row);
                     assert!(r.is_none());
@@ -510,9 +547,22 @@ impl Delegate {
 
                     // In order to compute resolved ts,
                     // we must track inflight txns.
-                    assert!(self.resolver.is_some(), "region resolver should be ready");
-                    let resolver = self.resolver.as_mut().unwrap();
-                    resolver.track_lock(row.start_ts.into(), row.key.clone());
+                    match self.resolver {
+                        Some(ref mut resolver) => {
+                            resolver.track_lock(row.start_ts.into(), row.key.clone())
+                        }
+                        None => {
+                            assert!(self.pending.is_some(), "region resolver not ready");
+                            self.pending
+                                .as_mut()
+                                .unwrap()
+                                .locks
+                                .push(PendingLock::Track {
+                                    key: row.key.clone(),
+                                    start_ts: row.start_ts.into(),
+                                });
+                        }
+                    }
 
                     *occupied = row;
                 }
