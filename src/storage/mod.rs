@@ -243,7 +243,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
 
-                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
+                let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -295,7 +295,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
+                let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     let mut snap_store = SnapshotStore::new(
                         snapshot,
@@ -351,7 +351,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
+                let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -422,7 +422,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
+                let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -560,7 +560,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
+                let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
 
@@ -602,7 +602,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
+                let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let cf = Self::rawkv_cf(&cf)?;
                     let mut results = vec![];
                     // TODO: optimize using seek.
@@ -637,7 +637,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
+                let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
@@ -907,7 +907,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
+                let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let end_key = end_key.map(Key::from_encoded);
 
                     let mut statistics = Statistics::default();
@@ -1010,7 +1010,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
+                let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     if !Self::check_key_ranges(&ranges, reverse) {
                         return Err(box_err!("Invalid KeyRanges"));

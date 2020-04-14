@@ -12,7 +12,6 @@ use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {
-    local_sched_processing_read_histogram_vec: LocalHistogramVec,
     local_kv_command_keyread_histogram_vec: LocalHistogramVec,
     local_kv_command_counter_vec: LocalIntCounterVec,
     local_sched_commands_pri_counter_vec: LocalIntCounterVec,
@@ -23,7 +22,6 @@ struct StorageLocalMetrics {
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
-            local_sched_processing_read_histogram_vec: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             local_kv_command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_kv_command_counter_vec: KV_COMMAND_COUNTER_VEC.local(),
             local_sched_commands_pri_counter_vec: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
@@ -35,10 +33,10 @@ thread_local! {
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     SCHED_HISTOGRAM_VEC_STATIC.flush();
+    SCHED_PROCESSING_READ_HISTOGRAM_STATIC.flush();
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
-        m.local_sched_processing_read_histogram_vec.flush();
         m.local_kv_command_keyread_histogram_vec.flush();
         m.local_kv_command_counter_vec.flush();
         m.local_sched_commands_pri_counter_vec.flush();
@@ -95,19 +93,16 @@ pub fn tls_collect_key_reads(cmd: &str, count: usize) {
     });
 }
 
-pub fn tls_processing_read_observe_duration<F, R>(cmd: &str, f: F) -> R
+pub fn tls_processing_read_observe_duration<F, R>(cmd: CommandKind, f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    TLS_STORAGE_METRICS.with(|m| {
-        let now = tikv_util::time::Instant::now_coarse();
-        let ret = f();
-        m.borrow_mut()
-            .local_sched_processing_read_histogram_vec
-            .with_label_values(&[cmd])
-            .observe(now.elapsed_secs());
-        ret
-    })
+    let now = tikv_util::time::Instant::now_coarse();
+    let ret = f();
+    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+        .get(cmd)
+        .observe(now.elapsed_secs());
+    ret
 }
 
 pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
@@ -191,6 +186,10 @@ make_auto_flush_static_metric! {
         "type" => CommandKind,
     }
 
+    pub struct ProcessingReadVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
     pub struct KvCommandCounterVec: LocalIntCounter {
         "type" => CommandKind,
     }
@@ -271,6 +270,8 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref SCHED_PROCESSING_READ_HISTOGRAM_STATIC: ProcessingReadVec =
+        auto_flush_from!(SCHED_PROCESSING_READ_HISTOGRAM_VEC, ProcessingReadVec);
     pub static ref SCHED_PROCESSING_WRITE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_processing_write_duration_seconds",
         "Bucketed histogram of processing write duration",
