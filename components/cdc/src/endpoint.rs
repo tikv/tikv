@@ -1104,7 +1104,7 @@ mod tests {
         // Stale deregister should be filtered.
         let downstream = Downstream::new("".to_string(), region_epoch, 0);
         ep.run(Task::Register {
-            request: req.clone(),
+            request: req,
             downstream,
             conn_id,
         });
