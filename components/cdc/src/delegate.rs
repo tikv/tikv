@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "prost-codec")]
@@ -48,6 +48,13 @@ impl DownstreamID {
     }
 }
 
+#[derive(Copy, Clone)]
+pub enum DownstreamState {
+    Uninitialized,
+    Normal,
+    Stopped,
+}
+
 #[derive(Clone)]
 pub struct Downstream {
     // TODO: include cdc request.
@@ -59,6 +66,7 @@ pub struct Downstream {
     peer: String,
     region_epoch: RegionEpoch,
     sink: Option<BatchSender<(usize, Event)>>,
+    state: Arc<AtomicU8>,
 }
 
 impl Downstream {
@@ -73,6 +81,7 @@ impl Downstream {
             peer,
             region_epoch,
             sink: None,
+            state: Arc::new(AtomicU8::new(DownstreamState::Uninitialized as u8)),
         }
     }
 
@@ -97,6 +106,10 @@ impl Downstream {
 
     pub fn get_id(&self) -> DownstreamID {
         self.id
+    }
+
+    pub fn get_state(&self) -> Arc<AtomicU8> {
+        self.state.clone()
     }
 
     pub fn sink_duplicate_error(&self, region_id: u64) {
@@ -178,18 +191,32 @@ impl Delegate {
         true
     }
 
-    pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
-        let change_data_error = err.map(|err| self.error_event(err));
-        let downstreams = if self.pending.is_some() {
+    pub fn downstreams(&self) -> &Vec<Downstream> {
+        if self.pending.is_some() {
+            &self.pending.as_ref().unwrap().downstreams
+        } else {
+            &self.downstreams
+        }
+    }
+
+    pub fn downstreams_mut(&mut self) -> &mut Vec<Downstream> {
+        if self.pending.is_some() {
             &mut self.pending.as_mut().unwrap().downstreams
         } else {
             &mut self.downstreams
-        };
+        }
+    }
+
+    pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
+        let change_data_error = err.map(|err| self.error_event(err));
+        let downstreams = self.downstreams_mut();
         downstreams.retain(|d| {
             if d.id == id {
                 if let Some(change_data_error) = change_data_error.clone() {
                     d.sink_event(change_data_error, 0);
                 }
+                d.state
+                    .store(DownstreamState::Stopped as u8, Ordering::SeqCst);
             }
             d.id != id
         });
@@ -241,15 +268,16 @@ impl Delegate {
         info!("region met error";
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
+        for downstream in &self.downstreams {
+            downstream
+                .state
+                .store(DownstreamState::Stopped as u8, Ordering::SeqCst);
+        }
         self.broadcast(change_data_err, 0);
     }
 
     fn broadcast(&self, change_data_event: Event, size: usize) {
-        let downstreams = if self.pending.is_some() {
-            &self.pending.as_ref().unwrap().downstreams
-        } else {
-            &self.downstreams
-        };
+        let downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
             "region {} miss downstream, event: {:?}",

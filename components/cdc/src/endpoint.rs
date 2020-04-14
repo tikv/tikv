@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,7 +26,7 @@ use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
-use crate::delegate::{Delegate, Downstream, DownstreamID};
+use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
 use crate::service::{Conn, ConnID};
 use crate::{CdcObserver, Error, Result};
@@ -374,6 +374,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         });
 
         let downstream_id = downstream.get_id();
+        let downstream_state = downstream.get_state();
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
         let batch_size = self.scan_batch_size;
@@ -385,10 +386,9 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             downstream_id,
             batch_size,
             observe_id: delegate.id,
+            downstream_state: downstream_state.clone(),
             checkpoint_ts: checkpoint_ts.into(),
             build_resolver: is_new_delegate,
-            // TODO: make the cancellation at Downstream level instead of Region level.
-            proceed: delegate.enabled(),
         };
         if !delegate.subscribe(downstream) {
             conn.unsubscribe(request.get_region_id());
@@ -439,7 +439,14 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             SignificantMsg::CaptureChange {
                 cmd: change_cmd,
                 region_epoch: request.take_region_epoch(),
-                callback: Callback::Read(cb),
+                callback: Callback::Read(Box::new(move |resp| {
+                    downstream_state.compare_and_swap(
+                        DownstreamState::Uninitialized as u8,
+                        DownstreamState::Normal as u8,
+                        Ordering::SeqCst,
+                    );
+                    cb(resp);
+                })),
             },
         ) {
             deregister_downstream(Error::Request(e.into()));
@@ -597,12 +604,12 @@ struct Initializer {
     region_id: u64,
     observe_id: ObserveID,
     downstream_id: DownstreamID,
+    downstream_state: Arc<AtomicU8>,
     conn_id: ConnID,
     checkpoint_ts: TimeStamp,
     batch_size: usize,
 
     build_resolver: bool,
-    proceed: Arc<AtomicBool>,
 }
 
 impl Initializer {
@@ -655,7 +662,7 @@ impl Initializer {
             .unwrap();
         let mut done = false;
         while !done {
-            if !self.proceed.load(Ordering::SeqCst) {
+            if self.downstream_state.load(Ordering::SeqCst) == DownstreamState::Normal as u8 {
                 info!("async incremental scan canceled";
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,
@@ -877,12 +884,12 @@ mod tests {
             region_id: 1,
             observe_id: ObserveID::new(),
             downstream_id: DownstreamID::new(),
+            downstream_state: Arc::new(AtomicU8::new(DownstreamState::Normal as u8)),
             conn_id: ConnID::new(),
             checkpoint_ts: 1.into(),
             batch_size: 1,
 
             build_resolver: true,
-            proceed: Arc::new(AtomicBool::new(true)),
         };
 
         (receiver_worker, pool, initializer, rx)
@@ -958,7 +965,9 @@ mod tests {
         }
 
         // Test cancellation.
-        initializer.proceed.store(false, Ordering::SeqCst);
+        initializer
+            .downstream_state
+            .store(DownstreamState::Stopped as u8, Ordering::SeqCst);
         initializer.async_incremental_scan(snap, region);
 
         loop {
