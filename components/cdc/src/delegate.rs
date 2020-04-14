@@ -126,9 +126,6 @@ impl Downstream {
 
 #[derive(Default)]
 struct Pending {
-    // Batch of RaftCommand observed from raftstore
-    multi_batch: Vec<CmdBatch>,
-    cmd_bytes: usize,
     pub downstreams: Vec<Downstream>,
 }
 
@@ -273,10 +270,10 @@ impl Delegate {
                 .state
                 .store(DownstreamState::Stopped as u8, Ordering::SeqCst);
         }
-        self.broadcast(change_data_err, 0);
+        self.broadcast(change_data_err, 0, false);
     }
 
-    fn broadcast(&self, change_data_event: Event, size: usize) {
+    fn broadcast(&self, change_data_event: Event, size: usize, normal_only: bool) {
         let downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
@@ -285,6 +282,11 @@ impl Delegate {
             change_data_event,
         );
         for i in 0..downstreams.len() - 1 {
+            if normal_only
+                && downstreams[i].state.load(Ordering::SeqCst) != DownstreamState::Normal as u8
+            {
+                continue;
+            }
             downstreams[i].sink_event(change_data_event.clone(), size);
         }
         downstreams
@@ -307,10 +309,6 @@ impl Delegate {
             for downstream in pending.downstreams {
                 self.subscribe(downstream);
             }
-            for batch in pending.multi_batch {
-                self.on_batch(batch)?;
-            }
-            CDC_PENDING_CMD_BYTES_GAUGE.sub(pending.cmd_bytes as i64);
         }
         info!("region is ready"; "region_id" => self.region_id);
         Ok(())
@@ -334,7 +332,7 @@ impl Delegate {
         let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
-        self.broadcast(change_data_event, 0);
+        self.broadcast(change_data_event, 0, true);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
             .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
         Some(resolved_ts)
@@ -343,13 +341,6 @@ impl Delegate {
     pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
         if batch.observe_id != self.id {
-            return Ok(());
-        }
-        if let Some(pending) = self.pending.as_mut() {
-            let cmd_bytes = batch.size();
-            pending.multi_batch.push(batch);
-            pending.cmd_bytes += cmd_bytes;
-            CDC_PENDING_CMD_BYTES_GAUGE.add(cmd_bytes as i64);
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
@@ -546,7 +537,7 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.index = index;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        self.broadcast(change_data_event, total_size);
+        self.broadcast(change_data_event, total_size, true);
     }
 
     fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
