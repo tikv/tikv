@@ -317,9 +317,8 @@ impl TiKVServer {
                 if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
                     let ip = addr.ip();
                     let port = addr.port();
-                    if cur_port == port && cur_ip == ip
-                        || cur_ip.is_unspecified()
-                        || ip.is_unspecified()
+                    if cur_port == port
+                        && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
                     {
                         let _ = try_lock_conflict_addr(file_path);
                     }
@@ -529,6 +528,7 @@ impl TiKVServer {
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
+            .encryption_key_manager(self.encryption_key_manager.clone())
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.

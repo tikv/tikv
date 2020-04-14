@@ -1013,10 +1013,12 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes 0.4.12",
+ "configuration",
  "crc32fast",
  "engine_traits",
  "failure",
  "futures 0.3.4",
+ "futures-util",
  "hex 0.4.2",
  "kvproto",
  "matches",
@@ -1945,7 +1947,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#98f910b71904ff7190e26a483b242ad5d7330c31"
+source = "git+https://github.com/pingcap/kvproto.git#b85805c9476caf3c4cea420410c2d97f818b0b66"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3004,6 +3006,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -3019,6 +3022,7 @@ dependencies = [
  "lazy_static",
  "log",
  "log_wrappers",
+ "openssl",
  "panic_hook",
  "pd_client",
  "prometheus",
