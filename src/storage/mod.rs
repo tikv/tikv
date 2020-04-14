@@ -257,7 +257,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
-                            metrics::tls_collect_key_reads(CMD.get_str(), 1);
+                            metrics::tls_collect_key_reads(CMD, 1);
                             r
                         });
 
@@ -376,7 +376,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     _ => unreachable!(),
                                 })
                                 .collect();
-                            metrics::tls_collect_key_reads(CMD.get_str(), kv_pairs.len());
+                            metrics::tls_collect_key_reads(CMD, kv_pairs.len());
                             kv_pairs
                         });
 
@@ -444,7 +444,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                     res.map_err(Error::from).map(|results| {
-                        metrics::tls_collect_key_reads(CMD.get_str(), results.len());
+                        metrics::tls_collect_key_reads(CMD, results.len());
                         results
                             .into_iter()
                             .map(|x| x.map_err(Error::from))
@@ -571,7 +571,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         stats.data.flow_stats.read_keys = 1;
                         stats.data.flow_stats.read_bytes = key_len + value.len();
                         tls_collect_read_flow(ctx.get_region_id(), &stats);
-                        tls_collect_key_reads(CMD.get_str(), 1);
+                        tls_collect_key_reads(CMD, 1);
                     }
                     Ok(r)
                 });
@@ -660,7 +660,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         })
                         .collect();
 
-                    tls_collect_key_reads(CMD.get_str(), stats.data.flow_stats.read_keys as usize);
+                    tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     Ok(result)
                 });
@@ -937,7 +937,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_key_reads(
-                        CMD.get_str(),
+                        CMD,
                         statistics.write.flow_stats.read_keys as usize,
                     );
                     metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
@@ -1055,7 +1055,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_key_reads(
-                        CMD.get_str(),
+                        CMD,
                         statistics.write.flow_stats.read_keys as usize,
                     );
                     metrics::tls_collect_scan_details(CMD.get_str(), &statistics);

@@ -12,7 +12,6 @@ use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {
-    local_kv_command_keyread_histogram_vec: LocalHistogramVec,
     local_kv_command_counter_vec: LocalIntCounterVec,
     local_sched_commands_pri_counter_vec: LocalIntCounterVec,
     local_scan_details: HashMap<&'static str, Statistics>,
@@ -22,7 +21,6 @@ struct StorageLocalMetrics {
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
-            local_kv_command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_kv_command_counter_vec: KV_COMMAND_COUNTER_VEC.local(),
             local_sched_commands_pri_counter_vec: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
             local_scan_details: HashMap::default(),
@@ -34,10 +32,10 @@ thread_local! {
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     SCHED_HISTOGRAM_VEC_STATIC.flush();
     SCHED_PROCESSING_READ_HISTOGRAM_STATIC.flush();
+    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.flush();
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
-        m.local_kv_command_keyread_histogram_vec.flush();
         m.local_kv_command_counter_vec.flush();
         m.local_sched_commands_pri_counter_vec.flush();
 
@@ -84,13 +82,10 @@ pub fn tls_collect_command_duration(cmd: CommandKind, duration: Duration) {
         .observe(tikv_util::time::duration_to_sec(duration))
 }
 
-pub fn tls_collect_key_reads(cmd: &str, count: usize) {
-    TLS_STORAGE_METRICS.with(|m| {
-        m.borrow_mut()
-            .local_kv_command_keyread_histogram_vec
-            .with_label_values(&[cmd])
-            .observe(count as f64)
-    });
+pub fn tls_collect_key_reads(cmd: CommandKind, count: usize) {
+    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+        .get(cmd)
+        .observe(count as f64);
 }
 
 pub fn tls_processing_read_observe_duration<F, R>(cmd: CommandKind, f: F) -> R
@@ -187,6 +182,10 @@ make_auto_flush_static_metric! {
     }
 
     pub struct ProcessingReadVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct KReadVec: LocalHistogram {
         "type" => CommandKind,
     }
 
@@ -302,6 +301,8 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 21).unwrap()
     )
     .unwrap();
+    pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_STATIC: KReadVec =
+        auto_flush_from!(KV_COMMAND_KEYREAD_HISTOGRAM_VEC, KReadVec);
     pub static ref KV_COMMAND_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_kv_scan_details",
         "Bucketed counter of kv keys scan details for each cf",
