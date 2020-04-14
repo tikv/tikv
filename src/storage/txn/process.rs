@@ -145,7 +145,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 self.take_pool()
                     .pool
-                    .spawn(move || {
+                    .spawn(async move {
                         notify_scheduler(
                             self.take_scheduler(),
                             Msg::FinishedWithErr {
@@ -154,7 +154,6 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                                 tag: task.tag,
                             },
                         );
-                        future::ok::<_, ()>(())
                     })
                     .unwrap();
             }
@@ -176,7 +175,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         let readonly = task.cmd.readonly();
         sched_pool
             .pool
-            .spawn(move || {
+            .spawn(async move {
                 fail_point!("scheduler_async_snapshot_finish");
 
                 let read_duration = Instant::now_coarse();
@@ -201,7 +200,6 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 );
 
                 tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
-                future::ok::<_, ()>(())
             })
             .unwrap();
     }
@@ -281,7 +279,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                     let engine_cb = Box::new(move |(_, result)| {
                         sched_pool
                             .pool
-                            .spawn(move || {
+                            .spawn(async move {
                                 notify_scheduler(
                                     sched,
                                     Msg::WriteFinished {

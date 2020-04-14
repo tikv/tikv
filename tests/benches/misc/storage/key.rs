@@ -1,5 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-//
+
 use rand::{self, Rng, RngCore};
 use tidb_query_datatype::{
     codec::{datum, table, Datum},

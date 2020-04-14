@@ -392,6 +392,9 @@ name = "bytes"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bzip2-sys"
@@ -471,9 +474,12 @@ dependencies = [
  "failure",
  "futures 0.1.29",
  "grpcio",
+ "hex 0.4.2",
  "kvproto",
+ "lazy_static",
  "panic_hook",
  "pd_client",
+ "prometheus",
  "raft",
  "raftstore",
  "resolved_ts",
@@ -608,16 +614,6 @@ dependencies = [
  "txn_types",
  "vlog",
  "yatp",
-]
-
-[[package]]
-name = "coarsetime"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
-dependencies = [
- "lazy_static",
- "libc",
 ]
 
 [[package]]
@@ -1016,22 +1012,33 @@ name = "encryption"
 version = "0.0.1"
 dependencies = [
  "byteorder",
+ "bytes 0.4.12",
  "crc32fast",
  "engine_traits",
  "failure",
+ "futures 0.3.4",
  "hex 0.4.2",
  "kvproto",
  "matches",
  "openssl",
  "protobuf",
  "rand 0.7.3",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kms",
+ "rusoto_mock",
+ "rusoto_util",
+ "rust-ini",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
+ "structopt",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
+ "tokio 0.2.13",
+ "toml",
 ]
 
 [[package]]
@@ -1078,6 +1085,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "prometheus",
+ "prometheus-static-metric",
  "rand 0.7.3",
  "rocksdb",
  "slog",
@@ -1500,9 +1508,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0eb5544c0e47a603130f1159773df46eb448c5649f7b4833c51f241c4e9fcbb"
+checksum = "a779eb8dc982fa4a552eb21e2962b2d927ea9037cb21be8645034c9e79ee4a29"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
@@ -1529,9 +1537,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.5.0"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48b1b6365d95c795aa3840b19c5364ad0a4bf82bfd48b2f9185719b9f8e614a7"
+checksum = "1b3080bdcfde08451cc7994f0b7c0c71c638629f8fb0049217af76a69d0742c3"
 dependencies = [
  "bindgen",
  "cc",
@@ -2006,7 +2014,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#1a8d5f480538af7f7e2c7d9723bcc3935239e596"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2025,7 +2033,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#1a8d5f480538af7f7e2c7d9723bcc3935239e596"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2821,7 +2829,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=a626d449eaebd5e8ce337f95c1d6dc9800f25df7#a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=086b7059482f1b06748e20c9a43efbc78b7252b2#086b7059482f1b06748e20c9a43efbc78b7252b2"
 dependencies = [
  "cfg-if",
  "fnv",
@@ -3019,6 +3027,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "rand 0.6.5",
  "serde",
  "serde_derive",
  "slog",
@@ -3359,6 +3368,8 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "slog",
+ "slog-global",
  "tikv_util",
  "txn_types",
 ]
@@ -3384,7 +3395,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#1a8d5f480538af7f7e2c7d9723bcc3935239e596"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3437,6 +3448,20 @@ dependencies = [
  "shlex",
  "tokio 0.2.13",
  "zeroize",
+]
+
+[[package]]
+name = "rusoto_kms"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "167c735c81ca560f7cd9914f99eabada7b5b66b3b14d7e4401507c68ebca02bb"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "futures 0.3.4",
+ "rusoto_core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4636,7 +4661,6 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
- "coarsetime",
  "codec",
  "configuration",
  "crc32fast",
@@ -4674,11 +4698,11 @@ dependencies = [
  "tokio-core",
  "tokio-executor",
  "tokio-sync",
- "tokio-threadpool",
  "tokio-timer",
  "toml",
  "url",
  "utime",
+ "yatp",
  "zeroize",
 ]
 

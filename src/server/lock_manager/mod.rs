@@ -424,29 +424,23 @@ mod tests {
         assert!(!lock_mgr.has_waiter());
 
         // If key_hashes is none, no wake up.
-        let prev_wake_up = TASK_COUNTER_METRICS.with(|m| m.wake_up.get());
+        let prev_wake_up = TASK_COUNTER_METRICS.wake_up.get();
         lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
-        assert_eq!(TASK_COUNTER_METRICS.with(|m| m.wake_up.get()), prev_wake_up);
+        assert_eq!(TASK_COUNTER_METRICS.wake_up.get(), prev_wake_up);
 
         // If it's non-pessimistic-txn, no clean up.
-        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
+        let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
         lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
-        assert_eq!(
-            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
-            prev_clean_up
-        );
+        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
         // If the txn doesn't wait for locks, no clean up.
-        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
+        let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
         lock_mgr.wake_up(10.into(), vec![], 10.into(), true);
-        assert_eq!(
-            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
-            prev_clean_up
-        );
+        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
         // If timeout is negative, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
-        let prev_wait_for = TASK_COUNTER_METRICS.with(|m| m.wait_for.get());
+        let prev_wait_for = TASK_COUNTER_METRICS.wait_for.get();
         lock_mgr.wait_for(
             waiter.start_ts,
             waiter.cb,
@@ -460,10 +454,7 @@ mod tests {
             0,
             200,
         );
-        assert_eq!(
-            TASK_COUNTER_METRICS.with(|m| m.wait_for.get()),
-            prev_wait_for,
-        );
+        assert_eq!(TASK_COUNTER_METRICS.wait_for.get(), prev_wait_for,);
     }
 
     #[bench]
