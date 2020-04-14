@@ -8,7 +8,7 @@ description = "A vector query engine to run TiDB pushed down executors"
 [dependencies]
 codec = { path = "../codec" }
 hex = "0.3"
-kvproto = { git = "https://github.com/innerr/kvproto.git", default-features = false, branch = "issue-6690" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 match_template = { path = "../match_template" }
 servo_arc = "0.1.1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
