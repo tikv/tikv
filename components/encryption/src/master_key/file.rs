@@ -114,7 +114,7 @@ mod tests {
         let backend = FileBackend::new(EncryptionMethod::Aes256Ctr, &key_path).unwrap();
 
         let iv = Vec::from_hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff").unwrap();
-        let iv = Iv::from(iv.as_slice());
+        let iv = Iv::from_slice(iv.as_slice()).unwrap();
         let encrypted_content = backend.mem_backend.encrypt_content(&pt, iv).unwrap();
         assert_eq!(encrypted_content.get_content(), ct.as_slice());
         let plaintext = backend.decrypt(&encrypted_content).unwrap();
