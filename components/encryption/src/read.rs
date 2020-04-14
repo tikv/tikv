@@ -9,7 +9,7 @@ use futures_util::{
     io::AsyncRead,
     task::{Context, Poll},
 };
-use kvproto::encryptionpb::EncryptionConfig;
+use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
 
 use crate::{Cipher, Error, Iv, Result};
@@ -18,8 +18,12 @@ use crate::{Cipher, Error, Iv, Result};
 pub struct EncrypterReader<R>(CrypterReader<R>);
 
 impl<R> EncrypterReader<R> {
-    pub fn new(reader: R, config: &EncryptionConfig) -> Result<(EncrypterReader<R>, Iv)> {
-        let (crypter, iv) = CrypterReader::new(reader, config, Mode::Encrypt, None)?;
+    pub fn new(
+        reader: R,
+        method: EncryptionMethod,
+        key: &[u8],
+    ) -> Result<(EncrypterReader<R>, Iv)> {
+        let (crypter, iv) = CrypterReader::new(reader, method, key, Mode::Encrypt, None)?;
         Ok((EncrypterReader(crypter), iv))
     }
 }
@@ -40,8 +44,13 @@ impl<R: AsyncRead + Unpin> AsyncRead for EncrypterReader<R> {
 pub struct DecrypterReader<R>(CrypterReader<R>);
 
 impl<R> DecrypterReader<R> {
-    pub fn new(reader: R, config: &EncryptionConfig, iv: Iv) -> Result<DecrypterReader<R>> {
-        let (crypter, _) = CrypterReader::new(reader, config, Mode::Decrypt, Some(iv))?;
+    pub fn new(
+        reader: R,
+        method: EncryptionMethod,
+        key: &[u8],
+        iv: Iv,
+    ) -> Result<DecrypterReader<R>> {
+        let (crypter, _) = CrypterReader::new(reader, method, key, Mode::Decrypt, Some(iv))?;
         Ok(DecrypterReader(crypter))
     }
 }
@@ -59,18 +68,19 @@ impl<R: AsyncRead + Unpin> AsyncRead for DecrypterReader<R> {
 }
 
 pub fn create_crypter(
-    config: &EncryptionConfig,
+    method: EncryptionMethod,
+    key: &[u8],
     mode: Mode,
     iv: Option<&[u8]>,
 ) -> Result<(OCipher, OCrypter)> {
-    match Cipher::from(config.method) {
+    match Cipher::from(method) {
         Cipher::Plaintext => Err(Error::Other(
             "init crypter while encryption is not enabled"
                 .to_owned()
                 .into(),
         )),
         Cipher::AesCtr(cipher) => {
-            let crypter = OCrypter::new(cipher, mode, &config.key, iv)?;
+            let crypter = OCrypter::new(cipher, mode, key, iv)?;
             Ok((cipher, crypter))
         }
     }
@@ -86,13 +96,14 @@ struct CrypterReader<R> {
 impl<R> CrypterReader<R> {
     pub fn new(
         reader: R,
-        config: &EncryptionConfig,
+        method: EncryptionMethod,
+        key: &[u8],
         mode: Mode,
         iv: Option<Iv>,
     ) -> Result<(CrypterReader<R>, Iv)> {
-        crate::verify_encryption_config(config)?;
+        crate::verify_encryption_config(method, &key)?;
         let iv = iv.unwrap_or_else(|| Iv::new());
-        let (cipher, crypter) = create_crypter(config, mode, Some(iv.as_slice()))?;
+        let (cipher, crypter) = create_crypter(method, key, mode, Some(iv.as_slice()))?;
         let block_size = cipher.block_size();
         Ok((
             CrypterReader {

@@ -22,7 +22,7 @@ use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{EncryptionKeyManager, KvEngine};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
-use kvproto::encryptionpb::{EncryptionConfig, EncryptionMethod};
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -251,7 +251,7 @@ pub trait SnapshotDeleter {
 
 // Try to delete the specified snapshot using deleter, return true if the deletion is done.
 pub fn retry_delete_snapshot(
-    deleter: &Box<dyn SnapshotDeleter>,
+    deleter: &dyn SnapshotDeleter,
     key: &SnapKey,
     snap: &dyn GenericSnapshot,
 ) -> bool {
@@ -305,12 +305,9 @@ fn get_decrypter_reader(
         let f = File::open(file)?;
         return Ok(Box::new(f) as Box<dyn Read + Send>);
     }
-    let mut enc_cfg = EncryptionConfig::default();
-    enc_cfg.set_method(mthd);
-    enc_cfg.set_key(enc_info.key.clone());
     let iv = Iv::from_slice(&enc_info.iv).map_err(enc_err_to_raftstore)?;
     let f = File::open(file)?;
-    let r = DecrypterReader::new(f, &enc_cfg, iv).map_err(enc_err_to_raftstore)?;
+    let r = DecrypterReader::new(f, mthd, &enc_info.key, iv).map_err(enc_err_to_raftstore)?;
     Ok(Box::new(r) as Box<dyn Read + Send>)
 }
 
@@ -583,12 +580,9 @@ impl Snap {
                 let enc_info = mgr.new_file(path)?;
                 let mthd = encryption_method_from_db_encryption_method(enc_info.method);
                 if mthd != EncryptionMethod::Plaintext {
-                    let mut enc_cfg = EncryptionConfig::default();
-                    enc_cfg.set_method(mthd);
-                    enc_cfg.set_key(enc_info.key);
                     let file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
                     file_for_recving.encrypter = Some(
-                        create_crypter(&enc_cfg, Mode::Encrypt, Some(&enc_info.iv))
+                        create_crypter(mthd, &enc_info.key, Mode::Encrypt, Some(&enc_info.iv))
                             .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
                     );
                 }
@@ -2304,6 +2298,7 @@ pub mod tests {
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
+            None,
         )
         .unwrap();
         assert!(s5.exists());
@@ -2333,9 +2328,14 @@ pub mod tests {
             None,
         )
         .is_err());
-        assert!(
-            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter).is_err()
-        );
+        assert!(Snap::new_for_applying(
+            dst_dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter,
+            None
+        )
+        .is_err());
     }
 
     #[test]
@@ -2434,7 +2434,8 @@ pub mod tests {
             dst_dir.path(),
             &key,
             Arc::clone(&size_track),
-            deleter.clone()
+            deleter.clone(),
+            None,
         )
         .is_err());
         assert!(Snap::new_for_receiving(

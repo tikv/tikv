@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
-use kvproto::encryptionpb::{EncryptionConfig, EncryptionMethod};
+use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 
 use crate::{Error, Result};
@@ -78,18 +78,18 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
     }
 }
 
-pub fn verify_encryption_config(config: &EncryptionConfig) -> Result<()> {
-    if config.method == compat(EncryptionMethod::Unknown) {
+pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<()> {
+    if method == compat(EncryptionMethod::Unknown) {
         return Err(Error::UnknownEncryption);
     }
-    if config.method != compat(EncryptionMethod::Plaintext) {
-        let key_len = get_method_key_length(config.method);
-        if config.key.len() != key_len {
+    if method != compat(EncryptionMethod::Plaintext) {
+        let key_len = get_method_key_length(method);
+        if key.len() != key_len {
             return Err(Error::Other(
                 format!(
                     "unexpected key length, expected {} vs actual {}",
                     key_len,
-                    config.key.len()
+                    key.len()
                 )
                 .into(),
             ));
