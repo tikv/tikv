@@ -60,6 +60,7 @@ prost = { version = "0.6", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.2"
 raft = { version = "0.6.0-alpha", default-features = false }
+rand = "0.6.5"
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -75,7 +76,6 @@ tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types"}
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
-coarsetime = "0.1"
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"

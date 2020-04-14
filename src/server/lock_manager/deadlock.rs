@@ -102,10 +102,7 @@ impl DetectTable {
     /// Returns the key hash which causes deadlock.
     pub fn detect(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) -> Option<u64> {
         let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
-        TASK_COUNTER_METRICS.with(|m| {
-            m.detect.inc();
-            m.may_flush_all()
-        });
+        TASK_COUNTER_METRICS.detect.inc();
 
         self.now = Instant::now_coarse();
         self.active_expire();
@@ -116,10 +113,7 @@ impl DetectTable {
         }
 
         if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
-            ERROR_COUNTER_METRICS.with(|m| {
-                m.deadlock.inc();
-                m.may_flush_all()
-            });
+            ERROR_COUNTER_METRICS.deadlock.inc();
             return Some(deadlock_key_hash);
         }
         self.register(txn_ts, lock_ts, lock_hash);
@@ -193,19 +187,13 @@ impl DetectTable {
                 }
             }
         }
-        TASK_COUNTER_METRICS.with(|m| {
-            m.clean_up_wait_for.inc();
-            m.may_flush_all()
-        });
+        TASK_COUNTER_METRICS.clean_up_wait_for.inc();
     }
 
     /// Removes the entries of the transaction.
     fn clean_up(&mut self, txn_ts: TimeStamp) {
         self.wait_for_map.remove(&txn_ts);
-        TASK_COUNTER_METRICS.with(|m| {
-            m.clean_up.inc();
-            m.may_flush_all()
-        });
+        TASK_COUNTER_METRICS.clean_up.inc();
     }
 
     /// Clears the whole detect table.
@@ -581,10 +569,7 @@ where
             }
 
             None => {
-                ERROR_COUNTER_METRICS.with(|m| {
-                    m.leader_not_found.inc();
-                    m.may_flush_all()
-                });
+                ERROR_COUNTER_METRICS.leader_not_found.inc();
                 Ok(None)
             }
         }
@@ -643,10 +628,7 @@ where
     /// Reconnects the leader. The leader info must exist.
     fn reconnect_leader(&mut self, handle: &Handle) {
         assert!(self.leader_client.is_none() && self.leader_info.is_some());
-        ERROR_COUNTER_METRICS.with(|m| {
-            m.reconnect_leader.inc();
-            m.may_flush_all()
-        });
+        ERROR_COUNTER_METRICS.reconnect_leader.inc();
         let (leader_id, leader_addr) = self.leader_info.as_ref().unwrap();
         // Create the connection to the leader and registers the callback to receive
         // the deadlock response.
@@ -756,10 +738,7 @@ where
             // If a request which causes deadlock is dropped, it leads to the waiter timeout.
             // TiDB will retry to acquire the lock and detect deadlock again.
             warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
-            ERROR_COUNTER_METRICS.with(|m| {
-                m.dropped.inc();
-                m.may_flush_all()
-            });
+            ERROR_COUNTER_METRICS.dropped.inc();
         }
     }
 
@@ -776,10 +755,7 @@ where
                 Some("I'm not the leader of deadlock detector".to_string()),
             );
             handle.spawn(sink.fail(status).map_err(|_| ()));
-            ERROR_COUNTER_METRICS.with(|m| {
-                m.not_leader.inc();
-                m.may_flush_all()
-            });
+            ERROR_COUNTER_METRICS.not_leader.inc();
             return;
         }
 
@@ -790,10 +766,7 @@ where
                 // It's possible the leader changes after registering this handler.
                 let mut inner = inner.borrow_mut();
                 if inner.role != Role::Leader {
-                    ERROR_COUNTER_METRICS.with(|m| {
-                        m.not_leader.inc();
-                        m.may_flush_all()
-                    });
+                    ERROR_COUNTER_METRICS.not_leader.inc();
                     return Err(Error::Other(box_err!("leader changed")));
                 }
 
