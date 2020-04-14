@@ -134,7 +134,7 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     });
 }
 
-make_static_metric! {
+make_auto_flush_static_metric! {
     pub label_enum CommandKind {
         prewrite,
         acquire_pessimistic_lock,
@@ -187,32 +187,32 @@ make_static_metric! {
         high,
     }
 
-    pub struct SchedDurationVec: Histogram {
+    pub struct SchedDurationVec: LocalHistogram {
         "type" => CommandKind,
     }
 
-    pub struct KvCommandCounterVec: IntCounter {
+    pub struct KvCommandCounterVec: LocalIntCounter {
         "type" => CommandKind,
     }
 
-    pub struct SchedStageCounterVec: IntCounter {
+    pub struct SchedStageCounterVec: LocalIntCounter {
         "type" => CommandKind,
         "stage" => CommandStageKind,
     }
 
-    pub struct SchedLatchDurationVec: Histogram {
+    pub struct SchedLatchDurationVec: LocalHistogram {
         "type" => CommandKind,
     }
 
-    pub struct KvCommandKeysWrittenVec: Histogram {
+    pub struct KvCommandKeysWrittenVec: LocalHistogram {
         "type" => CommandKind,
     }
 
-    pub struct SchedTooBusyVec: IntCounter {
+    pub struct SchedTooBusyVec: LocalIntCounter {
         "type" => CommandKind,
     }
 
-    pub struct SchedCommandPriCounterVec: IntCounter {
+    pub struct SchedCommandPriCounterVec: LocalIntCounter {
         "priority" => CommandPriority,
     }
 }
@@ -225,16 +225,17 @@ lazy_static! {
     )
     .unwrap();
     pub static ref KV_COMMAND_COUNTER_VEC_STATIC: KvCommandCounterVec =
-        KvCommandCounterVec::from(&KV_COMMAND_COUNTER_VEC);
-    pub static ref SCHED_STAGE_COUNTER_VEC: SchedStageCounterVec = {
-        register_static_int_counter_vec!(
-            SchedStageCounterVec,
+        auto_flush_from!(KV_COMMAND_COUNTER_VEC, KvCommandCounterVec);
+    pub static ref SCHED_STAGE_COUNTER: IntCounterVec = {
+        register_int_counter_vec!(
             "tikv_scheduler_stage_total",
             "Total number of commands on each stage.",
             &["type", "stage"]
         )
         .unwrap()
     };
+    pub static ref SCHED_STAGE_COUNTER_VEC: SchedStageCounterVec =
+        auto_flush_from!(SCHED_STAGE_COUNTER, SchedStageCounterVec);
     pub static ref SCHED_WRITING_BYTES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_writing_bytes",
         "Total number of writing kv."
@@ -253,16 +254,16 @@ lazy_static! {
     )
     .unwrap();
     pub static ref SCHED_HISTOGRAM_VEC_STATIC: SchedDurationVec =
-        SchedDurationVec::from(&SCHED_HISTOGRAM_VEC);
+        auto_flush_from!(SCHED_HISTOGRAM_VEC, SchedDurationVec);
+    pub static ref SCHED_LATCH_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_latch_wait_duration_seconds",
+        "Bucketed histogram of latch wait",
+        &["type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
     pub static ref SCHED_LATCH_HISTOGRAM_VEC: SchedLatchDurationVec =
-        register_static_histogram_vec!(
-            SchedLatchDurationVec,
-            "tikv_scheduler_latch_wait_duration_seconds",
-            "Bucketed histogram of latch wait",
-            &["type"],
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
-        )
-        .unwrap();
+        auto_flush_from!(SCHED_LATCH_HISTOGRAM, SchedLatchDurationVec);
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_processing_read_duration_seconds",
         "Bucketed histogram of processing read duration",
@@ -277,15 +278,16 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: SchedTooBusyVec = register_static_int_counter_vec!(
-        SchedTooBusyVec,
+    pub static ref SCHED_TOO_BUSY_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_too_busy_total",
         "Total count of scheduler too busy",
         &["type"]
     )
     .unwrap();
+    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: SchedTooBusyVec =
+        auto_flush_from!(SCHED_TOO_BUSY_COUNTER, SchedTooBusyVec);
     pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC: SchedCommandPriCounterVec =
-        SchedCommandPriCounterVec::from(&SCHED_COMMANDS_PRI_COUNTER_VEC);
+        auto_flush_from!(SCHED_COMMANDS_PRI_COUNTER_VEC, SchedCommandPriCounterVec);
     pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_commands_pri_total",
         "Total count of different priority commands",
@@ -305,15 +307,15 @@ lazy_static! {
         &["req", "cf", "tag"]
     )
     .unwrap();
+    pub static ref KV_COMMAND_KEYWRITE_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_kv_command_key_write",
+        "Bucketed histogram of keys write of a kv command",
+        &["type"],
+        exponential_buckets(1.0, 2.0, 21).unwrap()
+    )
+    .unwrap();
     pub static ref KV_COMMAND_KEYWRITE_HISTOGRAM_VEC: KvCommandKeysWrittenVec =
-        register_static_histogram_vec!(
-            KvCommandKeysWrittenVec,
-            "tikv_scheduler_kv_command_key_write",
-            "Bucketed histogram of keys write of a kv command",
-            &["type"],
-            exponential_buckets(1.0, 2.0, 21).unwrap()
-        )
-        .unwrap();
+        auto_flush_from!(KV_COMMAND_KEYWRITE_HISTOGRAM, KvCommandKeysWrittenVec);
     pub static ref REQUEST_EXCEED_BOUND: IntCounter = register_int_counter!(
         "tikv_request_exceed_bound",
         "Counter of request exceed bound"
