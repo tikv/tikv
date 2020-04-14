@@ -12,7 +12,6 @@ use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {
-    local_sched_histogram_vec: LocalHistogramVec,
     local_sched_processing_read_histogram_vec: LocalHistogramVec,
     local_kv_command_keyread_histogram_vec: LocalHistogramVec,
     local_kv_command_counter_vec: LocalIntCounterVec,
@@ -24,7 +23,6 @@ struct StorageLocalMetrics {
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
-            local_sched_histogram_vec: SCHED_HISTOGRAM_VEC.local(),
             local_sched_processing_read_histogram_vec: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             local_kv_command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_kv_command_counter_vec: KV_COMMAND_COUNTER_VEC.local(),
@@ -36,10 +34,10 @@ thread_local! {
 }
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
+    SCHED_HISTOGRAM_VEC_STATIC.flush();
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
-        m.local_sched_histogram_vec.flush();
         m.local_sched_processing_read_histogram_vec.flush();
         m.local_kv_command_keyread_histogram_vec.flush();
         m.local_kv_command_counter_vec.flush();
@@ -82,13 +80,10 @@ pub fn tls_collect_command_count(cmd: &str, priority: CommandPriority) {
     });
 }
 
-pub fn tls_collect_command_duration(cmd: &str, duration: Duration) {
-    TLS_STORAGE_METRICS.with(|m| {
-        m.borrow_mut()
-            .local_sched_histogram_vec
-            .with_label_values(&[cmd])
-            .observe(tikv_util::time::duration_to_sec(duration))
-    });
+pub fn tls_collect_command_duration(cmd: CommandKind, duration: Duration) {
+    SCHED_HISTOGRAM_VEC_STATIC
+        .get(cmd)
+        .observe(tikv_util::time::duration_to_sec(duration))
 }
 
 pub fn tls_collect_key_reads(cmd: &str, count: usize) {
