@@ -17,7 +17,6 @@ pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DB
     }
 }
 
-#[cfg(not(feature = "prost-codec"))]
 pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -> EncryptionMethod {
     match method {
         DBEncryptionMethod::Plaintext => EncryptionMethod::Plaintext,
@@ -47,17 +46,6 @@ pub fn encryption_method_to_db_encryption_method(
 }
 
 #[cfg(feature = "prost-codec")]
-pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -> i32 {
-    match method {
-        DBEncryptionMethod::Plaintext => 1,
-        DBEncryptionMethod::Aes128Ctr => 2,
-        DBEncryptionMethod::Aes192Ctr => 3,
-        DBEncryptionMethod::Aes256Ctr => 4,
-        DBEncryptionMethod::Unknown => 5,
-    }
-}
-
-#[cfg(feature = "prost-codec")]
 pub fn compat(method: EncryptionMethod) -> i32 {
     match method {
         EncryptionMethod::Unknown => 0,
@@ -79,10 +67,10 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
 }
 
 pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<()> {
-    if method == compat(EncryptionMethod::Unknown) {
+    if method == EncryptionMethod::Unknown {
         return Err(Error::UnknownEncryption);
     }
-    if method != compat(EncryptionMethod::Plaintext) {
+    if method != EncryptionMethod::Plaintext {
         let key_len = get_method_key_length(method);
         if key.len() != key_len {
             return Err(Error::Other(
