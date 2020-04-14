@@ -316,9 +316,8 @@ impl TiKVServer {
                 if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
                     let ip = addr.ip();
                     let port = addr.port();
-                    if cur_port == port && cur_ip == ip
-                        || cur_ip.is_unspecified()
-                        || ip.is_unspecified()
+                    if cur_port == port
+                        && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
                     {
                         let _ = try_lock_conflict_addr(file_path);
                     }
