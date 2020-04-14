@@ -8,6 +8,8 @@ extern crate failure;
 extern crate serde_derive;
 #[macro_use]
 extern crate tikv_util;
+#[macro_use]
+extern crate configuration;
 
 mod config;
 mod crypter;

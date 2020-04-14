@@ -10,6 +10,7 @@ prost-codec = ["kvproto/prost-codec"]
 
 [dependencies]
 byteorder = "1.2"
+configuration = { path = "../configuration" }
 crc32fast = "1.2"
 engine_traits = { path = "../engine_traits" }
 failure = "0.1"

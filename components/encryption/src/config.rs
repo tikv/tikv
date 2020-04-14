@@ -8,15 +8,19 @@ use crate::master_key::Backend;
 #[cfg(test)]
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct EncryptionConfig {
     // Encryption configs.
     #[serde(with = "encryption_method_serde")]
+    #[config(skip)]
     pub data_encryption_method: EncryptionMethod,
+    #[config(skip)]
     pub data_key_rotation_period: ReadableDuration,
+    #[config(skip)]
     pub master_key: MasterKeyConfig,
+    #[config(skip)]
     pub previous_master_key: MasterKeyConfig,
 }
 
