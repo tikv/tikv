@@ -237,7 +237,8 @@ fn test_cdc_not_leader() {
         .obs
         .get(&leader.get_store_id())
         .unwrap()
-        .is_subscribed(1));
+        .is_subscribed(1)
+        .is_some());
 
     // Transfer leader.
     let peer = suite
@@ -260,7 +261,8 @@ fn test_cdc_not_leader() {
         .obs
         .get(&leader.get_store_id())
         .unwrap()
-        .is_subscribed(1));
+        .is_subscribed(1)
+        .is_some());
 
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
@@ -290,7 +292,8 @@ fn test_cdc_not_leader() {
         .obs
         .get(&leader.get_store_id())
         .unwrap()
-        .is_subscribed(1));
+        .is_subscribed(1)
+        .is_some());
 
     event_feed_wrap.as_ref().replace(None);
     suite.stop();
