@@ -477,12 +477,12 @@ impl ReleasedLocks {
         }
     }
 
-    fn push(&mut self, lock: ReleasedLock) {
-        if let Some(h) = lock.hash {
-            self.hashes.push(h);
-        }
-        if !self.pessimistic {
-            self.pessimistic = lock.pessimistic;
+    fn push(&mut self, lock: Option<ReleasedLock>) {
+        if let Some(lock) = lock {
+            self.hashes.push(lock.hash);
+            if !self.pessimistic {
+                self.pessimistic = lock.pessimistic;
+            }
         }
     }
 
@@ -522,13 +522,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
-    let need_calc_lock_hash = || {
-        lock_mgr
-            .as_ref()
-            .map(|lm| lm.has_waiter())
-            .unwrap_or_default()
-    };
-
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
         CommandKind::Prewrite(Prewrite {
             mut mutations,
@@ -711,7 +704,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 }));
             }
             let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache());
-            txn.set_calc_lock_hash(need_calc_lock_hash());
 
             let rows = keys.len();
             // Pessimistic txn needs key_hashes to wake up waiters
@@ -734,7 +726,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             ..
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
-            txn.set_calc_lock_hash(need_calc_lock_hash());
 
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
             released_locks.push(txn.cleanup(key, current_ts)?);
@@ -745,7 +736,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         }
         CommandKind::Rollback(Rollback { keys, start_ts, .. }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
-            txn.set_calc_lock_hash(need_calc_lock_hash());
 
             let rows = keys.len();
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
@@ -765,7 +755,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             assert!(lock_mgr.is_some());
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
-            txn.set_calc_lock_hash(need_calc_lock_hash());
 
             let rows = keys.len();
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
@@ -789,7 +778,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             key_locks,
         }) => {
             let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), !cmd.ctx.get_not_fill_cache());
-            txn.set_calc_lock_hash(need_calc_lock_hash());
 
             let mut scan_key = scan_key.take();
             let mut write_size = 0;
@@ -844,7 +832,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             resolve_keys,
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
-            txn.set_calc_lock_hash(need_calc_lock_hash());
 
             let rows = resolve_keys.len();
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
@@ -885,7 +872,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             rollback_if_not_exist,
         }) => {
             let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache());
-            txn.set_calc_lock_hash(need_calc_lock_hash());
 
             let mut released_locks = ReleasedLocks::new(lock_ts, TimeStamp::zero());
             let (txn_status, released) = txn.check_txn_status(
