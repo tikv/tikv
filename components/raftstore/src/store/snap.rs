@@ -14,8 +14,8 @@ use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
 use encryption::{
-    create_crypter, encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader,
-    Error as EncryptionError, Iv,
+    create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager,
+    DecrypterReader, Error as EncryptionError, Iv,
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -577,8 +577,13 @@ impl Snap {
                 if mthd != EncryptionMethod::Plaintext {
                     let file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
                     file_for_recving.encrypter = Some(
-                        create_crypter(mthd, &enc_info.key, Mode::Encrypt, Some(&enc_info.iv))
-                            .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
+                        create_aes_ctr_crypter(
+                            mthd,
+                            &enc_info.key,
+                            Mode::Encrypt,
+                            Some(&enc_info.iv),
+                        )
+                        .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
                     );
                 }
             }

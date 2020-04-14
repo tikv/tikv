@@ -464,12 +464,11 @@ cert-path = "invalid path"
 key-path = "invalid path"
 
 [encryption]
-method = "aes128-ctr"
+data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
 
 [encryption.master-key]
 type = "file"
-method = "aes256-ctr"
 path = "/master/key/path"
 
 [encryption.previous-master-key]
