@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::*;
 
-use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
 use engine::*;
@@ -203,7 +203,7 @@ fn test_server_stale_peer_without_data_right_derive_when_split() {
     test_stale_peer_without_data(&mut cluster, true);
 }
 
-/// A help function for testing the behaviour of the gc of stale learner
+/// A help function for testing the behavior of the gc of stale learner
 /// which is out or region.
 #[test]
 fn test_stale_learner() {
@@ -244,4 +244,47 @@ fn test_stale_learner() {
     let state_key = keys::region_state_key(r1);
     let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
+}
+
+#[test]
+fn test_stale_learner_restart() {
+    let mut cluster = new_node_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.raft_store.raft_log_gc_threshold = 10;
+    let r = cluster.run_conf_change();
+    cluster
+        .pd_client
+        .must_add_peer(r, new_learner_peer(2, 1003));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    // Simulates slow apply.
+    fail::cfg("on_handle_apply_1003", "return").unwrap();
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    let state_key = keys::raft_state_key(r);
+    let mut state: RaftLocalState = cluster
+        .get_raft_engine(1)
+        .get_msg(&state_key)
+        .unwrap()
+        .unwrap();
+    let last_index = state.get_last_index();
+    let timer = Instant::now();
+    while timer.elapsed() < Duration::from_secs(5) {
+        state = cluster
+            .get_raft_engine(2)
+            .get_msg(&state_key)
+            .unwrap()
+            .unwrap();
+        if last_index == state.last_index {
+            break;
+        }
+    }
+    if state.last_index != last_index {
+        panic!("store 2 has not catched up logs after 5 secs.");
+    }
+    cluster.shutdown();
+    must_get_none(&cluster.get_engine(2), b"k2");
+    fail::remove("on_handle_apply_1003");
+    cluster.run_node(2).unwrap();
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 }
