@@ -206,6 +206,7 @@ dependencies = [
  "external_storage",
  "failure",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-executor",
  "futures-util",
  "grpcio",
@@ -228,7 +229,6 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
- "tokio-threadpool",
  "txn_types",
  "uuid",
 ]
@@ -461,9 +461,12 @@ dependencies = [
  "failure",
  "futures 0.1.29",
  "grpcio",
+ "hex 0.4.0",
  "kvproto",
+ "lazy_static",
  "panic_hook",
  "pd_client",
+ "prometheus",
  "raft",
  "raftstore",
  "resolved_ts",
@@ -1098,6 +1101,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "bytes 0.5.3",
  "futures 0.3.4",
  "futures-executor",
  "futures-io",
@@ -1105,9 +1109,9 @@ dependencies = [
  "kvproto",
  "rand 0.7.3",
  "rusoto_core",
- "rusoto_credential",
  "rusoto_mock",
  "rusoto_s3",
+ "rusoto_util",
  "rust-ini",
  "slog",
  "slog-global",
@@ -1115,7 +1119,6 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tokio 0.2.13",
- "tokio-util 0.3.0",
  "url",
 ]
 
@@ -1546,7 +1549,7 @@ dependencies = [
  "log",
  "slab",
  "tokio 0.2.13",
- "tokio-util 0.2.0",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1906,7 +1909,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#78042b285b75c1e427ac3dcf5559e1f8bcd340c9"
+source = "git+https://github.com/pingcap/kvproto.git#98f910b71904ff7190e26a483b242ad5d7330c31"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2918,7 +2921,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#e624c1d48460940a40d8aa69b5329460d9af87dd"
+source = "git+https://github.com/pingcap/raft-rs#b9891b673573fad77ebcf9bbe0969cf945841926"
 dependencies = [
  "fxhash",
  "getset",
@@ -2932,7 +2935,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#e624c1d48460940a40d8aa69b5329460d9af87dd"
+source = "git+https://github.com/pingcap/raft-rs#b9891b673573fad77ebcf9bbe0969cf945841926"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3312,6 +3315,8 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.0",
+ "slog",
+ "slog-global",
  "tikv_util",
  "txn_types",
 ]
@@ -3443,6 +3448,32 @@ dependencies = [
  "sha2",
  "time 0.2.9",
  "tokio 0.2.13",
+]
+
+[[package]]
+name = "rusoto_sts"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e83d166cfb294672db98a60159c4a81a8169c6c91054a275cb812158c73815e5"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "chrono",
+ "futures 0.3.4",
+ "rusoto_core",
+ "serde_urlencoded",
+ "tempfile",
+ "xml-rs",
+]
+
+[[package]]
+name = "rusoto_util"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_sts",
 ]
 
 [[package]]
@@ -4286,7 +4317,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.0-beta.2"
+version = "4.0.0-rc"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4434,6 +4465,7 @@ dependencies = [
  "slog-async",
  "slog-global",
  "slog-term",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "time 0.1.42",
@@ -4559,7 +4591,6 @@ checksum = "0fa5e81d6bc4e67fe889d5783bd2a128ab2e0cfa487e0be16b6a8d177b101616"
 dependencies = [
  "bytes 0.5.3",
  "fnv",
- "futures-core",
  "iovec",
  "lazy_static",
  "libc",
@@ -4814,21 +4845,6 @@ checksum = "571da51182ec208780505a32528fc5512a8fe1443ab960b3f2f3ef093cd16930"
 dependencies = [
  "bytes 0.5.3",
  "futures-core",
- "futures-sink",
- "log",
- "pin-project-lite",
- "tokio 0.2.13",
-]
-
-[[package]]
-name = "tokio-util"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af67cdce2b40f8dffb0ee04c853a24217b5d0d3e358f0f5ccc0b5332174ed9a8"
-dependencies = [
- "bytes 0.5.3",
- "futures-core",
- "futures-io",
  "futures-sink",
  "log",
  "pin-project-lite",
@@ -5225,7 +5241,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#9097bcffc1d64d25a27595dd5c3d47d54b9198fa"
+source = "git+https://github.com/tikv/yatp.git#9d3ccd00673965bb9a8d5ff672707b52863ba69c"
 dependencies = [
  "crossbeam-deque",
  "dashmap",

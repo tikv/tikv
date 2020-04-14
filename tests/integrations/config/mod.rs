@@ -90,7 +90,6 @@ fn test_serde_custom_tikv_config() {
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
-        unify_read_pool: Some(true),
         unified: UnifiedReadPoolConfig {
             min_thread_count: 5,
             max_thread_count: 10,
@@ -98,6 +97,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker: 2200,
         },
         storage: StorageReadPoolConfig {
+            use_unified_pool: Some(true),
             high_concurrency: 1,
             normal_concurrency: 3,
             low_concurrency: 7,
@@ -107,6 +107,7 @@ fn test_serde_custom_tikv_config() {
             stack_size: ReadableSize::mb(20),
         },
         coprocessor: CoprReadPoolConfig {
+            use_unified_pool: Some(false),
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
@@ -621,13 +622,16 @@ fn test_readpool_default_config() {
 }
 
 #[test]
-fn test_do_not_unify_readpool_with_legacy_config() {
+fn test_do_not_use_unified_readpool_with_legacy_config() {
     let content = r#"
         [readpool.storage]
         normal-concurrency = 1
+
+        [readpool.coprocessor]
+        normal-concurrency = 1
     "#;
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
-    assert!(!cfg.readpool.is_unified());
+    assert!(!cfg.readpool.is_unified_pool_enabled());
 }
 
 #[test]
