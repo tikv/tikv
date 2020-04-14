@@ -11,7 +11,7 @@ use procinfo::pid as pid_info;
 use prometheus::core::{Collector, Desc};
 use prometheus::{proto, Gauge, Opts};
 
-/// Monitors threads of the current process.
+/// Monitors memory of the current process.
 pub fn monitor_memory() -> Result<()> {
     let pid = unsafe { libc::getpid() };
     let tc = MemoryCollector::new(pid);
