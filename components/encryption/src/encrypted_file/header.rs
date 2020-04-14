@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use crate::{Error, Result};
+use crate::Result;
 use byteorder::{BigEndian, ByteOrder};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -15,7 +15,7 @@ impl Version {
         if input == 1 {
             Ok(Version::V1)
         } else {
-            Err(Error::Other(format!("unknown version {:x}", input).into()))
+            Err(box_err!("unknown version {:x}", input))
         }
     }
 }
@@ -60,13 +60,10 @@ impl Header {
     }
     pub fn parse(buf: &[u8]) -> Result<(Header, &[u8])> {
         if buf.len() < Header::SIZE {
-            return Err(Error::Other(
-                format!(
-                    "file corrupted! header size mismatch {} != {}",
-                    Header::SIZE,
-                    buf.len(),
-                )
-                .into(),
+            return Err(box_err!(
+                "file corrupted! header size mismatch {} != {}",
+                Header::SIZE,
+                buf.len()
             ));
         }
 
@@ -79,13 +76,10 @@ impl Header {
 
         let content = &buf[Header::SIZE..];
         if content.len() as u64 != size {
-            return Err(Error::Other(
-                format!(
-                    "file corrupted! content size mismatch {} != {}",
-                    size,
-                    content.len(),
-                )
-                .into(),
+            return Err(box_err!(
+                "file corrupted! content size mismatch {} != {}",
+                size,
+                content.len()
             ));
         }
 
@@ -93,12 +87,10 @@ impl Header {
         digest.update(content);
         let crc32_checksum = digest.finalize();
         if crc32_checksum != crc32 {
-            return Err(Error::Other(
-                format!(
-                    "file corrupted! crc32 mismatch {} != {}",
-                    crc32, crc32_checksum
-                )
-                .into(),
+            return Err(box_err!(
+                "file corrupted! crc32 mismatch {} != {}",
+                crc32,
+                crc32_checksum
             ));
         }
 

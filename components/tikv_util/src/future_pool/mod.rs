@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures03::channel::oneshot::{self, Canceled};
-use prometheus::{IntCounter, IntGauge};
+use prometheus::{Histogram, IntCounter, IntGauge};
 use yatp::task::future;
 
 type ThreadPool = yatp::ThreadPool<future::TaskCell>;
@@ -32,6 +32,7 @@ thread_local! {
 struct Env {
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
+    metrics_pool_schedule_duration: Histogram,
 }
 
 #[derive(Clone)]
@@ -138,10 +139,14 @@ impl FuturePool {
     where
         F: StdFuture + Send + 'static,
     {
+        let timer = Instant::now_coarse();
+        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
+
         self.gate_spawn()?;
 
         self.env.metrics_running_task_count.inc();
         self.pool.spawn(async move {
+            h_schedule.observe(timer.elapsed_secs());
             let _ = future.await;
         });
         Ok(())
@@ -158,11 +163,15 @@ impl FuturePool {
         F: StdFuture + Send + 'static,
         F::Output: Send,
     {
+        let timer = Instant::now_coarse();
+        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
+
         self.gate_spawn()?;
 
         let (tx, rx) = oneshot::channel();
         self.env.metrics_running_task_count.inc();
         self.pool.spawn(async move {
+            h_schedule.observe(timer.elapsed_secs());
             let res = future.await;
             let _ = tx.send(res);
         });
@@ -271,7 +280,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        assert_eq!(rx.try_recv().unwrap(), 0);
+        assert_eq!(rx.recv_timeout(Duration::from_micros(50)).unwrap(), 0);
         assert!(rx.try_recv().is_err());
 
         // Tick is not emitted if there is no task
@@ -280,12 +289,12 @@ mod tests {
 
         // Tick is emitted since long enough time has passed
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        assert_eq!(rx.recv_timeout(Duration::from_micros(50)).unwrap(), 1);
         assert!(rx.try_recv().is_err());
 
         // Tick is emitted immediately after a long task
         spawn_future_and_wait(&pool, TICK_INTERVAL * 2);
-        assert_eq!(rx.try_recv().unwrap(), 2);
+        assert_eq!(rx.recv_timeout(Duration::from_micros(50)).unwrap(), 2);
         assert!(rx.try_recv().is_err());
     }
 
