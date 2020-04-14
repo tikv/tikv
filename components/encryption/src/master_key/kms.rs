@@ -400,7 +400,7 @@ mod tests {
         let backend = KmsBackend {
             inner: Mutex::new(inner),
         };
-        let iv = Iv::from(iv.as_slice());
+        let iv = Iv::from_slice(iv.as_slice()).unwrap();
         let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
         assert_eq!(encrypted_content.get_content(), ct.as_slice());
         let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
