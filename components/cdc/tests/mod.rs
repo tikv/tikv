@@ -12,7 +12,7 @@ use std::time::Duration;
 use engine_rocks::RocksEngine;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
-use grpcio::{ClientDuplexReceiver, ClientDuplexSender};
+use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     create_change_data, event::Event as Event_oneof_event, ChangeDataClient, ChangeDataEvent,
@@ -201,6 +201,23 @@ impl TestSuite {
             commit_resp.get_region_error()
         );
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+    }
+
+    pub fn async_kv_commit(
+        &mut self,
+        region_id: u64,
+        keys: Vec<Vec<u8>>,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+    ) -> ClientUnaryReceiver<CommitResponse> {
+        let mut commit_req = CommitRequest::default();
+        commit_req.set_context(self.get_context(region_id));
+        commit_req.start_version = start_ts.into_inner();
+        commit_req.set_keys(keys.into_iter().collect());
+        commit_req.commit_version = commit_ts.into_inner();
+        self.get_tikv_client(region_id)
+            .kv_commit_async(&commit_req)
+            .unwrap()
     }
 
     pub fn get_context(&mut self, region_id: u64) -> Context {
