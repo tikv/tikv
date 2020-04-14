@@ -5,7 +5,7 @@ use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rand::{rngs::OsRng, RngCore};
 
-use crate::Result;
+use crate::{Error, Result};
 
 #[cfg(not(feature = "prost-codec"))]
 pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DBEncryptionMethod {
@@ -15,6 +15,16 @@ pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DB
         EncryptionMethod::Aes192Ctr => DBEncryptionMethod::Aes192Ctr,
         EncryptionMethod::Aes256Ctr => DBEncryptionMethod::Aes256Ctr,
         EncryptionMethod::Unknown => DBEncryptionMethod::Unknown,
+    }
+}
+
+pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -> EncryptionMethod {
+    match method {
+        DBEncryptionMethod::Plaintext => EncryptionMethod::Plaintext,
+        DBEncryptionMethod::Aes128Ctr => EncryptionMethod::Aes128Ctr,
+        DBEncryptionMethod::Aes192Ctr => EncryptionMethod::Aes192Ctr,
+        DBEncryptionMethod::Aes256Ctr => EncryptionMethod::Aes256Ctr,
+        DBEncryptionMethod::Unknown => EncryptionMethod::Unknown,
     }
 }
 
@@ -168,6 +178,23 @@ impl<'k> AesGcmCrypter<'k> {
         )?;
         Ok(plaintext)
     }
+}
+
+pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<()> {
+    if method == EncryptionMethod::Unknown {
+        return Err(Error::UnknownEncryption);
+    }
+    if method != EncryptionMethod::Plaintext {
+        let key_len = get_method_key_length(method);
+        if key.len() != key_len {
+            return Err(box_err!(
+                "unexpected key length, expected {} vs actual {}",
+                key_len,
+                key.len()
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
