@@ -32,6 +32,7 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
+use crate::storage::metrics::CommandKind;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
@@ -228,13 +229,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
-        const CMD: &str = "get";
+        const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
@@ -242,7 +243,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
 
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -256,16 +257,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
-                            metrics::tls_collect_key_reads(CMD, 1);
+                            metrics::tls_collect_key_reads(CMD.get_str(), 1);
                             r
                         });
 
-                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
                 });
-                tls_collect_command_duration(CMD, command_duration.elapsed());
+                tls_collect_command_duration(CMD.get_str(), command_duration.elapsed());
                 result
             },
             priority,
@@ -283,18 +284,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "batch_get_command";
+        const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
                     let mut statistics = Statistics::default();
                     let mut snap_store = SnapshotStore::new(
                         snapshot,
@@ -320,7 +321,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     }
                     results
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD.get_str(), command_duration.elapsed());
                 Ok(result)
             },
             priority,
@@ -339,18 +340,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "batch_get";
+        const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -375,16 +376,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     _ => unreachable!(),
                                 })
                                 .collect();
-                            metrics::tls_collect_key_reads(CMD, kv_pairs.len());
+                            metrics::tls_collect_key_reads(CMD.get_str(), kv_pairs.len());
                             kv_pairs
                         });
 
-                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD.get_str(), command_duration.elapsed());
                 result
             },
             priority,
@@ -410,18 +411,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "scan";
+        const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -439,18 +440,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let res = scanner.scan(limit);
 
                     let statistics = scanner.take_statistics();
-                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                     res.map_err(Error::from).map(|results| {
-                        metrics::tls_collect_key_reads(CMD, results.len());
+                        metrics::tls_collect_key_reads(CMD.get_str(), results.len());
                         results
                             .into_iter()
                             .map(|x| x.map_err(Error::from))
                             .collect()
                     })
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD.get_str(), command_duration.elapsed());
                 result
             },
             priority,
@@ -550,16 +551,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         key: Vec<u8>,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
-        const CMD: &str = "raw_get";
+        const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
 
@@ -570,11 +571,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         stats.data.flow_stats.read_keys = 1;
                         stats.data.flow_stats.read_bytes = key_len + value.len();
                         tls_collect_read_flow(ctx.get_region_id(), &stats);
-                        tls_collect_key_reads(CMD, 1);
+                        tls_collect_key_reads(CMD.get_str(), 1);
                     }
                     Ok(r)
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD.get_str(), command_duration.elapsed());
                 result
             },
             priority,
@@ -591,17 +592,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "raw_batch_get_command";
+        const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
                     let cf = Self::rawkv_cf(&cf)?;
                     let mut results = vec![];
                     // TODO: optimize using seek.
@@ -610,7 +611,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     }
                     Ok(results)
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD.get_str(), command_duration.elapsed());
                 result
             },
             priority,
@@ -627,16 +628,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         keys: Vec<Vec<u8>>,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_get";
+        const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
@@ -659,11 +660,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         })
                         .collect();
 
-                    tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
+                    tls_collect_key_reads(CMD.get_str(), stats.data.flow_stats.read_keys as usize);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     Ok(result)
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD.get_str(), command_duration.elapsed());
                 result
             },
             priority,
@@ -896,17 +897,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_scan";
+        const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
                     let end_key = end_key.map(Key::from_encoded);
 
                     let mut statistics = Statistics::default();
@@ -936,13 +937,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_key_reads(
-                        CMD,
+                        CMD.get_str(),
                         statistics.write.flow_stats.read_keys as usize,
                     );
-                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
                     result
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD.get_str(), command_duration.elapsed());
                 result
             },
             priority,
@@ -999,17 +1000,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_scan";
+        const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                let result = metrics::tls_processing_read_observe_duration(CMD.get_str(), || {
                     let mut statistics = Statistics::default();
                     if !Self::check_key_ranges(&ranges, reverse) {
                         return Err(box_err!("Invalid KeyRanges"));
@@ -1054,13 +1055,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_key_reads(
-                        CMD,
+                        CMD.get_str(),
                         statistics.write.flow_stats.read_keys as usize,
                     );
-                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
                     Ok(result)
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD.get_str(), command_duration.elapsed());
                 result
             },
             priority,

@@ -136,6 +136,11 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
 
 make_auto_flush_static_metric! {
     pub label_enum CommandKind {
+        get,
+        raw_batch_get_command,
+        scan,
+        batch_get,
+        batch_get_command,
         prewrite,
         acquire_pessimistic_lock,
         commit,
