@@ -814,6 +814,6 @@ mod tests {
         must_prewrite_lock(&engine, key, key, 60);
 
         must_met_newer_ts_data(&engine, 50, key, val2, true);
-        must_met_newer_ts_data(&engine, 60, key, val2, false);
+        must_met_newer_ts_data(&engine, 60, key, val2, true);
     }
 }
