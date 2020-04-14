@@ -4,7 +4,7 @@ use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 
-use crate::Result;
+use crate::{Error, Result};
 
 #[cfg(not(feature = "prost-codec"))]
 pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DBEncryptionMethod {
@@ -14,6 +14,16 @@ pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DB
         EncryptionMethod::Aes192Ctr => DBEncryptionMethod::Aes192Ctr,
         EncryptionMethod::Aes256Ctr => DBEncryptionMethod::Aes256Ctr,
         EncryptionMethod::Unknown => DBEncryptionMethod::Unknown,
+    }
+}
+
+pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -> EncryptionMethod {
+    match method {
+        DBEncryptionMethod::Plaintext => EncryptionMethod::Plaintext,
+        DBEncryptionMethod::Aes128Ctr => EncryptionMethod::Aes128Ctr,
+        DBEncryptionMethod::Aes192Ctr => EncryptionMethod::Aes192Ctr,
+        DBEncryptionMethod::Aes256Ctr => EncryptionMethod::Aes256Ctr,
+        DBEncryptionMethod::Unknown => EncryptionMethod::Unknown,
     }
 }
 
@@ -56,6 +66,26 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
     }
 }
 
+pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<()> {
+    if method == EncryptionMethod::Unknown {
+        return Err(Error::UnknownEncryption);
+    }
+    if method != EncryptionMethod::Plaintext {
+        let key_len = get_method_key_length(method);
+        if key.len() != key_len {
+            return Err(Error::Other(
+                format!(
+                    "unexpected key length, expected {} vs actual {}",
+                    key_len,
+                    key.len()
+                )
+                .into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub enum Cipher {
     Plaintext,
     AesCtr(OCipher),
@@ -82,21 +112,6 @@ pub struct Iv {
 }
 
 impl Iv {
-    pub fn as_slice(&self) -> &[u8; IV_LEN] {
-        &self.iv
-    }
-}
-
-impl<'a> From<&'a [u8]> for Iv {
-    fn from(src: &'a [u8]) -> Iv {
-        assert_eq!(src.len(), IV_LEN, "Nonce + Counter must be 16 bytes");
-        let mut iv = [0; IV_LEN];
-        iv.copy_from_slice(src);
-        Iv { iv }
-    }
-}
-
-impl Iv {
     /// Generate a nonce and a counter randomly.
     pub fn new() -> Iv {
         use rand::{rngs::OsRng, RngCore};
@@ -105,6 +120,26 @@ impl Iv {
         OsRng.fill_bytes(&mut iv);
 
         Iv { iv }
+    }
+
+    pub fn as_slice(&self) -> &[u8; IV_LEN] {
+        &self.iv
+    }
+
+    pub fn from_slice(iv: &[u8]) -> Result<Iv> {
+        if iv.len() != IV_LEN {
+            return Err(Error::Other(
+                format!(
+                    "iv length mismatch, expected {} vs actual {}",
+                    IV_LEN,
+                    iv.len()
+                )
+                .into(),
+            ));
+        }
+        let mut iv_copy = [0u8; IV_LEN];
+        iv_copy.copy_from_slice(iv);
+        Ok(Iv { iv: iv_copy })
     }
 }
 
@@ -158,7 +193,7 @@ mod tests {
         assert_eq!(ivs.len(), 100);
 
         for iv in ivs {
-            let iv1 = Iv::from(&iv.as_slice()[..]);
+            let iv1 = Iv::from_slice(&iv.as_slice()[..]).unwrap();
             assert_eq!(iv.as_slice(), iv1.as_slice());
         }
     }
@@ -167,9 +202,9 @@ mod tests {
         let pt = Vec::from_hex(pt).unwrap();
         let ct = Vec::from_hex(ct).unwrap();
         let key = Vec::from_hex(key).unwrap();
-        let iv = Vec::from_hex(iv).unwrap().as_slice().into();
+        let iv = Vec::from_hex(iv).unwrap();
 
-        let crypter = AesCtrCrypter::new(method, &key, iv);
+        let crypter = AesCtrCrypter::new(method, &key, Iv::from_slice(&iv).unwrap());
         let ciphertext = crypter.encrypt(&pt).unwrap();
         assert_eq!(ciphertext, ct, "{}", hex::encode(&ciphertext));
         let plaintext = crypter.decrypt(&ct).unwrap();
