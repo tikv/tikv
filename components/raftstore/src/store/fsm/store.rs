@@ -30,6 +30,7 @@ use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
+use crate::store::{RegionCache, RegionCacheBuilder};
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
@@ -185,6 +186,22 @@ impl<E: KvEngine> RaftRouter<E> {
             Err(TrySendError::Full(PeerMsg::RaftCommand(cmd))) => Err(TrySendError::Full(cmd)),
             Err(TrySendError::Disconnected(PeerMsg::RaftCommand(cmd))) => {
                 Err(TrySendError::Disconnected(cmd))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    pub fn send_cache_command(
+        &self,
+        builder: Box<dyn RegionCacheBuilder>
+    ) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder>>> {
+        let region_id = builder.region_id();
+        match self.send(region_id, PeerMsg::BuildCache(builder)) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(PeerMsg::BuildCache(builder))) => Err(TrySendError::Full(builder)),
+            Err(TrySendError::Disconnected(PeerMsg::BuildCache(builder))) => {
+                Err(TrySendError::Disconnected(builder))
             }
             _ => unreachable!(),
         }

@@ -2855,6 +2855,7 @@ where
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
+                    cache: None,
                 };
             }
         }
@@ -2915,7 +2916,7 @@ where
         } else {
             None
         };
-        ReadResponse { response, snapshot }
+        ReadResponse { response, snapshot, cache: None }
     }
 }
 

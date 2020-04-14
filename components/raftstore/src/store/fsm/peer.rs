@@ -313,6 +313,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         self.register_pd_heartbeat_tick()
                     }
                 }
+                PeerMsg::BuildCache(builder) => {
+
+                },
                 PeerMsg::Noop => {}
             }
         }

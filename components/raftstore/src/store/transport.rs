@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
+use crate::store::RegionCacheBuilder;
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
 use engine_rocks::RocksEngine;
@@ -25,6 +26,7 @@ pub trait CasualRouter<E: KvEngine> {
 /// Routes proposal to target region.
 pub trait ProposalRouter<E: KvEngine> {
     fn send(&self, cmd: RaftCommand<E>) -> std::result::Result<(), TrySendError<RaftCommand<E>>>;
+    fn build_cache(&self, builder: Box<dyn RegionCacheBuilder>) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder>>>;
 }
 
 /// Routes message to store FSM.
@@ -49,6 +51,11 @@ impl<E: KvEngine> ProposalRouter<E> for RaftRouter<E> {
     #[inline]
     fn send(&self, cmd: RaftCommand<E>) -> std::result::Result<(), TrySendError<RaftCommand<E>>> {
         self.send_raft_command(cmd)
+    }
+
+    #[inline]
+    fn build_cache(&self, builder: Box<dyn RegionCacheBuilder>) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder>>> {
+        self.send_cache_command(builder)
     }
 }
 

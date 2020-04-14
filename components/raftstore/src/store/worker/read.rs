@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use crossbeam::TrySendError;
@@ -17,7 +17,7 @@ use crate::store::fsm::RaftRouter;
 use crate::store::util::{self, LeaseState, RemoteLease};
 use crate::store::{
     cmd_resp, Peer, ProposalRouter, RaftCommand, ReadExecutor, ReadResponse, RequestInspector,
-    RequestPolicy,
+    RequestPolicy, RegionCacheBuilder
 };
 use crate::Result;
 use engine_traits::KvEngine;
@@ -26,6 +26,13 @@ use tikv_util::time::Instant;
 
 use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
+use crate::store::RegionCache;
+
+pub enum CacheState {
+    ReadOnly(Arc<dyn RegionCache>),
+    Empty,
+    Writing,
+}
 
 /// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
@@ -39,6 +46,7 @@ pub struct ReadDelegate {
 
     tag: String,
     invalid: Arc<AtomicBool>,
+    pub cache: CacheState,
 }
 
 impl ReadDelegate {
@@ -55,6 +63,7 @@ impl ReadDelegate {
             last_valid_ts: RefCell::new(Timespec::new(0, 0)),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
+            cache: None,
         }
     }
 
@@ -96,7 +105,11 @@ impl ReadDelegate {
                 {
                     // Cache snapshot_time for remaining requests in the same batch.
                     *last_valid_ts = snapshot_time;
-                    let mut resp = executor.execute(req, &self.region, None);
+                    let mut resp = if let CacheState::ReadOnly(ref cache) = self.cache {
+
+                    }  else {
+                        executor.execute(req, &self.region, None)
+                    };
                     // Leader can read local if and only if it is in lease.
                     cmd_resp::bind_term(&mut resp.response, term);
                     return Some(resp);
@@ -295,7 +308,7 @@ where
     }
 
     // It can only handle read command.
-    pub fn propose_raft_command(&self, cmd: RaftCommand<E>) {
+    pub fn propose_raft_command<B: RegionCacheBuilder>(&self, cmd: RaftCommand<E>) {
         let region_id = cmd.request.get_header().get_region_id();
         let mut executor = ReadExecutor::new(
             self.kv_engine.clone(),
@@ -315,6 +328,12 @@ where
                             .borrow_mut()
                             .insert(region_id, Some(delegate));
                         metrics.local_executed_requests += 1;
+                        if metrics.local_executed_requests % 1024 == 0 {
+                            let region_id = cmd.request.get_header().get_region_id();
+                            if let Some(builder) = B::from(region_id) {
+                                self.router.build_cache(builder);
+                            }
+                        }
                         return;
                     }
                     break;
@@ -357,8 +376,8 @@ where
     }
 
     #[inline]
-    pub fn execute_raft_command(&self, cmd: RaftCommand<E>) {
-        self.propose_raft_command(cmd);
+    pub fn execute_raft_command<B: RegionCacheBuilder>(&self, cmd: RaftCommand<E>) {
+        self.propose_raft_command::<B>(cmd);
         self.metrics.borrow_mut().maybe_flush();
     }
 
@@ -537,7 +556,7 @@ impl ReadMetrics {
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
         }
-        if self.local_executed_requests > 0 {
+        if self.local_executed_requests > 10000 {
             LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
             self.local_executed_requests = 0;
         }

@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::time::Instant;
+use std::sync::Arc;
 
 use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
@@ -18,6 +19,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::fsm::PeerFsm;
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
+use crate::store::{RegionCache, RegionCacheBuilder};
 use crate::store::SnapKey;
 use crate::Result;
 use engine_rocks::CompactedEvent;
@@ -29,6 +31,7 @@ use super::RegionSnapshot;
 pub struct ReadResponse<E: KvEngine> {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot<E>>,
+    pub cache: Option<Arc<dyn RegionCache>>,
 }
 
 #[derive(Debug)]
@@ -331,6 +334,10 @@ pub enum PeerMsg<E: KvEngine> {
     CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
+    /// Generate In-Memory-Cache for region
+    BuildCache(Box<dyn RegionCacheBuilder>),
+    /// Generate In-Memory-Cache for region
+    BuildCacheRes(Box<dyn RegionCache>),
 }
 
 impl<E: KvEngine> fmt::Debug for PeerMsg<E> {

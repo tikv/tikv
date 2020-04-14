@@ -50,6 +50,7 @@ impl SyncBenchRouter {
                 cb(ReadResponse {
                     response,
                     snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                    cache: None,
                 })
             }
             Callback::Write(cb) => {
