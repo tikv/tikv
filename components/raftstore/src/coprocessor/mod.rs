@@ -35,6 +35,7 @@ pub use self::split_check::{
     Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver, TableCheckObserver,
 };
 
+use crate::store::fsm::ObserveID;
 pub use crate::store::KeyEntry;
 
 /// Coprocessor is used to provide a convenient way to inject code to
@@ -182,20 +183,23 @@ impl Cmd {
 
 #[derive(Clone, Debug)]
 pub struct CmdBatch {
+    pub observe_id: ObserveID,
     pub region_id: u64,
-    cmds: Vec<Cmd>,
+    pub cmds: Vec<Cmd>,
 }
 
 impl CmdBatch {
-    pub fn new(region_id: u64) -> CmdBatch {
+    pub fn new(observe_id: ObserveID, region_id: u64) -> CmdBatch {
         CmdBatch {
+            observe_id,
             region_id,
             cmds: Vec::new(),
         }
     }
 
-    pub fn push(&mut self, region_id: u64, cmd: Cmd) {
+    pub fn push(&mut self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
         assert_eq!(region_id, self.region_id);
+        assert_eq!(observe_id, self.observe_id);
         self.cmds.push(cmd)
     }
 
@@ -211,13 +215,34 @@ impl CmdBatch {
     pub fn is_empty(&self) -> bool {
         self.cmds.is_empty()
     }
+
+    pub fn size(&self) -> usize {
+        let mut cmd_bytes = 0;
+        for cmd in self.cmds.iter() {
+            let Cmd {
+                ref request,
+                ref response,
+                ..
+            } = cmd;
+            if !response.get_header().has_error() {
+                if !request.has_admin_request() {
+                    for req in request.requests.iter() {
+                        let put = req.get_put();
+                        cmd_bytes += put.get_key().len();
+                        cmd_bytes += put.get_value().len();
+                    }
+                }
+            }
+        }
+        cmd_bytes
+    }
 }
 
 pub trait CmdObserver: Coprocessor {
     /// Hook to call after preparing for applying write requests.
-    fn on_prepare_for_apply(&self, region_id: u64);
+    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64);
     /// Hook to call after applying a write request.
-    fn on_apply_cmd(&self, region_id: u64, cmd: Cmd);
+    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
     fn on_flush_apply(&self);
 }

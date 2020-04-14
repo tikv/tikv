@@ -60,6 +60,7 @@ use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
     security::SecurityManager,
+    sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureScheduler, FutureWorker, Worker},
 };
@@ -77,6 +78,9 @@ pub fn run_tikv(config: TiKvConfig) {
 
     // Print version information.
     tikv::log_tikv_info();
+
+    // Print resource quota.
+    SysQuota::new().log_quota();
 
     // Do some prepare works before start.
     pre_start();
@@ -558,8 +562,6 @@ impl TiKVServer {
             self.pd_client.clone(),
         );
 
-        let raft_router = node.get_router();
-
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -586,14 +588,16 @@ impl TiKVServer {
         }
 
         // Start CDC.
+        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
         let cdc_endpoint = cdc::Endpoint::new(
             self.pd_client.clone(),
             cdc_worker.scheduler(),
             raft_router,
             cdc_ob,
         );
+        let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
-            .start(cdc_endpoint)
+            .start_with_timer(cdc_endpoint, cdc_timer)
             .unwrap_or_else(|e| fatal!("failed to start cdc: {}", e));
         self.to_stop.push(cdc_worker);
 
