@@ -235,7 +235,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
+                metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
@@ -291,7 +291,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
+                metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
@@ -346,7 +346,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
+                metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
@@ -417,7 +417,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
+                metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
@@ -557,7 +557,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
+                metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -599,7 +599,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
+                metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -634,7 +634,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
+                metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
@@ -903,7 +903,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
+                metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
@@ -1006,7 +1006,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD.get_str(), priority_tag);
+                metrics::tls_collect_command_count(CMD, priority_tag);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;

@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::local::*;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -12,8 +11,6 @@ use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {
-    local_kv_command_counter_vec: LocalIntCounterVec,
-    local_sched_commands_pri_counter_vec: LocalIntCounterVec,
     local_scan_details: HashMap<&'static str, Statistics>,
     local_read_flow_stats: HashMap<u64, FlowStatistics>,
 }
@@ -21,8 +18,6 @@ struct StorageLocalMetrics {
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
-            local_kv_command_counter_vec: KV_COMMAND_COUNTER_VEC.local(),
-            local_sched_commands_pri_counter_vec: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
             local_scan_details: HashMap::default(),
             local_read_flow_stats: HashMap::default(),
         }
@@ -30,14 +25,15 @@ thread_local! {
 }
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
+    // Flush Prometheus metrics
     SCHED_HISTOGRAM_VEC_STATIC.flush();
     SCHED_PROCESSING_READ_HISTOGRAM_STATIC.flush();
     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.flush();
+    KV_COMMAND_COUNTER_VEC_STATIC.flush();
+    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC.flush();
+
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
-        // Flush Prometheus metrics
-        m.local_kv_command_counter_vec.flush();
-        m.local_sched_commands_pri_counter_vec.flush();
 
         for (cmd, stat) in m.local_scan_details.drain() {
             for (cf, cf_details) in stat.details().iter() {
@@ -62,18 +58,9 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     });
 }
 
-pub fn tls_collect_command_count(cmd: &str, priority: CommandPriority) {
-    TLS_STORAGE_METRICS.with(|m| {
-        let mut storage_metrics = m.borrow_mut();
-        storage_metrics
-            .local_kv_command_counter_vec
-            .with_label_values(&[cmd])
-            .inc();
-        storage_metrics
-            .local_sched_commands_pri_counter_vec
-            .with_label_values(&[priority.get_str()])
-            .inc();
-    });
+pub fn tls_collect_command_count(cmd: CommandKind, priority: CommandPriority) {
+    KV_COMMAND_COUNTER_VEC_STATIC.get(cmd).inc();
+    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC.get(priority).inc();
 }
 
 pub fn tls_collect_command_duration(cmd: CommandKind, duration: Duration) {
@@ -286,14 +273,14 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_TOO_BUSY_COUNTER_VEC: SchedTooBusyVec =
         auto_flush_from!(SCHED_TOO_BUSY_COUNTER, SchedTooBusyVec);
-    pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC: SchedCommandPriCounterVec =
-        auto_flush_from!(SCHED_COMMANDS_PRI_COUNTER_VEC, SchedCommandPriCounterVec);
     pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_commands_pri_total",
         "Total count of different priority commands",
         &["priority"]
     )
     .unwrap();
+    pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC: SchedCommandPriCounterVec =
+        auto_flush_from!(SCHED_COMMANDS_PRI_COUNTER_VEC, SchedCommandPriCounterVec);
     pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_kv_command_key_read",
         "Bucketed histogram of keys read of a kv command",
