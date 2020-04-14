@@ -28,6 +28,7 @@ struct Env {
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
+    metrics_pool_schedule_duration: Histogram,
 }
 
 #[derive(Clone)]
@@ -56,7 +57,12 @@ impl FuturePool {
 
     /// Wraps a user provided future to support features of the `FuturePool`.
     /// The wrapped future will be spawned in the future thread pool.
-    fn wrap_user_future<F, R>(&self, future_fn: F) -> impl Future<Item = R::Item, Error = R::Error>
+    fn wrap_user_future<F, R>(
+        &self,
+        future_fn: F,
+        sched_histogram: Histogram,
+        sched_timer: Instant,
+    ) -> impl Future<Item = R::Item, Error = R::Error>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Future + Send + 'static,
@@ -67,6 +73,7 @@ impl FuturePool {
         env.metrics_running_task_count.inc();
 
         let func = move || {
+            sched_histogram.observe(sched_timer.elapsed_secs());
             future_fn().then(move |r| {
                 env.metrics_handled_task_count.inc();
                 env.metrics_running_task_count.dec();
@@ -85,7 +92,10 @@ impl FuturePool {
         R::Item: Send + 'static,
         R::Error: Send + 'static,
     {
-        let future = self.wrap_user_future(future_fn);
+        let timer = Instant::now_coarse();
+        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
+
+        let future = self.wrap_user_future(future_fn, h_schedule, timer);
         self.pool.spawn(future.then(|_| Ok(())));
     }
 
@@ -100,7 +110,10 @@ impl FuturePool {
         R::Item: Send + 'static,
         R::Error: Send + 'static,
     {
-        let future = self.wrap_user_future(future_fn);
+        let timer = Instant::now_coarse();
+        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
+
+        let future = self.wrap_user_future(future_fn, h_schedule, timer);
         self.pool.spawn_handle(future)
     }
 }
