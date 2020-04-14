@@ -651,9 +651,13 @@ impl Snap {
                     meta.get_cf()
                 ));
             }
-            // `validate` will be called when sending, so skip the check here is OK.
             cf_file.size = meta.get_size();
             cf_file.checksum = meta.get_checksum();
+            if file_exists(&cf_file.path) {
+                let mgr = self.encryption_key_manager.as_ref().map(|t| t.as_ref());
+                let (_, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
+                check_file_size(size, cf_file.size, &cf_file.path)?;
+            }
         }
         self.meta_file.meta = snapshot_meta;
         Ok(())
