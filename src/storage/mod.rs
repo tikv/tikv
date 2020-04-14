@@ -261,7 +261,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             r
                         });
 
-                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
+                    metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
@@ -380,7 +380,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             kv_pairs
                         });
 
-                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
+                    metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
@@ -440,7 +440,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let res = scanner.scan(limit);
 
                     let statistics = scanner.take_statistics();
-                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
+                    metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                     res.map_err(Error::from).map(|results| {
@@ -940,7 +940,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         CMD,
                         statistics.write.flow_stats.read_keys as usize,
                     );
-                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
+                    metrics::tls_collect_scan_details(CMD, &statistics);
                     result
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
@@ -1058,7 +1058,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         CMD,
                         statistics.write.flow_stats.read_keys as usize,
                     );
-                    metrics::tls_collect_scan_details(CMD.get_str(), &statistics);
+                    metrics::tls_collect_scan_details(CMD, &statistics);
                     Ok(result)
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());

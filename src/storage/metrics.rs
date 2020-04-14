@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::mem;
 use std::time::Duration;
 
+use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
 use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
 
@@ -36,10 +37,21 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         let mut m = m.borrow_mut();
 
         for (cmd, stat) in m.local_scan_details.drain() {
-            for (cf, cf_details) in stat.details().iter() {
+            let cmd_enum = match cmd {
+                "get" => CommandKind::get,
+                "batch_get" => CommandKind::batch_get,
+                "scan" => CommandKind::scan,
+                "raw_scan" => CommandKind::raw_scan,
+                "raw_batch_scan" => CommandKind::raw_batch_scan,
+                _ => panic!("should not happen"),
+            };
+
+            for (cf, cf_details) in stat.details_enum().iter() {
                 for (tag, count) in cf_details.iter() {
-                    KV_COMMAND_SCAN_DETAILS
-                        .with_label_values(&[cmd, *cf, *tag])
+                    KV_COMMAND_SCAN_DETAILS_STATIC
+                        .get(cmd_enum)
+                        .get((*cf).into())
+                        .get((*tag).into())
                         .inc_by(*count as i64);
                 }
             }
@@ -56,6 +68,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
 
         reporter.report_read_stats(read_stats);
     });
+    KV_COMMAND_SCAN_DETAILS_STATIC.flush();
 }
 
 pub fn tls_collect_command_count(cmd: CommandKind, priority: CommandPriority) {
@@ -87,11 +100,11 @@ where
     ret
 }
 
-pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
+pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
     TLS_STORAGE_METRICS.with(|m| {
         m.borrow_mut()
             .local_scan_details
-            .entry(cmd)
+            .entry(cmd.get_str())
             .or_insert_with(Default::default)
             .add(stats);
     });
@@ -164,6 +177,29 @@ make_auto_flush_static_metric! {
         high,
     }
 
+    pub label_enum GcKeysCF {
+        default,
+        lock,
+        write,
+    }
+
+    pub label_enum GcKeysDetail {
+        total,
+        processed,
+        get,
+        next,
+        prev,
+        seek,
+        seek_for_prev,
+        over_seek_bound,
+    }
+
+    pub struct CommandScanDetails: LocalIntCounter {
+        "req" => CommandKind,
+        "cf" => GcKeysCF,
+        "tag" => GcKeysDetail,
+    }
+
     pub struct SchedDurationVec: LocalHistogram {
         "type" => CommandKind,
     }
@@ -199,6 +235,31 @@ make_auto_flush_static_metric! {
 
     pub struct SchedCommandPriCounterVec: LocalIntCounter {
         "priority" => CommandPriority,
+    }
+}
+
+impl Into<GcKeysCF> for ServerGcKeysCF {
+    fn into(self) -> GcKeysCF {
+        match self {
+            ServerGcKeysCF::default => GcKeysCF::default,
+            ServerGcKeysCF::lock => GcKeysCF::lock,
+            ServerGcKeysCF::write => GcKeysCF::write,
+        }
+    }
+}
+
+impl Into<GcKeysDetail> for ServerGcKeysDetail {
+    fn into(self) -> GcKeysDetail {
+        match self {
+            ServerGcKeysDetail::total => GcKeysDetail::total,
+            ServerGcKeysDetail::processed => GcKeysDetail::processed,
+            ServerGcKeysDetail::get => GcKeysDetail::get,
+            ServerGcKeysDetail::next => GcKeysDetail::next,
+            ServerGcKeysDetail::prev => GcKeysDetail::prev,
+            ServerGcKeysDetail::seek => GcKeysDetail::seek,
+            ServerGcKeysDetail::seek_for_prev => GcKeysDetail::seek_for_prev,
+            ServerGcKeysDetail::over_seek_bound => GcKeysDetail::over_seek_bound,
+        }
     }
 }
 
@@ -296,6 +357,8 @@ lazy_static! {
         &["req", "cf", "tag"]
     )
     .unwrap();
+    pub static ref KV_COMMAND_SCAN_DETAILS_STATIC: CommandScanDetails =
+        auto_flush_from!(KV_COMMAND_SCAN_DETAILS, CommandScanDetails);
     pub static ref KV_COMMAND_KEYWRITE_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_kv_command_key_write",
         "Bucketed histogram of keys write of a kv command",
