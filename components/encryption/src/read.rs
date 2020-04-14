@@ -12,7 +12,7 @@ use futures_util::{
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
 
-use crate::{Cipher, Error, Iv, Result};
+use crate::{Iv, Result};
 
 /// Encrypt content as data being read.
 pub struct EncrypterReader<R>(CrypterReader<R>);
@@ -67,23 +67,22 @@ impl<R: AsyncRead + Unpin> AsyncRead for DecrypterReader<R> {
     }
 }
 
-pub fn create_crypter(
+pub fn create_aes_ctr_crypter(
     method: EncryptionMethod,
     key: &[u8],
     mode: Mode,
     iv: Option<&[u8]>,
 ) -> Result<(OCipher, OCrypter)> {
-    match Cipher::from(method) {
-        Cipher::Plaintext => Err(Error::Other(
-            "init crypter while encryption is not enabled"
-                .to_owned()
-                .into(),
-        )),
-        Cipher::AesCtr(cipher) => {
-            let crypter = OCrypter::new(cipher, mode, key, iv)?;
-            Ok((cipher, crypter))
+    let cipher = match method {
+        EncryptionMethod::Unknown | EncryptionMethod::Plaintext => {
+            return Err(box_err!("init crypter while encryption is not enabled"))
         }
-    }
+        EncryptionMethod::Aes128Ctr => OCipher::aes_128_ctr(),
+        EncryptionMethod::Aes192Ctr => OCipher::aes_192_ctr(),
+        EncryptionMethod::Aes256Ctr => OCipher::aes_256_ctr(),
+    };
+    let crypter = OCrypter::new(cipher, mode, key, iv)?;
+    Ok((cipher, crypter))
 }
 
 /// Implementation of EncrypterReader and DecrypterReader.
@@ -102,8 +101,8 @@ impl<R> CrypterReader<R> {
         iv: Option<Iv>,
     ) -> Result<(CrypterReader<R>, Iv)> {
         crate::verify_encryption_config(method, &key)?;
-        let iv = iv.unwrap_or_else(|| Iv::new());
-        let (cipher, crypter) = create_crypter(method, key, mode, Some(iv.as_slice()))?;
+        let iv = iv.unwrap_or_else(|| Iv::new_ctr());
+        let (cipher, crypter) = create_aes_ctr_crypter(method, key, mode, Some(iv.as_slice()))?;
         let block_size = cipher.block_size();
         Ok((
             CrypterReader {

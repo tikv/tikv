@@ -1013,6 +1013,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes 0.4.12",
+ "configuration",
  "crc32fast",
  "engine_traits",
  "failure",
