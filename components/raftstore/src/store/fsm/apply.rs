@@ -775,7 +775,7 @@ impl ApplyDelegate {
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => results.push_back(res),
-                _ => {
+                ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
                     // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= drainer.len() + 1;
                     let mut pending_entries = Vec::with_capacity(drainer.len() + 1);
@@ -2923,10 +2923,14 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm, Contro
             }
             normal.resume_pending(&mut self.apply_ctx);
             if normal.delegate.wait_merge_state.is_some() {
-                // Wait for a new message
+                // Yield due to applying CommitMerge, this fsm can be released if its
+                // channel msg count equals to expected_msg_count because it will receive
+                // a new message if its source region has applied all needed logs.
                 return expected_msg_count;
             } else if normal.delegate.yield_state.is_some() {
-                // Wait for next round
+                // Yield due to other reasons, this fsm must not be released because
+                // it's possible that no new message will be sent to itself.
+                // The remaining messages will be handled in next rounds.
                 return None;
             }
             expected_msg_count = None;
