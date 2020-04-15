@@ -4133,6 +4133,7 @@ checksum = "f764005d11ee5f36500a149ace24e00e3da98b0158b3e2d53a7495660d3f4d60"
 [[package]]
 name = "tame-gcs"
 version = "0.6.1"
+source = "git+https://github.com/yiwu-arbug/tame-gcs.git?branch=async#ab61fb4c9ce660c25d8680275cd4bd88109b3388"
 dependencies = [
  "base64 0.11.0",
  "bytes 0.5.3",
