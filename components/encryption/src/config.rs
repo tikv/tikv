@@ -8,27 +8,38 @@ use crate::master_key::Backend;
 #[cfg(test)]
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct EncryptionConfig {
     // Encryption configs.
     #[serde(with = "encryption_method_serde")]
-    pub method: EncryptionMethod,
+    #[config(skip)]
+    pub data_encryption_method: EncryptionMethod,
+    #[config(skip)]
     pub data_key_rotation_period: ReadableDuration,
+    #[config(skip)]
     pub master_key: MasterKeyConfig,
+    #[config(skip)]
     pub previous_master_key: MasterKeyConfig,
 }
 
 impl Default for EncryptionConfig {
     fn default() -> EncryptionConfig {
         EncryptionConfig {
-            method: EncryptionMethod::Plaintext,
+            data_encryption_method: EncryptionMethod::Plaintext,
             data_key_rotation_period: ReadableDuration::days(7),
             master_key: MasterKeyConfig::default(),
             previous_master_key: MasterKeyConfig::default(),
         }
     }
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct FileCofnig {
+    pub path: String,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -67,9 +78,8 @@ pub enum MasterKeyConfig {
     // with newline.
     #[serde(rename_all = "kebab-case")]
     File {
-        #[serde(with = "encryption_method_serde")]
-        method: EncryptionMethod,
-        path: String,
+        #[serde(flatten)]
+        config: FileCofnig,
     },
 
     #[serde(rename_all = "kebab-case")]
@@ -155,7 +165,7 @@ mod tests {
     #[test]
     fn test_kms_config() {
         let kms_cfg = EncryptionConfig {
-            method: EncryptionMethod::Aes128Ctr,
+            data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
             master_key: MasterKeyConfig::Kms {
                 config: KmsConfig {
@@ -169,7 +179,7 @@ mod tests {
             previous_master_key: MasterKeyConfig::Plaintext,
         };
         let kms_str = r#"
-        method = "aes128-ctr"
+        data-encryption-method = "aes128-ctr"
         data-key-rotation-period = "14d"
         [previous-master-key]
         type = "plaintext"

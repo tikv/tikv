@@ -8,10 +8,13 @@ extern crate slog_global;
 extern crate failure;
 #[macro_use(fail_point)]
 extern crate fail;
+#[macro_use]
+extern crate tikv_util;
 
 mod delegate;
 mod endpoint;
 mod errors;
+mod metrics;
 mod observer;
 mod service;
 

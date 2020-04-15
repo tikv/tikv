@@ -2,9 +2,8 @@
 
 use prometheus::*;
 use prometheus_static_metric::*;
-use tikv_util::metrics::TLSMetricGroup;
 
-make_static_metric! {
+make_auto_flush_static_metric! {
     pub struct LocalTaskCounter: LocalIntCounter {
         "type" => {
             wait_for,
@@ -25,7 +24,9 @@ make_static_metric! {
             deadlock,
         },
     }
+}
 
+make_static_metric! {
     pub struct WaitTableStatusGauge: IntGauge {
         "type" => {
             locks,
@@ -71,11 +72,8 @@ lazy_static! {
         "Heartbeat of the leader of the deadlock detector"
     )
     .unwrap();
-}
-
-thread_local! {
-    pub static TASK_COUNTER_METRICS: TLSMetricGroup<LocalTaskCounter> =
-        TLSMetricGroup::new(LocalTaskCounter::from(&TASK_COUNTER_VEC));
-    pub static ERROR_COUNTER_METRICS: TLSMetricGroup<LocalErrorCounter> =
-        TLSMetricGroup::new(LocalErrorCounter::from(&ERROR_COUNTER_VEC));
+    pub static ref TASK_COUNTER_METRICS: LocalTaskCounter =
+        auto_flush_from!(TASK_COUNTER_VEC, LocalTaskCounter);
+    pub static ref ERROR_COUNTER_METRICS: LocalErrorCounter =
+        auto_flush_from!(ERROR_COUNTER_VEC,LocalErrorCounter);
 }
