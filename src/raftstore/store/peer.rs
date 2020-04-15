@@ -1830,10 +1830,6 @@ impl Peer {
         Ok(())
     }
 
-    pub fn has_unresolved_reads(&self) -> bool {
-        self.pending_reads.has_unresolved()
-    }
-
     // Returns a boolean to indicate whether the `read` is proposed or not.
     // For these cases it won't be proposed:
     // 1. The region is in merging or splitting;
