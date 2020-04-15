@@ -11,7 +11,12 @@ use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+=======
+use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
+use protobuf::Message;
+>>>>>>> eacae77... raftstore: consider wake-up msg when checking stale msg (#7416):components/raftstore/src/store/fsm/store.rs
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -1176,7 +1181,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
-        let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Check if the target peer is tombstone.
@@ -1250,10 +1254,15 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
-
+            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
+            if msg.has_extra_msg() {
+                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // it is removed due to conf change or merge.
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+            }
             let not_exist = util::find_peer(region, from_store_id).is_none();
             self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), is_vote_msg && not_exist, None);
+                .handle_stale_msg(msg, region_epoch.clone(), need_gc_msg && not_exist, None);
 
             return Ok(true);
         }
