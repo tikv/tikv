@@ -118,6 +118,7 @@ fn test_stale_learner_restart() {
         if last_index == state.last_index {
             break;
         }
+        thread::sleep(Duration::from_millis(10));
     }
     if state.last_index != last_index {
         panic!("store 2 has not catched up logs after 5 secs.");
