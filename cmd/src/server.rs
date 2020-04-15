@@ -314,7 +314,8 @@ impl TiKVServer {
         }
 
         let search_base = env::temp_dir().join(&lock_dir);
-        std::fs::create_dir_all(&search_base).expect(&format!("create {} failed", lock_dir));
+        std::fs::create_dir_all(&search_base)
+            .unwrap_or_else(|_| panic!("create {} failed", lock_dir));
 
         for result in fs::read_dir(&search_base).unwrap() {
             if let Ok(entry) = result {
