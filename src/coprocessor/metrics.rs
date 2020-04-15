@@ -10,6 +10,28 @@ use prometheus::local::*;
 use prometheus::*;
 use prometheus_static_metric::*;
 
+make_auto_flush_static_metric! {
+    pub label_enum ReqTag {
+        select,
+        index,
+        analyze_table,
+        analyze_index,
+        checksum_table,
+        checksum_index,
+        test,
+    }
+
+    pub label_enum WaitType {
+        all,
+        schedule,
+        snapshot,
+    }
+
+    pub struct CoprReqHistogram: LocalHistogram {
+        "req" => ReqTag,
+    }
+}
+
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_duration_seconds",
@@ -18,6 +40,9 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref COPR_REQ_HISTOGRAM_STATIC: CoprReqHistogram =
+        auto_flush_from!(COPR_REQ_HISTOGRAM_VEC, CoprReqHistogram);
+
     pub static ref COPR_REQ_HANDLE_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_handle_seconds",
         "Bucketed histogram of coprocessor handle request duration",
@@ -102,7 +127,6 @@ make_static_metric! {
 }
 
 pub struct CopLocalMetrics {
-    pub local_copr_req_histogram_vec: LocalHistogramVec,
     pub local_copr_req_handle_time: LocalHistogramVec,
     pub local_copr_req_wait_time: LocalHistogramVec,
     pub local_copr_req_handler_build_time: LocalHistogramVec,
@@ -115,8 +139,6 @@ pub struct CopLocalMetrics {
 thread_local! {
     pub static TLS_COP_METRICS: RefCell<CopLocalMetrics> = RefCell::new(
         CopLocalMetrics {
-            local_copr_req_histogram_vec:
-                COPR_REQ_HISTOGRAM_VEC.local(),
             local_copr_req_handle_time:
                 COPR_REQ_HANDLE_TIME.local(),
             local_copr_req_wait_time:
@@ -136,10 +158,10 @@ thread_local! {
 }
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
+    COPR_REQ_HISTOGRAM_STATIC.flush();
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
         let mut m = m.borrow_mut();
-        m.local_copr_req_histogram_vec.flush();
         m.local_copr_req_handle_time.flush();
         m.local_copr_req_wait_time.flush();
         m.local_copr_req_handler_build_time.flush();

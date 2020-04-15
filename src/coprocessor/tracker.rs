@@ -211,14 +211,22 @@ impl Tracker {
         let total_storage_stats =
             std::mem::replace(&mut self.total_storage_stats, Statistics::default());
 
+        let req_tag = match self.req_ctx.tag {
+            "select" => ReqTag::select,
+            "index" => ReqTag::index,
+            "analyze_table" => ReqTag::analyze_table,
+            "analyze_index" => ReqTag::analyze_index,
+            "checksum_table" => ReqTag::checksum_table,
+            "checksum_index" => ReqTag::checksum_index,
+            "test" => ReqTag::test,
+            x => panic!(format!("not recognized tag {}",x)),
+        };
+
+        // req time
+        COPR_REQ_HISTOGRAM_STATIC.get(req_tag).observe(time::duration_to_sec(self.req_time));
+
         TLS_COP_METRICS.with(|m| {
             let mut cop_metrics = m.borrow_mut();
-
-            // req time
-            cop_metrics
-                .local_copr_req_histogram_vec
-                .with_label_values(&[self.req_ctx.tag])
-                .observe(time::duration_to_sec(self.req_time));
 
             // wait time
             cop_metrics
