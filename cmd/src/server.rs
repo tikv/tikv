@@ -57,7 +57,6 @@ use tikv::{
     storage,
 };
 use tikv_util::config::VersionTrack;
-use tikv_util::metrics::ensure_updater;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
@@ -100,8 +99,6 @@ pub fn run_tikv(config: TiKvConfig) {
     let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services(gc_worker);
     tikv.init_metrics_flusher();
-
-    ensure_updater();
 
     tikv.run_server(server_config);
 
@@ -319,9 +316,8 @@ impl TiKVServer {
                 if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
                     let ip = addr.ip();
                     let port = addr.port();
-                    if cur_port == port && cur_ip == ip
-                        || cur_ip.is_unspecified()
-                        || ip.is_unspecified()
+                    if cur_port == port
+                        && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
                     {
                         let _ = try_lock_conflict_addr(file_path);
                     }
@@ -531,6 +527,7 @@ impl TiKVServer {
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
+            .encryption_key_manager(self.encryption_key_manager.clone())
             .build(snap_path, Some(self.router.clone()));
 
         // Create coprocessor endpoint.
