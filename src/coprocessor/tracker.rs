@@ -245,15 +245,13 @@ impl Tracker {
         COPR_REQ_HANDLE_TIME_STATIC
             .get(req_tag)
             .observe(time::duration_to_sec(self.total_process_time));
+        // handler build time
+        COPR_REQ_HANDLER_BUILD_TIME_STATIC
+            .get(req_tag)
+            .observe(time::duration_to_sec(self.handler_build_time));
 
         TLS_COP_METRICS.with(|m| {
             let mut cop_metrics = m.borrow_mut();
-
-            // handler build time
-            cop_metrics
-                .local_copr_req_handler_build_time
-                .with_label_values(&[self.req_ctx.tag])
-                .observe(time::duration_to_sec(self.handler_build_time));
 
             // scan keys
             cop_metrics

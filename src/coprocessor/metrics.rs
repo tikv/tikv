@@ -72,6 +72,8 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref COPR_REQ_HANDLER_BUILD_TIME_STATIC: CoprReqHistogram =
+        auto_flush_from!(COPR_REQ_HANDLER_BUILD_TIME, CoprReqHistogram);
     pub static ref COPR_REQ_ERROR: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_request_error",
         "Total number of push down request error.",
