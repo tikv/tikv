@@ -11,18 +11,21 @@ use std::error::Error;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::iter::FromIterator;
+use std::path::Path;
 use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::{process, str, u64};
-use std::path::Path;
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
-use grpcio::{CallOption, ChannelBuilder, Environment};
-use protobuf::Message;
 use gag::BufferRedirect;
+use grpcio::{CallOption, ChannelBuilder, Environment};
+use nix::sys::wait::{wait, WaitStatus};
+use nix::unistd::{fork, ForkResult};
+use protobuf::Message;
+use regex::Regex;
 
 use encryption::DataKeyManager;
 use engine::rocks;
@@ -1734,35 +1737,27 @@ fn main() {
             SubCommand::with_name("cluster")
                 .about("Print the cluster id"),
         )
-        // .subcommand(
-        //     SubCommand::with_name("ldb")
-        //         .about("Intergated RocksDB ldb tool, all following args will be passed as tool args")
-        // ) 
-        // .subcommand(
-        //     SubCommand::with_name("sst_dump")
-        //         .about("Intergated RocksDB sst_dump tool, all following args will be passed as tool args")
-        // )
         .subcommand(
             SubCommand::with_name("bad-ssts")
                 .about("Print bad ssts related infos")
                 .arg(
                     Arg::with_name("db")
+                        .long("db")
                         .required(true)
                         .takes_value(true)
                         .help("db directory."),
                 )
                 .arg(
                     Arg::with_name("manifest")
+                        .long("manifest")
                         .takes_value(true)
                         .help("specify manifest, if not set, it will look up manifest file in db path"),
                 )
                 .arg(
                     Arg::with_name("pd")
                         .required(true)
+                        .long("pd")
                         .takes_value(true)
-                        .multiple(true)
-                        .use_delimiter(true)
-                        .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
                 )
@@ -1772,11 +1767,16 @@ fn main() {
 
     // Initialize configuration and security manager.
     let cfg_path = matches.value_of("config");
-    let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
+    let cfg = cfg_path.map_or_else(|| {
+        let mut cfg = TiKvConfig::default();
+        cfg.log_level = tikv_util::logger::get_level_by_string("warn").unwrap();
+        cfg
+    }, |path| {
         let s = fs::read_to_string(&path).unwrap();
         toml::from_str(&s).unwrap()
     });
     let mgr = new_security_mgr(&matches);
+    cmd::setup::initial_logger(&cfg);
 
     // Bypass the ldb command to RocksDB.
     if let Some(cmd) = matches.subcommand_matches("ldb") {
@@ -1784,7 +1784,7 @@ fn main() {
         return;
     }
 
-    // Bypass the ldb command to RocksDB.
+    // Bypass the sst dump command to RocksDB.
     if let Some(cmd) = matches.subcommand_matches("sst_dump") {
         run_sst_dump_command(&cmd, &cfg);
         return;
@@ -1794,8 +1794,8 @@ fn main() {
         let db = matches.value_of("db").unwrap();
         let manifest = matches.value_of("manifest");
         let pd = matches.value_of("pd").unwrap();
-        // let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
-        print_bad_ssts(db, manifest, pd, &cfg);
+        let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
+        print_bad_ssts(db, manifest, pd_client, &cfg);
         return;
     }
 
@@ -2197,8 +2197,7 @@ fn dump_snap_meta_file(path: &str) {
 }
 
 fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
-    let mut cfg = PdConfig::default();
-    cfg.endpoints.push(pd.to_owned());
+    let cfg = PdConfig::new(vec![pd.to_string()]);
     cfg.validate().unwrap();
     RpcClient::new(&cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
@@ -2328,79 +2327,157 @@ fn run_sst_dump_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     engine::rocks::run_sst_dump_tool(&args, &opts);
 }
 
-fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: &str, cfg: &TiKvConfig) {
-    let mut args = vec!["sst_dump".to_string(), "--hex".to_string(), "--command=check".to_string()];
+fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TiKvConfig) {
+    let mut args = vec![
+        "sst_dump".to_string(),
+        "--output_hex".to_string(),
+        "--command=verify".to_string(),
+    ];
     args.push(format!("--file={}", db));
 
-    let stderr = BufferRedirect::stderr().unwrap();
+    let mut stderr = BufferRedirect::stderr().unwrap();
+    let stdout = BufferRedirect::stdout().unwrap();
     let opts = cfg.rocksdb.build_opt();
-    engine::rocks::run_ldb_tool(&args, &opts);
-    v1!("run_ldb_command");
-    let reader = BufReader::new(stderr);
-    for line in reader.lines().map(|l| l.unwrap()) {
+    match run_and_wait_child_process(|| engine::rocks::run_sst_dump_tool(&args, &opts)).unwrap() {
+        0 => {},
+        status => {
+            let mut err = String::new();
+            stderr.read_to_string(&mut err).unwrap();
+            v1!("failed to run {}:\n{}", args.join(" "), err);
+            std::process::exit(status);
+        }
+    };
+
+    let mut corruptions = String::new();
+    stderr.read_to_string(&mut corruptions).unwrap();
+    drop(stderr);
+    drop(stdout);
+
+    for line in corruptions.lines() {
+        v1!("--------------------------------------------------------");
         // The corruption format may like this:
-        // /path/to/db/057155.sst is corrupted: Corruption: block checksum mismatch: expected 3754995957, got 708533950  in /path/to/db/057155.sst offset 3126049 size 22724       
-        let parts = line.splitn(2, ' ').collect::<Vec<_>>();
+        // /path/to/db/057155.sst is corrupted: Corruption: block checksum mismatch: expected 3754995957, got 708533950  in /path/to/db/057155.sst offset 3126049 size 22724
+        v1!("corruption info:\n{}", line);
+        let parts = line.splitn(2, ':').collect::<Vec<_>>();
         let path = Path::new(parts[0]);
-        assert_eq!(path.extension().unwrap().to_str().unwrap(), ".sst");
+        match path.extension() {
+            Some(ext) if ext.to_str().unwrap() == "sst" => {},
+            _ => { 
+                v1!("skip bad line format: {}", line);
+                continue;
+            },
+        }
         let sst_file_number = path.file_stem().unwrap().to_str().unwrap();
-        let mut args1 = vec!["sst_dump".to_string(), "--hex".to_string(), "manifest_dump".to_string()];
+        let mut args1 = vec![
+            "ldb".to_string(),
+            "--hex".to_string(),
+            "manifest_dump".to_string(),
+        ];
         args1.push(format!("--db={}", db));
-        args1.push(format!("--sst-file-number={}", sst_file_number));
+        args1.push(format!("--sst_file_number={}", sst_file_number));
         if let Some(manifest_path) = manifest {
             args1.push(format!("--manifest={}", manifest_path));
         }
-        // The output may like this:
-        // --------------- Column family "write"  (ID 2) --------------
-        // 63:132906243[3555338 .. 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73' seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at level 0
-        
+       
         let mut stdout = BufferRedirect::stdout().unwrap();
-        engine::rocks::run_ldb_tool(&args1, &opts);
+        let mut stderr = BufferRedirect::stderr().unwrap();
+        match run_and_wait_child_process(|| engine::rocks::run_ldb_tool(&args1, &opts)).unwrap() {
+            0 => {},
+            status => {
+                let mut err = String::new();
+                stderr.read_to_string(&mut err).unwrap();
+                drop(stdout);
+                v1!("failed to run {}:\n{}", args1.join(" "), err);
+                std::process::exit(status);
+            },
+        };
         let mut output = String::new();
         stdout.read_to_string(&mut output).unwrap();
         drop(stdout);
-        v1!("find {} {}", parts[0], parts[1]);
-        if output.contains("--------------- Column family ") {
-            v1!("sst meta: {}", output);
+        drop(stderr);
 
-            let regex = Regex::new(r".*\n\d+:\d+\[\d+ .. \d+\]\['(\w*)' seq:\d+, type:\d+ .. '(\w*)' seq:\d+, type:\d+\] at level \d+").unwrap();
-            let matches = regex.captures(output);
-            let start = from_hex(matches.get(1)?.as_str()).unwrap();
-            let end = from_hex(matches.get(2)?.as_str()).unwrap();
+        v1!("\nsst meta:");
+        // The output may like this:
+        // --------------- Column family "write"  (ID 2) --------------
+        // 63:132906243[3555338 .. 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73' seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at level 0
+        let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
+        if let Some(m) = column_r.captures(&output) {
+            v1!("{} for {}", m.get(2).unwrap().as_str(), m.get(1).unwrap().as_str());
+            let r = Regex::new(r".*\n\d+:\d+\[\d+ .. \d+\]\['(\w*)' seq:\d+, type:\d+ .. '(\w*)' seq:\d+, type:\d+\] at level \d+").unwrap();
+            let matches = match r.captures(&output) {
+                None => {
+                    v1!("sst start key format is not correct: {}", output);
+                    return;
+                }
+                Some(v) => v,
+            };
+            let start = from_hex(matches.get(1).unwrap().as_str()).unwrap();
+            let end = from_hex(matches.get(2).unwrap().as_str()).unwrap();
 
-            if start.starts_with(keys::DATA_PREFIX) {
-                start = start[1..];
-                end = end[1..];
-                print_overlap_region(start, end);
-            } else if start.starts_with(keys::LOCAL_PREFIX) {
-                v1!("it isn't easy to handle local data")
+            if start.starts_with(&[keys::DATA_PREFIX]) {
+                print_overlap_region(&pd_client, &start[1..], &end[1..]);
+            } else if start.starts_with(&[keys::LOCAL_PREFIX]) {
+                v1!("it isn't easy to handle local data");
 
-                start = vec![];
                 // consider the case that include both meta and user data
-                if end.starts_with(keys::DATA_PREFIX) {
-                    end = end[1..];
-                    print_overlap_region(start, end);
+                if end.starts_with(&[keys::DATA_PREFIX]) {
+                    print_overlap_region(&pd_client, &vec![], &end[1..]);
                 }
             } else {
-                v1!("seems raw kv?")
+                v1!("unexpected key {}, seems raw kv?", hex::encode_upper(&start));
             }
-
         } else {
             // it is expected when the sst is output of a compaction and the sst isn't added to manifest yet.
-            v1!("sst {} is not found in manifest: {}",  sst_file_number, output);
+            v1!(
+                "sst {} is not found in manifest: {}",
+                sst_file_number,
+                output
+            );
         }
     }
+    v1!("--------------------------------------------------------");
     v1!("finish print");
 }
 
-fn print_overlap_region(pd_client: RpcClient, start: &[u8], end: &[u8]) {
-    for {
-        let region = pd_client.get_region_info(start);
-        v1!("overlap region: {:?}", region);
+fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
+    match fork() {
+        Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
+            WaitStatus::Exited(_, status) => {
+                return Ok(status);
+            }
+            v @ _ => {
+                return Err(format!("{:?}", v));
+            }
+        },
+        Ok(ForkResult::Child) => {
+            //  run it as a child process
+            // due to when encouter error, sst dump tool calls exit(1) directly
+            // , which avoid tikv-ctl from printing more information
+            child();
+            std::process::exit(0);
+        }
+        Err(e) => {
+            return Err(format!("Fork failed: {}", e));
+        }
+    }
+}
+
+fn print_overlap_region(pd_client: &RpcClient, start: &[u8], end: &[u8]) {
+    let mut key = start.to_vec();
+    v1!("\noverlap region:");
+    loop {
+        let region = match pd_client.get_region_info(&key) {
+            Err(e) => {
+                v1!("can not get the region of key {}: {}", hex::encode_upper(start), e);
+                return;
+            }
+            Ok(r) => r,
+        };
+        v1!("{:?}", region);
         if region.get_end_key() > end || region.get_end_key().len() == 0 {
             break;
         }
-        start = region.get_end_key();
+        key = region.get_end_key().to_vec();
     }
 }
 

@@ -605,6 +605,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "regex",
  "serde_json",
  "signal",
  "slog",
