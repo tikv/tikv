@@ -2699,7 +2699,7 @@ pub mod tests {
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build::<_, RocksEngine>(snapfiles_path.path().to_str().unwrap(), None);
-        let snapshot = RocksSnapshot::new(engine.kv);
+        let snapshot = RocksSnapshot::new(engine.kv.clone());
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
