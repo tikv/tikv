@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{
-    util::{error_stream, AsyncReadAsSyncStreamOfBytes},
+    util::{block_on_external_io, error_stream, AsyncReadAsSyncStreamOfBytes},
     ExternalStorage,
 };
 
@@ -12,7 +12,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::executor::block_on;
 use futures_util::{
     io::{AsyncRead, Cursor},
     stream::{StreamExt, TryStreamExt},
@@ -114,7 +113,7 @@ impl GCSStorage {
             builder = builder.header(key, value);
         }
         // Use blocking IO, since conver_response is only used to read access token.
-        let content = block_on(res.bytes())
+        let content = block_on_external_io(res.bytes())
             .map_err(|e| Error::new(ErrorKind::Other, format!("failed to read response: {}", e)))?;
         builder.body(content).map_err(|e| {
             Error::new(
@@ -144,7 +143,7 @@ impl GCSStorage {
                 let new_request = http::Request::from_parts(parts, read_body);
                 let req = self.convert_request(new_request)?;
                 // Use blocking IO.
-                let res = block_on(self.client.execute(req)).map_err(|e| {
+                let res = block_on_external_io(self.client.execute(req)).map_err(|e| {
                     Error::new(ErrorKind::Other, format!("request token failed: {}", e))
                 })?;
                 let response = self.convert_response(res)?;
@@ -179,11 +178,11 @@ impl GCSStorage {
     {
         self.set_auth(&mut req, scope)?;
         let request = self.convert_request(req)?;
-        let response = block_on(self.client.execute(request))
+        let response = block_on_external_io(self.client.execute(request))
             .map_err(|e| Error::new(ErrorKind::Other, format!("make request fail: {}", e)))?;
         if !response.status().is_success() {
             let status = response.status();
-            let text = block_on(response.text()).map_err(|e| {
+            let text = block_on_external_io(response.text()).map_err(|e| {
                 Error::new(
                     ErrorKind::Other,
                     format!(
