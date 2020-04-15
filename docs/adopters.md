@@ -19,7 +19,7 @@ The following adopters deploy TiKV independently without TiDB.
 |[KuGou](https://en.wikipedia.org/wiki/KuGou)|Entertainment and Music Streaming|
 |[Meitu](https://en.wikipedia.org/wiki/Meitu)|Photo-editing|
 
-This is a list of TiKV adopters deploying TiKV with TiDB.
+The following are a list of TiKV adopters deploying TiKV with TiDB.
 
 | Company | Industry | Success Story |
 | :--- | :--- | :--- |
