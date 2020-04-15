@@ -201,6 +201,12 @@ mod tests {
                 Event::Unlock(2, Some(3), Key::from_raw(b"a")),
                 Event::Resolve(5, 5),
             ],
+            // Rollback may contain a key that is not locked.
+            vec![
+                Event::Lock(1, Key::from_raw(b"a")),
+                Event::Unlock(1, None, Key::from_raw(b"b")),
+                Event::Unlock(1, None, Key::from_raw(b"a")),
+            ],
         ];
 
         for (i, case) in cases.into_iter().enumerate() {
