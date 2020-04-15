@@ -45,42 +45,44 @@ use tracing_protobuf::tracing::Dummy;
 use txn_types::{self, Key};
 
 macro_rules! tracing_wrap {
-    ( $count:expr => fn $name:ident<$($x:ident : $xt:path),*> ($($arg:ident : $t:ty,)*) -> $ret:ty $body:block ) => {
-        fn $name<$($x: $xt),*> ($($arg: $t,)*) -> $ret {
-            let (s, r) = crossbeam::channel::unbounded();
-            for _ in 0..$count {
-                s.send("0123456789abcdevwxyz").unwrap();
-            }
+    ( $count:expr => $v:vis fn $name:ident<$($x:ident : $xt:path),*> ($($arg:ident : $t:ty,)*) -> $ret:ty $body:block ) => {
+        $v fn $name<$($x: $xt),*> ($($arg: $t,)*) -> $ret {
+            // let (s, r) = crossbeam::channel::unbounded();
+            // for _ in 0..$count {
+            //     s.send("0123456789abcdevwxyz").unwrap();
+            // }
 
             (|$($arg: $t,)*| $body)($($arg),*)
                 .map(move |ret| {
-                    let v: Vec<_> = r.iter().map(|s| s.to_string()).collect();
+                    // let v: Vec<_> = r.iter().map(|s| s.to_string()).collect();
+                    let v: Vec<_> = (0..$count).map(|_| "0123456789abcdevwxyz".to_owned()).collect();
                     let mut dmy = Dummy::default();
                     dmy.set_names(RepeatedField::from_slice(&v));
                     let v = dmy.write_to_bytes().unwrap();
 
                     (ret, v)
                 })
-                .map(|(ret, _)| { ret })
+                .map(|(ret, _)| ret )
         }
     };
-    ( $count:expr => fn $name:ident($($arg:ident : $t:ty,)*) -> $ret:ty $body:block ) => {
-        fn $name($($arg: $t,)*) -> $ret {
-            let (s, r) = crossbeam::channel::unbounded();
-            for _ in 0..$count {
-                s.send("0123456789abcdevwxyz").unwrap();
-            }
+    ( $count:expr => $v:vis fn $name:ident($($arg:ident : $t:ty,)*) -> $ret:ty $body:block ) => {
+        $v fn $name($($arg: $t,)*) -> $ret {
+            // let (s, r) = crossbeam::channel::unbounded();
+            // for _ in 0..$count {
+            //     s.send("0123456789abcdevwxyz").unwrap();
+            // }
 
             (|$($arg: $t,)*| $body)($($arg),*)
                 .map(move |ret| {
-                    let v: Vec<_> = r.iter().map(|s| s.to_string()).collect();
+                    // let v: Vec<_> = r.iter().map(|s| s.to_string()).collect();
+                    let v: Vec<_> = (0..$count).map(|_| "0123456789abcdevwxyz".to_owned()).collect();
                     let mut dmy = Dummy::default();
                     dmy.set_names(RepeatedField::from_slice(&v));
                     let v = dmy.write_to_bytes().unwrap();
 
                     (ret, v)
                 })
-                .map(|(ret, _)| { ret })
+                .map(|(ret, _)| ret )
         }
     };
 }
@@ -575,10 +577,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let (s, r) = crossbeam::channel::unbounded();
-        for _ in 0..20 {
-            s.send("0123456789abcdevwxyz").unwrap();
-        }
+        // let (s, r) = crossbeam::channel::unbounded();
+        // for _ in 0..20 {
+        //     s.send("0123456789abcdevwxyz").unwrap();
+        // }
 
         let begin_instant = Instant::now_coarse();
 
@@ -605,16 +607,17 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
-            })                
+            })
             .map(move |ret| {
-                let v: Vec<_> = r.iter().map(|s| s.to_string()).collect();
+                // let v: Vec<_> = r.iter().map(|s| s.to_string()).collect();
+                let v: Vec<_> = (0..2000).map(|_| "0123456789abcdevwxyz".to_owned()).collect();
                 let mut dmy = Dummy::default();
                 dmy.set_names(RepeatedField::from_slice(&v));
                 let v = dmy.write_to_bytes().unwrap();
 
                 (ret, v)
             })
-            .map(|(ret, _)| { ret });
+            .map(|(ret, _)| ret );
 
         ctx.spawn(future);
     }
@@ -1196,34 +1199,35 @@ fn future_handle_empty(
         .map_err(|_| unreachable!())
 }
 
-tracing_wrap! { 20 =>
-    fn future_get<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: GetRequest,
-    ) -> impl Future<Item = GetResponse, Error = Error> {
-        let mut req = req;
-        storage
-            .get(
-                req.take_context(),
-                Key::from_raw(req.get_key()),
-                req.get_version().into(),
-            )
-            .then(|v| {
-                let mut resp = GetResponse::default();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    match v {
-                        Ok(Some(val)) => resp.set_value(val),
-                        Ok(None) => resp.set_not_found(true),
-                        Err(e) => resp.set_error(extract_key_error(&e)),
-                    }
+tracing_wrap! { 2000 =>
+fn future_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: GetRequest,
+) -> impl Future<Item = GetResponse, Error = Error> {
+    let mut req = req;
+    storage
+        .get(
+            req.take_context(),
+            Key::from_raw(req.get_key()),
+            req.get_version().into(),
+        )
+        .then(|v| {
+            let mut resp = GetResponse::default();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                match v {
+                    Ok(Some(val)) => resp.set_value(val),
+                    Ok(None) => resp.set_not_found(true),
+                    Err(e) => resp.set_error(extract_key_error(&e)),
                 }
-                Ok(resp)
-            })
-    }
+            }
+            Ok(resp)
+        })
+}
 }
 
+tracing_wrap! { 2000 =>
 pub fn future_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -1278,134 +1282,136 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
         Ok(())
     })
 }
-
-tracing_wrap! { 20 =>
-    fn future_scan<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: ScanRequest,
-    ) -> impl Future<Item = ScanResponse, Error = Error> {
-        let mut req = req;
-        let end_key = if req.get_end_key().is_empty() {
-            None
-        } else {
-            Some(Key::from_raw(req.get_end_key()))
-        };
-
-        storage
-            .scan(
-                req.take_context(),
-                Key::from_raw(req.get_start_key()),
-                end_key,
-                req.get_limit() as usize,
-                req.get_version().into(),
-                req.get_key_only(),
-                req.get_reverse(),
-            )
-            .then(|v| {
-                let mut resp = ScanResponse::default();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    resp.set_pairs(extract_kv_pairs(v).into());
-                }
-                Ok(resp)
-            })
-    }
 }
 
-tracing_wrap! { 20 =>
-    fn future_batch_get<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: BatchGetRequest,
-    ) -> impl Future<Item = BatchGetResponse, Error = Error> {
-        let mut req = req;
-        let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-        storage
-            .batch_get(req.take_context(), keys, req.get_version().into())
-            .then(|v| {
-                let mut resp = BatchGetResponse::default();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    resp.set_pairs(extract_kv_pairs(v).into());
-                }
-                Ok(resp)
-            })
-    }
-}
+tracing_wrap! { 2000 =>
+fn future_scan<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: ScanRequest,
+) -> impl Future<Item = ScanResponse, Error = Error> {
+    let mut req = req;
+    let end_key = if req.get_end_key().is_empty() {
+        None
+    } else {
+        Some(Key::from_raw(req.get_end_key()))
+    };
 
-tracing_wrap! { 20 =>
-    fn future_gc<E: Engine>(
-        gc_worker: &GcWorker<E>,
-        req: GcRequest,
-    ) -> impl Future<Item = GcResponse, Error = Error> {
-        let mut req = req;
-        let (cb, f) = paired_future_callback();
-        let res = gc_worker.gc(req.take_context(), req.get_safe_point().into(), cb);
-
-        AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-            let mut resp = GcResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(extract_key_error(&e));
-            }
-            resp
-        })
-    }
-}
-
-tracing_wrap! { 20 =>
-    fn future_delete_range<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: DeleteRangeRequest,
-    ) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
-        let mut req = req;
-        let (cb, f) = paired_future_callback();
-        let res = storage.delete_range(
+    storage
+        .scan(
             req.take_context(),
             Key::from_raw(req.get_start_key()),
-            Key::from_raw(req.get_end_key()),
-            req.get_notify_only(),
-            cb,
-        );
-
-        AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-            let mut resp = DeleteRangeResponse::default();
+            end_key,
+            req.get_limit() as usize,
+            req.get_version().into(),
+            req.get_key_only(),
+            req.get_reverse(),
+        )
+        .then(|v| {
+            let mut resp = ScanResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
+            } else {
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
-            resp
+            Ok(resp)
         })
-    }
+}
 }
 
-tracing_wrap! { 20 =>
-    fn future_raw_get<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: RawGetRequest,
-    ) -> impl Future<Item = RawGetResponse, Error = Error> {
-        let mut req = req;
-        storage
-            .raw_get(req.take_context(), req.take_cf(), req.take_key())
-            .then(|v| {
-                let mut resp = RawGetResponse::default();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    match v {
-                        Ok(Some(val)) => resp.set_value(val),
-                        Ok(None) => resp.set_not_found(true),
-                        Err(e) => resp.set_error(format!("{}", e)),
-                    }
+tracing_wrap! { 2000 =>
+fn future_batch_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: BatchGetRequest,
+) -> impl Future<Item = BatchGetResponse, Error = Error> {
+    let mut req = req;
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+    storage
+        .batch_get(req.take_context(), keys, req.get_version().into())
+        .then(|v| {
+            let mut resp = BatchGetResponse::default();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                resp.set_pairs(extract_kv_pairs(v).into());
+            }
+            Ok(resp)
+        })
+}
+}
+
+tracing_wrap! { 2000 =>
+fn future_gc<E: Engine>(
+    gc_worker: &GcWorker<E>,
+    req: GcRequest,
+) -> impl Future<Item = GcResponse, Error = Error> {
+    let mut req = req;
+    let (cb, f) = paired_future_callback();
+    let res = gc_worker.gc(req.take_context(), req.get_safe_point().into(), cb);
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = GcResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(extract_key_error(&e));
+        }
+        resp
+    })
+}
+}
+
+tracing_wrap! { 2000 =>
+fn future_delete_range<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: DeleteRangeRequest,
+) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
+    let mut req = req;
+    let (cb, f) = paired_future_callback();
+    let res = storage.delete_range(
+        req.take_context(),
+        Key::from_raw(req.get_start_key()),
+        Key::from_raw(req.get_end_key()),
+        req.get_notify_only(),
+        cb,
+    );
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = DeleteRangeResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
+    })
+}
+}
+
+tracing_wrap! { 2000 =>
+fn future_raw_get<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: RawGetRequest,
+) -> impl Future<Item = RawGetResponse, Error = Error> {
+    let mut req = req;
+    storage
+        .raw_get(req.take_context(), req.take_cf(), req.take_key())
+        .then(|v| {
+            let mut resp = RawGetResponse::default();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                match v {
+                    Ok(Some(val)) => resp.set_value(val),
+                    Ok(None) => resp.set_not_found(true),
+                    Err(e) => resp.set_error(format!("{}", e)),
                 }
-                Ok(resp)
-            })
-    }
+            }
+            Ok(resp)
+        })
+}
 }
 
+tracing_wrap! { 2000 =>
 pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -1460,8 +1466,9 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
         Ok(())
     })
 }
+}
 
-tracing_wrap! { 20 =>
+tracing_wrap! { 2000 =>
 fn future_raw_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     req: RawBatchGetRequest,
@@ -1482,107 +1489,107 @@ fn future_raw_batch_get<E: Engine, L: LockManager>(
 }
 }
 
-tracing_wrap! { 20 =>
-    fn future_raw_put<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: RawPutRequest,
-    ) -> impl Future<Item = RawPutResponse, Error = Error> {
-        let mut req = req;
+tracing_wrap! { 2000 =>
+fn future_raw_put<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: RawPutRequest,
+) -> impl Future<Item = RawPutResponse, Error = Error> {
+    let mut req = req;
 
-        let (cb, future) = paired_future_callback();
-        let res = storage.raw_put(
-            req.take_context(),
-            req.take_cf(),
-            req.take_key(),
-            req.take_value(),
-            cb,
-        );
+    let (cb, future) = paired_future_callback();
+    let res = storage.raw_put(
+        req.take_context(),
+        req.take_cf(),
+        req.take_key(),
+        req.take_value(),
+        cb,
+    );
 
-        AndThenWith::new(res, future.map_err(Error::from)).map(|v| {
-            let mut resp = RawPutResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
-    }
+    AndThenWith::new(res, future.map_err(Error::from)).map(|v| {
+        let mut resp = RawPutResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
+    })
+}
 }
 
-tracing_wrap! { 20 =>
-    fn future_raw_batch_put<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: RawBatchPutRequest,
-    ) -> impl Future<Item = RawBatchPutResponse, Error = Error> {
-        let mut req = req;
+tracing_wrap! { 2000 =>
+fn future_raw_batch_put<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: RawBatchPutRequest,
+) -> impl Future<Item = RawBatchPutResponse, Error = Error> {
+    let mut req = req;
 
-        let cf = req.take_cf();
-        let pairs = req
-            .take_pairs()
-            .into_iter()
-            .map(|mut x| (x.take_key(), x.take_value()))
-            .collect();
+    let cf = req.take_cf();
+    let pairs = req
+        .take_pairs()
+        .into_iter()
+        .map(|mut x| (x.take_key(), x.take_value()))
+        .collect();
 
-        let (cb, f) = paired_future_callback();
-        let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
+    let (cb, f) = paired_future_callback();
+    let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
 
-        AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-            let mut resp = RawBatchPutResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
-    }
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = RawBatchPutResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
+    })
+}
 }
 
-tracing_wrap! { 20 =>
-    fn future_raw_delete<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: RawDeleteRequest,
-    ) -> impl Future<Item = RawDeleteResponse, Error = Error> {
-        let mut req = req;
+tracing_wrap! { 2000 =>
+fn future_raw_delete<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: RawDeleteRequest,
+) -> impl Future<Item = RawDeleteResponse, Error = Error> {
+    let mut req = req;
 
-        let (cb, f) = paired_future_callback();
-        let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
+    let (cb, f) = paired_future_callback();
+    let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
-        AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-            let mut resp = RawDeleteResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
-    }
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = RawDeleteResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
+    })
+}
 }
 
-tracing_wrap! { 20 =>
-    fn future_raw_batch_delete<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: RawBatchDeleteRequest,
-    ) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
-        let mut req = req;
+tracing_wrap! { 2000 =>
+fn future_raw_batch_delete<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: RawBatchDeleteRequest,
+) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
+    let mut req = req;
 
-        let cf = req.take_cf();
-        let keys = req.take_keys().into();
-        let (cb, f) = paired_future_callback();
-        let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
+    let cf = req.take_cf();
+    let keys = req.take_keys().into();
+    let (cb, f) = paired_future_callback();
+    let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
 
-        AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-            let mut resp = RawBatchDeleteResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
-    }
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = RawBatchDeleteResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
+    })
+}
 }
 
 // unimplemented
@@ -1639,110 +1646,110 @@ fn future_ver_delete_range<E: Engine, L: LockManager>(
     future::ok(resp)
 }
 
-tracing_wrap! { 20 =>
-    fn future_raw_scan<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: RawScanRequest,
-    ) -> impl Future<Item = RawScanResponse, Error = Error> {
-        let mut req = req;
+tracing_wrap! { 2000 =>
+fn future_raw_scan<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: RawScanRequest,
+) -> impl Future<Item = RawScanResponse, Error = Error> {
+    let mut req = req;
 
-        let end_key = if req.get_end_key().is_empty() {
-            None
-        } else {
-            Some(req.take_end_key())
-        };
-        storage
-            .raw_scan(
-                req.take_context(),
-                req.take_cf(),
-                req.take_start_key(),
-                end_key,
-                req.get_limit() as usize,
-                req.get_key_only(),
-                req.get_reverse(),
-            )
-            .then(|v| {
-                let mut resp = RawScanResponse::default();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    resp.set_kvs(extract_kv_pairs(v).into());
-                }
-                Ok(resp)
-            })
-    }
-}
-
-tracing_wrap! { 20 =>
-    fn future_raw_batch_scan<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: RawBatchScanRequest,
-    ) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
-        let mut req = req;
-
-        storage
-            .raw_batch_scan(
-                req.take_context(),
-                req.take_cf(),
-                req.take_ranges().into(),
-                req.get_each_limit() as usize,
-                req.get_key_only(),
-                req.get_reverse(),
-            )
-            .then(|v| {
-                let mut resp = RawBatchScanResponse::default();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    resp.set_kvs(extract_kv_pairs(v).into());
-                }
-                Ok(resp)
-            })
-    }
-}
-
-tracing_wrap! { 20 =>
-    fn future_raw_delete_range<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
-        req: RawDeleteRangeRequest,
-    ) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
-        let mut req = req;
-
-        let (cb, f) = paired_future_callback();
-        let res = storage.raw_delete_range(
+    let end_key = if req.get_end_key().is_empty() {
+        None
+    } else {
+        Some(req.take_end_key())
+    };
+    storage
+        .raw_scan(
             req.take_context(),
             req.take_cf(),
             req.take_start_key(),
-            req.take_end_key(),
-            cb,
-        );
-
-        AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-            let mut resp = RawDeleteRangeResponse::default();
+            end_key,
+            req.get_limit() as usize,
+            req.get_key_only(),
+            req.get_reverse(),
+        )
+        .then(|v| {
+            let mut resp = RawScanResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
+            } else {
+                resp.set_kvs(extract_kv_pairs(v).into());
             }
-            resp
+            Ok(resp)
         })
-    }
+}
 }
 
-tracing_wrap! { 20 =>
-    fn future_cop<E: Engine>(
-        cop: &Endpoint<E>,
-        peer: Option<String>,
-        req: Request,
-    ) -> impl Future<Item = Response, Error = Error> {
-        cop.parse_and_handle_unary_request(req, peer)
-            .map_err(|_| unreachable!())
-    }
+tracing_wrap! { 2000 =>
+fn future_raw_batch_scan<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: RawBatchScanRequest,
+) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
+    let mut req = req;
+
+    storage
+        .raw_batch_scan(
+            req.take_context(),
+            req.take_cf(),
+            req.take_ranges().into(),
+            req.get_each_limit() as usize,
+            req.get_key_only(),
+            req.get_reverse(),
+        )
+        .then(|v| {
+            let mut resp = RawBatchScanResponse::default();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                resp.set_kvs(extract_kv_pairs(v).into());
+            }
+            Ok(resp)
+        })
+}
+}
+
+tracing_wrap! { 2000 =>
+fn future_raw_delete_range<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: RawDeleteRangeRequest,
+) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
+    let mut req = req;
+
+    let (cb, f) = paired_future_callback();
+    let res = storage.raw_delete_range(
+        req.take_context(),
+        req.take_cf(),
+        req.take_start_key(),
+        req.take_end_key(),
+        cb,
+    );
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = RawDeleteRangeResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
+    })
+}
+}
+
+tracing_wrap! { 2000 =>
+fn future_cop<E: Engine>(
+    cop: &Endpoint<E>,
+    peer: Option<String>,
+    req: Request,
+) -> impl Future<Item = Response, Error = Error> {
+    cop.parse_and_handle_unary_request(req, peer)
+        .map_err(|_| unreachable!())
+}
 }
 
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident) { $else_branch: expr }) => {
-        tracing_wrap! { 20 =>
+        tracing_wrap! { 2000 =>
             fn $fn_name<E: Engine, L: LockManager>(
                 storage: &Storage<E, L>,
                 $req: $req_ty,
