@@ -253,46 +253,41 @@ impl Tracker {
         COPR_SCAN_KEYS_STATIC
             .get(req_tag)
             .observe(total_storage_stats.total_processed() as f64);
+        // RocksDB perf stats
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(req_tag)
+            .internal_key_skipped_count
+            .inc_by(self.total_perf_stats.0.internal_key_skipped_count as i64);
 
-        TLS_COP_METRICS.with(|m| {
-            let mut cop_metrics = m.borrow_mut();
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(req_tag)
+            .internal_delete_skipped_count
+            .inc_by(self.total_perf_stats.0.internal_delete_skipped_count as i64);
 
-            // RocksDB perf stats
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "internal_key_skipped_count"])
-                .inc_by(self.total_perf_stats.0.internal_key_skipped_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(req_tag)
+            .block_cache_hit_count
+            .inc_by(self.total_perf_stats.0.block_cache_hit_count as i64);
 
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "internal_delete_skipped_count"])
-                .inc_by(self.total_perf_stats.0.internal_delete_skipped_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(req_tag)
+            .block_read_count
+            .inc_by(self.total_perf_stats.0.block_read_count as i64);
 
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "block_cache_hit_count"])
-                .inc_by(self.total_perf_stats.0.block_cache_hit_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(req_tag)
+            .block_read_byte
+            .inc_by(self.total_perf_stats.0.block_read_byte as i64);
 
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "block_read_count"])
-                .inc_by(self.total_perf_stats.0.block_read_count as i64);
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(req_tag)
+            .encrypt_data_nanos
+            .inc_by(self.total_perf_stats.0.encrypt_data_nanos as i64);
 
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
-                .inc_by(self.total_perf_stats.0.block_read_byte as i64);
-
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "encrypt_data_nanos"])
-                .inc_by(self.total_perf_stats.0.encrypt_data_nanos as i64);
-
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "decrypt_data_nanos"])
-                .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
-        });
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(req_tag)
+            .decrypt_data_nanos
+            .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
 
         tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
         tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);

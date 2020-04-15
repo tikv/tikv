@@ -6,7 +6,6 @@ use std::mem;
 use crate::storage::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
 
-use prometheus::local::*;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -27,6 +26,16 @@ make_auto_flush_static_metric! {
         snapshot,
     }
 
+    pub label_enum PerfMetric {
+        internal_key_skipped_count,
+        internal_delete_skipped_count,
+        block_cache_hit_count,
+        block_read_count,
+        block_read_byte,
+        encrypt_data_nanos,
+        decrypt_data_nanos,
+    }
+
     pub struct CoprReqHistogram: LocalHistogram {
         "req" => ReqTag,
     }
@@ -34,6 +43,11 @@ make_auto_flush_static_metric! {
     pub struct ReqWaitHistogram: LocalHistogram {
         "req" => ReqTag,
         "type" => WaitType,
+    }
+
+    pub struct PerfCounter: LocalIntCounter {
+        "req" => ReqTag,
+        "metric" => PerfMetric,
     }
 }
 
@@ -101,6 +115,8 @@ lazy_static! {
         &["req", "metric"]
     )
     .unwrap();
+    pub static ref COPR_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
+        auto_flush_from!(COPR_ROCKSDB_PERF_COUNTER, PerfCounter);
     pub static ref COPR_DAG_REQ_COUNT: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_dag_request_count",
         "Total number of DAG requests",
@@ -139,8 +155,6 @@ make_static_metric! {
 }
 
 pub struct CopLocalMetrics {
-    pub local_copr_req_handler_build_time: LocalHistogramVec,
-    pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
     local_scan_details: HashMap<&'static str, Statistics>,
     local_cop_flow_stats: HashMap<u64, FlowStatistics>,
 }
@@ -148,10 +162,6 @@ pub struct CopLocalMetrics {
 thread_local! {
     pub static TLS_COP_METRICS: RefCell<CopLocalMetrics> = RefCell::new(
         CopLocalMetrics {
-            local_copr_req_handler_build_time:
-                COPR_REQ_HANDLER_BUILD_TIME.local(),
-            local_copr_rocksdb_perf_counter:
-                COPR_ROCKSDB_PERF_COUNTER.local(),
             local_scan_details:
                 HashMap::default(),
             local_cop_flow_stats:
@@ -165,11 +175,11 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     COPR_REQ_WAIT_TIME_STATIC.flush();
     COPR_REQ_HANDLE_TIME_STATIC.flush();
     COPR_SCAN_KEYS_STATIC.flush();
+    COPR_ROCKSDB_PERF_COUNTER_STATIC.flush();
+    COPR_REQ_HANDLER_BUILD_TIME_STATIC.flush();
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
         let mut m = m.borrow_mut();
-        m.local_copr_req_handler_build_time.flush();
-        m.local_copr_rocksdb_perf_counter.flush();
 
         for (cmd, stat) in m.local_scan_details.drain() {
             for (cf, cf_details) in stat.details().iter() {
