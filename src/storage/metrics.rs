@@ -149,7 +149,7 @@ pub fn tls_collect_qps(
 ) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
-        let mut key_range = build_key_range(start_key, end_key,false);
+        let mut key_range = build_key_range(start_key, end_key, false);
         if reverse_scan {
             std::mem::swap(&mut key_range.start_key, &mut key_range.end_key)
         }

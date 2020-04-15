@@ -611,17 +611,17 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
 
 pub struct KeysInfoFormatter<
     'a,
-    I: std::iter::DoubleEndedIterator<Item=&'a Vec<u8>>
-    + std::iter::ExactSizeIterator<Item=&'a Vec<u8>>
-    + Clone,
+    I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
+        + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
+        + Clone,
 >(pub I);
 
 impl<
-    'a,
-    I: std::iter::DoubleEndedIterator<Item=&'a Vec<u8>>
-    + std::iter::ExactSizeIterator<Item=&'a Vec<u8>>
-    + Clone,
-> fmt::Display for KeysInfoFormatter<'a, I>
+        'a,
+        I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
+            + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
+            + Clone,
+    > fmt::Display for KeysInfoFormatter<'a, I>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut it = self.0.clone();
