@@ -223,6 +223,16 @@ impl Tracker {
                 .local_copr_rocksdb_perf_counter
                 .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
                 .inc_by(self.total_perf_stats.0.block_read_byte as i64);
+
+            cop_metrics
+                .local_copr_rocksdb_perf_counter
+                .with_label_values(&[self.req_ctx.tag, "encrypt_data_nanos"])
+                .inc_by(self.total_perf_stats.0.encrypt_data_nanos as i64);
+
+            cop_metrics
+                .local_copr_rocksdb_perf_counter
+                .with_label_values(&[self.req_ctx.tag, "decrypt_data_nanos"])
+                .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
         });
 
         tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);

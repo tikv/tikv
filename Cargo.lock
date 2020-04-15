@@ -1007,8 +1007,10 @@ dependencies = [
  "futures-util",
  "hex 0.4.2",
  "kvproto",
+ "lazy_static",
  "matches",
  "openssl",
+ "prometheus",
  "protobuf",
  "rand 0.7.3",
  "rusoto_core",
@@ -2001,7 +2003,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#193485b1c1aa20e90641f05292ce8f003694d922"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#c7c1a9cd0ab1e4cb21ad24f09bb83a2838a5bd62"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2020,7 +2022,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#193485b1c1aa20e90641f05292ce8f003694d922"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#c7c1a9cd0ab1e4cb21ad24f09bb83a2838a5bd62"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3367,7 +3369,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#193485b1c1aa20e90641f05292ce8f003694d922"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#c7c1a9cd0ab1e4cb21ad24f09bb83a2838a5bd62"
 dependencies = [
  "libc",
  "librocksdb_sys",

@@ -17,6 +17,7 @@ mod encrypted_file;
 mod errors;
 mod manager;
 mod master_key;
+mod metrics;
 mod read;
 mod write;
 
