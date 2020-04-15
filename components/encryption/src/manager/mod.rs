@@ -13,7 +13,7 @@ use protobuf::Message;
 use crate::config::{EncryptionConfig, MasterKeyConfig};
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
-use crate::master_key::{create_backend, Backend, PlainTextBackend};
+use crate::master_key::{create_backend, Backend, PlaintextBackend};
 use crate::metrics::*;
 use crate::{Error, Result};
 
@@ -118,7 +118,7 @@ impl Dicts {
         let file = EncryptedFile::new(&self.base, FILE_DICT_NAME);
         let file_bytes = self.file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
-        file.write(&file_bytes, &PlainTextBackend::default())?;
+        file.write(&file_bytes, &PlaintextBackend::default())?;
 
         ENCRYPTION_FILE_SIZE_GAUGE
             .with_label_values(&["file_dictionary"])
@@ -896,7 +896,7 @@ mod tests {
 
         // Change it insecure backend and save dicts,
         // must set expose for all keys.
-        let insecure = Arc::new(PlainTextBackend::default());
+        let insecure = Arc::new(PlaintextBackend::default());
         let ok = dicts
             .rotate_key(100, DataKey::default(), insecure.as_ref())
             .unwrap();

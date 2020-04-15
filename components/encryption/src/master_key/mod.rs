@@ -34,9 +34,9 @@ pub use self::kms::KmsBackend;
 mod metadata;
 
 #[derive(Default)]
-pub(crate) struct PlainTextBackend {}
+pub(crate) struct PlaintextBackend {}
 
-impl Backend for PlainTextBackend {
+impl Backend for PlaintextBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
         let mut content = EncryptedContent::default();
         content.set_content(plaintext.to_owned());
@@ -53,7 +53,7 @@ impl Backend for PlainTextBackend {
 
 pub(crate) fn create_backend(config: &MasterKeyConfig) -> Result<Arc<dyn Backend>> {
     Ok(match config {
-        MasterKeyConfig::Plaintext => Arc::new(PlainTextBackend {}) as _,
+        MasterKeyConfig::Plaintext => Arc::new(PlaintextBackend {}) as _,
         MasterKeyConfig::File { method, path } => {
             Arc::new(FileBackend::new(*method, Path::new(path))?) as _
         }
@@ -89,7 +89,7 @@ pub mod tests {
     impl Default for MockBackend {
         fn default() -> MockBackend {
             MockBackend {
-                inner: Box::new(PlainTextBackend {}),
+                inner: Box::new(PlaintextBackend {}),
                 is_wrong_master_key: false,
                 encrypt_fail: false,
                 encrypt_called: 0,
