@@ -14,6 +14,7 @@ use crate::config::{EncryptionConfig, MasterKeyConfig};
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
 use crate::master_key::{create_backend, Backend, PlaintextBackend};
+use crate::metrics::*;
 use crate::{Error, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
@@ -63,6 +64,10 @@ impl Dicts {
                 file_dict.merge_from_bytes(&file_bytes)?;
                 let mut key_dict = KeyDictionary::default();
                 key_dict.merge_from_bytes(&key_bytes)?;
+
+                ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
+                ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
+
                 Ok(Some(Dicts {
                     file_dict,
                     key_dict,
@@ -100,6 +105,12 @@ impl Dicts {
         }
         let key_bytes = self.key_dict.write_to_bytes()?;
         file.write(&key_bytes, master_key)?;
+
+        ENCRYPTION_FILE_SIZE_GAUGE
+            .with_label_values(&["key_dictionary"])
+            .set(key_bytes.len() as _);
+        ENCRYPTION_DATA_KEY_GAUGE.set(self.key_dict.keys.len() as _);
+
         Ok(())
     }
 
@@ -108,6 +119,12 @@ impl Dicts {
         let file_bytes = self.file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
         file.write(&file_bytes, &PlaintextBackend::default())?;
+
+        ENCRYPTION_FILE_SIZE_GAUGE
+            .with_label_values(&["file_dictionary"])
+            .set(file_bytes.len() as _);
+        ENCRYPTION_FILE_NUM_GAUGE.set(self.file_dict.files.len() as _);
+
         Ok(())
     }
 
@@ -202,7 +219,6 @@ impl Dicts {
             Entry::Occupied(_) => return Ok(false),
             Entry::Vacant(e) => e.insert(key),
         };
-
         // Update current data key id.
         self.key_dict.current_key_id = key_id;
         // re-encrypt key dict file.
@@ -368,6 +384,9 @@ impl DataKeyManager {
             (Err(e), _) => return Err(e),
         };
         dicts.maybe_rotate_data_key(method, master_key.as_ref())?;
+
+        ENCRYPTION_INITIALIZED_GAUGE.set(1);
+
         Ok(Some(DataKeyManager {
             dicts: Arc::new(RwLock::new(dicts)),
             master_key,
