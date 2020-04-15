@@ -474,9 +474,12 @@ dependencies = [
  "failure",
  "futures 0.1.29",
  "grpcio",
+ "hex 0.4.2",
  "kvproto",
+ "lazy_static",
  "panic_hook",
  "pd_client",
+ "prometheus",
  "raft",
  "raftstore",
  "resolved_ts",
@@ -611,16 +614,6 @@ dependencies = [
  "txn_types",
  "vlog",
  "yatp",
-]
-
-[[package]]
-name = "coarsetime"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
-dependencies = [
- "lazy_static",
- "libc",
 ]
 
 [[package]]
@@ -1020,14 +1013,18 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes 0.4.12",
+ "configuration",
  "crc32fast",
  "engine_traits",
  "failure",
  "futures 0.3.4",
+ "futures-util",
  "hex 0.4.2",
  "kvproto",
+ "lazy_static",
  "matches",
  "openssl",
+ "prometheus",
  "protobuf",
  "rand 0.7.3",
  "rusoto_core",
@@ -1085,7 +1082,6 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
- "coarsetime",
  "encryption",
  "engine",
  "engine_traits",
@@ -1953,7 +1949,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#98f910b71904ff7190e26a483b242ad5d7330c31"
+source = "git+https://github.com/pingcap/kvproto.git#b85805c9476caf3c4cea420410c2d97f818b0b66"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2022,7 +2018,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#eca6976f9c72f1cfed2ba7b148949df5180bd41f"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2041,7 +2037,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#eca6976f9c72f1cfed2ba7b148949df5180bd41f"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2837,7 +2833,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=a626d449eaebd5e8ce337f95c1d6dc9800f25df7#a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=086b7059482f1b06748e20c9a43efbc78b7252b2#086b7059482f1b06748e20c9a43efbc78b7252b2"
 dependencies = [
  "cfg-if",
  "fnv",
@@ -3009,10 +3005,10 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
- "coarsetime",
  "configuration",
  "crc32fast",
  "crossbeam",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -3028,6 +3024,7 @@ dependencies = [
  "lazy_static",
  "log",
  "log_wrappers",
+ "openssl",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -3036,6 +3033,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "rand 0.6.5",
  "serde",
  "serde_derive",
  "slog",
@@ -3376,6 +3374,8 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "slog",
+ "slog-global",
  "tikv_util",
  "txn_types",
 ]
@@ -3401,7 +3401,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#9bbdb6a4584d115215bc8cdb8706f9366fbcaecc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#eca6976f9c72f1cfed2ba7b148949df5180bd41f"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4667,7 +4667,6 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
- "coarsetime",
  "codec",
  "configuration",
  "crc32fast",

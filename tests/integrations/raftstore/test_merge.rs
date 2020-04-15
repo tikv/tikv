@@ -945,6 +945,53 @@ fn test_merge_isolated_store_with_no_target_peer() {
     must_get_equal(&cluster.get_engine(4), b"k345", b"v345");
 }
 
+/// Test whether a isolated peer can recover when two other regions merge to its region
+#[test]
+fn test_merge_cascade_merge_isolated() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    region = pd_client.get_region(b"k2").unwrap();
+    cluster.must_split(&region, b"k3");
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k3", b"v3");
+
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+
+    let r1 = pd_client.get_region(b"k1").unwrap();
+    let r2 = pd_client.get_region(b"k2").unwrap();
+    let r3 = pd_client.get_region(b"k3").unwrap();
+
+    let r1_on_store1 = find_peer(&r1, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(r1.get_id(), r1_on_store1);
+    let r2_on_store2 = find_peer(&r2, 2).unwrap().to_owned();
+    cluster.must_transfer_leader(r2.get_id(), r2_on_store2);
+    let r3_on_store1 = find_peer(&r3, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(r3.get_id(), r3_on_store1);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    // r1, r3 both merge to r2
+    pd_client.must_merge(r1.get_id(), r2.get_id());
+    pd_client.must_merge(r3.get_id(), r2.get_id());
+
+    cluster.must_put(b"k4", b"v4");
+
+    cluster.clear_send_filters();
+
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
+
 // Test if a learner can be destroyed properly when it's isloated and removed
 // before its region merge to another region
 #[test]
@@ -965,7 +1012,7 @@ fn test_merge_isloated_not_in_merge_learner() {
     let right_on_store1 = find_peer(&right, 1).unwrap().to_owned();
 
     pd_client.must_add_peer(left.get_id(), new_learner_peer(2, 2));
-    // ensure this learner exists
+    // Ensure this learner exists
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
@@ -974,6 +1021,7 @@ fn test_merge_isloated_not_in_merge_learner() {
     pd_client.must_remove_peer(left.get_id(), new_learner_peer(2, 2));
 
     pd_client.must_add_peer(left.get_id(), new_peer(3, 3));
+
     pd_client.must_remove_peer(left.get_id(), left_on_store1);
 
     pd_client.must_add_peer(right.get_id(), new_peer(3, 4));
@@ -986,6 +1034,6 @@ fn test_merge_isloated_not_in_merge_learner() {
     cluster.must_put(b"k123", b"v123");
 
     cluster.run_node(2).unwrap();
-    // we can see if the old peer 2 is destroyed
+    // We can see if the old peer 2 is destroyed
     must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
 }

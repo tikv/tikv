@@ -1308,7 +1308,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             );
             let mut need_gc_msg = util::is_vote_msg(msg.get_message());
             if msg.has_extra_msg() {
-                // A learner can't vote so it sends the wake-up msg to others to find out whether 
+                // A learner can't vote so it sends the wake-up msg to others to find out whether
                 // it is removed due to conf change or merge.
                 need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
             }
