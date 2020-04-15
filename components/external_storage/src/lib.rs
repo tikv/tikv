@@ -20,8 +20,7 @@ use futures_io::AsyncRead;
 use kvproto::backup::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
 use kvproto::backup::StorageBackend_oneof_backend as Backend;
-#[cfg(feature = "protobuf-codec")]
-use kvproto::backup::{Gcs, Noop, StorageBackend, S3};
+use kvproto::backup::{Gcs, Local, Noop, StorageBackend, S3};
 
 mod local;
 pub use local::LocalStorage;

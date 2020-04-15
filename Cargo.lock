@@ -1953,7 +1953,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#be05e44bb82ebebad8c09da71c10dd00afbd8194"
+source = "git+https://github.com/pingcap/kvproto.git#b85805c9476caf3c4cea420410c2d97f818b0b66"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -4134,8 +4134,9 @@ checksum = "f764005d11ee5f36500a149ace24e00e3da98b0158b3e2d53a7495660d3f4d60"
 
 [[package]]
 name = "tame-gcs"
-version = "0.6.1"
-source = "git+https://github.com/yiwu-arbug/tame-gcs.git?branch=async#ec55270486ec70f8ef54c78b26552f8c2ee6c26a"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a563f50394146c3dbaf0bcc362ae6b89ffe23a1a0df5e51d411973c872f1af2"
 dependencies = [
  "base64 0.11.0",
  "bytes 0.5.3",
