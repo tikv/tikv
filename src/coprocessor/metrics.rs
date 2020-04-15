@@ -87,6 +87,8 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref COPR_SCAN_KEYS_STATIC: CoprReqHistogram =
+        auto_flush_from!(COPR_SCAN_KEYS, CoprReqHistogram);
     pub static ref COPR_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_scan_details",
         "Bucketed counter of coprocessor scan details for each CF",
@@ -138,7 +140,6 @@ make_static_metric! {
 
 pub struct CopLocalMetrics {
     pub local_copr_req_handler_build_time: LocalHistogramVec,
-    pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
     local_scan_details: HashMap<&'static str, Statistics>,
     local_cop_flow_stats: HashMap<u64, FlowStatistics>,
@@ -149,8 +150,6 @@ thread_local! {
         CopLocalMetrics {
             local_copr_req_handler_build_time:
                 COPR_REQ_HANDLER_BUILD_TIME.local(),
-            local_copr_scan_keys:
-                COPR_SCAN_KEYS.local(),
             local_copr_rocksdb_perf_counter:
                 COPR_ROCKSDB_PERF_COUNTER.local(),
             local_scan_details:
@@ -165,11 +164,11 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     COPR_REQ_HISTOGRAM_STATIC.flush();
     COPR_REQ_WAIT_TIME_STATIC.flush();
     COPR_REQ_HANDLE_TIME_STATIC.flush();
+    COPR_SCAN_KEYS_STATIC.flush();
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
         let mut m = m.borrow_mut();
         m.local_copr_req_handler_build_time.flush();
-        m.local_copr_scan_keys.flush();
         m.local_copr_rocksdb_perf_counter.flush();
 
         for (cmd, stat) in m.local_scan_details.drain() {

@@ -249,15 +249,13 @@ impl Tracker {
         COPR_REQ_HANDLER_BUILD_TIME_STATIC
             .get(req_tag)
             .observe(time::duration_to_sec(self.handler_build_time));
+        // scan keys
+        COPR_SCAN_KEYS_STATIC
+            .get(req_tag)
+            .observe(total_storage_stats.total_processed() as f64);
 
         TLS_COP_METRICS.with(|m| {
             let mut cop_metrics = m.borrow_mut();
-
-            // scan keys
-            cop_metrics
-                .local_copr_scan_keys
-                .with_label_values(&[self.req_ctx.tag])
-                .observe(total_storage_stats.total_processed() as f64);
 
             // RocksDB perf stats
             cop_metrics
