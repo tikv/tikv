@@ -7,7 +7,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use crate::store::fsm::RaftRouter;
 use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
-    RegionCacheBuilder, NoneRegionCacheBuilder
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_rocks::RocksEngine;
@@ -20,11 +19,6 @@ pub trait RaftStoreRouter: Send + Clone {
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()>;
-
-    /// Read and Get Snapshot from local store.
-    fn read<B: RegionCacheBuilder>(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()> {
-        Ok(())
-    }
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -73,11 +67,6 @@ impl RaftStoreRouter for RaftStoreBlackHole {
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksEngine>) -> RaftStoreResult<()> {
-        Ok(())
-    }
-
-
-    fn read<B: RegionCacheBuilder>(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -141,7 +130,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
         if LocalReader::<RaftRouter<RocksEngine>, RocksEngine>::acceptable(&cmd.request) {
-            self.local_reader.execute_raft_command::<NoneRegionCacheBuilder>(cmd);
+            self.local_reader.execute_raft_command(cmd);
             Ok(())
         } else {
             let region_id = cmd.request.get_header().get_region_id();
@@ -149,12 +138,6 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
                 .send_raft_command(cmd)
                 .map_err(|e| handle_send_error(region_id, e))
         }
-    }
-
-    fn read<B: RegionCacheBuilder>(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()> {
-        let cmd = RaftCommand::new(req, cb);
-        self.local_reader.execute_raft_command::<B>(cmd);
-        Ok(())
     }
 
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {

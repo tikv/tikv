@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
@@ -37,7 +37,10 @@ use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot, SnapshotCallback};
+use crate::store::{
+    Callback, Config, PdTask, ReadResponse, RegionCache, RegionCacheBuilder, RegionSnapshot,
+    SnapshotCallback,
+};
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -244,6 +247,9 @@ pub struct Peer {
 
     /// Time of the last attempt to wake up inactive leader.
     pub bcast_wake_up_time: Option<UtilInstant>,
+
+    pub region_cache: Option<Arc<dyn RegionCache>>,
+    pub last_propose_time: Timespec,
 }
 
 impl Peer {
@@ -322,6 +328,8 @@ impl Peer {
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
+            region_cache: None,
+            last_propose_time: monotonic_raw_now(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2143,6 +2151,68 @@ impl Peer {
         true
     }
 
+    pub fn build_cache<T: Transport, C>(
+        &mut self,
+        poll_ctx: &mut PollContext<T, C>,
+        builder: Box<dyn RegionCacheBuilder<RocksEngine>>,
+    ) {
+        // Try to renew leader lease on every consistent read/write request.
+        if poll_ctx.current_time.is_none() {
+            poll_ctx.current_time = Some(monotonic_raw_now());
+        }
+
+        let current_time = poll_ctx.current_time.unwrap();
+        if current_time - self.last_propose_time
+            < time::Duration::from_std(Duration::from_secs(60)).unwrap()
+        {
+            return;
+        }
+        self.last_propose_time = current_time;
+        let region_id = self.region_id;
+        let peer_id = self.peer.get_id();
+        let router = poll_ctx.router.clone();
+        use crate::store::PeerMsg;
+        let cb: SnapshotCallback<RocksEngine> =
+            Box::new(move |snap_ret, _region, apply_state, _applied_index_term| {
+                if let Ok(snap) = snap_ret {
+                    let cache = builder.build(snap);
+                    router.send(
+                        region_id,
+                        PeerMsg::BuildCacheRes {
+                            cache,
+                            apply_index: apply_state.get_applied_index(),
+                        },
+                    );
+                } else {
+                    error!(
+                        "schedule region cache failed";
+                            "region_id" => region_id,
+                            "peer_id" => peer_id,
+                    );
+                }
+            });
+        poll_ctx.apply_router.schedule_task(
+            region_id,
+            ApplyTask::Snapshot {
+                cb,
+                sync: true,
+                region_id: self.region_id,
+            },
+        );
+    }
+
+    pub fn on_build_cache_res(&mut self, cache: Arc<dyn RegionCache>, apply_index: u64) {
+        if apply_index == self.last_applying_idx {
+            self.region_cache = Some(cache);
+        }
+    }
+
+    pub fn invalid_cache(&mut self) {
+        if let Some(cache) = self.region_cache.take() {
+            cache.set_valid(false);
+        }
+    }
+
     // For now, it is only used in merge.
     pub fn get_min_progress(&self) -> Result<u64> {
         let mut min = None;
@@ -2480,12 +2550,8 @@ impl Peer {
         check_epoch: bool,
         read_index: Option<u64>,
     ) -> ReadResponse<RocksEngine> {
-        let mut resp = ReadExecutor::new(
-            ctx.engines.kv.clone(),
-            check_epoch,
-            false, /* we don't need snapshot time */
-        )
-        .execute(&req, self.region(), read_index);
+        let mut resp = ReadExecutor::new(&ctx.engines.kv, check_epoch, self.region_cache.clone())
+            .execute(&req, self.region(), read_index);
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -2755,46 +2821,26 @@ impl RequestInspector for Peer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct ReadExecutor<E: KvEngine> {
     check_epoch: bool,
-    engine: E,
-    snapshot: Option<<E::Snapshot as Snapshot>::SyncSnapshot>,
-    snapshot_time: Option<Timespec>,
-    need_snapshot_time: bool,
+    snapshot: <E::Snapshot as Snapshot>::SyncSnapshot,
+
+    #[derivative(Debug = "ignore")]
+    cache: Option<Arc<dyn RegionCache>>,
 }
 
 impl<E> ReadExecutor<E>
 where
     E: KvEngine,
 {
-    pub fn new(engine: E, check_epoch: bool, need_snapshot_time: bool) -> Self {
+    pub fn new(engine: &E, check_epoch: bool, cache: Option<Arc<dyn RegionCache>>) -> Self {
+        let snapshot = engine.snapshot().into_sync();
         ReadExecutor {
             check_epoch,
-            engine,
-            snapshot: None,
-            snapshot_time: None,
-            need_snapshot_time,
-        }
-    }
-
-    #[inline]
-    pub fn snapshot_time(&mut self) -> Option<Timespec> {
-        self.maybe_update_snapshot();
-        self.snapshot_time
-    }
-
-    #[inline]
-    fn maybe_update_snapshot(&mut self) {
-        if self.snapshot.is_some() {
-            return;
-        }
-        self.snapshot = Some(self.engine.snapshot().into_sync());
-        // Reading current timespec after snapshot, in case we do not
-        // expire lease in time.
-        atomic::fence(atomic::Ordering::Release);
-        if self.need_snapshot_time {
-            self.snapshot_time = Some(monotonic_raw_now());
+            snapshot,
+            cache,
         }
     }
 
@@ -2805,11 +2851,10 @@ where
         util::check_key_in_region(key, region)?;
 
         let mut resp = Response::default();
-        let snapshot = self.snapshot.as_ref().unwrap();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
             // TODO: check whether cf exists or not.
-            snapshot
+            self.snapshot
                 .get_value_cf(cf, &keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -2821,7 +2866,7 @@ where
                     )
                 })
         } else {
-            snapshot
+            self.snapshot
                 .get_value(&keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -2837,6 +2882,10 @@ where
         }
 
         Ok(resp)
+    }
+
+    pub fn set_read_from_cache(&mut self, cache: Arc<dyn RegionCache>) {
+        self.cache = Some(cache);
     }
 
     pub fn execute(
@@ -2855,11 +2904,9 @@ where
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
-                    cache: None,
                 };
             }
         }
-        self.maybe_update_snapshot();
         let mut need_snapshot = false;
         let requests = msg.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
@@ -2909,14 +2956,15 @@ where
         let mut response = RaftCmdResponse::default();
         response.set_responses(responses.into());
         let snapshot = if need_snapshot {
-            Some(RegionSnapshot::from_snapshot(
-                self.snapshot.clone().unwrap(),
+            Some(RegionSnapshot::from_cache(
+                self.snapshot.clone(),
                 region.to_owned(),
+                self.cache.clone(),
             ))
         } else {
             None
         };
-        ReadResponse { response, snapshot, cache: None }
+        ReadResponse { response, snapshot }
     }
 }
 

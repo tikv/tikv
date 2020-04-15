@@ -8,7 +8,7 @@ use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::store::{util, PeerStorage};
+use crate::store::{util, PeerStorage, RegionCache};
 use crate::{Error, Result};
 use engine_rocks::RocksEngine;
 use engine_traits::util::check_key_in_range;
@@ -22,11 +22,14 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct RegionSnapshot<E: KvEngine> {
     snap: <E::Snapshot as Snapshot>::SyncSnapshot,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
+    #[derivative(Debug = "ignore")]
+    cache: Option<Arc<dyn RegionCache>>,
 }
 
 impl<E> RegionSnapshot<E>
@@ -42,6 +45,21 @@ where
         RegionSnapshot::from_snapshot(db.snapshot().into_sync(), region)
     }
 
+    pub fn from_cache(
+        snap: <E::Snapshot as Snapshot>::SyncSnapshot,
+        region: Region,
+        cache: Option<Arc<dyn RegionCache>>,
+    ) -> RegionSnapshot<E> {
+        RegionSnapshot {
+            snap,
+            region: Arc::new(region),
+            // Use 0 to indicate that the apply index is missing and we need to KvGet it,
+            // since apply index must be >= RAFT_INIT_LOG_INDEX.
+            apply_index: Arc::new(AtomicU64::new(0)),
+            cache,
+        }
+    }
+
     pub fn from_snapshot(
         snap: <E::Snapshot as Snapshot>::SyncSnapshot,
         region: Region,
@@ -52,6 +70,7 @@ where
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
+            cache: None,
         }
     }
 
@@ -158,6 +177,7 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
+            cache: None,
         }
     }
 }

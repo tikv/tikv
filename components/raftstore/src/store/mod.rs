@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod cache;
 pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
 pub mod msg;
 pub mod transport;
 pub mod util;
-pub mod cache;
 
 mod bootstrap;
 mod local_metrics;
@@ -22,6 +22,7 @@ pub use self::bootstrap::{
     bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,
     prepare_bootstrap_cluster,
 };
+pub use self::cache::{RegionCache, RegionCacheBuilder, RegionCacheBuilderFactory};
 pub use self::config::Config;
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
@@ -47,4 +48,3 @@ pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::worker::{DynamicConfig, FlowStatistics, FlowStatsReporter, PdTask};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
-pub use self::cache::{RegionCache, RegionCacheBuilder, NoneRegionCacheBuilder};

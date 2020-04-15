@@ -30,7 +30,6 @@ use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
-use crate::store::{RegionCache, RegionCacheBuilder};
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
@@ -53,6 +52,7 @@ use crate::store::worker::{
 };
 use crate::store::DynamicConfig;
 use crate::store::PdTask;
+use crate::store::RegionCacheBuilder;
 use crate::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
     SnapshotDeleter, StoreMsg, StoreTick,
@@ -194,12 +194,14 @@ impl<E: KvEngine> RaftRouter<E> {
     #[inline]
     pub fn send_cache_command(
         &self,
-        builder: Box<dyn RegionCacheBuilder>
-    ) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder>>> {
+        builder: Box<dyn RegionCacheBuilder<E>>,
+    ) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder<E>>>> {
         let region_id = builder.region_id();
         match self.send(region_id, PeerMsg::BuildCache(builder)) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(PeerMsg::BuildCache(builder))) => Err(TrySendError::Full(builder)),
+            Err(TrySendError::Full(PeerMsg::BuildCache(builder))) => {
+                Err(TrySendError::Full(builder))
+            }
             Err(TrySendError::Disconnected(PeerMsg::BuildCache(builder))) => {
                 Err(TrySendError::Disconnected(builder))
             }

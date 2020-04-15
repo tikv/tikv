@@ -38,6 +38,7 @@ use std::{
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
+use tikv::storage::TxnRegionCacheBuilderFactory;
 use tikv::{
     config::{CfgError, ConfigController, ConfigHandler, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
@@ -372,6 +373,7 @@ impl TiKVServer {
             engines.kv.c().clone(),
             store_meta.clone(),
             self.router.clone(),
+            Some(Arc::new(TxnRegionCacheBuilderFactory::new())),
         );
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 

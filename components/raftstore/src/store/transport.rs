@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::store::RegionCacheBuilder;
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
 use engine_rocks::RocksEngine;
@@ -26,7 +26,10 @@ pub trait CasualRouter<E: KvEngine> {
 /// Routes proposal to target region.
 pub trait ProposalRouter<E: KvEngine> {
     fn send(&self, cmd: RaftCommand<E>) -> std::result::Result<(), TrySendError<RaftCommand<E>>>;
-    fn build_cache(&self, builder: Box<dyn RegionCacheBuilder>) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder>>>;
+    fn build_cache(
+        &self,
+        builder: Box<dyn RegionCacheBuilder<E>>,
+    ) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder<E>>>>;
 }
 
 /// Routes message to store FSM.
@@ -54,7 +57,10 @@ impl<E: KvEngine> ProposalRouter<E> for RaftRouter<E> {
     }
 
     #[inline]
-    fn build_cache(&self, builder: Box<dyn RegionCacheBuilder>) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder>>> {
+    fn build_cache(
+        &self,
+        builder: Box<dyn RegionCacheBuilder<E>>,
+    ) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder<E>>>> {
         self.send_cache_command(builder)
     }
 }
@@ -94,6 +100,13 @@ impl ProposalRouter<RocksEngine> for mpsc::SyncSender<RaftCommand<RocksEngine>> 
             Err(mpsc::TrySendError::Disconnected(cmd)) => Err(TrySendError::Disconnected(cmd)),
             Err(mpsc::TrySendError::Full(cmd)) => Err(TrySendError::Full(cmd)),
         }
+    }
+
+    fn build_cache(
+        &self,
+        _builder: Box<dyn RegionCacheBuilder<RocksEngine>>,
+    ) -> std::result::Result<(), TrySendError<Box<dyn RegionCacheBuilder<RocksEngine>>>> {
+        Ok(())
     }
 }
 

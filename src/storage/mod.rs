@@ -27,7 +27,7 @@ pub use self::{
         ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{ProcessResult, Scanner, SnapshotStore, Store},
+    txn::{ProcessResult, Scanner, SnapshotStore, Store, TxnRegionCacheBuilderFactory},
     types::{PessimisticLockRes, StorageCallback, TxnStatus},
 };
 
