@@ -219,32 +219,31 @@ impl Tracker {
             "checksum_table" => ReqTag::checksum_table,
             "checksum_index" => ReqTag::checksum_index,
             "test" => ReqTag::test,
-            x => panic!(format!("not recognized tag {}",x)),
+            x => panic!(format!("not recognized tag {}", x)),
         };
 
         // req time
-        COPR_REQ_HISTOGRAM_STATIC.get(req_tag).observe(time::duration_to_sec(self.req_time));
+        COPR_REQ_HISTOGRAM_STATIC
+            .get(req_tag)
+            .observe(time::duration_to_sec(self.req_time));
+        // wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(req_tag)
+            .all
+            .observe(time::duration_to_sec(self.wait_time));
+        // schedule wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(req_tag)
+            .schedule
+            .observe(time::duration_to_sec(self.schedule_wait_time));
+        // snapshot wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(req_tag)
+            .snapshot
+            .observe(time::duration_to_sec(self.snapshot_wait_time));
 
         TLS_COP_METRICS.with(|m| {
             let mut cop_metrics = m.borrow_mut();
-
-            // wait time
-            cop_metrics
-                .local_copr_req_wait_time
-                .with_label_values(&[self.req_ctx.tag, "all"])
-                .observe(time::duration_to_sec(self.wait_time));
-
-            // schedule wait time
-            cop_metrics
-                .local_copr_req_wait_time
-                .with_label_values(&[self.req_ctx.tag, "schedule"])
-                .observe(time::duration_to_sec(self.schedule_wait_time));
-
-            // snapshot wait time
-            cop_metrics
-                .local_copr_req_wait_time
-                .with_label_values(&[self.req_ctx.tag, "snapshot"])
-                .observe(time::duration_to_sec(self.snapshot_wait_time));
 
             // handler build time
             cop_metrics

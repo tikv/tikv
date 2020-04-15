@@ -30,6 +30,11 @@ make_auto_flush_static_metric! {
     pub struct CoprReqHistogram: LocalHistogram {
         "req" => ReqTag,
     }
+
+    pub struct ReqWaitHistogram: LocalHistogram {
+        "req" => ReqTag,
+        "type" => WaitType,
+    }
 }
 
 lazy_static! {
@@ -42,7 +47,6 @@ lazy_static! {
     .unwrap();
     pub static ref COPR_REQ_HISTOGRAM_STATIC: CoprReqHistogram =
         auto_flush_from!(COPR_REQ_HISTOGRAM_VEC, CoprReqHistogram);
-
     pub static ref COPR_REQ_HANDLE_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_handle_seconds",
         "Bucketed histogram of coprocessor handle request duration",
@@ -57,6 +61,8 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref COPR_REQ_WAIT_TIME_STATIC: ReqWaitHistogram =
+        auto_flush_from!(COPR_REQ_WAIT_TIME, ReqWaitHistogram);
     pub static ref COPR_REQ_HANDLER_BUILD_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_handler_build_seconds",
         "Bucketed histogram of coprocessor request handler build duration",
@@ -128,7 +134,6 @@ make_static_metric! {
 
 pub struct CopLocalMetrics {
     pub local_copr_req_handle_time: LocalHistogramVec,
-    pub local_copr_req_wait_time: LocalHistogramVec,
     pub local_copr_req_handler_build_time: LocalHistogramVec,
     pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
@@ -141,8 +146,6 @@ thread_local! {
         CopLocalMetrics {
             local_copr_req_handle_time:
                 COPR_REQ_HANDLE_TIME.local(),
-            local_copr_req_wait_time:
-                COPR_REQ_WAIT_TIME.local(),
             local_copr_req_handler_build_time:
                 COPR_REQ_HANDLER_BUILD_TIME.local(),
             local_copr_scan_keys:
@@ -159,11 +162,11 @@ thread_local! {
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     COPR_REQ_HISTOGRAM_STATIC.flush();
+    COPR_REQ_WAIT_TIME_STATIC.flush();
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
         let mut m = m.borrow_mut();
         m.local_copr_req_handle_time.flush();
-        m.local_copr_req_wait_time.flush();
         m.local_copr_req_handler_build_time.flush();
         m.local_copr_scan_keys.flush();
         m.local_copr_rocksdb_perf_counter.flush();
