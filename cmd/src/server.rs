@@ -302,16 +302,12 @@ impl TiKVServer {
             .expect("failed to parse into a socket address");
         let cur_ip = cur_addr.ip();
         let cur_port = cur_addr.port();
-        let lock_dir: String;
 
-        #[cfg(target_os = "linux")]
-        {
-            lock_dir = format!("{}_TIKV_LOCK_FILES", unsafe { libc::getuid() });
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            lock_dir = "TIKV_LOCK_FILES".to_owned();
-        }
+        let lock_dir = if cfg!(unix) {
+            format!("{}_TIKV_LOCK_FILES", unsafe { libc::getuid() })
+        } else {
+            "TIKV_LOCK_FILES".to_owned()
+        };
 
         let search_base = env::temp_dir().join(&lock_dir);
         std::fs::create_dir_all(&search_base)
