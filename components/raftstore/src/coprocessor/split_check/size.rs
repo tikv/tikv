@@ -2,6 +2,7 @@
 
 use std::marker::PhantomData;
 use std::mem;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use engine_traits::LARGE_CFS;
@@ -132,7 +133,11 @@ where
     ) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let region_size = match get_region_approximate_size(engine, &region) {
+        let region_size = match get_region_approximate_size(
+            engine,
+            &region,
+            host.cfg.region_max_size.0 * host.cfg.batch_split_limit,
+        ) {
             Ok(size) => size,
             Err(e) => {
                 warn!(
@@ -193,10 +198,14 @@ where
 }
 
 /// Get the approximate size of the range.
-pub fn get_region_approximate_size(db: &impl KvEngine, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_size(
+    db: &impl KvEngine,
+    region: &Region,
+    large_threshold: u64,
+) -> Result<u64> {
     let mut size = 0;
     for cfname in LARGE_CFS {
-        size += get_region_approximate_size_cf(db, cfname, &region)?
+        size += get_region_approximate_size_cf(db, cfname, &region, large_threshold)?
     }
     Ok(size)
 }
@@ -205,18 +214,48 @@ pub fn get_region_approximate_size_cf(
     db: &impl KvEngine,
     cfname: &str,
     region: &Region,
+    large_threshold: u64,
 ) -> Result<u64> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    let (_, mut size) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
+    let mut total_size = 0;
+    let (_, mem_size) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
+    total_size += mem_size;
 
     let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
     for (_, v) in collection.iter() {
         let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
-        size += props.get_approximate_size_in_range(&start_key, &end_key);
+        total_size += props.get_approximate_size_in_range(&start_key, &end_key);
     }
-    Ok(size)
+
+    if large_threshold != 0 && total_size > large_threshold {
+        let ssts = collection
+            .iter()
+            .map(|(k, v)| {
+                let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
+                let size = props.get_approximate_size_in_range(&start_key, &end_key);
+                format!(
+                    "{}:{}",
+                    Path::new(&*k)
+                        .file_name()
+                        .map(|f| f.to_str().unwrap())
+                        .unwrap_or(&*k),
+                    size
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(
+            "region size is too large";
+            "region_id" => region.get_id(),
+            "total_size" => total_size,
+            "memtable" => mem_size,
+            "ssts_size" => ssts,
+            "cf" => cfname,
+        )
+    }
+    Ok(total_size)
 }
 
 /// Get region approximate split keys based on default and write cf.
@@ -227,7 +266,7 @@ fn get_approximate_split_keys(
     max_size: u64,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
@@ -737,10 +776,10 @@ pub mod tests {
         }
 
         let region = make_region(1, vec![], vec![]);
-        let size = get_region_approximate_size(db.c(), &region).unwrap();
+        let size = get_region_approximate_size(db.c(), &region, 0).unwrap();
         assert_eq!(size, cf_size * LARGE_CFS.len() as u64);
         for cfname in LARGE_CFS {
-            let size = get_region_approximate_size_cf(db.c(), cfname, &region).unwrap();
+            let size = get_region_approximate_size_cf(db.c(), cfname, &region, 0).unwrap();
             assert_eq!(size, cf_size);
         }
     }
@@ -776,11 +815,11 @@ pub mod tests {
         }
 
         let region = make_region(1, vec![], vec![]);
-        let size = get_region_approximate_size(db.c(), &region).unwrap();
+        let size = get_region_approximate_size(db.c(), &region, 0).unwrap();
         assert_eq!(size, cf_size as u64);
 
         let region = make_region(1, b"k2".to_vec(), b"k8".to_vec());
-        let size = get_region_approximate_size(db.c(), &region).unwrap();
+        let size = get_region_approximate_size(db.c(), &region, 0).unwrap();
         assert_eq!(size, 0);
     }
 
@@ -820,7 +859,7 @@ pub mod tests {
 
         let region = make_region(1, vec![], vec![]);
         b.iter(|| {
-            let size = get_region_approximate_size(db.c(), &region).unwrap();
+            let size = get_region_approximate_size(db.c(), &region, 0).unwrap();
             assert_eq!(size, cf_size as u64);
         })
     }
