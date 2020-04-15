@@ -5,23 +5,34 @@ category: adopters
 
 # TiKV Adopters
 
-This is a list of TiKV adopters in various industries.
+The following adopters deploy TiKV independently without TiDB. 
+
+| Company | Industry | Success Story |
+| :--- | :--- | :--- |
+|[JD Cloud](https://www.crunchbase.com/organization/jd-cloud)|Cloud Computing|[English](https://pingcap.com/success-stories/lesson-learned-from-40-k-qps-and-20-billion-rows-of-data-in-a-single-scale-out-cluster/); [Chinese](https://pingcap.com/cases-cn/user-case-jingdongyun/)|
+|[Shopee](https://en.wikipedia.org/wiki/Shopee)|E-commerce|[English](https://www.pingcap.com/success-stories/tidb-in-shopee/); [Chinese](https://www.pingcap.com/cases-cn/user-case-shopee/)|
+|[LY.com](https://www.crunchbase.com/organization/ly-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-tongcheng/)|
+|[Zhuan Zhuan](https://www.crunchbase.com/organization/zhuan-zhuan)|Online Marketplace|[English](https://www.pingcap.com/success-stories/tidb-in-zhuanzhuan/); [Chinese](https://pingcap.com/cases-cn/user-case-zhuanzhuan/)|
+|[Meituan-Dianping](https://en.wikipedia.org/wiki/Meituan-Dianping)|Food Delivery|[English](https://www.pingcap.com/success-stories/tidb-in-meituan-dianping/); [Chinese](https://pingcap.com/cases-cn/user-case-meituan/)|
+|[Ele.me](https://en.wikipedia.org/wiki/Ele.me)|Food Delivery|
+|[Yidian Zixun](https://www.crunchbase.com/organization/yidian-zixun#section-overview)|Media and Entertainment|
+|[KuGou](https://en.wikipedia.org/wiki/KuGou)|Entertainment and Music Streaming|
+|[Meitu](https://en.wikipedia.org/wiki/Meitu)|Photo-editing|
+
+This is a list of TiKV adopters deploying TiKV with TiDB.
 
 | Company | Industry | Success Story |
 | :--- | :--- | :--- |
 |[Zhihu](https://en.wikipedia.org/wiki/Zhihu)|Knowledge Sharing|[English](https://pingcap.com/success-stories/lesson-learned-from-queries-over-1.3-trillion-rows-of-data-within-milliseconds-of-response-time-at-zhihu/); [Chinese](https://pingcap.com/cases-cn/user-case-zhihu/)|
-|[JD Cloud](https://www.crunchbase.com/organization/jd-cloud)|Cloud Computing|[English](https://pingcap.com/success-stories/lesson-learned-from-40-k-qps-and-20-billion-rows-of-data-in-a-single-scale-out-cluster/); [Chinese](https://pingcap.com/cases-cn/user-case-jingdongyun/)|
 |[Mobike](https://en.wikipedia.org/wiki/Mobike)|Ridesharing|[English](https://www.pingcap.com/blog/Use-Case-TiDB-in-Mobike/); [Chinese](https://www.pingcap.com/cases-cn/user-case-mobike/)|
 |[Jinri Toutiao](https://en.wikipedia.org/wiki/Toutiao)|Mobile News Platform|[Chinese](https://www.pingcap.com/cases-cn/user-case-toutiao/)|
 |[Yiguo.com](https://www.crunchbase.com/organization/shanghai-yiguo-electron-business)|E-commerce|[English](https://www.datanami.com/2018/02/22/hybrid-database-capturing-perishable-insights-yiguo/); [Chinese](https://www.pingcap.com/cases-cn/user-case-yiguo)|
-|[Shopee](https://en.wikipedia.org/wiki/Shopee)|E-commerce|[English](https://www.pingcap.com/success-stories/tidb-in-shopee/); [Chinese](https://www.pingcap.com/cases-cn/user-case-shopee/)|
 |[Happigo.com](https://www.crunchbase.com/organization/happigo-com)|E-commerce||
 |[Yimutian](http://www.ymt.com/)|E-commerce||
 |[Youju Tech](https://www.ujuz.cn/)|E-Commerce||
 |[Maizuo](https://www.crunchbase.com/organization/maizhuo)|E-Commerce||
 |[Mogujie](https://www.crunchbase.com/organization/mogujie)|E-Commerce||
 |[Xiaomi](https://en.wikipedia.org/wiki/Xiaomi)|Consumer Electronics|[Chinese](https://pingcap.com/cases-cn/user-case-xiaomi/)|
-|[LY.com](https://www.crunchbase.com/organization/ly-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-tongcheng/)|
 |[Qunar.com](https://www.crunchbase.com/organization/qunar-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-qunar/)|
 |[VNG](https://en.wikipedia.org/wiki/VNG_Corporation)|Entertainment||
 |[Hulu](https://www.hulu.com)|Entertainment||
@@ -57,10 +68,8 @@ This is a list of TiKV adopters in various industries.
 |[BookMyShow](https://www.crunchbase.com/organization/bookmyshow)|Media and Entertainment|[English](https://pingcap.com/success-stories/tidb-in-bookmyshow/)|
 |[Gengmei](https://www.crunchbase.com/organization/gengmei)|Plastic Surgery||
 |[Keruyun](https://www.crunchbase.com/organization/keruyun-technology-beijing-co-ltd)|SaaS|[Chinese](https://pingcap.com/cases-cn/user-case-keruyun/)|
-|[Zhuan Zhuan](https://www.crunchbase.com/organization/zhuan-zhuan)|Online Marketplace|[English](https://www.pingcap.com/success-stories/tidb-in-zhuanzhuan/); [Chinese](https://pingcap.com/cases-cn/user-case-zhuanzhuan/)|
 |[LinkDoc Technology](https://www.crunchbase.com/organization/linkdoc-technology)|HealthTech|[Chinese](https://pingcap.com/cases-cn/user-case-linkdoc/)|
 |[Chunyu Yisheng](https://www.crunchbase.com/organization/chunyu)|HealthTech||
-|[Meituan-Dianping](https://en.wikipedia.org/wiki/Meituan-Dianping)|Food Delivery|[English](https://www.pingcap.com/success-stories/tidb-in-meituan-dianping/); [Chinese](https://pingcap.com/cases-cn/user-case-meituan/)|
 |[Qutoutiao](https://www.crunchbase.com/organization/qutoutiao)|Social Network||
 |[360 Finance](https://www.crunchbase.com/organization/360-finance)|FinTech|[Chinese](https://pingcap.com/cases-cn/user-case-360/)|
 |[Tongdun Technology](https://www.crunchbase.com/organization/tongdun-technology)|FinTech||
