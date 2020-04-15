@@ -211,10 +211,11 @@ impl Display for Task {
                 hex::encode_upper(&split_key),
             ),
             Task::AutoSplit {
-                ..
+                ref split_infos,
             } => write!(
                 f,
-                "to ask split region"
+                "auto split split regions, num is {}",
+                split_infos.len(),
             ),
             Task::AskBatchSplit {
                 ref region,
@@ -470,6 +471,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         peer: metapb::Peer,
         right_derive: bool,
         callback: Callback<RocksEngine>,
+        task: String,
     ) {
         let router = self.router.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -479,7 +481,8 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                         "try to split region";
                         "region_id" => region.get_id(),
                         "new_region_id" => resp.get_new_region_id(),
-                        "region" => ?region
+                        "region" => ?region,
+                        "task"=>task,
                     );
 
                     let req = new_split_region_request(
@@ -495,7 +498,8 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                 Err(e) => {
                     warn!("failed to ask split";
                     "region_id" => region.get_id(),
-                    "err" => ?e);
+                    "err" => ?e,
+                    "task"=>task);
                 }
             }
             Ok(())
@@ -945,7 +949,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 peer,
                 right_derive,
                 callback,
-            } => self.handle_ask_split(handle, region, split_key, peer, right_derive, callback),
+            } => self.handle_ask_split(handle, region, split_key, peer, right_derive, callback, String::from("AskSplit")),
             Task::AskBatchSplit {
                 region,
                 split_keys,
@@ -963,7 +967,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
             Task::AutoSplit { split_infos } => {
                 for split_info in split_infos {
                     if let Ok(Some(region)) =
-                        self.pd_client.get_region_by_id(split_info.region_id).wait()
+                    self.pd_client.get_region_by_id(split_info.region_id).wait()
                     {
                         self.handle_ask_split(
                             handle,
@@ -972,6 +976,7 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                             split_info.peer,
                             true,
                             Callback::None,
+                            String::from("AutoSplit"),
                         );
                     }
                 }

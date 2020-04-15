@@ -402,7 +402,7 @@ mod tests {
     impl SampleCase {
         fn sample_key(&self, start_key: &[u8], end_key: &[u8], pos: Position) {
             let mut samples = vec![Sample::new(&self.key)];
-            let key_range = build_key_range(start_key, end_key);
+            let key_range = build_key_range(start_key, end_key,false);
             Recorder::sample(&mut samples, &key_range);
             assert_eq!(
                 samples[0].num(pos),
@@ -459,8 +459,8 @@ mod tests {
         for i in 0..100 {
             let mut qps_stats = QpsStats::new();
             for _ in 0..100 {
-                qps_stats.add(1, &Peer::default(), build_key_range(b"a", b"b"));
-                qps_stats.add(1, &Peer::default(), build_key_range(b"b", b"c"));
+                qps_stats.add(1, &Peer::default(), build_key_range(b"a", b"b",false));
+                qps_stats.add(1, &Peer::default(), build_key_range(b"b", b"c",false));
             }
             let (_, split_infos) = hub.flush(vec![qps_stats]);
             if (i + 1) % hub.cfg.detect_times == 0 {
@@ -482,7 +482,7 @@ mod tests {
         let mut qps_stats = QpsStats::new();
         for i in 0..REGION_NUM {
             for _j in 0..KEY_RANGE_NUM {
-                qps_stats.add(i, &Peer::default(), build_key_range(b"a", b"b"))
+                qps_stats.add(i, &Peer::default(), build_key_range(b"a", b"b",false))
             }
         }
         qps_stats
@@ -491,7 +491,7 @@ mod tests {
     #[bench]
     fn recorder_sample(b: &mut test::Bencher) {
         let mut samples = vec![Sample::new(b"c")];
-        let key_range = build_key_range(b"a", b"b");
+        let key_range = build_key_range(b"a", b"b",false);
         b.iter(|| {
             Recorder::sample(&mut samples, &key_range);
         });
@@ -523,7 +523,7 @@ mod tests {
                         key = end_key;
                     }
                 }
-                qps_stats.add(0, &Peer::default(), build_key_range(&start_key, &key));
+                qps_stats.add(0, &Peer::default(), build_key_range(&start_key, &key,false));
             }
         });
     }
@@ -532,7 +532,7 @@ mod tests {
     fn qps_add(b: &mut test::Bencher) {
         let mut qps_stats = default_qps_stats();
         b.iter(|| {
-            qps_stats.add(0, &Peer::default(), build_key_range(b"a", b"b"));
+            qps_stats.add(0, &Peer::default(), build_key_range(b"a", b"b",false));
         });
     }
 }

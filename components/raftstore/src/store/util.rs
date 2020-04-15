@@ -273,10 +273,15 @@ pub fn check_peer_id(req: &RaftCmdRequest, peer_id: u64) -> Result<()> {
 }
 
 #[inline]
-pub fn build_key_range(start_key: &[u8], end_key: &[u8]) -> KeyRange {
+pub fn build_key_range(start_key: &[u8], end_key: &[u8], reverse_scan: bool) -> KeyRange {
     let mut range = KeyRange::default();
-    range.set_start_key(start_key.to_vec());
-    range.set_end_key(end_key.to_vec());
+    if reverse_scan {
+        range.set_start_key(end_key.to_vec());
+        range.set_end_key(start_key.to_vec());
+    } else {
+        range.set_start_key(start_key.to_vec());
+        range.set_end_key(end_key.to_vec());
+    }
     range
 }
 
@@ -606,17 +611,17 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
 
 pub struct KeysInfoFormatter<
     'a,
-    I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
-        + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
-        + Clone,
+    I: std::iter::DoubleEndedIterator<Item=&'a Vec<u8>>
+    + std::iter::ExactSizeIterator<Item=&'a Vec<u8>>
+    + Clone,
 >(pub I);
 
 impl<
-        'a,
-        I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
-            + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
-            + Clone,
-    > fmt::Display for KeysInfoFormatter<'a, I>
+    'a,
+    I: std::iter::DoubleEndedIterator<Item=&'a Vec<u8>>
+    + std::iter::ExactSizeIterator<Item=&'a Vec<u8>>
+    + Clone,
+> fmt::Display for KeysInfoFormatter<'a, I>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut it = self.0.clone();

@@ -368,7 +368,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let mut key_ranges = vec![];
                 for key in &keys {
                     if let Ok(key) = key.to_owned().into_raw() {
-                        key_ranges.push(build_key_range(&key, &key));
+                        key_ranges.push(build_key_range(&key, &key,false));
                     }
                 }
                 tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges, false);
@@ -695,7 +695,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let mut key_ranges = vec![];
                 for key in &keys {
-                    key_ranges.push(build_key_range(key, key));
+                    key_ranges.push(build_key_range(key, key,false));
                 }
                 tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges, false);
 
