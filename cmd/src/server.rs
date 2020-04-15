@@ -657,7 +657,11 @@ impl TiKVServer {
         }
 
         // Create Diagnostics service
-        let diag_service = DiagnosticsService::new(pool, self.config.log_file.clone());
+        let diag_service = DiagnosticsService::new(
+            pool,
+            self.config.log_file.clone(),
+            self.security_mgr.clone(),
+        );
         if servers
             .server
             .register_service(create_diagnostics(diag_service))

@@ -10,6 +10,8 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
+
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
@@ -19,11 +21,16 @@ use crate::server::{Error, Result};
 pub struct Service {
     pool: CpuPool,
     log_file: String,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(pool: CpuPool, log_file: String) -> Self {
-        Service { pool, log_file }
+    pub fn new(pool: CpuPool, log_file: String, security_mgr: Arc<SecurityManager>) -> Self {
+        Service {
+            pool,
+            log_file,
+            security_mgr,
+        }
     }
 }
 
@@ -34,6 +41,9 @@ impl Diagnostics for Service {
         req: SearchLogRequest,
         sink: ServerStreamingSink<SearchLogResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let log_file = self.log_file.to_owned();
         let stream = self
             .pool
