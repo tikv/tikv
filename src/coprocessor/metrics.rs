@@ -6,6 +6,7 @@ use std::mem;
 use crate::storage::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
 
+use crate::server::metrics::{GcKeysCF, GcKeysDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -18,6 +19,23 @@ make_auto_flush_static_metric! {
         checksum_table,
         checksum_index,
         test,
+    }
+
+    pub label_enum CF {
+        default,
+        lock,
+        write,
+    }
+
+    pub label_enum StatDetail {
+        total,
+        processed,
+        get,
+        next,
+        prev,
+        seek,
+        seek_for_prev,
+        over_seek_bound,
     }
 
     pub label_enum WaitType {
@@ -48,6 +66,12 @@ make_auto_flush_static_metric! {
     pub struct PerfCounter: LocalIntCounter {
         "req" => ReqTag,
         "metric" => PerfMetric,
+    }
+
+    pub struct CoprScanDetails : LocalIntCounter {
+        "req" => ReqTag,
+        "cf" => CF,
+        "tag" => StatDetail,
     }
 }
 
@@ -109,6 +133,8 @@ lazy_static! {
         &["req", "cf", "tag"]
     )
     .unwrap();
+    pub static ref COPR_SCAN_DETAILS_STATIC: CoprScanDetails =
+        auto_flush_from!(COPR_SCAN_DETAILS, CoprScanDetails);
     pub static ref COPR_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_rocksdb_perf",
         "Total number of RocksDB internal operations from PerfContext",
@@ -170,6 +196,31 @@ thread_local! {
     );
 }
 
+impl Into<CF> for GcKeysCF {
+    fn into(self) -> CF {
+        match self {
+            GcKeysCF::default => CF::default,
+            GcKeysCF::lock => CF::lock,
+            GcKeysCF::write => CF::write,
+        }
+    }
+}
+
+impl Into<StatDetail> for GcKeysDetail {
+    fn into(self) -> StatDetail {
+        match self {
+            GcKeysDetail::total => StatDetail::total,
+            GcKeysDetail::processed => StatDetail::processed,
+            GcKeysDetail::get => StatDetail::get,
+            GcKeysDetail::next => StatDetail::next,
+            GcKeysDetail::prev => StatDetail::prev,
+            GcKeysDetail::seek => StatDetail::seek,
+            GcKeysDetail::seek_for_prev => StatDetail::seek_for_prev,
+            GcKeysDetail::over_seek_bound => StatDetail::over_seek_bound,
+        }
+    }
+}
+
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     COPR_REQ_HISTOGRAM_STATIC.flush();
     COPR_REQ_WAIT_TIME_STATIC.flush();
@@ -181,15 +232,29 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         // Flush Prometheus metrics
         let mut m = m.borrow_mut();
 
-        for (cmd, stat) in m.local_scan_details.drain() {
-            for (cf, cf_details) in stat.details().iter() {
+        for (req_tag, stat) in m.local_scan_details.drain() {
+            let req_tag = match req_tag {
+                "select" => ReqTag::select,
+                "index" => ReqTag::index,
+                "analyze_table" => ReqTag::analyze_table,
+                "analyze_index" => ReqTag::analyze_index,
+                "checksum_table" => ReqTag::checksum_table,
+                "checksum_index" => ReqTag::checksum_index,
+                "test" => ReqTag::test,
+                _ => panic!("should not happen"),
+            };
+
+            for (cf, cf_details) in stat.details_enum().iter() {
                 for (tag, count) in cf_details.iter() {
-                    COPR_SCAN_DETAILS
-                        .with_label_values(&[cmd, *cf, *tag])
+                    COPR_SCAN_DETAILS_STATIC
+                        .get(req_tag)
+                        .get((*cf).into())
+                        .get((*tag).into())
                         .inc_by(*count as i64);
                 }
             }
         }
+        COPR_SCAN_DETAILS_STATIC.flush();
 
         // Report PD metrics
         if m.local_cop_flow_stats.is_empty() {
