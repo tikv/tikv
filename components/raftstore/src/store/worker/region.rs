@@ -230,6 +230,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<RocksEngine>(
             self.mgr.clone(),
+            &self.engines.kv,
             kv_snap,
             region_id,
             last_applied_index_term,
