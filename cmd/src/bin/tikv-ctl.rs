@@ -76,7 +76,7 @@ fn new_debug_executor(
 
             let raft_path = raft_db
                 .map(ToString::to_string)
-                .unwrap_or_else(|| format!("{}/../raft", kv_path));
+                .unwrap_or_else(|| format!("{}/raft", &cfg.storage.data_dir));
             let mut raft_db_opts = cfg.raftdb.build_opt();
             raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
