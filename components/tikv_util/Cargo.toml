@@ -11,7 +11,6 @@ failpoints = ["fail/failpoints"]
 async-speed-limit = "0.3"
 backtrace = "0.3.9"
 byteorder = "1.2"
-coarsetime = "0.1"
 codec = { path = "../codec" }
 configuration = { path = "../configuration" }
 chrono = "0.4"
