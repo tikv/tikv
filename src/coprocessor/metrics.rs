@@ -168,10 +168,11 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
             mem::swap(&mut read_stats, &mut m.local_cop_flow_stats);
             reporter.report_read_stats(read_stats);
         }
-
-        let mut qps_stats = QpsStats::new();
-        mem::swap(&mut qps_stats, &mut m.local_qps_stats);
-        reporter.report_qps_stats(qps_stats);
+        if !m.local_qps_stats.is_empty() {
+            let mut qps_stats = QpsStats::new();
+            mem::swap(&mut qps_stats, &mut m.local_qps_stats);
+            reporter.report_qps_stats(qps_stats);
+        }
     });
 }
 

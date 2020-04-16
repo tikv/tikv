@@ -279,6 +279,10 @@ impl QpsStats {
         region_info.update_peer(peer);
         region_info.add_key_ranges(key_ranges);
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.region_infos.is_empty()
+    }
 }
 
 pub struct AutoSplitController {
