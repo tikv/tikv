@@ -16,11 +16,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use futures_io::AsyncRead;
-#[cfg(feature = "prost-codec")]
-use kvproto::backup::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
 use kvproto::backup::StorageBackend_oneof_backend as Backend;
-use kvproto::backup::{Gcs, Local, Noop, StorageBackend, S3};
+#[cfg(feature = "prost-codec")]
+use kvproto::backup::{storage_backend::Backend, Local};
+use kvproto::backup::{Gcs, Noop, StorageBackend, S3};
 
 mod local;
 pub use local::LocalStorage;
