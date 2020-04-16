@@ -440,9 +440,8 @@ fn test_read_after_peer_destroyed() {
 
     let destroy_peer_fp = "destroy_peer";
     fail::cfg(destroy_peer_fp, "pause").unwrap();
-    pd_client.remove_peer(r1, new_peer(1, 1));
-    // Wait for raftstore receives the change peer cmd.
-    sleep_ms(200);
+    pd_client.must_remove_peer(r1, new_peer(1, 1));
+    sleep_ms(300);
 
     // Try writing k2 to peer3
     let mut request = new_request(
@@ -463,6 +462,9 @@ fn test_read_after_peer_destroyed() {
     fail::remove(destroy_peer_fp);
 
     let resp = rx.recv_timeout(Duration::from_millis(200)).unwrap();
-    println!("resp {:?}", resp);
-    assert!(resp.get_header().get_error().has_region_not_found());
+    assert!(
+        resp.get_header().get_error().has_region_not_found(),
+        "{:?}",
+        resp
+    );
 }
