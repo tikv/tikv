@@ -1,7 +1,8 @@
+use crate::{Error, Result};
 use engine_traits::KvEngine;
+use kvproto::metapb;
 use std::sync::Arc;
 use txn_types::{Key, Value};
-use kvproto::metapb;
 
 pub trait RegionCache: Send + Sync {
     fn get(&self, key: &Key) -> Option<Value>;
@@ -11,7 +12,7 @@ pub trait RegionCache: Send + Sync {
 }
 
 pub trait RegionCacheBuilder<E: KvEngine>: Send + Sync {
-    fn build(&self, snap: E::Snapshot) -> Arc<dyn RegionCache>;
+    fn build(&self, snap: E::Snapshot) -> Result<Arc<dyn RegionCache>>;
     fn region_id(&self) -> u64;
 }
 

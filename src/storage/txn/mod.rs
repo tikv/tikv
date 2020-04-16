@@ -9,7 +9,6 @@ pub mod scheduler;
 mod latch;
 mod process;
 mod store;
-mod txn_region_cache;
 
 use crate::storage::{
     types::{MvccInfo, PessimisticLockRes, TxnStatus},
@@ -27,7 +26,6 @@ pub use self::scheduler::{Msg, Scheduler};
 pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store};
-pub use self::txn_region_cache::TxnRegionCacheBuilderFactory;
 
 /// Process result of a command.
 pub enum ProcessResult {

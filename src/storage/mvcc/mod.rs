@@ -5,9 +5,11 @@
 mod metrics;
 mod reader;
 mod txn;
-
+mod txn_region_cache;
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
+pub use self::txn_region_cache::TxnRegionCacheBuilderFactory;
+
 pub use crate::new_txn;
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,

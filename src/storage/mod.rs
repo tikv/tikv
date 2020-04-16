@@ -26,8 +26,9 @@ pub use self::{
         CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator, RocksEngine,
         ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
+    mvcc::TxnRegionCacheBuilderFactory,
     read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{ProcessResult, Scanner, SnapshotStore, Store, TxnRegionCacheBuilderFactory},
+    txn::{ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, StorageCallback, TxnStatus},
 };
 

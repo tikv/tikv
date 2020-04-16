@@ -2175,8 +2175,8 @@ impl Peer {
         let cb: SnapshotCallback<RocksEngine> =
             Box::new(move |snap_ret, _region, apply_state, _applied_index_term| {
                 if let Ok(snap) = snap_ret {
-                    let cache = builder.build(snap);
-                    router.send(
+                    let cache = builder.build(snap).unwrap();
+                    let _ = router.send(
                         region_id,
                         PeerMsg::BuildCacheRes {
                             cache,
