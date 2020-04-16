@@ -151,7 +151,9 @@ mod sys {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
     use std::string::ToString;
+    use std::time::Duration;
 
+    use itertools::izip;
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
     use sysinfo::{DiskExt, ProcessExt, SystemExt};
     use tikv_util::config::KB;
@@ -181,42 +183,56 @@ mod sys {
         }
         // https://www.kernel.org/doc/Documentation/filesystems/proc.txt
         // We ignore the error because some operating systems don't contain procfs.
-        if let Ok(file) = File::open("/proc/stat") {
-            let names = vec![
-                "user",
-                "nice",
-                "system",
-                "idle",
-                "iowait",
-                "irq",
-                "softirq",
-                "steal",
-                "guest",
-                "guest_nice",
-            ];
-            for line in BufReader::new(file).lines() {
-                if let Ok(line) = line {
-                    if !line.starts_with("cpu") {
-                        continue;
+        let get_cpu_time = || {
+            if let Ok(file) = File::open("/proc/stat") {
+                for line in BufReader::new(file).lines() {
+                    if let Ok(line) = line {
+                        let mut parts = line.split_whitespace();
+                        match parts.next() {
+                            Some(name) if name == "cpu" => {
+                                return parts
+                                    .map(|s| s.parse::<f64>().ok())
+                                    .collect::<Option<Vec<_>>>();
+                            }
+                            _ => continue,
+                        }
                     }
-                    let mut parts = line.split_whitespace();
-                    let name = match parts.nth(0) {
-                        Some(name) if name != "cpu" => name,
-                        _ => continue,
-                    };
-                    let mut pairs = vec![];
-                    for (val, name) in parts.zip(&names) {
-                        let mut pair = ServerInfoPair::default();
-                        pair.set_key((*name).to_string());
-                        pair.set_value(val.to_string());
-                        pairs.push(pair);
-                    }
-                    let mut item = ServerInfoItem::default();
-                    item.set_tp("cpu".to_string());
-                    item.set_name(name.to_string());
-                    item.set_pairs(pairs.into());
-                    collector.push(item);
                 }
+            }
+
+            None
+        };
+
+        if let Some(t1s) = get_cpu_time() {
+            std::thread::sleep(Duration::from_secs(1));
+            if let Some(t2s) = get_cpu_time() {
+                let total = t2s.iter().sum::<f64>() - t1s.iter().sum::<f64>();
+                let names = vec![
+                    "user",
+                    "nice",
+                    "system",
+                    "idle",
+                    "iowait",
+                    "irq",
+                    "softirq",
+                    "steal",
+                    "guest",
+                    "guest_nice",
+                ];
+
+                let mut pairs = vec![];
+                for (t1, t2, name) in izip!(t1s, t2s, names) {
+                    let mut pair = ServerInfoPair::default();
+                    pair.set_key(name.to_string());
+                    pair.set_value(format!("{:.2}", (t2 - t1) / total));
+                    pairs.push(pair);
+                }
+
+                let mut item = ServerInfoItem::default();
+                item.set_tp("cpu".to_string());
+                item.set_name("usage".to_string());
+                item.set_pairs(pairs.into());
+                collector.push(item);
             }
         }
     }
@@ -608,7 +624,7 @@ mod sys {
             #[cfg(linux)]
             {
                 let cpu_stat = cpu_info.next().unwrap();
-                let keys = cpu_load
+                let keys = cpu_stat
                     .get_pairs()
                     .iter()
                     .map(|x| x.get_key())
