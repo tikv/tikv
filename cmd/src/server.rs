@@ -302,9 +302,11 @@ impl TiKVServer {
             .expect("failed to parse into a socket address");
         let cur_ip = cur_addr.ip();
         let cur_port = cur_addr.port();
+        let lock_dir = get_lock_dir();
 
-        let search_base = env::temp_dir().join("TIKV_LOCK_FILES");
-        std::fs::create_dir_all(&search_base).expect("create TIKV_LOCK_FILES failed");
+        let search_base = env::temp_dir().join(&lock_dir);
+        std::fs::create_dir_all(&search_base)
+            .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
         for result in fs::read_dir(&search_base).unwrap() {
             if let Ok(entry) = result {
@@ -921,6 +923,16 @@ fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
         );
     }
     f
+}
+
+#[cfg(unix)]
+fn get_lock_dir() -> String {
+    format!("{}_TIKV_LOCK_FILES", unsafe { libc::getuid() })
+}
+
+#[cfg(not(unix))]
+fn get_lock_dir() -> String {
+    "TIKV_LOCK_FILES".to_owned()
 }
 
 /// A small trait for components which can be trivially stopped. Lets us keep
