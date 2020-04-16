@@ -46,10 +46,7 @@ impl GCSStorage {
         let svc_info = ServiceAccountInfo::deserialize(&config.credentials_blob).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidInput,
-                format!(
-                    "invalid credentials_blob {}: {}",
-                    config.credentials_blob, e
-                ),
+                format!("invalid credentials_blob: {}", e),
             )
         })?;
         let svc_access = ServiceAccountAccess::new(svc_info).map_err(|e| {
@@ -278,35 +275,31 @@ impl ExternalStorage for GCSStorage {
         let bucket = self.config.bucket.clone();
         let name = self.maybe_prefix_key(name);
         debug!("read file from GCS storage"; "key" => %name);
-        match ObjectId::new(bucket, name) {
-            Err(e) => GCSStorage::error_to_async_read(ErrorKind::InvalidInput, e),
-            Ok(oid) => {
-                match Object::download(&oid, None /*optional*/) {
-                    Err(e) => GCSStorage::error_to_async_read(ErrorKind::Other, e),
-                    Ok(request) => {
-                        let (parts, _) = request.into_parts();
-                        match self.make_request(
-                            http::Request::from_parts(parts, futures_util::io::empty()),
-                            tame_gcs::Scopes::ReadOnly,
-                        ) {
-                            Err(e) => GCSStorage::error_to_async_read(ErrorKind::Other, e),
-                            Ok(response) => Box::new(
-                                response
-                                    .bytes_stream()
-                                    .map(|result| {
-                                        result.map_err(|e| {
-                                            Error::new(
-                                                ErrorKind::Other,
-                                                format!("download from gcs error {}", e),
-                                            )
-                                        })
-                                    })
-                                    .into_async_read(),
-                            ),
-                        }
-                    }
-                }
-            }
-        }
+        let oid = match ObjectId::new(bucket, name) {
+            Ok(oid) => oid,
+            Err(e) => return GCSStorage::error_to_async_read(ErrorKind::InvalidInput, e),
+        };
+        let request = match Object::download(&oid, None /*optional*/) {
+            Ok(request) => request,
+            Err(e) => return GCSStorage::error_to_async_read(ErrorKind::Other, e),
+        };
+        let (parts, _) = request.into_parts();
+        let response = match self.make_request(
+            http::Request::from_parts(parts, futures_util::io::empty()),
+            tame_gcs::Scopes::ReadOnly,
+        ) {
+            Ok(response) => response,
+            Err(e) => return GCSStorage::error_to_async_read(ErrorKind::Other, e),
+        };
+        Box::new(
+            response
+                .bytes_stream()
+                .map(|result| {
+                    result.map_err(|e| {
+                        Error::new(ErrorKind::Other, format!("download from gcs error {}", e))
+                    })
+                })
+                .into_async_read(),
+        )
     }
 }
