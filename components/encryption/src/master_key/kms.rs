@@ -6,20 +6,18 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use futures::future::{self, TryFutureExt};
-use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod};
+use kvproto::encryptionpb::EncryptedContent;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::HttpClient;
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 use tokio::runtime::{Builder, Runtime};
 
-use super::{metadata::MetadataKey, Backend, MemBackend};
+use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
 use crate::config::KmsConfig;
 use crate::crypter::Iv;
 use crate::{Error, Result};
 use rusoto_util::new_client;
 
-// Always use AES 256 for encrypting master key.
-const KMS_DATA_KEY_METHOD: EncryptionMethod = EncryptionMethod::Aes256Ctr;
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
 const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
 
@@ -60,9 +58,7 @@ impl AwsKms {
 
     fn check_config(config: &KmsConfig) -> Result<()> {
         if config.key_id.is_empty() {
-            return Err(Error::Other(
-                "KMS key id can not be empty".to_owned().into(),
-            ));
+            return Err(box_err!("KMS key id can not be empty"));
         }
         Ok(())
     }
@@ -138,7 +134,7 @@ where
 
 struct Inner {
     config: KmsConfig,
-    backend: Option<MemBackend>,
+    backend: Option<MemAesGcmBackend>,
     cached_ciphertext_key: Vec<u8>,
 }
 
@@ -179,8 +175,7 @@ impl Inner {
         }
 
         // Always use AES 256 for encrypting master key.
-        let method = KMS_DATA_KEY_METHOD;
-        self.backend = Some(MemBackend::new(method, key)?);
+        self.backend = Some(MemAesGcmBackend::new(key)?);
         Ok(())
     }
 }
@@ -218,7 +213,7 @@ impl KmsBackend {
             AWS_KMS_VENDOR_NAME.to_vec(),
         );
         if inner.cached_ciphertext_key.is_empty() {
-            return Err(Error::Other("KMS ciphertext key not found".into()));
+            return Err(box_err!("KMS ciphertext key not found"));
         }
         content.metadata.insert(
             MetadataKey::KmsCiphertextKey.as_str().to_owned(),
@@ -233,12 +228,10 @@ impl KmsBackend {
             // For now, we only support AWS.
             Some(val) if val.as_slice() == AWS_KMS_VENDOR_NAME => (),
             other => {
-                return Err(Error::Other(
-                    format!(
-                        "KMS vendor mismatch expect {:?} got {:?}",
-                        AWS_KMS_VENDOR_NAME, other
-                    )
-                    .into(),
+                return Err(box_err!(
+                    "KMS vendor mismatch expect {:?} got {:?}",
+                    AWS_KMS_VENDOR_NAME,
+                    other
                 ))
             }
         }
@@ -246,7 +239,7 @@ impl KmsBackend {
         let mut inner = self.inner.lock().unwrap();
         let ciphertext_key = content.metadata.get(MetadataKey::KmsCiphertextKey.as_str());
         if ciphertext_key.is_none() {
-            return Err(Error::Other("KMS ciphertext key not found".into()));
+            return Err(box_err!("KMS ciphertext key not found"));
         }
         inner.maybe_update_backend(ciphertext_key)?;
         inner.backend.as_ref().unwrap().decrypt_content(content)
@@ -255,7 +248,7 @@ impl KmsBackend {
 
 impl Backend for KmsBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
-        self.encrypt_content(plaintext, Iv::new())
+        self.encrypt_content(plaintext, Iv::new_gcm())
     }
 
     fn decrypt(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
@@ -375,22 +368,16 @@ mod tests {
 
     #[test]
     fn test_kms_backend() {
-        // See more https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf
-        let pt = Vec::from_hex(
-            "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411\
-                  e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710",
-        )
-        .unwrap();
-        let ct = Vec::from_hex(
-            "601ec313775789a5b7a7f504bbf3d228f443e3ca4d62b59aca84e990cacaf5c52b0930daa23de94c\
-                  e87017ba2d84988ddfc9c58db67aada613c2dd08457941a6",
-        )
-        .unwrap();
-        let key = Vec::from_hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
+        // See more http://csrc.nist.gov/groups/STM/cavp/documents/mac/gcmtestvectors.zip
+        let pt = Vec::from_hex("25431587e9ecffc7c37f8d6d52a9bc3310651d46fb0e3bad2726c8f2db653749")
             .unwrap();
-        let iv = Vec::from_hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff").unwrap();
+        let ct = Vec::from_hex("84e5f23f95648fa247cb28eef53abec947dbf05ac953734618111583840bd980")
+            .unwrap();
+        let key = Vec::from_hex("c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139")
+            .unwrap();
+        let iv = Vec::from_hex("cafabd9672ca6c79a2fbdc22").unwrap();
 
-        let backend = MemBackend::new(EncryptionMethod::Aes256Ctr, key.clone()).unwrap();
+        let backend = MemAesGcmBackend::new(key.clone()).unwrap();
 
         let inner = Inner {
             config: KmsConfig::default(),
@@ -400,7 +387,7 @@ mod tests {
         let backend = KmsBackend {
             inner: Mutex::new(inner),
         };
-        let iv = Iv::from(iv.as_slice());
+        let iv = Iv::from_slice(iv.as_slice()).unwrap();
         let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
         assert_eq!(encrypted_content.get_content(), ct.as_slice());
         let plaintext = backend.decrypt_content(&encrypted_content).unwrap();

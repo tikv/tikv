@@ -70,6 +70,7 @@ crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
 derive_more = "0.99.3"
+encryption = { path = "components/encryption" }
 engine = { path = "components/engine" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
@@ -147,7 +148,6 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 into_other = { path = "components/into_other" }
-encryption = { path = "components/encryption" }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
@@ -171,7 +171,7 @@ raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", de
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 fail = { git = "https://github.com/tikv/fail-rs.git", rev = "2cf1175a1a5cc2c70bd20ebd45313afd69b558fc" }
-prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7" }
+prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "086b7059482f1b06748e20c9a43efbc78b7252b2" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
