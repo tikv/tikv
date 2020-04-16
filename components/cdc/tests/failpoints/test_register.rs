@@ -269,9 +269,11 @@ fn test_merge() {
     // Wait until raftstore receives MergeResult
     sleep_ms(100);
     // Retry to subscribe source region
-    let source = suite.cluster.get_region(b"k0");
+    let mut source_epoch = source.get_region_epoch().clone();
+    source_epoch.set_version(source_epoch.get_version() + 1);
+    source_epoch.set_conf_ver(source_epoch.get_conf_ver() + 1);
     req.region_id = source.get_id();
-    req.set_region_epoch(source.get_region_epoch().clone());
+    req.set_region_epoch(source_epoch);
     let _source_tx = source_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Wait until raftstore receives ChangeCmd
     sleep_ms(100);
