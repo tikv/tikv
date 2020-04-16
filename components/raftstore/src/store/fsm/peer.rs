@@ -2393,7 +2393,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             _ => (),
         }
 
-        if self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove || self.fsm.stopped {
             apply::notify_req_region_removed(self.region_id(), cb);
             return;
         }
