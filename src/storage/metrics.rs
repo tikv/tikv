@@ -5,7 +5,6 @@ use prometheus_static_metric::*;
 
 use std::cell::RefCell;
 use std::mem;
-use std::time::Duration;
 
 use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
 use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
@@ -61,17 +60,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
 
         reporter.report_read_stats(read_stats);
     });
-}
-
-pub fn tls_collect_command_count(cmd: CommandKind, priority: CommandPriority) {
-    KV_COMMAND_COUNTER_VEC_STATIC.get(cmd).inc();
-    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC.get(priority).inc();
-}
-
-pub fn tls_collect_command_duration(cmd: CommandKind, duration: Duration) {
-    SCHED_HISTOGRAM_VEC_STATIC
-        .get(cmd)
-        .observe(tikv_util::time::duration_to_sec(duration))
 }
 
 pub fn tls_collect_key_reads(cmd: CommandKind, count: usize) {
