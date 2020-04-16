@@ -567,7 +567,8 @@ impl TiKVServer {
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
-        let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+        let importer =
+            Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(

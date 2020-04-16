@@ -22,6 +22,7 @@ prost-codec = [
 
 [dependencies]
 crc32fast = "1.2"
+encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage" }
 futures = "0.1"

@@ -3885,6 +3885,7 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "encryption",
  "engine_traits",
  "external_storage",
  "futures 0.1.29",

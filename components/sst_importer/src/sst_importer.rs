@@ -6,12 +6,14 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use kvproto::backup::StorageBackend;
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
+use encryption::DataKeyManager;
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterator, CF_WRITE};
 use engine_traits::{SeekKey, SstReader, SstWriter};
@@ -27,12 +29,17 @@ use crate::metrics::*;
 /// SSTImporter manages SST files that are waiting for ingesting.
 pub struct SSTImporter {
     dir: ImportDir,
+    key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl SSTImporter {
-    pub fn new<P: AsRef<Path>>(root: P) -> Result<SSTImporter> {
+    pub fn new<P: AsRef<Path>>(
+        root: P,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<SSTImporter> {
         Ok(SSTImporter {
             dir: ImportDir::new(root)?,
+            key_manager,
         })
     }
 
@@ -68,7 +75,7 @@ impl SSTImporter {
     }
 
     pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
-        match self.dir.ingest(meta, engine) {
+        match self.dir.ingest(meta, engine, &self.key_manager) {
             Ok(_) => {
                 info!("ingest"; "meta" => ?meta);
                 Ok(())
@@ -392,12 +399,17 @@ impl ImportDir {
         Ok(path)
     }
 
-    fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
+    fn ingest<E: KvEngine>(
+        &self,
+        meta: &SstMeta,
+        engine: &E,
+        key_manager: &Option<Arc<DataKeyManager>>,
+    ) -> Result<()> {
         let start = Instant::now();
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
         let cf = engine.cf_handle(cf).expect("bad cf name");
-        engine.prepare_sst_for_ingestion(&path.save, &path.clone)?;
+        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
         let length = meta.get_length();
         let crc32 = meta.get_crc32();
         // FIXME perform validate_sst_for_ingestion after we can handle sst file size correctly.
