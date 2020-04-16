@@ -26,13 +26,6 @@ thread_local! {
 }
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
-    // Flush Prometheus metrics
-    SCHED_HISTOGRAM_VEC_STATIC.flush();
-    SCHED_PROCESSING_READ_HISTOGRAM_STATIC.flush();
-    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.flush();
-    KV_COMMAND_COUNTER_VEC_STATIC.flush();
-    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC.flush();
-
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
 
@@ -68,7 +61,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
 
         reporter.report_read_stats(read_stats);
     });
-    KV_COMMAND_SCAN_DETAILS_STATIC.flush();
 }
 
 pub fn tls_collect_command_count(cmd: CommandKind, priority: CommandPriority) {
