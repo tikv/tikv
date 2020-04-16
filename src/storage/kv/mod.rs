@@ -8,6 +8,7 @@ mod stats;
 
 use std::cell::UnsafeCell;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{error, ptr, result};
 
@@ -16,6 +17,7 @@ use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
+use raftstore::store::RegionCache;
 use txn_types::{Key, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
@@ -126,6 +128,9 @@ pub trait Snapshot: Send + Clone {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+    fn get_cache(&self) -> Option<Arc<dyn RegionCache>> {
+        None
+    }
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,

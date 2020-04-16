@@ -352,6 +352,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                    if let Some(cache) = snapshot.get_cache() {
+                        let mut result = Vec::with_capacity(keys.len());
+                        for k in keys {
+                            if let Some(v) = cache.get(&k) {
+                                result.push(Ok((k.into_raw().unwrap(), v)));
+                            }
+                        }
+                        return Ok(result);
+                    }
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,

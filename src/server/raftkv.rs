@@ -14,6 +14,7 @@ use kvproto::raft_cmdpb::{
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
+use std::sync::Arc;
 use std::time::Duration;
 use txn_types::{Key, Value};
 
@@ -26,7 +27,7 @@ use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::store::{RegionIterator, RegionSnapshot};
+use raftstore::store::{RegionCache, RegionIterator, RegionSnapshot};
 use tikv_util::time::Instant;
 
 quick_error! {
@@ -419,6 +420,10 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
         )));
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cache(&self) -> Option<Arc<dyn RegionCache>> {
+        self.cache.clone()
     }
 
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
