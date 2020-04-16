@@ -113,7 +113,8 @@ impl Collector for ThreadsCollector {
 
         let mut tid_retriever = self.tid_retriever.lock().unwrap();
         let tids = tid_retriever.get_tids();
-        for &tid in tids {
+        for tid in tids {
+            let tid = *tid;
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 // Threads CPU time.
                 let total = cpu_total(&stat);
@@ -385,7 +386,9 @@ impl ThreadInfoStatistics {
 
         let tids = self.tid_retriever.get_tids();
 
-        for &tid in tids {
+        for tid in tids {
+            let tid = *tid;
+
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 let name = get_name(&stat.command);
                 self.tid_names.entry(tid).or_insert(name);
