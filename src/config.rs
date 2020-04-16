@@ -2265,6 +2265,10 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
+lazy_static! {
+    pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
+}
+
 fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
     // This helper function translate nested module config to a list
     // of name/value pair and seperated module by '.' in the name field,
@@ -2299,6 +2303,74 @@ fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>
         Ok(entries)
     };
     helper("".to_owned(), change)
+}
+
+fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> {
+    fn helper(
+        mut fields: Vec<String>,
+        dst: &mut ConfigChange,
+        typed: &ConfigChange,
+        value: String,
+    ) -> CfgResult<()> {
+        if let Some(mut f) = fields.pop() {
+            if f == "raftstore" {
+                f = "raft_store".to_owned();
+            } else {
+                f = f.replace("-", "_");
+            }
+            return match typed.get(&f) {
+                None => Err(format!("unexpect fields: {}", f).into()),
+                Some(ConfigValue::Skip) => {
+                    Err(format!("fields {:?} can not be change", fields).into())
+                }
+                Some(ConfigValue::Module(m)) => {
+                    if let ConfigValue::Module(n_dst) =
+                        dst.entry(f).or_insert(ConfigValue::Module(HashMap::new()))
+                    {
+                        return helper(fields, n_dst, m, value);
+                    }
+                    panic!("unexpect config value");
+                }
+                Some(v) => {
+                    if fields.is_empty() {
+                        return match to_change_value(&value, v) {
+                            Err(_) => Err(format!("failed to parse: {}", value).into()),
+                            Ok(v) => {
+                                dst.insert(f, v);
+                                Ok(())
+                            }
+                        };
+                    }
+                    Err(format!("unexpect fields: {:?}", fields).into())
+                }
+            };
+        }
+        Ok(())
+    }
+    let mut res = HashMap::new();
+    for (name, value) in change {
+        let fields: Vec<_> = name.as_str().split(".").collect();
+        let fields: Vec<_> = fields.into_iter().map(|s| s.to_owned()).rev().collect();
+        helper(fields, &mut res, &TIKVCONFIG_TYPED, value)?;
+    }
+    Ok(res)
+}
+
+fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
+    let res = match typed {
+        ConfigValue::Duration(_) => ConfigValue::from(v.parse::<ReadableDuration>()?),
+        ConfigValue::Size(_) => ConfigValue::from(v.parse::<ReadableSize>()?),
+        ConfigValue::U64(_) => ConfigValue::from(v.parse::<u64>()?),
+        ConfigValue::F64(_) => ConfigValue::from(v.parse::<f64>()?),
+        ConfigValue::U32(_) => ConfigValue::from(v.parse::<u32>()?),
+        ConfigValue::I32(_) => ConfigValue::from(v.parse::<i32>()?),
+        ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
+        ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
+        ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
+        ConfigValue::Other(_) => ConfigValue::Other(v.to_owned()),
+        _ => unreachable!(),
+    };
+    Ok(res)
 }
 
 fn from_change_value(v: ConfigValue) -> CfgResult<String> {
@@ -2397,6 +2469,42 @@ impl ConfigController {
         }
     }
 
+    pub fn update(&mut self, change: HashMap<String, String>) -> CfgResult<()> {
+        let diff = to_config_change(change)?;
+        {
+            let mut incoming = self.current.clone();
+            incoming.update(diff.clone());
+            incoming.validate()?;
+        }
+        let mut to_update = HashMap::with_capacity(diff.len());
+        for (name, change) in diff.into_iter() {
+            match change {
+                ConfigValue::Module(change) => {
+                    // update a submodule's config only if changes had been sucessfully
+                    // dispatched to corresponding config manager, to avoid double dispatch change
+                    if let Some(mgr) = self.config_mgrs.get_mut(&Module::from(name.as_str())) {
+                        if let Err(e) = mgr.dispatch(change.clone()) {
+                            self.current.update(to_update);
+                            return Err(e);
+                        }
+                    }
+                    to_update.insert(name, ConfigValue::Module(change));
+                }
+                _ => {
+                    let _ = to_update.insert(name, change);
+                }
+            }
+        }
+        debug!("all config change had been dispatched"; "change" => ?to_update);
+        self.current.update(to_update);
+        if self.persist_update {
+            if let Err(e) = persist_config(&self.current) {
+                return Err(e.into());
+            }
+        }
+        Ok(())
+    }
+
     pub fn update_or_rollback(
         &mut self,
         mut incoming: TiKvConfig,
@@ -2478,11 +2586,6 @@ impl ConfigHandler {
         mut controller: ConfigController,
         scheduler: FutureScheduler<PdTask>,
     ) -> CfgResult<Self> {
-        if controller.get_current().enable_dynamic_config {
-            if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
-                return Err(format!("failed to schedule refresh config task: {:?}", e).into());
-            }
-        }
         let version = controller.start_version.take().unwrap_or_default();
         Ok(ConfigHandler {
             id,
@@ -2796,6 +2899,40 @@ mod tests {
             diff[0].value,
             toml::to_string(&incoming.refresh_config_interval).unwrap()
         );
+    }
+
+    #[test]
+    fn test_to_config_change() {
+        assert_eq!(
+            to_change_value("10h", &ConfigValue::Duration(0)).unwrap(),
+            ConfigValue::from(ReadableDuration::hours(10))
+        );
+        assert_eq!(
+            to_change_value("100MB", &ConfigValue::Size(0)).unwrap(),
+            ConfigValue::from(ReadableSize::mb(100))
+        );
+        assert_eq!(
+            to_change_value("10000", &ConfigValue::U64(0)).unwrap(),
+            ConfigValue::from(10000u64)
+        );
+
+        let old = TiKvConfig::default();
+        let mut incoming = TiKvConfig::default();
+        incoming.refresh_config_interval = ReadableDuration::hours(10);
+        incoming.coprocessor.region_split_keys = 10000;
+        incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
+        incoming.raft_store.sync_log = false;
+        let diff = old.diff(&incoming);
+        let mut change = HashMap::new();
+        change.insert("refresh-config-interval".to_owned(), "10h".to_owned());
+        change.insert(
+            "coprocessor.region-split-keys".to_owned(),
+            "10000".to_owned(),
+        );
+        change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
+        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
+        let res = to_config_change(change).unwrap();
+        assert_eq!(diff, res);
     }
 
     #[test]
