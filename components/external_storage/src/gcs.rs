@@ -13,7 +13,7 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::{
-    io::{AsyncRead, Cursor},
+    io::AsyncRead,
     stream::{StreamExt, TryStreamExt},
 };
 use http::Method;
@@ -135,12 +135,8 @@ impl GCSStorage {
                 scope_hash,
                 ..
             } => {
-                let (parts, body) = request.into_parts();
-                let read_body = Cursor::new(body);
-                let new_request = http::Request::from_parts(parts, read_body);
-                let req = self.convert_request(new_request)?;
                 // Use blocking IO.
-                let res = block_on_external_io(self.client.execute(req)).map_err(|e| {
+                let res = block_on_external_io(self.client.execute(request.into())).map_err(|e| {
                     Error::new(ErrorKind::Other, format!("request token failed: {}", e))
                 })?;
                 let response = self.convert_response(res)?;
