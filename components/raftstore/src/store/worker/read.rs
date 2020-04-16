@@ -10,7 +10,6 @@ use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
-use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::fsm::RaftRouter;
@@ -29,6 +28,13 @@ use crate::store::fsm::store::StoreMeta;
 use crate::store::RegionCache;
 use tikv_util::time::monotonic_raw_now;
 
+#[cfg(not(test))]
+const CACHE_SAMPLE: u64 = 60 * 100;
+#[cfg(test)]
+const CACHE_SAMPLE: u64 = 4;
+
+const MIN_CACHE_TIME: f64 = 60.0;
+
 /// A read only delegate of `Peer`.
 #[derive(Derivative)]
 #[derivative(Clone, Debug)]
@@ -38,7 +44,8 @@ pub struct ReadDelegate {
     term: u64,
     applied_index_term: u64,
     leader_lease: Option<RemoteLease>,
-    last_valid_ts: RefCell<Timespec>,
+    read_times: RefCell<u64>,
+    last_check_time: RefCell<Instant>,
 
     tag: String,
     invalid: Arc<AtomicBool>,
@@ -58,7 +65,8 @@ impl ReadDelegate {
             term: peer.term(),
             applied_index_term: peer.get_store().applied_index_term(),
             leader_lease: None,
-            last_valid_ts: RefCell::new(Timespec::new(0, 0)),
+            read_times: RefCell::new(0),
+            last_check_time: RefCell::new(Instant::now()),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
             cache: None,
@@ -86,6 +94,22 @@ impl ReadDelegate {
         }
     }
 
+    fn get_region_meta_if_hot(&self) -> Option<metapb::Region> {
+        if self.cache.is_some() {
+            return None;
+        }
+        let count = self.read_times.borrow_mut();
+        if *count > CACHE_SAMPLE {
+            let mut t = self.last_check_time.borrow_mut();
+            if t.elapsed_secs() < MIN_CACHE_TIME {
+                *t = Instant::now();
+                return Some(self.region.clone());
+            }
+            *t = Instant::now();
+        }
+        None
+    }
+
     // TODO: return ReadResponse once we remove batch snapshot.
     fn handle_read<E: KvEngine>(
         &self,
@@ -105,6 +129,8 @@ impl ReadDelegate {
                             executor.set_read_from_cache(cache.clone());
                         }
                     }
+                    let mut count = self.read_times.borrow_mut();
+                    *count += 1;
                     let mut resp = executor.execute(req, &self.region, None);
                     // Leader can read local if and only if it is in lease.
                     cmd_resp::bind_term(&mut resp.response, term);
@@ -313,7 +339,6 @@ where
     // It can only handle read command.
     pub fn propose_raft_command(&self, cmd: RaftCommand<E>) {
         let region_id = cmd.request.get_header().get_region_id();
-
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
@@ -321,6 +346,13 @@ where
                     if let Some(resp) =
                         delegate.handle_read(&self.kv_engine, &cmd.request, &mut *metrics)
                     {
+                        //self.cache_factory.as_ref().map(|factory| {
+                        if let Some(factory) = self.cache_factory.as_ref() {
+                            if let Some(region) = delegate.get_region_meta_if_hot() {
+                                let _ = self.router.build_cache(factory.create_builder(region));
+                            }
+                        }
+
                         cmd.callback.invoke_read(resp);
                         self.delegates
                             .borrow_mut()
@@ -361,10 +393,6 @@ where
                 }
             }
         }
-        //        let region_id = cmd.request.get_header().get_region_id();
-        //        if let Some(builder) = B::from(region_id) {
-        //            self.router.build_cache(builder);
-        //        }
         // Remove delegate for updating it by next cmd execution.
         self.delegates.borrow_mut().remove(&region_id);
         // Forward to raftstore.
@@ -562,6 +590,7 @@ impl ReadMetrics {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
     use std::sync::mpsc::*;
     use std::thread;
 
@@ -571,18 +600,42 @@ mod tests {
 
     use crate::store::util::Lease;
     use crate::store::Callback;
+    use crate::store::RegionCacheBuilder;
+    use crate::Error;
     use engine::rocks;
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
 
     use super::*;
+
+    pub struct TestRegionCacheBuilderFactory {
+        has_create_builder: Arc<AtomicBool>,
+    }
+    pub struct TestRegionCacheBuilder {}
+    impl RegionCacheBuilder<RocksEngine> for TestRegionCacheBuilder {
+        fn build(&self, _snap: RocksSnapshot) -> Result<Arc<dyn RegionCache>> {
+            Err(Error::Other("not support".into()))
+        }
+
+        fn region_id(&self) -> u64 {
+            0
+        }
+    }
+
+    impl RegionCacheBuilderFactory<RocksEngine> for TestRegionCacheBuilderFactory {
+        fn create_builder(&self, _: metapb::Region) -> Box<dyn RegionCacheBuilder<RocksEngine>> {
+            self.has_create_builder.store(true, Ordering::Release);
+            Box::new(TestRegionCacheBuilder {})
+        }
+    }
 
     #[allow(clippy::type_complexity)]
     fn new_reader(
         path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
+        has_create_builder: Arc<AtomicBool>,
     ) -> (
         TempDir,
         LocalReader<SyncSender<RaftCommand<RocksEngine>>, RocksEngine>,
@@ -596,6 +649,9 @@ mod tests {
             store_meta,
             store_id: Cell::new(Some(store_id)),
             router: ch,
+            cache_factory: Some(Arc::new(TestRegionCacheBuilderFactory {
+                has_create_builder,
+            })),
             kv_engine: RocksEngine::from_db(Arc::new(db)),
             delegates: RefCell::new(HashMap::default()),
             metrics: Default::default(),
@@ -649,7 +705,12 @@ mod tests {
     fn test_read() {
         let store_id = 2;
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
+        let (_tmp, mut reader, rx) = new_reader(
+            "test-local-reader",
+            store_id,
+            store_meta.clone(),
+            Arc::new(AtomicBool::new(false)),
+        );
 
         // region: 1,
         // peers: 2, 3, 4,
@@ -701,7 +762,9 @@ mod tests {
                 term: term6,
                 applied_index_term: term6 - 1,
                 leader_lease: Some(remote),
-                last_valid_ts: RefCell::new(Timespec::new(0, 0)),
+                read_times: RefCell::new(0),
+                cache: None,
+                last_check_time: RefCell::new(Instant::now()),
                 invalid: Arc::new(AtomicBool::new(false)),
             };
             meta.readers.insert(1, read_delegate);
@@ -871,5 +934,79 @@ mod tests {
             reader.metrics.borrow().rejected_by_term_mismatch,
             previous_term_rejection + 1,
         );
+    }
+
+    #[test]
+    fn test_build_cache() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let create_flag = Arc::new(AtomicBool::new(false));
+        let (_tmp, mut reader, rx) = new_reader(
+            "test-local-reader-cache",
+            store_id,
+            store_meta.clone(),
+            create_flag.clone(),
+        );
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        let prs = new_peers(store_id, vec![2, 3, 4]);
+        region.set_peers(prs.clone().into());
+        let epoch13 = {
+            let mut ep = metapb::RegionEpoch::default();
+            ep.set_conf_ver(1);
+            ep.set_version(3);
+            ep
+        };
+        let leader = prs[0].clone();
+        region.set_region_epoch(epoch13.clone());
+        let term6 = 6;
+        let mut lease = Lease::new(Duration::seconds(2)); // 1s is long enough.
+        header.set_region_id(1);
+        header.set_peer(leader.clone());
+        header.set_region_epoch(epoch13.clone());
+        header.set_term(term6);
+        cmd.set_header(header);
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        cmd.set_requests(vec![req].into());
+
+        {
+            let remote = lease.maybe_new_remote_lease(term6).unwrap();
+            lease.renew(monotonic_raw_now());
+            let mut meta = store_meta.lock().unwrap();
+            let read_delegate = ReadDelegate {
+                tag: String::new(),
+                region: region.clone(),
+                peer_id: leader.get_id(),
+                term: term6,
+                applied_index_term: term6,
+                leader_lease: Some(remote),
+                read_times: RefCell::new(0),
+                cache: None,
+                last_check_time: RefCell::new(Instant::now()),
+                invalid: Arc::new(AtomicBool::new(false)),
+            };
+            meta.readers.insert(1, read_delegate);
+        }
+
+        for i in 0..=CACHE_SAMPLE {
+            let j = i;
+
+            let task = RaftCommand::<RocksEngine>::new(
+                cmd.clone(),
+                Callback::Read(Box::new(move |resp| {
+                    assert!(resp.snapshot.is_some(), "{:?}, {:?}", resp.response, j);
+                })),
+            );
+
+            must_not_redirect(&mut reader, &rx, task);
+            if i == CACHE_SAMPLE {
+                assert!(create_flag.load(Ordering::Acquire));
+            } else {
+                assert!(!create_flag.load(Ordering::Acquire));
+            }
+        }
     }
 }

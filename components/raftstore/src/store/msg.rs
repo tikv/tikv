@@ -338,7 +338,7 @@ pub enum PeerMsg<E: KvEngine> {
     /// Generate In-Memory-Cache for region
     BuildCacheRes {
         cache: Arc<dyn RegionCache>,
-        apply_index: u64,
+        apply_state: RaftApplyState,
     },
 }
 

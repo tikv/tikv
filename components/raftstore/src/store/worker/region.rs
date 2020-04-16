@@ -18,12 +18,10 @@ use crate::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
 use crate::store::transport::CasualRouter;
 use crate::store::{
     self, check_abort, ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
-    SnapshotCallback,
 };
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt};
-use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use yatp::pool::{Builder, ThreadPool};
@@ -69,12 +67,11 @@ pub enum Task {
         end_key: Vec<u8>,
     },
     InMemSnapshotGen {
-        region: Region,
+        region_id: u64,
+        apply_state: RaftApplyState,
         kv_snap: RocksSnapshot,
-        last_applied_state: RaftApplyState,
-        last_applied_index_term: u64,
         #[derivative(Debug = "ignore")]
-        cb: SnapshotCallback<RocksEngine>,
+        cb: Box<dyn FnOnce(RocksSnapshot, RaftApplyState) + Send>,
     },
 }
 
@@ -104,8 +101,8 @@ impl Display for Task {
                 hex::encode_upper(start_key),
                 hex::encode_upper(end_key)
             ),
-            Task::InMemSnapshotGen { ref region, .. } => {
-                write!(f, "In-Memory Snapshot gen for {}", region.get_id())
+            Task::InMemSnapshotGen { region_id, .. } => {
+                write!(f, "In-Memory Snapshot gen for {}", region_id)
             }
         }
     }
@@ -633,18 +630,12 @@ where
                 });
             }
             Task::InMemSnapshotGen {
-                region,
-                last_applied_index_term,
-                last_applied_state,
+                apply_state,
                 kv_snap,
                 cb,
+                ..
             } => {
-                cb(
-                    Ok(kv_snap),
-                    &region,
-                    &last_applied_state,
-                    last_applied_index_term,
-                );
+                cb(kv_snap, apply_state);
             }
             task @ Task::Apply { .. } => {
                 // to makes sure appling snapshots in order.

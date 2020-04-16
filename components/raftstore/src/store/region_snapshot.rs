@@ -29,7 +29,7 @@ pub struct RegionSnapshot<E: KvEngine> {
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
     #[derivative(Debug = "ignore")]
-    cache: Option<Arc<dyn RegionCache>>,
+    pub cache: Option<Arc<dyn RegionCache>>,
 }
 
 impl<E> RegionSnapshot<E>

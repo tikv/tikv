@@ -3348,6 +3348,7 @@ mod tests {
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -3456,12 +3457,29 @@ mod tests {
             .is_none());
         // Make sure Apply and Snapshot are in the same batch.
         let (tx, _) = mpsc::sync_channel(0);
+        let snap_task = GenSnapTask::new(2, 0, tx);
+        let cb: SnapshotCallback<RocksEngine> =
+            Box::new(move |snap_ret, _region, apply_state, applied_index_term| {
+                if let Ok(snap) = snap_ret {
+                    let _ = snap_task.generate_and_schedule_snapshot(
+                        snap,
+                        applied_index_term,
+                        apply_state.clone(),
+                        &region_scheduler,
+                    );
+                }
+            });
+
         batch_messages(
             &router,
             2,
             vec![
                 Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)], 3, 5, 4)),
-                Msg::Snapshot(GenSnapTask::new(2, 0, tx)),
+                Msg::Snapshot {
+                    cb,
+                    region_id: 0,
+                    sync: true,
+                },
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {

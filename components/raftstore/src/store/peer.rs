@@ -2163,32 +2163,32 @@ impl Peer {
 
         let current_time = poll_ctx.current_time.unwrap();
         if current_time - self.last_propose_time
-            < time::Duration::from_std(Duration::from_secs(60)).unwrap()
+            < time::Duration::from_std(Duration::from_secs(100)).unwrap()
         {
             return;
         }
         self.last_propose_time = current_time;
         let region_id = self.region_id;
-        let peer_id = self.peer.get_id();
         let router = poll_ctx.router.clone();
+        let region_sched = self.get_store().region_sched.clone();
         use crate::store::PeerMsg;
+        let build_cb = Box::new(move |snap, apply_state| {
+            if let Ok(cache) = builder.build(snap) {
+                let _ = router.send(region_id, PeerMsg::BuildCacheRes { cache, apply_state });
+            }
+        });
         let cb: SnapshotCallback<RocksEngine> =
             Box::new(move |snap_ret, _region, apply_state, _applied_index_term| {
                 if let Ok(snap) = snap_ret {
-                    let cache = builder.build(snap).unwrap();
-                    let _ = router.send(
+                    let task = RegionTask::InMemSnapshotGen {
+                        // This snapshot may be held for a long time, which may cause too many
+                        // open files in rocksdb.
                         region_id,
-                        PeerMsg::BuildCacheRes {
-                            cache,
-                            apply_index: apply_state.get_applied_index(),
-                        },
-                    );
-                } else {
-                    error!(
-                        "schedule region cache failed";
-                            "region_id" => region_id,
-                            "peer_id" => peer_id,
-                    );
+                        apply_state: apply_state.clone(),
+                        kv_snap: snap,
+                        cb: build_cb,
+                    };
+                    let _ = region_sched.schedule(task);
                 }
             });
         poll_ctx.apply_router.schedule_task(
@@ -2201,8 +2201,8 @@ impl Peer {
         );
     }
 
-    pub fn on_build_cache_res(&mut self, cache: Arc<dyn RegionCache>, apply_index: u64) {
-        if apply_index == self.last_applying_idx {
+    pub fn on_build_cache_res(&mut self, cache: Arc<dyn RegionCache>, apply_state: RaftApplyState) {
+        if apply_state == *self.get_store().apply_state() {
             self.region_cache = Some(cache);
         }
     }
@@ -2815,6 +2815,7 @@ impl RequestInspector for Peer {
                 "lease" => ?self.leader_lease,
             );
             // The lease is expired, call `expire` explicitly.
+
             self.leader_lease.expire();
         }
         state

@@ -1,4 +1,4 @@
-use crate::{Error, Result};
+use crate::Result;
 use engine_traits::KvEngine;
 use kvproto::metapb;
 use std::sync::Arc;

@@ -52,8 +52,8 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, RegionCacheBuilder,
-    SignificantMsg, SnapKey, SnapshotDeleter, StoreMsg,
+    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
+    SnapshotDeleter, StoreMsg,
 };
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
@@ -314,10 +314,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::BuildCache(builder) => {
-                    self.build_cache(builder);
+                    self.fsm.peer.build_cache(self.ctx, builder);
                 }
-                PeerMsg::BuildCacheRes { cache, apply_index } => {
-                    self.fsm.peer.on_build_cache_res(cache, apply_index);
+                PeerMsg::BuildCacheRes { cache, apply_state } => {
+                    self.fsm.peer.on_build_cache_res(cache, apply_state);
                 }
                 PeerMsg::Noop => {}
             }
@@ -2438,10 +2438,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
-    }
-
-    fn build_cache(&mut self, builder: Box<dyn RegionCacheBuilder<RocksEngine>>) {
-        self.fsm.peer.build_cache(self.ctx, builder);
     }
 
     fn find_sibling_region(&self) -> Option<Region> {
