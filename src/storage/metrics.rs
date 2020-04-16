@@ -62,12 +62,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     });
 }
 
-pub fn tls_collect_key_reads(cmd: CommandKind, count: usize) {
-    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-        .get(cmd)
-        .observe(count as f64);
-}
-
 pub fn tls_processing_read_observe_duration<F, R>(cmd: CommandKind, f: F) -> R
 where
     F: FnOnce() -> R,
