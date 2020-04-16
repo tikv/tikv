@@ -306,7 +306,7 @@ impl TiKVServer {
 
         let search_base = env::temp_dir().join(&lock_dir);
         std::fs::create_dir_all(&search_base)
-            .unwrap_or_else(|_| panic!("create {} failed", lock_dir));
+            .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
         for result in fs::read_dir(&search_base).unwrap() {
             if let Ok(entry) = result {
@@ -922,12 +922,12 @@ fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
     f
 }
 
-#[cfg(target_family = "unix")]
+#[cfg(unix)]
 fn get_lock_dir() -> String {
     format!("{}_TIKV_LOCK_FILES", unsafe { libc::getuid() })
 }
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(not(unix))]
 fn get_lock_dir() -> String {
     "TIKV_LOCK_FILES".to_owned()
 }
