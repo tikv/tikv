@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -440,11 +439,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 cmd: change_cmd,
                 region_epoch: request.take_region_epoch(),
                 callback: Callback::Read(Box::new(move |resp| {
-                    downstream_state.compare_and_swap(
-                        DownstreamState::Uninitialized as u8,
-                        DownstreamState::Normal as u8,
-                        Ordering::SeqCst,
-                    );
+                    downstream_state.uninitialized_to_normal();
                     cb(resp);
                 })),
             },
@@ -604,7 +599,7 @@ struct Initializer {
     region_id: u64,
     observe_id: ObserveID,
     downstream_id: DownstreamID,
-    downstream_state: Arc<AtomicU8>,
+    downstream_state: DownstreamState,
     conn_id: ConnID,
     checkpoint_ts: TimeStamp,
     batch_size: usize,
@@ -662,7 +657,7 @@ impl Initializer {
             .unwrap();
         let mut done = false;
         while !done {
-            if self.downstream_state.load(Ordering::SeqCst) != DownstreamState::Normal as u8 {
+            if !self.downstream_state.is_normal() {
                 info!("async incremental scan canceled";
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,
@@ -877,6 +872,8 @@ mod tests {
             .name_prefix("test-initializer-worker")
             .pool_size(4)
             .build();
+        let downstream_state = DownstreamState::new();
+        downstream_state.set_normal();
 
         let initializer = Initializer {
             sched: receiver_worker.scheduler(),
@@ -884,7 +881,7 @@ mod tests {
             region_id: 1,
             observe_id: ObserveID::new(),
             downstream_id: DownstreamID::new(),
-            downstream_state: Arc::new(AtomicU8::new(DownstreamState::Normal as u8)),
+            downstream_state,
             conn_id: ConnID::new(),
             checkpoint_ts: 1.into(),
             batch_size: 1,
@@ -965,9 +962,7 @@ mod tests {
         }
 
         // Test cancellation.
-        initializer
-            .downstream_state
-            .store(DownstreamState::Stopped as u8, Ordering::SeqCst);
+        initializer.downstream_state.set_stopped();
         initializer.async_incremental_scan(snap, region);
 
         loop {

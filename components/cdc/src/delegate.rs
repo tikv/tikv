@@ -48,11 +48,47 @@ impl DownstreamID {
     }
 }
 
-#[derive(Copy, Clone)]
-pub enum DownstreamState {
-    Uninitialized,
-    Normal,
-    Stopped,
+#[derive(Clone)]
+pub struct DownstreamState(Arc<AtomicU8>);
+
+impl DownstreamState {
+    const UNINITIALIZED: u8 = 0;
+    const NORMAL: u8 = 1;
+    const STOPPED: u8 = 2;
+
+    pub fn new() -> Self {
+        DownstreamState(Arc::new(AtomicU8::new(Self::UNINITIALIZED)))
+    }
+
+    pub fn is_normal(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == Self::NORMAL
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == Self::STOPPED
+    }
+
+    pub fn is_uninitialized(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == Self::UNINITIALIZED
+    }
+
+    pub fn set_normal(&self) {
+        self.0.store(Self::NORMAL, Ordering::SeqCst);
+    }
+
+    pub fn set_stopped(&self) {
+        self.0.store(Self::STOPPED, Ordering::SeqCst);
+    }
+
+    pub fn set_uninitialized(&self) {
+        self.0.store(Self::UNINITIALIZED, Ordering::SeqCst);
+    }
+
+    pub fn uninitialized_to_normal(&self) -> bool {
+        self.0
+            .compare_and_swap(Self::UNINITIALIZED, Self::NORMAL, Ordering::SeqCst)
+            == Self::UNINITIALIZED
+    }
 }
 
 #[derive(Clone)]
@@ -66,7 +102,7 @@ pub struct Downstream {
     peer: String,
     region_epoch: RegionEpoch,
     sink: Option<BatchSender<(usize, Event)>>,
-    state: Arc<AtomicU8>,
+    state: DownstreamState,
 }
 
 impl Downstream {
@@ -81,7 +117,7 @@ impl Downstream {
             peer,
             region_epoch,
             sink: None,
-            state: Arc::new(AtomicU8::new(DownstreamState::Uninitialized as u8)),
+            state: DownstreamState::new(),
         }
     }
 
@@ -108,7 +144,7 @@ impl Downstream {
         self.id
     }
 
-    pub fn get_state(&self) -> Arc<AtomicU8> {
+    pub fn get_state(&self) -> DownstreamState {
         self.state.clone()
     }
 
@@ -225,8 +261,7 @@ impl Delegate {
                 if let Some(change_data_error) = change_data_error.clone() {
                     d.sink_event(change_data_error, 0);
                 }
-                d.state
-                    .store(DownstreamState::Stopped as u8, Ordering::SeqCst);
+                d.state.set_stopped();
             }
             d.id != id
         });
@@ -279,9 +314,7 @@ impl Delegate {
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
         for downstream in &self.downstreams {
-            downstream
-                .state
-                .store(DownstreamState::Stopped as u8, Ordering::SeqCst);
+            downstream.state.set_stopped();
         }
         self.broadcast(change_data_err, 0, false);
     }
@@ -295,9 +328,7 @@ impl Delegate {
             change_data_event,
         );
         for i in 0..downstreams.len() - 1 {
-            if normal_only
-                && downstreams[i].state.load(Ordering::SeqCst) != DownstreamState::Normal as u8
-            {
+            if normal_only && !downstreams[i].state.is_normal() {
                 continue;
             }
             downstreams[i].sink_event(change_data_event.clone(), size);
