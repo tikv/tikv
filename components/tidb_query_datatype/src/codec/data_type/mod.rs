@@ -43,7 +43,7 @@ impl AsMySQLBool for Real {
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0.0)
+        Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
     }
 }
 
@@ -140,7 +140,10 @@ mod tests {
             (b"0x00", None),
             (b"11.xx", None),
             (b"xx.11", None),
-            (b".0000000000000000000000000000000000000000000000000000001", Some(true))
+            (
+                b".0000000000000000000000000000000000000000000000000000001",
+                Some(true),
+            ),
         ];
 
         let mut ctx = EvalContext::default();
@@ -164,11 +167,19 @@ mod tests {
 
         // test overflow
         let mut ctx = EvalContext::default();
-        let val: Result<bool> = f64::INFINITY.to_string().as_bytes().to_vec().as_mysql_bool(&mut ctx);
+        let val: Result<bool> = f64::INFINITY
+            .to_string()
+            .as_bytes()
+            .to_vec()
+            .as_mysql_bool(&mut ctx);
         assert!(val.is_err());
 
         let mut ctx = EvalContext::default();
-        let val: Result<bool> = f64::NEG_INFINITY.to_string().as_bytes().to_vec().as_mysql_bool(&mut ctx);
+        let val: Result<bool> = f64::NEG_INFINITY
+            .to_string()
+            .as_bytes()
+            .to_vec()
+            .as_mysql_bool(&mut ctx);
         assert!(val.is_err());
     }
 }
