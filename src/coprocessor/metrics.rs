@@ -222,12 +222,6 @@ impl Into<StatDetail> for GcKeysDetail {
 }
 
 pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
-    COPR_REQ_HISTOGRAM_STATIC.flush();
-    COPR_REQ_WAIT_TIME_STATIC.flush();
-    COPR_REQ_HANDLE_TIME_STATIC.flush();
-    COPR_SCAN_KEYS_STATIC.flush();
-    COPR_ROCKSDB_PERF_COUNTER_STATIC.flush();
-    COPR_REQ_HANDLER_BUILD_TIME_STATIC.flush();
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
         let mut m = m.borrow_mut();
@@ -254,7 +248,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                 }
             }
         }
-        COPR_SCAN_DETAILS_STATIC.flush();
 
         // Report PD metrics
         if m.local_cop_flow_stats.is_empty() {
