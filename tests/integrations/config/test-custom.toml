@@ -149,7 +149,6 @@ store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
-quorum-algorithm = "integration-on-half-fail"
 
 [coprocessor]
 split-region-on-table = false
@@ -477,12 +476,11 @@ cert-allowed-cn = [
 ]
 
 [encryption]
-method = "aes128-ctr"
+data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
 
 [encryption.master-key]
 type = "file"
-method = "aes256-ctr"
 path = "/master/key/path"
 
 [encryption.previous-master-key]

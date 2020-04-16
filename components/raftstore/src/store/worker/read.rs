@@ -489,55 +489,51 @@ impl ReadMetrics {
     fn flush(&mut self) {
         if self.rejected_by_store_id_mismatch > 0 {
             LOCAL_READ_REJECT
-                .with_label_values(&["store_id_mismatch"])
+                .store_id_mismatch
                 .inc_by(self.rejected_by_store_id_mismatch);
             self.rejected_by_store_id_mismatch = 0;
         }
         if self.rejected_by_peer_id_mismatch > 0 {
             LOCAL_READ_REJECT
-                .with_label_values(&["peer_id_mismatch"])
+                .peer_id_mismatch
                 .inc_by(self.rejected_by_peer_id_mismatch);
             self.rejected_by_peer_id_mismatch = 0;
         }
         if self.rejected_by_term_mismatch > 0 {
             LOCAL_READ_REJECT
-                .with_label_values(&["term_mismatch"])
+                .term_mismatch
                 .inc_by(self.rejected_by_term_mismatch);
             self.rejected_by_term_mismatch = 0;
         }
         if self.rejected_by_lease_expire > 0 {
             LOCAL_READ_REJECT
-                .with_label_values(&["lease_expire"])
+                .lease_expire
                 .inc_by(self.rejected_by_lease_expire);
             self.rejected_by_lease_expire = 0;
         }
         if self.rejected_by_no_region > 0 {
             LOCAL_READ_REJECT
-                .with_label_values(&["no_region"])
+                .no_region
                 .inc_by(self.rejected_by_no_region);
             self.rejected_by_no_region = 0;
         }
         if self.rejected_by_no_lease > 0 {
-            LOCAL_READ_REJECT
-                .with_label_values(&["no_lease"])
-                .inc_by(self.rejected_by_no_lease);
+            LOCAL_READ_REJECT.no_lease.inc_by(self.rejected_by_no_lease);
             self.rejected_by_no_lease = 0;
         }
         if self.rejected_by_epoch > 0 {
-            LOCAL_READ_REJECT
-                .with_label_values(&["epoch"])
-                .inc_by(self.rejected_by_epoch);
+            LOCAL_READ_REJECT.epoch.inc_by(self.rejected_by_epoch);
             self.rejected_by_epoch = 0;
         }
         if self.rejected_by_appiled_term > 0 {
             LOCAL_READ_REJECT
-                .with_label_values(&["appiled_term"])
+                .appiled_term
                 .inc_by(self.rejected_by_appiled_term);
             self.rejected_by_appiled_term = 0;
         }
         if self.rejected_by_channel_full > 0 {
             LOCAL_READ_REJECT
-                .with_label_values(&["channel_full"])
+                .channel_full
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
         }

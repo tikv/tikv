@@ -107,3 +107,29 @@ pub fn conv(s: &str, from_base: Int, to_base: Int) -> Option<Bytes> {
         None
     }
 }
+
+// Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
+//
+// # Examples
+// ```
+// assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
+// assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
+// assert_eq!(i64_to_usize(-1_i64, false), (1_usize, false));
+// assert_eq!(i64_to_usize(u64::max_value() as i64, true), (u64::max_value() as usize, true));
+// assert_eq!(i64_to_usize(u64::max_value() as i64, false), (1_usize, false));
+// ```
+#[inline]
+pub fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
+    if is_unsigned {
+        (i as u64 as usize, true)
+    } else if i >= 0 {
+        (i as usize, true)
+    } else {
+        let i = if i == i64::min_value() {
+            i64::max_value() as usize + 1
+        } else {
+            -i as usize
+        };
+        (i, false)
+    }
+}

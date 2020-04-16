@@ -22,6 +22,8 @@ pub struct ReadIndexRequest {
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksEngine>)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
+    // `true` means it's in `ReadIndexQueue::reads`.
+    in_contexts: bool,
 }
 
 impl ReadIndexRequest {
@@ -49,6 +51,7 @@ impl ReadIndexRequest {
             cmds,
             renew_lease_time,
             read_index: None,
+            in_contexts: false,
         }
     }
 }
@@ -136,8 +139,9 @@ impl ReadIndexQueue {
         self.contexts.clear();
     }
 
-    pub fn push_back(&mut self, read: ReadIndexRequest, is_leader: bool) {
+    pub fn push_back(&mut self, mut read: ReadIndexRequest, is_leader: bool) {
         if !is_leader {
+            read.in_contexts = true;
             let offset = self.handled_cnt + self.reads.len();
             self.contexts.insert(read.id, offset);
         }
@@ -174,8 +178,20 @@ impl ReadIndexQueue {
     {
         let (mut min_changed_offset, mut max_changed_offset) = (usize::MAX, 0);
         for (uuid, index) in states {
-            if let Some(offset) = self.contexts.remove(&uuid) {
-                let offset = offset.checked_sub(self.handled_cnt).unwrap();
+            if let Some(raw_offset) = self.contexts.remove(&uuid) {
+                let offset = match raw_offset.checked_sub(self.handled_cnt) {
+                    Some(offset) => offset,
+                    None => panic!(
+                        "advance_replica_reads uuid: {}, offset: {}, handled: {}",
+                        uuid, raw_offset, self.handled_cnt
+                    ),
+                };
+                assert_eq!(
+                    self.reads[offset].id, uuid,
+                    "ReadIndexQueue::reads[{}].uuid: {}, but want: {}",
+                    raw_offset, self.reads[offset].id, uuid
+                );
+                self.reads[offset].in_contexts = false;
                 if let Some(occur_index) = self.reads[offset].read_index {
                     if occur_index < index {
                         continue;
@@ -234,7 +250,15 @@ impl ReadIndexQueue {
         }
         self.ready_cnt -= 1;
         self.handled_cnt += 1;
-        self.reads.pop_front()
+        let mut res = self
+            .reads
+            .pop_front()
+            .expect("read_queue is empty but ready_cnt > 0");
+        if res.in_contexts {
+            res.in_contexts = false;
+            self.contexts.remove(&res.id);
+        }
+        Some(res)
     }
 
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
@@ -308,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn test_role_change() {
+    fn test_become_leader_then_become_follower() {
         let mut queue = ReadIndexQueue::default();
         queue.handled_cnt = 100;
 
@@ -386,5 +410,31 @@ mod tests {
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
+    }
+
+    #[test]
+    fn test_advance_replica_reads_out_of_order() {
+        let mut queue = ReadIndexQueue::default();
+        queue.handled_cnt = 100;
+
+        let ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
+        for i in 0..2 {
+            // Push a pending read comand when the peer is follower.
+            let req = ReadIndexRequest::with_command(
+                ids[i],
+                RaftCmdRequest::default(),
+                Callback::None,
+                Timespec::new(0, 0),
+            );
+            queue.push_back(req, false);
+        }
+
+        queue.advance_replica_reads(vec![(ids[1], 100)]);
+        assert_eq!(queue.ready_cnt, 2);
+        while let Some(mut read) = queue.pop_front() {
+            read.cmds.clear();
+        }
+
+        queue.advance_replica_reads(vec![(ids[0], 100)]);
     }
 }

@@ -345,6 +345,7 @@ fn test_delete_files_in_range_for_titan() {
     let limiter = Limiter::new(INFINITY);
     build_sst_cf_file::<RocksEngine>(
         &default_sst_file_path.to_str().unwrap(),
+        engines.kv.c(),
         &RocksSnapshot::new(Arc::clone(&engines.kv)),
         CF_DEFAULT,
         b"",
@@ -354,6 +355,7 @@ fn test_delete_files_in_range_for_titan() {
     .unwrap();
     build_sst_cf_file::<RocksEngine>(
         &write_sst_file_path.to_str().unwrap(),
+        engines.kv.c(),
         &RocksSnapshot::new(Arc::clone(&engines.kv)),
         CF_WRITE,
         b"",

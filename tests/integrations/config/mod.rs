@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-use encryption::{EncryptionConfig, MasterKeyConfig};
+use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
 use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
@@ -14,7 +14,7 @@ use engine::rocks::{
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::{Config as RaftstoreConfig, QuorumAlgorithm};
+use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
@@ -184,7 +184,6 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
-        quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -564,11 +563,12 @@ fn test_serde_custom_tikv_config() {
         cert_allowed_cn,
     };
     value.encryption = EncryptionConfig {
-        method: EncryptionMethod::Aes128Ctr,
+        data_encryption_method: EncryptionMethod::Aes128Ctr,
         data_key_rotation_period: ReadableDuration::days(14),
         master_key: MasterKeyConfig::File {
-            method: EncryptionMethod::Aes256Ctr,
-            path: "/master/key/path".to_owned(),
+            config: FileCofnig {
+                path: "/master/key/path".to_owned(),
+            },
         },
         previous_master_key: MasterKeyConfig::Plaintext,
     };

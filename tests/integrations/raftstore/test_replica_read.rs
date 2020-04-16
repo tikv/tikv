@@ -9,11 +9,43 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::RaftMessage;
+use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
+
+#[derive(Default)]
+struct CommitToFilter {
+    // map[peer_id] -> committed index.
+    committed: Arc<Mutex<HashMap<u64, u64>>>,
+}
+
+impl CommitToFilter {
+    fn new(committed: Arc<Mutex<HashMap<u64, u64>>>) -> Self {
+        Self { committed }
+    }
+}
+
+impl Filter for CommitToFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        let mut committed = self.committed.lock().unwrap();
+        for msg in msgs.iter_mut() {
+            let cmt = msg.get_message().get_commit();
+            if cmt != 0 {
+                let to = msg.get_message().get_to();
+                committed.insert(to, cmt);
+                msg.mut_message().set_commit(0);
+            }
+        }
+        Ok(())
+    }
+
+    fn after(&self, _: Result<()>) -> Result<()> {
+        Ok(())
+    }
+}
 
 #[test]
 fn test_replica_read_not_applied() {
@@ -208,33 +240,43 @@ fn test_read_hibernated_region() {
     assert!(!resp2.get_header().has_error(), "{:?}", resp2);
 }
 
-#[derive(Default)]
-struct CommitToFilter {
-    // map[peer_id] -> committed index.
-    committed: Arc<Mutex<HashMap<u64, u64>>>,
-}
+/// The read index response can advance the commit index.
+/// But in previous implemtation, we forget to set term in read index response
+/// which causes panic in raft-rs. This test is to reproduce the case.
+#[test]
+fn test_replica_read_on_stale_peer() {
+    let mut cluster = new_node_cluster(0, 3);
 
-impl CommitToFilter {
-    fn new(committed: Arc<Mutex<HashMap<u64, u64>>>) -> Self {
-        Self { committed }
-    }
-}
+    configure_for_lease_read(&mut cluster, Some(50), Some(30));
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
 
-impl Filter for CommitToFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        let mut committed = self.committed.lock().unwrap();
-        for msg in msgs.iter_mut() {
-            let cmt = msg.get_message().get_commit();
-            if cmt != 0 {
-                let to = msg.get_message().get_to();
-                committed.insert(to, cmt);
-                msg.mut_message().set_commit(0);
-            }
-        }
-        Ok(())
-    }
+    cluster.run();
 
-    fn after(&self, _: Result<()>) -> Result<()> {
-        Ok(())
-    }
+    let region = pd_client.get_region(b"k1").unwrap();
+
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    let peer_on_store3 = find_peer(&region, 3).unwrap().to_owned();
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    let filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    );
+    cluster.sim.wl().add_recv_filter(3, filter);
+    cluster.must_put(b"k2", b"v2");
+    let resp1_ch = async_read_on_peer(
+        &mut cluster,
+        peer_on_store3.clone(),
+        region.clone(),
+        b"k2",
+        true,
+        true,
+    );
+    // must be timeout
+    assert!(resp1_ch.recv_timeout(Duration::from_micros(100)).is_err());
 }
