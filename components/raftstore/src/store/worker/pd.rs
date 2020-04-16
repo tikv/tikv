@@ -71,6 +71,7 @@ impl FlowStatsReporter for Scheduler<Task> {
             error!("Failed to send read flow statistics"; "err" => ?e);
         }
     }
+
     fn report_qps_stats(&self, qps_stats: QpsStats) {
         if let Err(e) = self.schedule(Task::QpsStats { qps_stats }) {
             error!("Failed to send qps statistics"; "err" => ?e);
@@ -289,7 +290,7 @@ fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         .collect()
 }
 
-pub struct StatsMonitor {
+struct StatsMonitor {
     scheduler: Scheduler<Task>,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
@@ -318,7 +319,7 @@ impl StatsMonitor {
         &mut self,
         mut auto_split_controller: AutoSplitController,
     ) -> Result<(), io::Error> {
-        let mut timer_cnt = 0;
+        let mut timer_cnt = 0; // to run functions with different intervals in a loop
         let collect_interval = self.collect_interval;
         let thread_info_interval = self
             .thread_info_interval
@@ -383,7 +384,7 @@ impl StatsMonitor {
                             }
                         }
                     }
-                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
+                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval); //
                     auto_split_controller.refresh_cfg();
                 }
             })?;
