@@ -1909,7 +1909,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git#98f910b71904ff7190e26a483b242ad5d7330c31"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#be05e44bb82ebebad8c09da71c10dd00afbd8194"
+>>>>>>> 22bdc46... cop: Fixed issue #6690 Coprocessor Cache is unsound (#7095)
 dependencies = [
  "futures 0.1.29",
  "grpcio",
