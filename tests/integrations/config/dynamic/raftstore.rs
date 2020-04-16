@@ -84,12 +84,6 @@ fn start_raftstore(
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
     );
     let pd_worker = FutureWorker::new("store-config");
-    let config_client = ConfigHandler::start(
-        String::new(),
-        ConfigController::new(cfg, Default::default(), false),
-        pd_worker.scheduler(),
-    )
-    .unwrap();
 
     system
         .spawn(
@@ -104,7 +98,6 @@ fn start_raftstore(
             host,
             importer,
             Worker::new("split"),
-            Box::new(config_client),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)

@@ -96,13 +96,6 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::new(SSTImporter::new(dir).unwrap())
     };
 
-    let cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
-    let config_client = ConfigHandler::start(
-        cfg.server.advertise_addr,
-        cfg_controller,
-        pd_worker.scheduler(),
-    )
-    .unwrap();
     // try to restart this node, will clear the prepare data
     node.start(
         engines,
@@ -113,7 +106,6 @@ fn test_node_bootstrap_with_prepared_data() {
         coprocessor_host,
         importer,
         Worker::new("split"),
-        Box::new(config_client),
     )
     .unwrap();
     assert!(Arc::clone(&engine)

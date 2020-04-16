@@ -125,10 +125,6 @@ pub enum Task {
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
     },
-    RefreshConfig,
-    GetConfig {
-        cfg_sender: oneshot::Sender<String>,
-    },
 }
 
 pub struct StoreStat {
@@ -241,8 +237,6 @@ impl Display for Task {
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
             ),
-            Task::RefreshConfig => write!(f, "refresh config"),
-            Task::GetConfig {..} => write!(f, "get config"),
         }
     }
 }
@@ -327,7 +321,6 @@ impl StatsMonitor {
 pub struct Runner<T: PdClient + ConfigClient> {
     store_id: u64,
     pd_client: Arc<T>,
-    config_handler: Box<dyn DynamicConfig>,
     router: RaftRouter<RocksEngine>,
     db: RocksEngine,
     region_peers: HashMap<u64, PeerStat>,
@@ -349,7 +342,6 @@ impl<T: PdClient + ConfigClient> Runner<T> {
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        config_handler: Box<dyn DynamicConfig>,
         router: RaftRouter<RocksEngine>,
         db: RocksEngine,
         scheduler: Scheduler<Task>,
@@ -364,7 +356,6 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         Runner {
             store_id,
             pd_client,
-            config_handler,
             router,
             db,
             is_hb_receiver_scheduled: false,
@@ -813,29 +804,6 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         self.store_stat.store_read_io_rates = read_io_rates;
         self.store_stat.store_write_io_rates = write_io_rates;
     }
-
-    fn handle_refresh_config(&mut self, handle: &Handle) {
-        self.config_handler.refresh(self.pd_client.as_ref() as _);
-
-        let scheduler = self.scheduler.clone();
-        let when = Instant::now() + self.config_handler.refresh_interval();
-        let f = Delay::new(when)
-            .map_err(|e| warn!("timeout timer delay errored"; "err" => ?e))
-            .then(move |_| {
-                if let Err(e) = scheduler.schedule(Task::RefreshConfig) {
-                    error!("failed to schedule refresh config task"; "err" => ?e)
-                }
-                Ok(())
-            });
-        handle.spawn(f);
-    }
-
-    fn handle_get_config(&self, cfg_sender: oneshot::Sender<String>) {
-        let cfg = self.config_handler.get();
-        let _ = cfg_sender
-            .send(cfg)
-            .map_err(|_| error!("failed to send config"));
-    }
 }
 
 impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
@@ -951,8 +919,6 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 read_io_rates,
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
-            Task::RefreshConfig => self.handle_refresh_config(handle),
-            Task::GetConfig { cfg_sender } => self.handle_get_config(cfg_sender),
         };
     }
 

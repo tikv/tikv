@@ -328,7 +328,6 @@ impl Simulator for ServerCluster {
             coprocessor_host,
             importer.clone(),
             split_check_worker,
-            Box::new(config_client) as _,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

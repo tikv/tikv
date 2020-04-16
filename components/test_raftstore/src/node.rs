@@ -238,12 +238,6 @@ impl Simulator for NodeCluster {
             Module::Raftstore,
             Box::new(RaftstoreConfigManager(raft_store)),
         );
-        let config_client = ConfigHandler::start(
-            cfg.server.advertise_addr,
-            cfg_controller,
-            pd_worker.scheduler(),
-        )
-        .unwrap();
 
         node.start(
             engines.clone(),
@@ -254,7 +248,6 @@ impl Simulator for NodeCluster {
             coprocessor_host,
             importer,
             split_check_worker,
-            Box::new(config_client) as _,
         )?;
         assert!(engines
             .kv

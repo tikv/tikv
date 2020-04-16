@@ -924,9 +924,6 @@ fn test_double_run_node() {
     };
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
-    let cfg_controller = Default::default();
-    let config_client =
-        ConfigHandler::start(String::new(), cfg_controller, pd_worker.scheduler()).unwrap();
     let e = node
         .start(
             engines,
@@ -937,7 +934,6 @@ fn test_double_run_node() {
             coprocessor_host,
             importer,
             Worker::new("split"),
-            Box::new(config_client),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
