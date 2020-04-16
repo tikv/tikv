@@ -286,7 +286,50 @@ impl TiKVServer {
         pd_client
     }
 
+<<<<<<< HEAD
     fn init_fs(&self) {
+=======
+    fn check_conflict_addr(&mut self) {
+        let cur_addr: SocketAddr = self
+            .config
+            .server
+            .addr
+            .parse()
+            .expect("failed to parse into a socket address");
+        let cur_ip = cur_addr.ip();
+        let cur_port = cur_addr.port();
+        let lock_dir = get_lock_dir();
+
+        let search_base = env::temp_dir().join(&lock_dir);
+        std::fs::create_dir_all(&search_base)
+            .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
+
+        for result in fs::read_dir(&search_base).unwrap() {
+            if let Ok(entry) = result {
+                if !entry.file_type().unwrap().is_file() {
+                    continue;
+                }
+                let file_path = entry.path();
+                let file_name = file_path.file_name().unwrap().to_str().unwrap();
+                if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
+                    let ip = addr.ip();
+                    let port = addr.port();
+                    if cur_port == port
+                        && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
+                    {
+                        let _ = try_lock_conflict_addr(file_path);
+                    }
+                }
+            }
+        }
+
+        let cur_path = search_base.join(cur_addr.to_string().replace(':', "_"));
+        let cur_file = try_lock_conflict_addr(cur_path);
+        self.lock_files.push(cur_file);
+    }
+
+    fn init_fs(&mut self) {
+>>>>>>> 6411ffe... cmd: add uid flag for TIKV_LOCK_FILES (#7470)
         let lock_path = self.store_path.join(Path::new("LOCK"));
 
         let f = File::create(lock_path.as_path())
@@ -854,6 +897,37 @@ fn check_system_config(config: &TiKvConfig) {
     }
 }
 
+<<<<<<< HEAD
+=======
+fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
+    let f = File::create(path.as_ref()).unwrap_or_else(|e| {
+        fatal!(
+            "failed to create lock at {}: {}",
+            path.as_ref().display(),
+            e
+        )
+    });
+
+    if f.try_lock_exclusive().is_err() {
+        fatal!(
+            "{} already in use, maybe another instance is binding with this address.",
+            path.as_ref().file_name().unwrap().to_str().unwrap()
+        );
+    }
+    f
+}
+
+#[cfg(unix)]
+fn get_lock_dir() -> String {
+    format!("{}_TIKV_LOCK_FILES", unsafe { libc::getuid() })
+}
+
+#[cfg(not(unix))]
+fn get_lock_dir() -> String {
+    "TIKV_LOCK_FILES".to_owned()
+}
+
+>>>>>>> 6411ffe... cmd: add uid flag for TIKV_LOCK_FILES (#7470)
 /// A small trait for components which can be trivially stopped. Lets us keep
 /// a list of these in `TiKV`, rather than storing each component individually.
 trait Stop {
