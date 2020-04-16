@@ -718,7 +718,7 @@ impl Snap {
                 sst_importer::prepare_sst_for_ingestion(
                     &cf_file.path,
                     &cf_file.clone_path,
-                    &self.encryption_key_manager,
+                    self.encryption_key_manager.as_ref(),
                 )?;
             }
         }

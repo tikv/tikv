@@ -46,5 +46,6 @@ txn_types = { path = "../txn_types" }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
+engine_rocks = { path = "../engine_rocks" }
 tempfile = "3.0"
 test_sst_importer = { path = "../test_sst_importer" }

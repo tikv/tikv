@@ -26,7 +26,7 @@ use super::Result;
 pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     path: P,
     clone: Q,
-    encryption_key_manager: &Option<Arc<DataKeyManager>>,
+    encryption_key_manager: Option<&Arc<DataKeyManager>>,
 ) -> Result<()> {
     use std::os::linux::fs::MetadataExt;
 
@@ -88,6 +88,51 @@ fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use engine_rocks::{
+        util::new_engine, RocksCFOptions, RocksColumnFamilyOptions, RocksDBOptions, RocksEngine,
+        RocksIngestExternalFileOptions, RocksSstWriterBuilder, RocksTitanDBOptions,
+    };
+    use engine_traits::{
+        CFHandleExt, CfName, ColumnFamilyOptions, DBOptions, ImportExt, IngestExternalFileOptions,
+        Peekable, SstWriter, SstWriterBuilder, TitanDBOptions,
+    };
+    use std::fs;
+    use std::path::Path;
+    use tempfile::Builder;
+    use tikv_util::file::calc_crc32;
+
+    #[cfg(target_os = "linux")]
+    fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
+        use std::os::linux::fs::MetadataExt;
+        assert_eq!(fs::metadata(path).unwrap().st_nlink(), nlink);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn check_hard_link<P: AsRef<Path>>(_: P, _: u64) {
+        // Just do nothing
+    }
+
+    fn check_db_with_kvs(db: &RocksEngine, cf: &str, kvs: &[(&str, &str)]) {
+        for &(k, v) in kvs {
+            assert_eq!(
+                db.get_value_cf(cf, k.as_bytes()).unwrap().unwrap(),
+                v.as_bytes()
+            );
+        }
+    }
+
+    fn gen_sst_with_kvs(db: &RocksEngine, cf: CfName, path: &str, kvs: &[(&str, &str)]) {
+        let mut writer = RocksSstWriterBuilder::new()
+            .set_db(db)
+            .set_cf(cf)
+            .build(path)
+            .unwrap();
+        for &(k, v) in kvs {
+            writer.put(k.as_bytes(), v.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
     fn check_prepare_sst_for_ingestion(
         db_opts: Option<RocksDBOptions>,
         cf_opts: Option<Vec<RocksCFOptions>>,
