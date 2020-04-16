@@ -447,15 +447,13 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             deregister_downstream(Error::Request(e.into()));
             return;
         }
-        self.workers.spawn(
-            fut.map_err(move |e| {
-                deregister_downstream(Error::Other(box_err!(e)));
-            })
-            .and_then(move |resp| {
-                init.on_change_cmd(resp);
-                Ok(())
-            }),
-        );
+        self.workers.spawn(fut.then(move |res| {
+            match res {
+                Ok(resp) => init.on_change_cmd(resp),
+                Err(e) => deregister_downstream(Error::Other(box_err!(e))),
+            };
+            Ok(())
+        }));
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
