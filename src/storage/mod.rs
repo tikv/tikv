@@ -238,6 +238,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        false,
                     );
                     let result = snap_store
                         .get(&key, &mut statistics)
@@ -290,6 +291,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         Default::default(),
+                        false,
                     );
                     let mut results = vec![];
                     // TODO: optimize using seek.
@@ -346,6 +348,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        false,
                     );
                     let result = snap_store
                         .batch_get(&keys, &mut statistics)
@@ -416,13 +419,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        false,
                     );
 
                     let mut scanner;
                     if !reverse_scan {
-                        scanner = snap_store.scanner(false, key_only, Some(start_key), end_key)?;
+                        scanner =
+                            snap_store.scanner(false, key_only, false, Some(start_key), end_key)?;
                     } else {
-                        scanner = snap_store.scanner(true, key_only, end_key, Some(start_key))?;
+                        scanner =
+                            snap_store.scanner(true, key_only, false, end_key, Some(start_key))?;
                     };
                     let res = scanner.scan(limit);
 
