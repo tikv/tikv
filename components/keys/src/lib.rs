@@ -54,6 +54,7 @@ pub const SNAPSHOT_RAFT_STATE_SUFFIX: u8 = 0x04;
 
 // For region meta
 pub const REGION_STATE_SUFFIX: u8 = 0x01;
+pub const REGION_TEMP_STATE_SUFFIX: u8 = 0x05;
 
 #[inline]
 fn make_region_prefix(region_id: u64, suffix: u8) -> [u8; 11] {
@@ -184,6 +185,10 @@ pub fn region_meta_prefix(region_id: u64) -> [u8; 10] {
 
 pub fn region_state_key(region_id: u64) -> [u8; 11] {
     make_region_meta_key(region_id, REGION_STATE_SUFFIX)
+}
+
+pub fn region_temp_state_key(region_id: u64) -> [u8; 11] {
+    make_region_meta_key(region_id, REGION_TEMP_STATE_SUFFIX)
 }
 
 pub fn validate_data_key(key: &[u8]) -> bool {

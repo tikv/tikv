@@ -218,6 +218,11 @@ where
         }
     }
 
+    #[inline]
+    pub fn force_send_control(&self, msg: C::Message) -> Result<(), SendError<C::Message>> {
+        self.control_box.force_send(msg, &self.control_scheduler)
+    }
+
     /// Try to notify all normal fsm a message.
     pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) {
         let mailboxes = self.normals.lock().unwrap();

@@ -1557,6 +1557,21 @@ pub fn write_peer_state<T: Mutable>(
     Ok(())
 }
 
+// The only use is to write a new peer state which is created by splitting
+pub fn write_peer_temp_state<T: Mutable>(kv_wb: &mut T, region: &metapb::Region) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::default();
+    region_state.set_state(PeerState::Normal);
+    region_state.set_region(region.clone());
+
+    kv_wb.put_msg_cf(
+        CF_RAFT,
+        &keys::region_temp_state_key(region_id),
+        &region_state,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::CoprocessorHost;

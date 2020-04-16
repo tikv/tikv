@@ -221,7 +221,7 @@ pub trait PollHandler<N, C> {
     fn handle_normal(&mut self, normal: &mut N) -> Option<usize>;
 
     /// This function is called at the end of every round.
-    fn end(&mut self, batch: &mut [Box<N>]);
+    fn end(&mut self, batch: &mut [Box<N>], control: &mut C);
 
     /// This function is called when batch system is going to sleep.
     fn pause(&mut self) {}
@@ -329,7 +329,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
                 fsm_cnt += 1;
             }
-            self.handler.end(&mut batch.normals);
+            self.handler
+                .end(&mut batch.normals, batch.control.as_mut().unwrap());
 
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.

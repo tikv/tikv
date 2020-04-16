@@ -42,7 +42,9 @@ use crate::store::fsm::{
 use crate::store::fsm::{ApplyNotifier, RegionProposal};
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
-use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
+use crate::store::peer_storage::{
+    self, write_initial_apply_state, write_peer_state, HandleRaftReadyContext, InvokeContext,
+};
 use crate::store::transport::Transport;
 use crate::store::util::is_initial_msg;
 use crate::store::worker::{
@@ -53,8 +55,8 @@ use crate::store::worker::{
 use crate::store::DynamicConfig;
 use crate::store::PdTask;
 use crate::store::{
-    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
-    SnapshotDeleter, StoreMsg, StoreTick,
+    util, Callback, CasualMessage, HandleSplitRegions, PeerMsg, RaftCommand, SignificantMsg,
+    SnapManager, SnapshotDeleter, StoreMsg, StoreTick,
 };
 use crate::Result;
 use engine_rocks::{CompactedEvent, CompactionListener};
@@ -88,6 +90,13 @@ pub struct StoreMeta {
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
     /// region_id -> region
     pub regions: HashMap<u64, Region>,
+    /// Two data structures used to occupy a range and id of some new regions created by splitting.
+    /// Most of these regions will be created normally, very little of them will be destroyed because they
+    /// have already created due to some sophisticated cases.
+    /// region_end_key -> region_id
+    pub split_region_ranges: BTreeMap<Vec<u8>, u64>,
+    /// region_id -> region
+    pub split_regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
     /// `MsgRequestPreVote` or `MsgRequestVote` messages from newly split Regions shouldn't be dropped if there is no
@@ -109,6 +118,8 @@ impl StoreMeta {
             store_id: None,
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
+            split_region_ranges: BTreeMap::default(),
+            split_regions: HashMap::default(),
             readers: HashMap::default(),
             pending_votes: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
@@ -231,6 +242,7 @@ pub struct PollContext<T, C: 'static> {
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
+    pub split_regions_res: Vec<HandleSplitRegions>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -436,6 +448,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     self.on_store_unreachable(store_id);
                 }
                 StoreMsg::Start { store } => self.start(store),
+                StoreMsg::HandleSplitRegions(hsr) => self.on_handle_split_regions(hsr),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
             }
@@ -473,7 +486,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>], store: &mut StoreFsm) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -550,6 +563,17 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
         fail_point!("raft_after_save");
+        if self.poll_ctx.split_regions_res.len() != 0 {
+            let mut split_regions_res =
+                mem::replace(&mut self.poll_ctx.split_regions_res, Vec::default());
+            for split_regions in split_regions_res.drain(..) {
+                let mut delegate = StoreFsmDelegate {
+                    fsm: store,
+                    ctx: &mut self.poll_ctx,
+                };
+                delegate.post_handle_split_regions(split_regions);
+            }
+        }
         if ready_cnt != 0 {
             let mut batch_pos = 0;
             let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, Vec::default());
@@ -565,6 +589,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     .post_raft_ready_append(ready, invoke_ctx);
             }
         }
+
         let dur = self.timer.elapsed();
         if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(
@@ -694,9 +719,9 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         expected_msg_count
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>], store: &mut StoreFsm) {
         if self.poll_ctx.has_ready {
-            self.handle_raft_ready(peers);
+            self.handle_raft_ready(peers, store);
         }
         self.poll_ctx.current_time = None;
         if !self.poll_ctx.queued_snapshot.is_empty() {
@@ -764,10 +789,16 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut raft_wb = self.engines.raft.write_batch();
         let mut applying_regions = vec![];
         let mut merging_count = 0;
+        let mut split_regions = vec![];
         let mut meta = self.store_meta.lock().unwrap();
         kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
             let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
-            if suffix != keys::REGION_STATE_SUFFIX {
+            if suffix == keys::REGION_TEMP_STATE_SUFFIX {
+                let mut local_state = RegionLocalState::default();
+                local_state.merge_from_bytes(value)?;
+                split_regions.push(local_state.get_region().clone());
+                return Ok(true);
+            } else if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
             }
 
@@ -820,6 +851,35 @@ impl<T, C> RaftPollerBuilder<T, C> {
             );
             Ok(true)
         })?;
+
+        for ref region in split_regions {
+            let region_id = region.get_id();
+            let state_key = keys::region_state_key(region_id);
+            let state: Option<RegionLocalState> = kv_engine.get_msg_cf(CF_RAFT, &state_key)?;
+            if state.is_none() {
+                write_peer_state(&mut kv_wb, region, PeerState::Normal, None)
+                    .and_then(|_| write_initial_apply_state(&mut kv_wb, region.get_id()))?;
+                let (tx, peer) = box_try!(PeerFsm::create(
+                    store_id,
+                    &self.cfg.value(),
+                    self.region_scheduler.clone(),
+                    self.engines.clone(),
+                    region,
+                ));
+                meta.region_ranges.insert(enc_end_key(region), region_id);
+                meta.regions.insert(region_id, region.clone());
+                // No need to check duplicated here, because we use region id as the key
+                // in DB.
+                region_peers.push((tx, peer));
+                self.coprocessor_host.on_region_changed(
+                    region,
+                    RegionChangeEvent::Create,
+                    StateRole::Follower,
+                );
+            }
+            let temp_state_key = keys::region_temp_state_key(region_id);
+            kv_wb.delete_cf(CF_RAFT, &temp_state_key)?;
+        }
 
         if !kv_wb.is_empty() {
             self.engines.kv.write(&kv_wb).unwrap();
@@ -950,6 +1010,7 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
+            split_regions_res: Vec::default(),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
@@ -1407,6 +1468,21 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return Ok(false);
         }
 
+        if meta.split_regions.contains_key(&region_id) {
+            return Ok(false);
+        }
+
+        for (_, id) in meta.split_region_ranges.range((
+            Excluded(data_key(msg.get_start_key())),
+            Unbounded::<Vec<u8>>,
+        )) {
+            let exist_region = &meta.split_regions[&id];
+            if enc_start_key(exist_region) >= data_end_key(msg.get_end_key()) {
+                break;
+            }
+            return Ok(false);
+        }
+
         let mut is_overlapped = false;
         let mut regions_to_destroy = vec![];
         for (_, id) in meta.region_ranges.range((
@@ -1424,9 +1500,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "msg" => ?msg,
                 "exist_region" => ?exist_region,
             );
-            if util::is_first_vote_msg(msg.get_message()) {
-                meta.pending_votes.push(msg.to_owned());
-            }
 
             if maybe_destroy_source(
                 meta,
@@ -1449,6 +1522,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             }
         }
         if is_overlapped {
+            if util::is_first_vote_msg(msg.get_message()) {
+                meta.pending_votes.push(msg.to_owned());
+            }
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(false);
         }
@@ -1486,6 +1562,208 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .force_send(region_id, PeerMsg::Start)
             .unwrap();
         Ok(true)
+    }
+
+    fn on_handle_split_regions(&mut self, mut hsr: HandleSplitRegions) {
+        let meta = self.ctx.store_meta.lock().unwrap();
+        let mut destroy_regions = Vec::default();
+        hsr.regions.retain(|new_region| {
+            let new_region_id = new_region.get_id();
+            if let Some(r) = meta.regions.get(&new_region_id) {
+                if r.get_peers().is_empty()
+                    && r.get_start_key() == new_region.get_start_key()
+                    && r.get_end_key() == new_region.get_end_key()
+                {
+                    // Suppose a new node is added by conf change and the snapshot comes slowly.
+                    // Then, the region splits and the first vote message comes to the new node
+                    // before the old snapshot, which will create an uninitialized peer on the
+                    // store. After that, the old snapshot comes, followed with the last split
+                    // proposal. After it's applied, the uninitialized peer will be met.
+                    // We can remove this uninitialized peer directly.
+
+                    // FIXME, I think it may be wrong to close it directly
+                    self.ctx.router.close(new_region_id);
+                } else {
+                    destroy_regions.push(new_region.clone());
+                    return false;
+                }
+            }
+            true
+        });
+        // We will read rocksdb next step so releasing the global lock,
+        drop(meta);
+
+        hsr.regions.retain(|new_region| {
+            let new_region_id = new_region.get_id();
+            let state_key = keys::region_state_key(new_region_id);
+            let state: Option<RegionLocalState> =
+                match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key) {
+                    Ok(s) => s,
+                    e => panic!(
+                        "store failed to get regions state of {}: {:?}",
+                        new_region_id, e
+                    ),
+                };
+            if state.is_some() {
+                destroy_regions.push(new_region.clone());
+                return false;
+            }
+            true
+        });
+
+        std::mem::replace(&mut hsr.destroy_regions, destroy_regions);
+
+        for ref new_region in hsr.regions {
+            let new_region_id = new_region.get_id();
+            let temp_state_key = keys::region_temp_state_key(new_region_id);
+            self.ctx
+                .kv_wb
+                .delete_cf(CF_RAFT, &temp_state_key)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "store failed to delete temp state key {}: {:?}",
+                        new_region_id, e
+                    )
+                });
+            write_peer_state(&mut self.ctx.kv_wb, new_region, PeerState::Normal, None)
+                .and_then(|_| write_initial_apply_state(&mut self.ctx.kv_wb, new_region.get_id()))
+                .unwrap_or_else(|e| {
+                    panic!("store fails to save split region {:?}: {:?}", new_region, e)
+                });
+        }
+
+        for ref destroy_region in hsr.destroy_regions {
+            let destroy_region_id = destroy_region.get_id();
+            let temp_state_key = keys::region_temp_state_key(destroy_region_id);
+            self.ctx
+                .kv_wb
+                .delete_cf(CF_RAFT, &temp_state_key)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "store failed to delete temp state key {}: {:?}",
+                        destroy_region_id, e
+                    )
+                });
+        }
+    }
+
+    fn post_handle_split_regions(&mut self, hsr: HandleSplitRegions) {
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        for new_region in hsr.regions {
+            let new_region_id = new_region.get_id();
+
+            // Insert new regions and validation
+            info!(
+                "insert new region";
+                "region_id" => new_region_id,
+                "region" => ?new_region,
+            );
+
+            let mut not_exist = meta
+                .split_region_ranges
+                .remove(&enc_end_key(&new_region))
+                .is_none();
+            assert!(
+                not_exist,
+                "[region {}] should exists in split_region_ranges",
+                new_region_id
+            );
+            not_exist = meta.split_regions.remove(&new_region_id).is_none();
+            assert!(
+                not_exist,
+                "[region {}] should exists in split_regions",
+                new_region_id
+            );
+
+            let (sender, mut new_peer) = match PeerFsm::create(
+                self.ctx.store_id(),
+                &self.ctx.cfg,
+                self.ctx.region_scheduler.clone(),
+                self.ctx.engines.clone(),
+                &new_region,
+            ) {
+                Ok((sender, new_peer)) => (sender, new_peer),
+                Err(e) => {
+                    // peer information is already written into db, can't recover.
+                    // there is probably a bug.
+                    panic!("create new split region {:?} err {:?}", new_region, e);
+                }
+            };
+            let meta_peer = new_peer.peer.peer.clone();
+
+            for p in new_region.get_peers() {
+                // Add this peer to cache.
+                new_peer.peer.insert_peer_cache(p.clone());
+            }
+
+            // New peer derive write flow from parent region,
+            // this will be used by balance write flow.
+            new_peer.peer.peer_stat = hsr.parent_peer_stat.clone();
+            let campaigned = new_peer.peer.maybe_campaign(hsr.parent_is_leader);
+            new_peer.has_ready |= campaigned;
+
+            if hsr.parent_is_leader {
+                // The new peer is likely to become leader, send a heartbeat immediately to reduce
+                // client query miss.
+                new_peer.peer.heartbeat_pd(self.ctx);
+            }
+
+            new_peer.peer.activate(self.ctx);
+            meta.regions.insert(new_region_id, new_region);
+            meta.readers
+                .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+            if hsr.last_region_id == new_region_id {
+                // To prevent from big region, the right region needs run split
+                // check again after split.
+                new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
+            }
+            let mailbox = BasicMailbox::new(sender, new_peer);
+            self.ctx.router.register(new_region_id, mailbox);
+            self.ctx
+                .router
+                .force_send(new_region_id, PeerMsg::Start)
+                .unwrap();
+
+            if !campaigned {
+                if let Some(msg) = meta
+                    .pending_votes
+                    .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
+                {
+                    let _ = self
+                        .ctx
+                        .router
+                        .send(new_region_id, PeerMsg::RaftMessage(msg));
+                }
+            }
+        }
+
+        for destroy_region in hsr.destroy_regions {
+            let destroy_region_id = destroy_region.get_id();
+
+            info!(
+                "destroy split region";
+                "region_id" => destroy_region_id,
+                "region" => ?destroy_region,
+            );
+
+            let mut not_exist = meta
+                .split_region_ranges
+                .remove(&enc_end_key(&destroy_region))
+                .is_none();
+            assert!(
+                not_exist,
+                "[region {}] should exists in split_region_ranges",
+                destroy_region_id
+            );
+            not_exist = meta.split_regions.remove(&destroy_region_id).is_none();
+            assert!(
+                not_exist,
+                "[region {}] should exists in split_regions",
+                destroy_region_id
+            );
+
+            // TODO: destroy the range!
+        }
     }
 
     fn on_compaction_finished(&mut self, event: CompactedEvent) {

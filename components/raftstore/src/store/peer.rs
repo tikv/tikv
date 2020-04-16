@@ -148,7 +148,7 @@ pub struct ConsistencyState {
 }
 
 /// Statistics about raft peer.
-#[derive(Default, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct PeerStat {
     pub written_bytes: u64,
     pub written_keys: u64,

@@ -35,7 +35,7 @@ use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
-use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
+use crate::store::peer_storage::{self, write_peer_state, write_peer_temp_state};
 use crate::store::util::KeysInfoFormatter;
 use crate::store::util::{check_region_epoch, compare_region_epoch};
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
@@ -1733,14 +1733,12 @@ impl ApplyDelegate {
             {
                 peer.set_id(*peer_id);
             }
-            write_peer_state(kv_wb_mut, &new_region, PeerState::Normal, None)
-                .and_then(|_| write_initial_apply_state(kv_wb_mut, new_region.get_id()))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} fails to save split region {:?}: {:?}",
-                        self.tag, new_region, e
-                    )
-                });
+            write_peer_temp_state(kv_wb_mut, &new_region).unwrap_or_else(|e| {
+                panic!(
+                    "{} fails to save split region {:?}: {:?}",
+                    self.tag, new_region, e
+                )
+            });
             regions.push(new_region);
         }
         if right_derive {
@@ -3004,7 +3002,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm, Contro
         expected_msg_count
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
+    fn end(&mut self, fsms: &mut [Box<ApplyFsm>], _: &mut ControlFsm) {
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {

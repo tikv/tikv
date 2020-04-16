@@ -18,6 +18,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::fsm::PeerFsm;
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
+use crate::store::PeerStat;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
@@ -373,6 +374,8 @@ pub enum StoreMsg {
         store: metapb::Store,
     },
 
+    HandleSplitRegions(HandleSplitRegions),
+
     /// Messge only used for test
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -398,10 +401,19 @@ impl fmt::Debug for StoreMsg {
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            StoreMsg::HandleSplitRegions(ref hsr) => write!(fmt, "HandleSplitRegions {:?}", hsr),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
     }
+}
+#[derive(Debug, Clone)]
+pub struct HandleSplitRegions {
+    pub regions: Vec<metapb::Region>,
+    pub destroy_regions: Vec<metapb::Region>,
+    pub parent_is_leader: bool,
+    pub parent_peer_stat: PeerStat,
+    pub last_region_id: u64,
 }
 
 // TODO: remove this enum and utilize the actual message instead.
