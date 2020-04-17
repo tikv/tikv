@@ -124,7 +124,7 @@ struct TiKVServer {
     engines: Option<Engines>,
     servers: Option<Servers>,
     region_info_accessor: RegionInfoAccessor,
-    coprocessor_host: Option<CoprocessorHost>,
+    coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
 }
@@ -132,14 +132,14 @@ struct TiKVServer {
 struct Engines {
     engines: engine::Engines,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter>,
-    raft_router: ServerRaftStoreRouter,
+    engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
+    raft_router: ServerRaftStoreRouter<RocksEngine>,
 }
 
 struct Servers {
-    pd_sender: FutureScheduler<PdTask>,
+    pd_sender: FutureScheduler<PdTask<RocksEngine>>,
     lock_mgr: Option<LockManager>,
-    server: Server<ServerRaftStoreRouter, resolve::PdStoreAddrResolver>,
+    server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
@@ -303,9 +303,11 @@ impl TiKVServer {
             .expect("failed to parse into a socket address");
         let cur_ip = cur_addr.ip();
         let cur_port = cur_addr.port();
+        let lock_dir = get_lock_dir();
 
-        let search_base = env::temp_dir().join("TIKV_LOCK_FILES");
-        std::fs::create_dir_all(&search_base).expect("create TIKV_LOCK_FILES failed");
+        let search_base = env::temp_dir().join(&lock_dir);
+        std::fs::create_dir_all(&search_base)
+            .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
         for result in fs::read_dir(&search_base).unwrap() {
             if let Ok(entry) = result {
@@ -435,7 +437,7 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter>> {
+    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -456,7 +458,7 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
         cfg_controller.register(
@@ -666,7 +668,10 @@ impl TiKVServer {
         server_config
     }
 
-    fn register_services(&mut self, gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter>>) {
+    fn register_services(
+        &mut self,
+        gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
+    ) {
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
 
@@ -930,6 +935,16 @@ fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
         );
     }
     f
+}
+
+#[cfg(unix)]
+fn get_lock_dir() -> String {
+    format!("{}_TIKV_LOCK_FILES", unsafe { libc::getuid() })
+}
+
+#[cfg(not(unix))]
+fn get_lock_dir() -> String {
+    "TIKV_LOCK_FILES".to_owned()
 }
 
 /// A small trait for components which can be trivially stopped. Lets us keep

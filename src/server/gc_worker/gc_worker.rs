@@ -137,7 +137,7 @@ impl Display for GcTask {
 struct GcRunner<E: Engine> {
     engine: E,
     local_storage: Option<RocksEngine>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
     region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
@@ -153,7 +153,7 @@ impl<E: Engine> GcRunner<E> {
     pub fn new(
         engine: E,
         local_storage: Option<RocksEngine>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         cfg_tracker: Tracker<GcConfig>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
@@ -658,7 +658,7 @@ pub struct GcWorker<E: Engine> {
     /// `local_storage` represent the underlying RocksDB of the `engine`.
     local_storage: Option<RocksEngine>,
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
     /// Access the region's meta before getting snapshot, which will wake hibernating regions up.
     /// This is useful to do the `need_gc` check without waking hibernatin regions up.
     /// This is not set for tests.
@@ -721,7 +721,7 @@ impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
         local_storage: Option<RocksEngine>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
     ) -> GcWorker<E> {
@@ -774,7 +774,7 @@ impl<E: Engine> GcWorker<E> {
 
     pub fn start_observe_lock_apply(
         &mut self,
-        coprocessor_host: &mut CoprocessorHost,
+        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
         let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);

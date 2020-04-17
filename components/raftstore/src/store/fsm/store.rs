@@ -76,8 +76,8 @@ const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_VOTES_CAP: usize = 20;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
-pub struct StoreInfo {
-    pub engine: RocksEngine,
+pub struct StoreInfo<E> {
+    pub engine: E,
     pub capacity: u64,
 }
 
@@ -120,7 +120,7 @@ impl StoreMeta {
     #[inline]
     pub fn set_region(
         &mut self,
-        host: &CoprocessorHost,
+        host: &CoprocessorHost<RocksEngine>,
         region: Region,
         peer: &mut crate::store::Peer,
     ) {
@@ -200,22 +200,22 @@ impl<E: KvEngine> RaftRouter<E> {
 pub struct PollContext<T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
-    pub pd_scheduler: FutureScheduler<PdTask>,
+    pub pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask>,
+    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
     pub apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
-    pub snap_mgr: SnapManager,
+    pub snap_mgr: SnapManager<RocksEngine>,
     pub applying_snap_count: Arc<AtomicUsize>,
-    pub coprocessor_host: CoprocessorHost,
+    pub coprocessor_host: CoprocessorHost<RocksEngine>,
     pub timer: SteadyTimer,
     pub trans: T,
     pub pd_client: Arc<C>,
@@ -233,7 +233,7 @@ pub struct PollContext<T, C: 'static> {
     pub current_time: Option<Timespec>,
 }
 
-impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
+impl<T, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollContext<T, C> {
     fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
         (&mut self.kv_wb, &mut self.raft_wb)
     }
@@ -467,7 +467,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     previous_metrics: RaftMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<T, C>,
-    pending_proposals: Vec<RegionProposal>,
+    pending_proposals: Vec<RegionProposal<RocksEngine>>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
@@ -724,19 +724,19 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
 pub struct RaftPollerBuilder<T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
-    pd_scheduler: FutureScheduler<PdTask>,
+    pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask>,
+    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
     apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
-    snap_mgr: SnapManager,
-    pub coprocessor_host: CoprocessorHost,
+    snap_mgr: SnapManager<RocksEngine>,
+    pub coprocessor_host: CoprocessorHost<RocksEngine>,
     trans: T,
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
@@ -967,14 +967,14 @@ where
 }
 
 struct Workers {
-    pd_worker: FutureWorker<PdTask>,
+    pd_worker: FutureWorker<PdTask<RocksEngine>>,
     consistency_check_worker: Worker<ConsistencyCheckTask<RocksEngine>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
-    region_worker: Worker<RegionTask>,
-    coprocessor_host: CoprocessorHost,
+    region_worker: Worker<RegionTask<RocksEngine>>,
+    coprocessor_host: CoprocessorHost<RocksEngine>,
     future_poller: ThreadPool,
 }
 
@@ -1003,10 +1003,10 @@ impl RaftBatchSystem {
         engines: KvEngines<RocksEngine, RocksEngine>,
         trans: T,
         pd_client: Arc<C>,
-        mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask>,
+        mgr: SnapManager<RocksEngine>,
+        pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        mut coprocessor_host: CoprocessorHost,
+        mut coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,

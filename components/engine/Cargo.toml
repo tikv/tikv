@@ -15,7 +15,7 @@ encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
 hex = "0.4"
 lazy_static = "1.3"
-prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
+prometheus = { version = "0.8", features = ["nightly", "push"] }
 protobuf = "2.8"
 serde = "1.0"
 serde_derive = "1.0"

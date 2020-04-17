@@ -374,6 +374,11 @@ impl BatchExecutor for BatchFixtureExecutor {
     fn take_scanned_range(&mut self) -> IntervalRange {
         unreachable!()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        unreachable!()
+    }
 }
 
 pub struct NormalFixtureExecutor {
@@ -412,6 +417,11 @@ impl Executor for NormalFixtureExecutor {
 
     #[inline]
     fn take_scanned_range(&mut self) -> IntervalRange {
+        unreachable!()
+    }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
         unreachable!()
     }
 }

@@ -12,8 +12,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-use engine_rocks::RocksEngine;
-use engine_traits::MiscExt;
+use engine_traits::KvEngine;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -65,7 +64,10 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     fn report_qps_stats(&self, qps_stats: QpsStats);
 }
 
-impl FlowStatsReporter for Scheduler<Task> {
+impl<E> FlowStatsReporter for Scheduler<Task<E>>
+where
+    E: KvEngine,
+{
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
@@ -86,14 +88,17 @@ pub trait DynamicConfig: Send + 'static {
 }
 
 /// Uses an asynchronous thread to tell PD something.
-pub enum Task {
+pub enum Task<E>
+where
+    E: KvEngine,
+{
     AskSplit {
         region: metapb::Region,
         split_key: Vec<u8>,
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<RocksEngine>,
+        callback: Callback<E>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -101,7 +106,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<RocksEngine>,
+        callback: Callback<E>,
     },
     AutoSplit {
         split_infos: Vec<SplitInfo>,
@@ -119,7 +124,7 @@ pub enum Task {
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
-        store_info: StoreInfo,
+        store_info: StoreInfo<E>,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -198,7 +203,10 @@ pub struct PeerStat {
     pub last_report_ts: UnixSecs,
 }
 
-impl Display for Task {
+impl<E> Display for Task<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::AskSplit {
@@ -290,8 +298,11 @@ fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         .collect()
 }
 
-struct StatsMonitor {
-    scheduler: Scheduler<Task>,
+struct StatsMonitor<E>
+where
+    E: KvEngine,
+{
+    scheduler: Scheduler<Task<E>>,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
     sender: Option<Sender<QpsStats>>,
@@ -300,8 +311,11 @@ struct StatsMonitor {
     collect_interval: Duration,
 }
 
-impl StatsMonitor {
-    pub fn new(interval: Duration, scheduler: Scheduler<Task>) -> Self {
+impl<E> StatsMonitor<E>
+where
+    E: KvEngine,
+{
+    pub fn new(interval: Duration, scheduler: Scheduler<Task<E>>) -> Self {
         StatsMonitor {
             scheduler,
             handle: None,
@@ -411,12 +425,16 @@ impl StatsMonitor {
     }
 }
 
-pub struct Runner<T: PdClient + ConfigClient> {
+pub struct Runner<E, T>
+where
+    E: KvEngine,
+    T: PdClient + ConfigClient,
+{
     store_id: u64,
     pd_client: Arc<T>,
     config_handler: Box<dyn DynamicConfig>,
-    router: RaftRouter<RocksEngine>,
-    db: RocksEngine,
+    router: RaftRouter<E>,
+    db: E,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -426,23 +444,27 @@ pub struct Runner<T: PdClient + ConfigClient> {
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task>,
-    stats_monitor: StatsMonitor,
+    scheduler: Scheduler<Task<E>>,
+    stats_monitor: StatsMonitor<E>,
 }
 
-impl<T: PdClient + ConfigClient> Runner<T> {
+impl<E, T> Runner<E, T>
+where
+    E: KvEngine,
+    T: PdClient + ConfigClient,
+{
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
         config_handler: Box<dyn DynamicConfig>,
-        router: RaftRouter<RocksEngine>,
-        db: RocksEngine,
-        scheduler: Scheduler<Task>,
+        router: RaftRouter<E>,
+        db: E,
+        scheduler: Scheduler<Task<E>>,
         store_heartbeat_interval: u64,
         auto_split_controller: AutoSplitController,
-    ) -> Runner<T> {
+    ) -> Runner<E, T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
@@ -471,7 +493,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<RocksEngine>,
+        callback: Callback<E>,
         task: String,
     ) {
         let router = self.router.clone();
@@ -515,7 +537,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<RocksEngine>,
+        callback: Callback<E>,
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -624,7 +646,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         &mut self,
         handle: &Handle,
         mut stats: pdpb::StoreStats,
-        store_info: StoreInfo,
+        store_info: StoreInfo<E>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.engine.path()) {
             Err(e) => {
@@ -935,8 +957,12 @@ impl<T: PdClient + ConfigClient> Runner<T> {
     }
 }
 
-impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
-    fn run(&mut self, task: Task, handle: &Handle) {
+impl<E, T> Runnable<Task<E>> for Runner<E, T>
+where
+    E: KvEngine,
+    T: PdClient + ConfigClient,
+{
+    fn run(&mut self, task: Task<E>, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
@@ -1143,14 +1169,16 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request(
-    router: &RaftRouter<RocksEngine>,
+fn send_admin_request<E>(
+    router: &RaftRouter<E>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<RocksEngine>,
-) {
+    callback: Callback<E>,
+) where
+    E: KvEngine,
+{
     let cmd_type = request.get_cmd_type();
 
     let mut req = RaftCmdRequest::default();
@@ -1169,7 +1197,11 @@ fn send_admin_request(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(router: &RaftRouter<RocksEngine>, source_region_id: u64, target: metapb::Peer) {
+fn send_merge_fail(
+    router: &RaftRouter<impl KvEngine>,
+    source_region_id: u64,
+    target: metapb::Peer,
+) {
     let target_id = target.get_id();
     if let Err(e) = router.force_send(
         source_region_id,
@@ -1187,7 +1219,7 @@ fn send_merge_fail(router: &RaftRouter<RocksEngine>, source_region_id: u64, targ
 
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
-    router: &RaftRouter<RocksEngine>,
+    router: &RaftRouter<impl KvEngine>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
@@ -1210,6 +1242,7 @@ fn send_destroy_peer_message(
 #[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
+    use engine_rocks::RocksEngine;
     use std::sync::Mutex;
     use tikv_util::worker::FutureWorker;
 
@@ -1217,13 +1250,13 @@ mod tests {
 
     struct RunnerTest {
         store_stat: Arc<Mutex<StoreStat>>,
-        stats_monitor: StatsMonitor,
+        stats_monitor: StatsMonitor<RocksEngine>,
     }
 
     impl RunnerTest {
         fn new(
             interval: u64,
-            scheduler: Scheduler<Task>,
+            scheduler: Scheduler<Task<RocksEngine>>,
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
             let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
@@ -1251,8 +1284,8 @@ mod tests {
         }
     }
 
-    impl Runnable<Task> for RunnerTest {
-        fn run(&mut self, task: Task, _handle: &Handle) {
+    impl Runnable<Task<RocksEngine>> for RunnerTest {
+        fn run(&mut self, task: Task<RocksEngine>, _handle: &Handle) {
             if let Task::StoreInfos {
                 cpu_usages,
                 read_io_rates,
