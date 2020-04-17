@@ -1239,6 +1239,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+<<<<<<< HEAD
 name = "lexical-core"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1252,6 +1253,10 @@ dependencies = [
 [[package]]
 name = "libc"
 version = "0.2.64"
+=======
+name = "libfuzzer-sys"
+version = "0.3.1"
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -1796,6 +1801,7 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "procinfo"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1807,6 +1813,8 @@ dependencies = [
 ]
 
 [[package]]
+=======
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
 name = "procinfo"
 version = "0.4.2"
 source = "git+https://github.com/tikv/procinfo-rs#ac3841d271fe2e4e865afdce60bb6a166044f7c7"
@@ -1833,6 +1841,7 @@ name = "prometheus"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
+<<<<<<< HEAD
  "cfg-if 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "fnv 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.9.18 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1842,6 +1851,16 @@ dependencies = [
  "protobuf 2.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "spin 0.4.9 (registry+https://github.com/rust-lang/crates.io-index)",
+=======
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "libc",
+ "protobuf",
+ "reqwest",
+ "spin",
+ "thiserror",
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
 ]
 
 [[package]]
@@ -2306,6 +2325,10 @@ dependencies = [
 name = "rgb"
 version = "0.8.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+<<<<<<< HEAD
+=======
+checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
 
 [[package]]
 name = "rocksdb"

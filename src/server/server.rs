@@ -64,7 +64,13 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<ThreadPool>,
+<<<<<<< HEAD
     thread_load: Arc<ThreadLoad>,
+=======
+    grpc_thread_load: Arc<ThreadLoad>,
+    yatp_read_pool: Option<ReadPool>,
+    readpool_normal_thread_load: Arc<ThreadLoad>,
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
     timer: Handle,
 }
 
@@ -83,11 +89,27 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         deadlock_service: Option<DeadlockService>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
+<<<<<<< HEAD
         let stats_pool = ThreadPoolBuilder::new()
             .pool_size(cfg.stats_concurrency)
             .name_prefix(STATS_THREAD_PREFIX)
             .build();
         let thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
+=======
+        let stats_pool = if cfg.stats_concurrency > 0 {
+            Some(
+                ThreadPoolBuilder::new()
+                    .pool_size(cfg.stats_concurrency)
+                    .name_prefix(STATS_THREAD_PREFIX)
+                    .build(),
+            )
+        } else {
+            None
+        };
+        let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
+        let readpool_normal_thread_load =
+            Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
 
         let env = Arc::new(
             EnvBuilder::new()
@@ -171,8 +193,15 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router,
             snap_mgr,
             snap_worker,
+<<<<<<< HEAD
             stats_pool: Some(stats_pool),
             thread_load,
+=======
+            stats_pool,
+            grpc_thread_load,
+            yatp_read_pool,
+            readpool_normal_thread_load,
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
@@ -206,6 +235,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             let tl = Arc::clone(&self.thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
+<<<<<<< HEAD
         self.stats_pool.as_ref().unwrap().spawn(
             self.timer
                 .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
@@ -215,6 +245,24 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                     Ok(())
                 }),
         );
+=======
+        let mut readpool_normal_load_stats = {
+            let tl = Arc::clone(&self.readpool_normal_thread_load);
+            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, READPOOL_NORMAL_THREAD_PREFIX, tl)
+        };
+        if let Some(ref p) = self.stats_pool {
+            p.spawn(
+                self.timer
+                    .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
+                    .map_err(|_| ())
+                    .for_each(move |i| {
+                        grpc_load_stats.record(i);
+                        readpool_normal_load_stats.record(i);
+                        Ok(())
+                    }),
+            )
+        };
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
 
         info!("TiKV is ready to serve");
         Ok(())
