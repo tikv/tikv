@@ -94,13 +94,12 @@ fn test_lock_manager_cfg_update() {
     cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(DEFAULT_TIMEOUT);
     cfg.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(DEFAULT_DELAY);
     cfg.validate().unwrap();
-    let (mut cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg.clone());
+    let (mut cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg);
 
     // update of other module's config should not effect lock manager config
-    let mut incoming = cfg.clone();
-    incoming.raft_store.raft_log_gc_threshold = 2000;
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert_eq!(rollback.right(), Some(true));
+    cfg_controller
+        .update_config("raftstore.raft-log-gc-threshold", "2000")
+        .unwrap();
     validate_waiter(
         &waiter,
         move |timeout: ReadableDuration, delay: ReadableDuration| {
@@ -113,10 +112,9 @@ fn test_lock_manager_cfg_update() {
     });
 
     // only update wake_up_delay_duration
-    let mut incoming = cfg.clone();
-    incoming.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(500);
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert_eq!(rollback.right(), Some(true));
+    cfg_controller
+        .update_config("pessimistic-txn.wake-up-delay-duration", "500ms")
+        .unwrap();
     validate_waiter(
         &waiter,
         move |timeout: ReadableDuration, delay: ReadableDuration| {
@@ -130,12 +128,9 @@ fn test_lock_manager_cfg_update() {
     });
 
     // only update wait_for_lock_timeout
-    let mut incoming = cfg.clone();
-    incoming.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(4000);
-    // keep wake_up_delay_duration the same as last update
-    incoming.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(500);
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert_eq!(rollback.right(), Some(true));
+    cfg_controller
+        .update_config("pessimistic-txn.wait-for-lock-timeout", "4000ms")
+        .unwrap();
     validate_waiter(
         &waiter,
         move |timeout: ReadableDuration, delay: ReadableDuration| {
@@ -149,11 +144,16 @@ fn test_lock_manager_cfg_update() {
     });
 
     // update both config
-    let mut incoming = cfg;
-    incoming.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(4321);
-    incoming.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(123);
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert_eq!(rollback.right(), Some(true));
+    let mut m = std::collections::HashMap::new();
+    m.insert(
+        "pessimistic-txn.wait-for-lock-timeout".to_owned(),
+        "4321ms".to_owned(),
+    );
+    m.insert(
+        "pessimistic-txn.wake-up-delay-duration".to_owned(),
+        "123ms".to_owned(),
+    );
+    cfg_controller.update(m).unwrap();
     validate_waiter(
         &waiter,
         move |timeout: ReadableDuration, delay: ReadableDuration| {

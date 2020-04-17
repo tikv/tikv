@@ -12,7 +12,7 @@ use raftstore::store::fsm::StoreMeta;
 use raftstore::store::fsm::*;
 use raftstore::store::{SnapManager, StoreMsg, Transport};
 use raftstore::Result;
-use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
+use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 
 use engine::Engines;
@@ -142,26 +142,19 @@ fn test_update_raftstore_config() {
     config.validate().unwrap();
     let (mut cfg_controller, router, _, mut system) = start_raftstore(config.clone());
 
-    let incoming = config.clone();
-    let raft_store = incoming.raft_store.clone();
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-
-    // config should not change
-    assert_eq!(rollback.right(), Some(false));
-    validate_store(&router, move |cfg: &Config| {
-        assert_eq!(cfg, &raft_store);
-    });
-
     // dispatch updated config
-    let mut raft_store = config.raft_store.clone();
-    raft_store.messages_per_tick = 12345;
-    raft_store.raft_log_gc_threshold = 54321;
-    let mut incoming = config;
-    incoming.raft_store = raft_store.clone();
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+    let change = {
+        let mut m = std::collections::HashMap::new();
+        m.insert("raftstore.messages-per-tick", "12345");
+        m.insert("raftstore.raft-log-gc-threshold", "54321");
+        m
+    };
+    cfg_controller.update(change).unwrap();
 
     // config should be updated
-    assert_eq!(rollback.right(), Some(true));
+    let mut raft_store = config.raft_store;
+    raft_store.messages_per_tick = 12345;
+    raft_store.raft_log_gc_threshold = 54321;
     validate_store(&router, move |cfg: &Config| {
         assert_eq!(cfg, &raft_store);
     });
@@ -184,10 +177,6 @@ fn test_update_apply_store_config() {
     reg.region.set_id(region_id);
     apply_router.schedule_task(region_id, ApplyTask::Registration(reg));
 
-    let rollback = cfg_controller.update_or_rollback(config.clone()).unwrap();
-
-    // config should not change
-    assert_eq!(rollback.right(), Some(false));
     validate_store(&raft_router, move |cfg: &Config| {
         assert_eq!(cfg.sync_log, true);
     });
@@ -196,12 +185,11 @@ fn test_update_apply_store_config() {
     });
 
     // dispatch updated config
-    let mut incoming = config;
-    incoming.raft_store.sync_log = false;
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+    cfg_controller
+        .update_config("raftstore.sync-log", "false")
+        .unwrap();
 
     // both configs should be updated
-    assert_eq!(rollback.right(), Some(true));
     validate_store(&raft_router, move |cfg: &Config| {
         assert_eq!(cfg.sync_log, false);
     });

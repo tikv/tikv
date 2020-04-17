@@ -5,12 +5,10 @@ use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use futures::sync::oneshot;
 use futures::Future;
 use tokio_core::reactor::Handle;
-use tokio_timer::Delay;
 
 use engine_rocks::RocksEngine;
 use engine_traits::MiscExt;
@@ -65,12 +63,6 @@ impl FlowStatsReporter for Scheduler<Task> {
             error!("Failed to send read flow statistics"; "err" => ?e);
         }
     }
-}
-
-pub trait DynamicConfig: Send + 'static {
-    fn refresh(&mut self, cfg_client: &dyn ConfigClient);
-    fn refresh_interval(&self) -> Duration;
-    fn get(&self) -> String;
 }
 
 /// Uses an asynchronous thread to tell PD something.

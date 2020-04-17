@@ -15,8 +15,6 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{bootstrap_store, fsm, SnapManager};
 use test_raftstore::*;
-use tikv::config::ConfigController;
-use tikv::config::ConfigHandler;
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv_util::config::VersionTrack;

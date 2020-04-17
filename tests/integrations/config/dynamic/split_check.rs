@@ -72,27 +72,30 @@ fn test_update_split_check_config() {
     let scheduler = worker.scheduler();
 
     let cop_config = cfg.coprocessor.clone();
-    let mut incoming = cfg.clone();
-    incoming.raft_store.raft_log_gc_threshold = 2000;
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
     // update of other module's config should not effect split check config
-    assert_eq!(rollback.right(), Some(true));
+    cfg_controller
+        .update_config("raftstore.raft-log-gc-threshold", "2000")
+        .unwrap();
     validate(&scheduler, move |cfg: &Config| {
         assert_eq!(cfg, &cop_config);
     });
 
+    let change = {
+        let mut m = std::collections::HashMap::new();
+        m.insert("coprocessor.split_region_on_table", "true");
+        m.insert("coprocessor.batch_split_limit", "123");
+        m.insert("coprocessor.region_split_keys", "12345");
+    };
+    cfg_controller.update(change).unwrap();
+
+    // config should be updated
     let cop_config = {
-        let mut cop_config = cfg.coprocessor.clone();
+        let mut cop_config = cfg.coprocessor;
         cop_config.split_region_on_table = true;
         cop_config.batch_split_limit = 123;
         cop_config.region_split_keys = 12345;
         cop_config
     };
-    let mut incoming = cfg;
-    incoming.coprocessor = cop_config.clone();
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    // config should be updated
-    assert_eq!(rollback.right(), Some(true));
     validate(&scheduler, move |cfg: &Config| {
         assert_eq!(cfg, &cop_config);
     });

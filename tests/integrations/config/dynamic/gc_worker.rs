@@ -59,25 +59,25 @@ fn test_gc_worker_config_update() {
     let scheduler = gc_worker.scheduler();
 
     // update of other module's config should not effect gc worker config
-    let mut incoming = cfg.clone();
-    incoming.raft_store.raft_log_gc_threshold = 2000;
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert!(rollback.right().unwrap());
+    cfg_controller
+        .update_config("raftstore.raft-log-gc-threshold", "2000")
+        .unwrap();
     validate(&scheduler, move |cfg: &GcConfig, _| {
         assert_eq!(cfg, &GcConfig::default());
     });
 
     // Update gc worker config
-    let mut incoming = cfg;
-    incoming.gc.ratio_threshold = 1.23;
-    incoming.gc.batch_keys = 1234;
-    incoming.gc.max_write_bytes_per_sec = ReadableSize(1024);
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert!(rollback.right().unwrap());
+    let change = {
+        let mut change = HashMap::new();
+        change.insert("gc.ratio-threshold".to_owned(), "1.23".to_owned());
+        change.insert("gc.batch-keys".to_owned(), "1234".to_owned());
+        change.insert("gc.max-write-bytes-per-sec".to_owned(), "1KB".to_owned());
+    };
+    cfg_controller.update(change).unwrap();
     validate(&scheduler, move |cfg: &GcConfig, _| {
         assert_eq!(cfg.ratio_threshold, 1.23);
         assert_eq!(cfg.batch_keys, 1234);
-        assert_eq!(cfg.max_write_bytes_per_sec, ReadableSize(1024));
+        assert_eq!(cfg.max_write_bytes_per_sec, ReadableSize::kb(1));
     });
 }
 
@@ -94,28 +94,25 @@ fn test_change_io_limit_by_config_manager() {
     });
 
     // Enable io iolimit
-    let mut incoming = cfg.clone();
-    incoming.gc.max_write_bytes_per_sec = ReadableSize(1024);
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert!(rollback.right().unwrap());
+    cfg_controller
+        .update_config("gc.max-write-bytes-per-sec", "1024")
+        .unwrap();
     validate(&scheduler, move |_, limiter: &Limiter| {
         assert_eq!(limiter.speed_limit(), 1024.0);
     });
 
     // Change io iolimit
-    let mut incoming = cfg.clone();
-    incoming.gc.max_write_bytes_per_sec = ReadableSize(2048);
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert!(rollback.right().unwrap());
+    cfg_controller
+        .update_config("gc.max-write-bytes-per-sec", "2048")
+        .unwrap();
     validate(&scheduler, move |_, limiter: &Limiter| {
         assert_eq!(limiter.speed_limit(), 2048.0);
     });
 
     // Disable io iolimit
-    let mut incoming = cfg;
-    incoming.gc.max_write_bytes_per_sec = ReadableSize(0);
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert!(rollback.right().unwrap());
+    cfg_controller
+        .update_config("gc.max-write-bytes-per-sec", "0")
+        .unwrap();
     validate(&scheduler, move |_, limiter: &Limiter| {
         assert_eq!(limiter.speed_limit(), INFINITY);
     });

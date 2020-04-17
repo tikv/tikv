@@ -294,7 +294,7 @@ impl FromStr for ReadableDuration {
                 u
             };
             if unit >= last_unit {
-                return Err(format!("d, h, m, s, ms should occur in given order.",));
+                return Err("d, h, m, s, ms should occur in given order.".to_owned());
             }
             // do we need to check 12h360m?
             let number_str = unsafe { str::from_utf8_unchecked(first) };
@@ -308,7 +308,7 @@ impl FromStr for ReadableDuration {
             return Err(err_msg);
         }
         if dur.is_sign_negative() {
-            return Err(format!("duration should be positive."));
+            return Err("duration should be positive.".to_owned());
         }
         let secs = dur as u64 / SECOND as u64;
         let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;

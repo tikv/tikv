@@ -22,7 +22,6 @@ use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::SnapManager;
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::ConfigHandler;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};

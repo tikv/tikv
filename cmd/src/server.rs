@@ -16,10 +16,10 @@ use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
 use kvproto::{
-    backup::create_backup, cdcpb::create_change_data, configpb, deadlock::create_deadlock,
+    backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
-use pd_client::{Error as PdError, PdClient, RpcClient};
+use pd_client::{PdClient, RpcClient};
 use raftstore::{
     coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
     router::ServerRaftStoreRouter,
@@ -222,7 +222,7 @@ impl TiKVServer {
 
         config.write_into_metrics();
 
-        ConfigController::new(config, configpb::Version::default(), true)
+        ConfigController::new(config)
     }
 
     fn connect_to_pd_cluster(
@@ -413,7 +413,7 @@ impl TiKVServer {
         &mut self,
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
-        let mut cfg_controller = self.cfg_controller.as_mut().unwrap();
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Gc,
             Box::new(gc_worker.get_config_manager()),
