@@ -148,18 +148,6 @@ macro_rules! check_key_size {
 }
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
-    /// Get concurrency of normal readpool.
-    pub fn readpool_normal_concurrency(&self) -> usize {
-        if let ReadPoolHandle::FuturePools {
-            read_pool_normal, ..
-        } = &self.read_pool
-        {
-            read_pool_normal.get_pool_size()
-        } else {
-            0
-        }
-    }
-
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
@@ -250,6 +238,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        false,
                     );
                     let result = snap_store
                         .get(&key, &mut statistics)
@@ -302,6 +291,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         Default::default(),
+                        false,
                     );
                     let mut results = vec![];
                     // TODO: optimize using seek.
@@ -358,6 +348,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        false,
                     );
                     let result = snap_store
                         .batch_get(&keys, &mut statistics)
@@ -428,13 +419,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        false,
                     );
 
                     let mut scanner;
                     if !reverse_scan {
-                        scanner = snap_store.scanner(false, key_only, Some(start_key), end_key)?;
+                        scanner =
+                            snap_store.scanner(false, key_only, false, Some(start_key), end_key)?;
                     } else {
-                        scanner = snap_store.scanner(true, key_only, end_key, Some(start_key))?;
+                        scanner =
+                            snap_store.scanner(true, key_only, false, end_key, Some(start_key))?;
                     };
                     let res = scanner.scan(limit);
 
