@@ -21,12 +21,34 @@ mod threads_linux;
 #[cfg(target_os = "linux")]
 pub use self::threads_linux::monitor_threads;
 
+#[cfg(target_os = "linux")]
+mod memory_linux;
+#[cfg(target_os = "linux")]
+pub use self::memory_linux::monitor_memory;
+
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
 pub use self::threads_dummy::monitor_threads;
 
+<<<<<<< HEAD:src/util/metrics/mod.rs
 /// `run_prometheus` runs a background prometheus client.
+=======
+#[cfg(not(target_os = "linux"))]
+mod memory_dummy;
+#[cfg(not(target_os = "linux"))]
+pub use self::memory_dummy::monitor_memory;
+
+pub use self::allocator_metrics::monitor_allocator_stats;
+
+pub mod allocator_metrics;
+
+pub use self::metrics_reader::HistogramReader;
+
+mod metrics_reader;
+
+/// Runs a background Prometheus client.
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306):components/tikv_util/src/metrics/mod.rs
 pub fn run_prometheus(
     interval: Duration,
     address: &str,

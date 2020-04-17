@@ -395,6 +395,7 @@ impl Command {
     }
 }
 
+<<<<<<< HEAD
 #[derive(Clone, Default)]
 pub struct Options {
     pub lock_ttl: u64,
@@ -444,6 +445,10 @@ impl Storage<RocksEngine> {
 }
 
 impl<E: Engine> Storage<E> {
+=======
+impl<E: Engine, L: LockManager> Storage<E, L> {
+    /// Create a `Storage` from given engine.
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
     pub fn from_engine(
         engine: E,
         config: &Config,
