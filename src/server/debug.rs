@@ -55,17 +55,14 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         InvalidArgument(msg: String) {
-            description(msg)
             display("Invalid Argument {:?}", msg)
         }
         NotFound(msg: String) {
-            description(msg)
             display("Not Found {:?}", msg)
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{:?}", err)
         }
     }

@@ -77,7 +77,6 @@ quick_error! {
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("compact failed {:?}", err)
         }
     }

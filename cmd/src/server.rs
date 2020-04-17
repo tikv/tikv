@@ -149,10 +149,10 @@ impl TiKVServer {
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
-        let security_mgr =
-            Arc::new(SecurityManager::new(&config.security).unwrap_or_else(|e| {
-                fatal!("failed to create security manager: {}", e.description())
-            }));
+        let security_mgr = Arc::new(
+            SecurityManager::new(&config.security)
+                .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
+        );
         let pd_client = Self::connect_to_pd_cluster(&mut config, Arc::clone(&security_mgr));
 
         // Initialize and check config

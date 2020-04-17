@@ -34,27 +34,26 @@ quick_error! {
     pub enum Error {
         RequestFailed(e: errorpb::Error) {
             from()
-            description(e.get_message())
+            display("{}", e.get_message())
         }
         Io(e: IoError) {
             from()
             cause(e)
-            description(e.description())
+            display("{}", e)
         }
 
         Server(e: RaftServerError) {
             from()
             cause(e)
-            description(e.description())
+            display("{}", e)
         }
         InvalidResponse(reason: String) {
-            description(reason)
+            display("{}", reason)
         }
         InvalidRequest(reason: String) {
-            description(reason)
+            display("{}", reason)
         }
         Timeout(d: Duration) {
-            description("request timeout")
             display("timeout after {:?}", d)
         }
     }
