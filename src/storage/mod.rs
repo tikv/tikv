@@ -1129,12 +1129,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         };
                         result.extend(pairs.into_iter());
                     }
-                    if reverse_scan {
-                        for range in ranges.iter_mut() {
-                            std::mem::swap(&mut range.start_key, &mut range.end_key)
-                        }
+                    let mut key_ranges = vec![];
+                    for range in ranges {
+                        key_ranges.push(build_key_range(
+                            &range.start_key,
+                            &range.end_key,
+                            reverse_scan,
+                        ));
                     }
-                    tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), ranges);
+                    tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_key_reads(
                         CMD,
