@@ -12,7 +12,7 @@ use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ObserveID};
-use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
+use raftstore::store::msg::{Callback, ReadCallback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
@@ -113,6 +113,12 @@ pub enum Task {
         entries: Vec<Option<TxnEntry>>,
     },
     RegisterMinTsEvent,
+    // The result of ChangeCmd should be returned from CDC Endpoint to ensure
+    // the downstream switches to Normal after the previous commands was sunk.
+    ReadCallback {
+        resp: ReadResponse<RocksEngine>,
+        cb: ReadCallback<RocksEngine>,
+    },
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
@@ -177,7 +183,11 @@ impl fmt::Debug for Task {
                 .field("downstream", &downstream_id)
                 .field("scan_entries", &entries.len())
                 .finish(),
-            Task::RegisterMinTsEvent => de.finish(),
+            Task::RegisterMinTsEvent => de.field("type", &"register_min_ts").finish(),
+            Task::ReadCallback { ref resp, .. } => de
+                .field("type", &"read_callback")
+                .field("resp", &resp)
+                .finish(),
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
         }
     }
@@ -433,14 +443,22 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 error!("schedule cdc task failed"; "error" => ?e);
             }
         };
+        let scheduler = self.scheduler.clone();
         if let Err(e) = self.raft_router.significant_send(
             region_id,
             SignificantMsg::CaptureChange {
                 cmd: change_cmd,
                 region_epoch: request.take_region_epoch(),
                 callback: Callback::Read(Box::new(move |resp| {
-                    downstream_state.uninitialized_to_normal();
-                    cb(resp);
+                    if let Err(e) = scheduler.schedule(Task::ReadCallback {
+                        resp,
+                        cb: Box::new(move |resp1| {
+                            downstream_state.uninitialized_to_normal();
+                            cb(resp1);
+                        }),
+                    }) {
+                        error!("schedule cdc task failed"; "error" => ?e);
+                    }
                 })),
             },
         ) {
@@ -800,6 +818,7 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
             Task::MultiBatch { multi } => self.on_multi_batch(multi),
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::RegisterMinTsEvent => self.register_min_ts_event(),
+            Task::ReadCallback { resp, cb } => cb(resp),
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
             }
