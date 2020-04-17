@@ -258,7 +258,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 result
             },
             priority,
-            start_ts.into_inner(),
+            thread_rng().next_u64(),
         );
 
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -379,7 +379,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 result
             },
             priority,
-            start_ts.into_inner(),
+            thread_rng().next_u64(),
         );
 
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -448,7 +448,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 result
             },
             priority,
-            start_ts.into_inner(),
+            thread_rng().next_u64(),
         );
 
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
