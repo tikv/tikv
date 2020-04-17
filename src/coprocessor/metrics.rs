@@ -251,22 +251,11 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     });
 }
 
-pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
-    let req_tag = match cmd {
-        "select" => ReqTag::select,
-        "index" => ReqTag::index,
-        "analyze_table" => ReqTag::analyze_table,
-        "analyze_index" => ReqTag::analyze_index,
-        "checksum_table" => ReqTag::checksum_table,
-        "checksum_index" => ReqTag::checksum_index,
-        "test" => ReqTag::test,
-        _ => panic!("should not happen"),
-    };
-
+pub fn tls_collect_scan_details(cmd: ReqTag, stats: &Statistics) {
     TLS_COP_METRICS.with(|m| {
         m.borrow_mut()
             .local_scan_details
-            .entry(req_tag)
+            .entry(cmd)
             .or_insert_with(Default::default)
             .add(stats);
     });

@@ -289,7 +289,7 @@ impl Tracker {
             .decrypt_data_nanos
             .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
 
-        tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
+        tls_collect_scan_details(req_tag, &total_storage_stats);
         tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);
 
         self.current_stage = TrackerState::Tracked;
