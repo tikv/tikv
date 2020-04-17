@@ -29,7 +29,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         let mut m = m.borrow_mut();
 
         for (cmd, stat) in m.local_scan_details.drain() {
-
             for (cf, cf_details) in stat.details_enum().iter() {
                 for (tag, count) in cf_details.iter() {
                     KV_COMMAND_SCAN_DETAILS_STATIC
