@@ -36,7 +36,7 @@ impl AsMySQLBool for Int {
 impl AsMySQLBool for Real {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
-        Ok(self.into_inner() != 0.0)
+        Ok(self.into_inner() != 0f64)
     }
 }
 
@@ -183,6 +183,7 @@ mod tests {
         assert!(val.is_err());
     }
 
+    #[test]
     fn test_real_as_bool() {
         let tests: Vec<(f64, Option<bool>)> = vec![
             (0.0, Some(false)),
