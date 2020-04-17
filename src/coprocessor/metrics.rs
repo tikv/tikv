@@ -181,7 +181,7 @@ make_static_metric! {
 }
 
 pub struct CopLocalMetrics {
-    local_scan_details: HashMap<&'static str, Statistics>,
+    local_scan_details: HashMap<ReqTag, Statistics>,
     local_cop_flow_stats: HashMap<u64, FlowStatistics>,
 }
 
@@ -227,17 +227,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         let mut m = m.borrow_mut();
 
         for (req_tag, stat) in m.local_scan_details.drain() {
-            let req_tag = match req_tag {
-                "select" => ReqTag::select,
-                "index" => ReqTag::index,
-                "analyze_table" => ReqTag::analyze_table,
-                "analyze_index" => ReqTag::analyze_index,
-                "checksum_table" => ReqTag::checksum_table,
-                "checksum_index" => ReqTag::checksum_index,
-                "test" => ReqTag::test,
-                _ => panic!("should not happen"),
-            };
-
             for (cf, cf_details) in stat.details_enum().iter() {
                 for (tag, count) in cf_details.iter() {
                     COPR_SCAN_DETAILS_STATIC
@@ -263,10 +252,21 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
 }
 
 pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
+    let req_tag = match cmd {
+        "select" => ReqTag::select,
+        "index" => ReqTag::index,
+        "analyze_table" => ReqTag::analyze_table,
+        "analyze_index" => ReqTag::analyze_index,
+        "checksum_table" => ReqTag::checksum_table,
+        "checksum_index" => ReqTag::checksum_index,
+        "test" => ReqTag::test,
+        _ => panic!("should not happen"),
+    };
+
     TLS_COP_METRICS.with(|m| {
         m.borrow_mut()
             .local_scan_details
-            .entry(cmd)
+            .entry(req_tag)
             .or_insert_with(Default::default)
             .add(stats);
     });
