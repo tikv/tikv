@@ -2506,7 +2506,7 @@ impl ConfigHandler {
     pub fn start(
         id: String,
         mut controller: ConfigController,
-        scheduler: FutureScheduler<PdTask>,
+        scheduler: FutureScheduler<PdTask<RocksEngine>>,
     ) -> CfgResult<Self> {
         if controller.get_current().enable_dynamic_config {
             if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {

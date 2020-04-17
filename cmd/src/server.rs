@@ -123,7 +123,7 @@ struct TiKVServer {
     engines: Option<Engines>,
     servers: Option<Servers>,
     region_info_accessor: RegionInfoAccessor,
-    coprocessor_host: Option<CoprocessorHost>,
+    coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
 }
@@ -131,14 +131,14 @@ struct TiKVServer {
 struct Engines {
     engines: engine::Engines,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter>,
-    raft_router: ServerRaftStoreRouter,
+    engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
+    raft_router: ServerRaftStoreRouter<RocksEngine>,
 }
 
 struct Servers {
-    pd_sender: FutureScheduler<PdTask>,
+    pd_sender: FutureScheduler<PdTask<RocksEngine>>,
     lock_mgr: Option<LockManager>,
-    server: Server<ServerRaftStoreRouter, resolve::PdStoreAddrResolver>,
+    server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
@@ -436,7 +436,7 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter>> {
+    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -457,7 +457,7 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
         cfg_controller.register(
@@ -656,7 +656,10 @@ impl TiKVServer {
         server_config
     }
 
-    fn register_services(&mut self, gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter>>) {
+    fn register_services(
+        &mut self,
+        gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
+    ) {
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
 
