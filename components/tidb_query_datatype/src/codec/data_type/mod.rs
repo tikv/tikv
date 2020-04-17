@@ -17,7 +17,6 @@ use crate::EvalType;
 
 use crate::codec::convert::ConvertTo;
 use crate::expr::EvalContext;
-use num_traits::Zero;
 use tidb_query_common::error::Result;
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
@@ -37,7 +36,7 @@ impl AsMySQLBool for Int {
 impl AsMySQLBool for Real {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
-        Ok(!self.is_zero())
+        Ok(self.into_inner() != 0.0)
     }
 }
 
@@ -130,7 +129,7 @@ mod tests {
     use std::f64;
 
     #[test]
-    fn test_bytes_to_bool() {
+    fn test_bytes_as_bool() {
         let tests: Vec<(&'static [u8], Option<bool>)> = vec![
             (b"", Some(false)),
             (b" 23", Some(true)),
@@ -182,5 +181,32 @@ mod tests {
             .to_vec()
             .as_mysql_bool(&mut ctx);
         assert!(val.is_err());
+    }
+
+    fn test_real_as_bool() {
+        let tests: Vec<(f64, Option<bool>)> = vec![
+            (0.0, Some(false)),
+            (1.3, Some(true)),
+            (-1.234, Some(true)),
+            (0.000000000000000000000000000000001, Some(true)),
+            (-0.00000000000000000000000000000001, Some(true)),
+            (f64::MAX, Some(true)),
+            (f64::MIN, Some(true)),
+            (f64::MIN_POSITIVE, Some(true)),
+            (f64::INFINITY, Some(true)),
+            (f64::NEG_INFINITY, Some(true)),
+            (f64::NAN, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (f, expected) in tests {
+            match Real::new(f) {
+                Ok(b) => {
+                    let r = b.as_mysql_bool(&mut ctx).unwrap();
+                    assert_eq!(r, expected.unwrap());
+                }
+                Err(_) => assert!(expected.is_none(), "{} to bool should fail", f,),
+            }
+        }
     }
 }
