@@ -26,6 +26,7 @@ use crate::storage::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 
+use engine_rocks::RocksEngine;
 use parking_lot::Mutex;
 use pd_client::PdClient;
 use tikv_util::collections::HashSet;
@@ -182,7 +183,7 @@ impl LockManager {
 
     /// Creates a `RoleChangeNotifier` of the deadlock detector worker and registers it to
     /// the `CoprocessorHost` to observe the role change events of the leader region.
-    pub fn register_detector_role_change_observer(&self, host: &mut CoprocessorHost) {
+    pub fn register_detector_role_change_observer(&self, host: &mut CoprocessorHost<RocksEngine>) {
         let role_change_notifier = RoleChangeNotifier::new(self.detector_scheduler.clone());
         role_change_notifier.register(host);
     }
