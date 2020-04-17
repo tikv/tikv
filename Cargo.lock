@@ -1918,6 +1918,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b37545ab726dd833ec6420aaba8231c5b320814b9029ad585555d2a03e94fbf"
 
 [[package]]
+<<<<<<< HEAD
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1938,6 +1939,10 @@ dependencies = [
 [[package]]
 name = "libc"
 version = "0.2.64"
+=======
+name = "libfuzzer-sys"
+version = "0.3.1"
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74dfca3d9957906e8d1e6a0b641dc9a59848e793f1da2165889fd4f62d10d79c"
 
@@ -2709,6 +2714,7 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "procinfo"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2721,6 +2727,8 @@ dependencies = [
 ]
 
 [[package]]
+=======
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
 name = "procinfo"
 version = "0.4.2"
 source = "git+https://github.com/tikv/procinfo-rs#ac3841d271fe2e4e865afdce60bb6a166044f7c7"
@@ -2753,7 +2761,10 @@ dependencies = [
  "hyper 0.9.18",
  "lazy_static 0.2.8",
  "libc",
+<<<<<<< HEAD
  "procinfo 0.3.1",
+=======
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
  "protobuf",
  "quick-error 0.2.2",
  "spin 0.4.9",

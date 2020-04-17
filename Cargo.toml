@@ -101,6 +101,7 @@ tokio-io = "0.1"
 openssl = "0.10"
 serde = "1.0"
 serde_json = "1.0"
+<<<<<<< HEAD
 serde_derive = "1.0"
 zipf = "5.0.1"
 bitflags = "1.0.1"
@@ -120,6 +121,34 @@ smallvec = { version = "0.6", features = ["union"] }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 more-asserts = "0.1"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
+=======
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+slog_derive = "0.2"
+parking_lot = "0.10"
+prometheus = { version = "0.8", features = ["nightly", "push"] }
+sst_importer = { path = "components/sst_importer" }
+sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
+tempfile = "3.0"
+tidb_query_datatype = { path = "components/tidb_query_datatype" }
+tidb_query_common = { path = "components/tidb_query_common" }
+tidb_query_shared_expr = { path = "components/tidb_query_shared_expr" }
+tidb_query_normal_expr = { path = "components/tidb_query_normal_expr" }
+tidb_query_normal_executors = { path = "components/tidb_query_normal_executors" }
+tidb_query_vec_expr = { path = "components/tidb_query_vec_expr" }
+tidb_query_vec_aggr = { path = "components/tidb_query_vec_aggr" }
+tidb_query_vec_executors = { path = "components/tidb_query_vec_executors" }
+tikv_alloc = { path = "components/tikv_alloc" }
+tikv_util = { path = "components/tikv_util" }
+time = "0.1"
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+tokio = { version = "0.2", features = ["sync"] }
+tokio-tcp = "0.1"
+tokio-core = "0.1"
+tokio-fs = "0.1.6"
+tokio-io = "0.1.12"
+tokio-sync = "0.1.7"
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
 tokio-threadpool = "0.1.13"
 vlog = "0.1.4"
 twoway = "0.2.0"

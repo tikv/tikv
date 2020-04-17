@@ -687,11 +687,15 @@ impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
             error!("Failed to stop gc_worker:"; "err" => ?e);
         }
 
+<<<<<<< HEAD
         info!("Storage stopped.");
     }
 }
 
 impl<E: Engine, L: LockMgr> Storage<E, L> {
+=======
+impl<E: Engine, L: LockManager> Storage<E, L> {
+>>>>>>> 7d13ca0... *: reduce sys_getdents syscall (#7306)
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
