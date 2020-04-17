@@ -14,9 +14,10 @@ use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
 use encryption::DataKeyManager;
-use engine_traits::{IngestExternalFileOptions, KvEngine};
-use engine_traits::{Iterator, CF_WRITE};
-use engine_traits::{SeekKey, SstReader, SstWriter};
+use engine_traits::{
+    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
+    SstWriter, CF_WRITE,
+};
 use external_storage::{block_on_external_io, create_storage, url_of_backend};
 use futures_util::io::{copy, AllowStdIo};
 use keys;
@@ -151,7 +152,11 @@ impl SSTImporter {
 
         // do the I/O copy from external_storage to the local file.
         {
-            let mut file_writer = AllowStdIo::new(File::create(&path.temp)?);
+            let file_writer: Box<dyn Write> = match &self.key_manager {
+                None => Box::new(File::create(&path.temp)?) as _,
+                Some(key_manager) => Box::new(key_manager.create_file(&path.temp)?) as _,
+            };
+            let mut file_writer = AllowStdIo::new(file_writer);
             let file_length =
                 block_on_external_io(copy(ext_reader, &mut file_writer)).map_err(|e| {
                     Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e)
@@ -161,7 +166,10 @@ impl SSTImporter {
                 return Err(Error::FileCorrupted(path.temp, reason));
             }
             IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
-            file_writer.into_inner().sync_data()?;
+            OpenOptions::new()
+                .append(true)
+                .open(&path.temp)?
+                .sync_data()?;
         }
 
         // now validate the SST file.
@@ -239,6 +247,17 @@ impl SSTImporter {
         if let Some(range) = direct_retval {
             // TODO: what about encrypted SSTs?
             fs::rename(&path.temp, &path.save)?;
+            if let Some(key_manager) = &self.key_manager {
+                let temp_str = path
+                    .temp
+                    .to_str()
+                    .ok_or_else(|| Error::InvalidSSTPath(path.temp.clone()))?;
+                let save_str = path
+                    .save
+                    .to_str()
+                    .ok_or_else(|| Error::InvalidSSTPath(path.save.clone()))?;
+                key_manager.rename_file(temp_str, save_str)?;
+            }
             let duration = start.elapsed();
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])

@@ -586,7 +586,7 @@ impl Snap {
                             mthd,
                             &enc_info.key,
                             Mode::Encrypt,
-                            Some(&enc_info.iv),
+                            Iv::from_slice(&enc_info.iv)?,
                         )
                         .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
                     );

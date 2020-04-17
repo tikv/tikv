@@ -191,6 +191,18 @@ impl<W: Write> Write for EncrypterWriter<W> {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         let mut encrypt_buffer = vec![0; buf.len() + self.block_size];
         let bytes = self.crypter.update(buf, &mut encrypt_buffer)?;
+        // The EncrypterWriter current only support crypters that always return the same amount
+        // of data. This is true for CTR mode.
+        if bytes != buf.len() {
+            return Err(IoError::new(
+                ErrorKind::Other,
+                format!(
+                    "EncrypterWriter output size mismatch, expect {} vs actual {}",
+                    buf.len(),
+                    bytes,
+                ),
+            ));
+        }
         self.writer.write_all(&encrypt_buffer[0..bytes])?;
         Ok(bytes)
     }
@@ -204,6 +216,10 @@ impl<W: Write> Drop for EncrypterWriter<W> {
     fn drop(&mut self) {
         let mut encrypt_buffer = vec![0; self.block_size];
         let bytes = self.crypter.finalize(&mut encrypt_buffer).unwrap();
-        self.writer.write_all(&encrypt_buffer[0..bytes]).unwrap();
+        if bytes != 0 {
+            // The EncrypterWriter current only support crypters that always return the same amount
+            // of data. This is true for CTR mode.
+            panic!("unsupported encryption");
+        }
     }
 }

@@ -154,6 +154,10 @@ quick_error! {
             description(err.description())
             display("SstImporter {}", err)
         }
+        Encryption(err: encryption::Error) {
+            from()
+            display("Encryption {}", err)
+        }
     }
 }
 

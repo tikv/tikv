@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::hash_map::Entry;
+use std::fs::File;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -13,6 +14,7 @@ use protobuf::Message;
 use crate::config::{EncryptionConfig, MasterKeyConfig};
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
+use crate::io::EncrypterWriter;
 use crate::master_key::{create_backend, Backend, PlaintextBackend};
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -412,6 +414,23 @@ impl DataKeyManager {
             master_key,
             method,
         }))
+    }
+
+    pub fn create_file<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
+        let fname = path.as_ref().to_str().ok_or_else(|| {
+            Error::Other(box_err!(
+                "failed to convert path to string {:?}",
+                path.as_ref()
+            ))
+        })?;
+        let file = self.new_file(fname)?;
+        let file_writer = File::create(path)?;
+        EncrypterWriter::new(
+            file_writer,
+            crypter::encryption_method_from_db_encryption_method(file.method),
+            &file.key,
+            Iv::from_slice(&file.iv)?,
+        )
     }
 }
 
