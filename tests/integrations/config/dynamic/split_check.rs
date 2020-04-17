@@ -14,18 +14,21 @@ use raftstore::store::{SplitCheckRunner as Runner, SplitCheckTask as Task};
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv_util::worker::{Scheduler, Worker};
 
-use tempfile::Builder;
+use tempfile::{Builder, TempDir};
 
-fn tmp_engine() -> Arc<DB> {
+fn tmp_engine() -> (Arc<DB>, TempDir) {
     let path = Builder::new().prefix("test-config").tempdir().unwrap();
-    Arc::new(
-        rocks::util::new_engine(
-            path.path().join("db").to_str().unwrap(),
-            None,
-            &["split-check-config"],
-            None,
-        )
-        .unwrap(),
+    (
+        Arc::new(
+            rocks::util::new_engine(
+                path.path().join("db").to_str().unwrap(),
+                None,
+                &["split-check-config"],
+                None,
+            )
+            .unwrap(),
+        ),
+        path,
     )
 }
 
@@ -40,7 +43,7 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
     let mut worker: Worker<Task> = Worker::new("split-check-config");
     worker.start(runner).unwrap();
 
-    let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
+    let mut cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(
         Module::Coprocessor,
         Box::new(SplitCheckConfigManager(worker.scheduler())),
@@ -65,9 +68,10 @@ where
 
 #[test]
 fn test_update_split_check_config() {
+    let (engine, _dir) = tmp_engine();
     let mut cfg = TiKvConfig::default();
     cfg.validate().unwrap();
-    let engine = tmp_engine();
+    cfg.storage.data_dir = _dir.path().display().to_string();
     let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine);
     let scheduler = worker.scheduler();
 
@@ -82,9 +86,16 @@ fn test_update_split_check_config() {
 
     let change = {
         let mut m = std::collections::HashMap::new();
-        m.insert("coprocessor.split_region_on_table", "true");
-        m.insert("coprocessor.batch_split_limit", "123");
-        m.insert("coprocessor.region_split_keys", "12345");
+        m.insert(
+            "coprocessor.split_region_on_table".to_owned(),
+            "true".to_owned(),
+        );
+        m.insert("coprocessor.batch_split_limit".to_owned(), "123".to_owned());
+        m.insert(
+            "coprocessor.region_split_keys".to_owned(),
+            "12345".to_owned(),
+        );
+        m
     };
     cfg_controller.update(change).unwrap();
 

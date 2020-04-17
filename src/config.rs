@@ -2452,9 +2452,8 @@ mod tests {
     use super::*;
     use engine::rocks::util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
-    use kvproto::configpb::Version;
     use slog::Level;
-    use std::cmp::Ordering;
+    use std::sync::Arc;
     use toml;
 
     #[test]
@@ -2660,39 +2659,6 @@ mod tests {
             change.insert(name, value);
             assert!(to_config_change(change).is_err());
         }
-    }
-
-    #[test]
-    fn test_cmp_version() {
-        fn new_version((g1, l1): (u64, u64), (g2, l2): (u64, u64)) -> (Version, Version) {
-            let mut v1 = Version::default();
-            v1.set_global(g1);
-            v1.set_local(l1);
-            let mut v2 = Version::default();
-            v2.set_global(g2);
-            v2.set_local(l2);
-            (v1, v2)
-        }
-
-        let (v1, v2) = new_version((10, 10), (10, 10));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Equal);
-
-        // either global or local of v1 less than global or local of v2
-        // Ordering::Less shuold be returned
-        let (small, big) = (10, 11);
-        let (v1, v2) = new_version((small, 10), (big, 10));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-        let (v1, v2) = new_version((small, 20), (big, 10));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-        let (v1, v2) = new_version((small, 10), (big, 20));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-
-        let (v1, v2) = new_version((10, small), (10, big));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-        let (v1, v2) = new_version((20, small), (10, big));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-        let (v1, v2) = new_version((10, small), (20, big));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
     }
 
     fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController, TempDir) {

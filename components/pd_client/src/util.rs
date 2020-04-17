@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Deref;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -13,10 +12,9 @@ use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
 use grpcio::{
-    CallOption, Channel, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
 };
-use kvproto::configpb::ConfigClient;
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient, RegionHeartbeatRequest,
     RegionHeartbeatResponse, ResponseHeader,
@@ -28,33 +26,6 @@ use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 
-pub struct PdClientStub {
-    pd_client: PdClient,
-    config_client: ConfigClient,
-}
-
-impl PdClientStub {
-    fn new(ch: Channel) -> Self {
-        // reuse the same channel for tow different client
-        PdClientStub {
-            pd_client: PdClient::new(ch.clone()),
-            config_client: ConfigClient::new(ch),
-        }
-    }
-
-    pub fn config(&self) -> &ConfigClient {
-        &self.config_client
-    }
-}
-
-impl Deref for PdClientStub {
-    type Target = PdClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.pd_client
-    }
-}
-
 pub struct Inner {
     env: Arc<Environment>,
     pub hb_sender: Either<
@@ -62,7 +33,7 @@ pub struct Inner {
         UnboundedSender<RegionHeartbeatRequest>,
     >,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Task>,
-    pub client_stub: PdClientStub,
+    pub client_stub: PdClient,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
@@ -118,7 +89,7 @@ impl LeaderClient {
     pub fn new(
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        client_stub: PdClientStub,
+        client_stub: PdClient,
         members: GetMembersResponse,
     ) -> LeaderClient {
         let (tx, rx) = client_stub.region_heartbeat().unwrap();
@@ -342,7 +313,7 @@ where
 /// Do a request in synchronized fashion.
 pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
 where
-    F: Fn(&PdClientStub) -> GrpcResult<R>,
+    F: Fn(&PdClient) -> GrpcResult<R>,
 {
     let mut err = None;
     for _ in 0..retry {
@@ -369,7 +340,7 @@ pub fn validate_endpoints(
     env: Arc<Environment>,
     cfg: &Config,
     security_mgr: &SecurityManager,
-) -> Result<(PdClientStub, GetMembersResponse)> {
+) -> Result<(PdClient, GetMembersResponse)> {
     let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
 
@@ -423,7 +394,7 @@ fn connect(
     env: Arc<Environment>,
     security_mgr: &SecurityManager,
     addr: &str,
-) -> Result<(PdClientStub, GetMembersResponse)> {
+) -> Result<(PdClient, GetMembersResponse)> {
     info!("connecting to PD endpoint"; "endpoints" => addr);
     let addr = addr
         .trim_start_matches("http://")
@@ -433,7 +404,7 @@ fn connect(
         .keepalive_timeout(Duration::from_secs(3));
 
     let channel = security_mgr.connect(cb, addr);
-    let client = PdClientStub::new(channel);
+    let client = PdClient::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
     match client.get_members_opt(&GetMembersRequest::default(), option) {
         Ok(resp) => Ok((client, resp)),
@@ -445,7 +416,7 @@ pub fn try_connect_leader(
     env: Arc<Environment>,
     security_mgr: &SecurityManager,
     previous: &GetMembersResponse,
-) -> Result<(PdClientStub, GetMembersResponse)> {
+) -> Result<(PdClient, GetMembersResponse)> {
     let previous_leader = previous.get_leader();
     let members = previous.get_members();
     let cluster_id = previous.get_header().get_cluster_id();

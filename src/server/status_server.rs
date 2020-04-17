@@ -624,18 +624,15 @@ mod tests {
     use hyper_openssl::HttpsConnector;
     use openssl::ssl::SslFiletype;
     use openssl::ssl::{SslConnector, SslMethod};
-    use tokio_core::reactor::Handle;
 
     use std::env;
     use std::path::PathBuf;
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
-    use raftstore::store::PdTask;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
     use tikv_util::security::SecurityConfig;
-    use tikv_util::worker::{FutureRunnable, FutureWorker};
 
     #[test]
     fn test_status_service() {

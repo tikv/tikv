@@ -17,7 +17,6 @@ use tikv::import::SSTImporter;
 
 use engine::Engines;
 use engine_traits::ALL_CFS;
-use pd_client::ConfigClient;
 use pd_client::PdClient;
 use tempfile::{Builder, TempDir};
 use tikv_util::config::VersionTrack;
@@ -36,29 +35,23 @@ impl Transport for MockTransport {
 
 struct MockPdClient;
 impl PdClient for MockPdClient {}
-impl ConfigClient for MockPdClient {}
 
-fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
-    let path = Builder::new().prefix(path).tempdir().unwrap();
+fn create_tmp_engine(dir: &TempDir) -> Engines {
     let db = Arc::new(
-        rocks::util::new_engine(
-            path.path().join("db").to_str().unwrap(),
-            None,
-            ALL_CFS,
-            None,
-        )
-        .unwrap(),
+        rocks::util::new_engine(dir.path().join("db").to_str().unwrap(), None, ALL_CFS, None)
+            .unwrap(),
     );
     let raft_db = Arc::new(
-        rocks::util::new_engine(path.path().join("raft").to_str().unwrap(), None, &[], None)
+        rocks::util::new_engine(dir.path().join("raft").to_str().unwrap(), None, &[], None)
             .unwrap(),
     );
     let shared_block_cache = false;
-    (path, Engines::new(db, raft_db, shared_block_cache))
+    Engines::new(db, raft_db, shared_block_cache)
 }
 
 fn start_raftstore(
     cfg: TiKvConfig,
+    dir: &TempDir,
 ) -> (
     ConfigController,
     RaftRouter<RocksEngine>,
@@ -66,19 +59,29 @@ fn start_raftstore(
     RaftBatchSystem,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
-    let (_, engines) = create_tmp_engine("store-config");
+    let engines = create_tmp_engine(dir);
     let host = CoprocessorHost::default();
     let importer = {
-        let dir = Builder::new().prefix("store-config").tempdir().unwrap();
-        Arc::new(SSTImporter::new(dir.path()).unwrap())
+        let p = dir
+            .path()
+            .join("store-config-importer")
+            .as_path()
+            .display()
+            .to_string();
+        Arc::new(SSTImporter::new(&p).unwrap())
     };
     let snap_mgr = {
-        let tmp = Builder::new().prefix("store-config").tempdir().unwrap();
-        SnapManager::new(tmp.path().to_str().unwrap(), Some(raft_router.clone()))
+        let p = dir
+            .path()
+            .join("store-config-snp")
+            .as_path()
+            .display()
+            .to_string();
+        SnapManager::new(p, Some(raft_router.clone()))
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-    let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
+    let mut cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(
         Module::Raftstore,
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
@@ -137,16 +140,21 @@ where
 
 #[test]
 fn test_update_raftstore_config() {
+    let dir = Builder::new().tempdir().unwrap();
     let mut config = TiKvConfig::default();
     config.enable_dynamic_config = false;
+    config.storage.data_dir = dir.path().display().to_string();
     config.validate().unwrap();
-    let (mut cfg_controller, router, _, mut system) = start_raftstore(config.clone());
+    let (mut cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &dir);
 
     // dispatch updated config
     let change = {
         let mut m = std::collections::HashMap::new();
-        m.insert("raftstore.messages-per-tick", "12345");
-        m.insert("raftstore.raft-log-gc-threshold", "54321");
+        m.insert("raftstore.messages-per-tick".to_owned(), "12345".to_owned());
+        m.insert(
+            "raftstore.raft-log-gc-threshold".to_owned(),
+            "54321".to_owned(),
+        );
         m
     };
     cfg_controller.update(change).unwrap();
@@ -164,12 +172,14 @@ fn test_update_raftstore_config() {
 
 #[test]
 fn test_update_apply_store_config() {
+    let dir = Builder::new().tempdir().unwrap();
     let mut config = TiKvConfig::default();
     config.enable_dynamic_config = false;
     config.raft_store.sync_log = true;
+    config.storage.data_dir = dir.path().display().to_string();
     config.validate().unwrap();
     let (mut cfg_controller, raft_router, apply_router, mut system) =
-        start_raftstore(config.clone());
+        start_raftstore(config.clone(), &dir);
 
     // register region
     let region_id = 1;

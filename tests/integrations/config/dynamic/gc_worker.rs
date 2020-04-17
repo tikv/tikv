@@ -28,7 +28,7 @@ fn setup_cfg_controller(
     let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone());
     gc_worker.start().unwrap();
 
-    let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
+    let mut cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(Module::Gc, Box::new(gc_worker.get_config_manager()));
 
     (gc_worker, cfg_controller)
@@ -68,10 +68,11 @@ fn test_gc_worker_config_update() {
 
     // Update gc worker config
     let change = {
-        let mut change = HashMap::new();
+        let mut change = std::collections::HashMap::new();
         change.insert("gc.ratio-threshold".to_owned(), "1.23".to_owned());
         change.insert("gc.batch-keys".to_owned(), "1234".to_owned());
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "1KB".to_owned());
+        change
     };
     cfg_controller.update(change).unwrap();
     validate(&scheduler, move |cfg: &GcConfig, _| {

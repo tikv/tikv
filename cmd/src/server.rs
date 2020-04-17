@@ -27,7 +27,7 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-        new_compaction_listener, LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
+        new_compaction_listener, LocalReader, SnapManagerBuilder, SplitCheckRunner,
     },
 };
 use std::{
@@ -63,7 +63,7 @@ use tikv_util::{
     security::SecurityManager,
     sys::sys_quota::SysQuota,
     time::Monitor,
-    worker::{FutureScheduler, FutureWorker, Worker},
+    worker::{FutureWorker, Worker},
 };
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -136,7 +136,6 @@ struct Engines {
 }
 
 struct Servers {
-    pd_sender: FutureScheduler<PdTask>,
     lock_mgr: Option<LockManager>,
     server: Server<ServerRaftStoreRouter, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
@@ -156,7 +155,7 @@ impl TiKVServer {
         let pd_client = Self::connect_to_pd_cluster(&mut config, Arc::clone(&security_mgr));
 
         // Initialize and check config
-        let cfg_controller = Self::init_config(config, Arc::clone(&pd_client));
+        let cfg_controller = Self::init_config(config);
         let config = cfg_controller.get_current().clone();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
@@ -200,7 +199,7 @@ impl TiKVServer {
     /// - If the config can't pass `validate()`
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
-    fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
+    fn init_config(mut config: TiKvConfig) -> ConfigController {
         // TODO: register addr to pd
 
         ensure_dir_exist(&config.storage.data_dir).unwrap();
@@ -492,7 +491,7 @@ impl TiKVServer {
         } else {
             let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.coprocessor,
-                pd_sender.clone(),
+                pd_sender,
                 engines.engine.clone(),
             ));
             cop_read_pools.handle()
@@ -592,7 +591,6 @@ impl TiKVServer {
         self.to_stop.push(cdc_worker);
 
         self.servers = Some(Servers {
-            pd_sender,
             lock_mgr,
             server,
             node,

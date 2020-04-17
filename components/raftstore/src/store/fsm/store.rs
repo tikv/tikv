@@ -58,7 +58,7 @@ use crate::store::{
 use crate::Result;
 use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::{ConfigClient, PdClient};
+use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
@@ -995,7 +995,7 @@ impl RaftBatchSystem {
     }
 
     // TODO: reduce arguments
-    pub fn spawn<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
+    pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
@@ -1064,7 +1064,7 @@ impl RaftBatchSystem {
 
     fn start_system<
         T: Transport + 'static,
-        C: PdClient + ConfigClient + 'static,
+        C: PdClient + 'static,
         W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
     >(
         &mut self,

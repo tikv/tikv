@@ -22,7 +22,7 @@ fn change(name: &str, value: &str) -> HashMap<String, String> {
 
 #[test]
 fn test_update_config() {
-    let (cfg, dir) = config_with_dir();
+    let (cfg, _dir) = config_with_dir();
     let mut cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current().clone();
 
@@ -73,7 +73,7 @@ fn test_dispatch_change() {
         }
     }
 
-    let (cfg, dir) = config_with_dir();
+    let (cfg, _dir) = config_with_dir();
     let mut cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current().clone();
     let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
