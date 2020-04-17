@@ -21,10 +21,20 @@ mod threads_linux;
 #[cfg(target_os = "linux")]
 pub use self::threads_linux::monitor_threads;
 
+#[cfg(target_os = "linux")]
+mod memory_linux;
+#[cfg(target_os = "linux")]
+pub use self::memory_linux::monitor_memory;
+
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
 pub use self::threads_dummy::monitor_threads;
+
+#[cfg(not(target_os = "linux"))]
+mod memory_dummy;
+#[cfg(not(target_os = "linux"))]
+pub use self::memory_dummy::monitor_memory;
 
 /// `run_prometheus` runs a background prometheus client.
 pub fn run_prometheus(

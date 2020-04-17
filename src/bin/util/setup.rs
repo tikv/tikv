@@ -94,8 +94,10 @@ pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
 }
 
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
+    util::metrics::monitor_memory()
+        .unwrap_or_else(|e| fatal!("failed to start memory monitor: {}", e));
     util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
+        .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
 
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;
