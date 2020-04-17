@@ -162,13 +162,19 @@ impl Dicts {
         file.iv = Iv::new_ctr().as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
         file.method = compat(method);
-        self.file_dict.files.insert(fname.to_owned(), file);
+        self.file_dict.files.insert(fname.to_owned(), file.clone());
         self.save_file_dict()?;
+        if method != EncryptionMethod::Plaintext {
+            info!("new encrypted file"; 
+                  "fname" => fname, 
+                  "method" => format!("{:?}", method), 
+                  "iv" => hex::encode(file.iv));
+        }
         Ok(self.file_dict.files.get(fname).unwrap())
     }
 
     fn delete_file(&mut self, fname: &str) -> Result<()> {
-        self.file_dict.files.remove(fname).ok_or_else(|| {
+        let file = self.file_dict.files.remove(fname).ok_or_else(|| {
             Error::Io(IoError::new(
                 ErrorKind::NotFound,
                 format!("file not found, {}", fname),
@@ -176,7 +182,11 @@ impl Dicts {
         })?;
 
         // TOOD GC unused data keys.
-        self.save_file_dict()
+        self.save_file_dict()?;
+        if file.method != EncryptionMethod::Plaintext {
+            info!("delete encrypted file"; "fname" => fname);
+        }
+        Ok(())
     }
 
     fn link_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
@@ -197,8 +207,13 @@ impl Dicts {
                 format!("file already exists, {}", dst_fname),
             )));
         }
+        let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict()
+        self.save_file_dict()?;
+        if method != EncryptionMethod::Plaintext {
+            info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        }
+        Ok(())
     }
 
     fn rename_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
@@ -208,8 +223,13 @@ impl Dicts {
                 format!("file not found, {}", src_fname),
             ))
         })?;
+        let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict()
+        self.save_file_dict()?;
+        if method != EncryptionMethod::Plaintext {
+            info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        }
+        Ok(())
     }
 
     fn rotate_key(&mut self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
