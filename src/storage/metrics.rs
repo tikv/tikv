@@ -11,7 +11,7 @@ use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {
-    local_scan_details: HashMap<&'static str, Statistics>,
+    local_scan_details: HashMap<CommandKind, Statistics>,
     local_read_flow_stats: HashMap<u64, FlowStatistics>,
 }
 
@@ -29,19 +29,11 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         let mut m = m.borrow_mut();
 
         for (cmd, stat) in m.local_scan_details.drain() {
-            let cmd_enum = match cmd {
-                "get" => CommandKind::get,
-                "batch_get" => CommandKind::batch_get,
-                "scan" => CommandKind::scan,
-                "raw_scan" => CommandKind::raw_scan,
-                "raw_batch_scan" => CommandKind::raw_batch_scan,
-                _ => panic!("should not happen"),
-            };
 
             for (cf, cf_details) in stat.details_enum().iter() {
                 for (tag, count) in cf_details.iter() {
                     KV_COMMAND_SCAN_DETAILS_STATIC
-                        .get(cmd_enum)
+                        .get(cmd)
                         .get((*cf).into())
                         .get((*tag).into())
                         .inc_by(*count as i64);
@@ -78,7 +70,7 @@ pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
     TLS_STORAGE_METRICS.with(|m| {
         m.borrow_mut()
             .local_scan_details
-            .entry(cmd.get_str())
+            .entry(cmd)
             .or_insert_with(Default::default)
             .add(stats);
     });
