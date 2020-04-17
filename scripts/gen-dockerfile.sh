@@ -22,7 +22,7 @@ RUN yum install -y epel-release && \
 
 RUN yum install -y \
         perl \
-        make cmake3 pkg-config dwz \
+        make cmake3 dwz \
         gcc gcc-c++ libstdc++-static && \
     yum clean all
 EOT
