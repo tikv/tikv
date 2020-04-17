@@ -151,27 +151,14 @@ pub fn tls_collect_qps(
 ) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
-        let mut key_range = build_key_range(start_key, end_key, false);
-        if reverse_scan {
-            std::mem::swap(&mut key_range.start_key, &mut key_range.end_key)
-        }
+        let key_range = build_key_range(start_key, end_key, reverse_scan);
         m.local_qps_stats.add(region_id, peer, key_range);
     });
 }
 
-pub fn tls_collect_qps_batch(
-    region_id: u64,
-    peer: &metapb::Peer,
-    mut key_ranges: Vec<KeyRange>,
-    reverse_scan: bool,
-) {
+pub fn tls_collect_qps_batch(region_id: u64, peer: &metapb::Peer, key_ranges: Vec<KeyRange>) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
-        if reverse_scan {
-            for range in key_ranges.iter_mut() {
-                std::mem::swap(&mut range.start_key, &mut range.end_key)
-            }
-        }
         m.local_qps_stats.batch_add(region_id, peer, key_ranges);
     });
 }

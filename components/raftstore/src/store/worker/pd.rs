@@ -384,7 +384,7 @@ impl StatsMonitor {
                             }
                         }
                     }
-                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval); //
+                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
                     auto_split_controller.refresh_cfg();
                 }
             })?;

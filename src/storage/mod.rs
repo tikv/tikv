@@ -371,7 +371,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         key_ranges.push(build_key_range(&key, &key, false));
                     }
                 }
-                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges, false);
+                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
@@ -697,7 +697,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 for key in &keys {
                     key_ranges.push(build_key_range(key, key, false));
                 }
-                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges, false);
+                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
@@ -1084,12 +1084,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 metrics::tls_collect_command_count(CMD, priority_tag);
-                tls_collect_qps_batch(
-                    ctx.get_region_id(),
-                    ctx.get_peer(),
-                    ranges.clone(),
-                    reverse_scan,
-                );
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
@@ -1135,7 +1129,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         };
                         result.extend(pairs.into_iter());
                     }
-
+                    if reverse_scan {
+                        for range in ranges.iter_mut() {
+                            std::mem::swap(&mut range.start_key, &mut range.end_key)
+                        }
+                    }
+                    tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), ranges);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_key_reads(
                         CMD,
