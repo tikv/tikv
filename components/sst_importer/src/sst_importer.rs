@@ -14,6 +14,7 @@ use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
 use encryption::DataKeyManager;
+use engine_rocks::{encryption::get_env, RocksSstReader};
 use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
     SstWriter, CF_WRITE,
@@ -174,7 +175,9 @@ impl SSTImporter {
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
-        let sst_reader = E::SstReader::open(path_str)?;
+        let env = get_env(self.key_manager.clone(), None /*base_env*/)?;
+        // Use abstracted SstReader after Env is abstracted.
+        let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
         sst_reader.verify_checksum()?;
 
         debug!("downloaded file and verified";
