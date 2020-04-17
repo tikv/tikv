@@ -7,6 +7,7 @@ use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
+use engine_rocks::RocksEngine;
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
@@ -398,7 +399,7 @@ impl RoleChangeNotifier {
         }
     }
 
-    pub(crate) fn register(self, host: &mut CoprocessorHost) {
+    pub(crate) fn register(self, host: &mut CoprocessorHost<RocksEngine>) {
         host.registry
             .register_role_observer(1, BoxRoleObserver::new(self.clone()));
         host.registry
@@ -1085,7 +1086,9 @@ pub mod tests {
         }
     }
 
-    fn start_deadlock_detector(host: &mut CoprocessorHost) -> (FutureWorker<Task>, Scheduler) {
+    fn start_deadlock_detector(
+        host: &mut CoprocessorHost<RocksEngine>,
+    ) -> (FutureWorker<Task>, Scheduler) {
         let waiter_mgr_worker = FutureWorker::new("dummy-waiter-mgr");
         let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
         let mut detector_worker = FutureWorker::new("test-deadlock-detector");
