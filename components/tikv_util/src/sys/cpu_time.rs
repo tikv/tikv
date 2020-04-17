@@ -22,7 +22,14 @@ impl LiunxStyleCpuTime {
     pub fn total(&self) -> u64 {
         // Note: guest(_nice) is not counted, since it is already in user.
         // See https://unix.stackexchange.com/questions/178045/proc-stat-is-guest-counted-into-user-time
-        self.user + self.system + self.idle + self.nice + self.iowait + self.irq + self.softirq + self.steal
+        self.user
+            + self.system
+            + self.idle
+            + self.nice
+            + self.iowait
+            + self.irq
+            + self.softirq
+            + self.steal
     }
 
     pub fn current() -> io::Result<LiunxStyleCpuTime> {
@@ -57,7 +64,7 @@ mod imp {
                 guest_nice: parts.next()?.parse::<u64>().ok()?,
             })
         })()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "first line of /proc/stat malformed"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "first line of /proc/stat malformed"))
     }
 }
 
@@ -138,7 +145,7 @@ mod imp {
                 steal: 0,
                 guest: 0,
                 nice: 0,
-                guest_nice: 0
+                guest_nice: 0,
             };
             let mut current = cpu_info as *const processor_cpu_load_info_data_t;
             for _ in 0..num_cpus_u {

@@ -153,8 +153,8 @@ mod sys {
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
     use sysinfo::{DiskExt, ProcessExt, SystemExt};
     use tikv_util::config::KB;
-    use tikv_util::sys::sys_quota::SysQuota;
     use tikv_util::sys::cpu_time::LiunxStyleCpuTime;
+    use tikv_util::sys::sys_quota::SysQuota;
 
     fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
         // CPU load
@@ -181,22 +181,22 @@ mod sys {
 
         let t1 = LiunxStyleCpuTime::current();
         if t1.is_err() {
-            return
+            return;
         }
         let t1 = t1.unwrap();
         if t1.total() == 0 {
-            return
+            return;
         }
 
         std::thread::sleep(std::time::Duration::from_secs(1));
 
         let t2 = LiunxStyleCpuTime::current();
         if t2.is_err() {
-            return
+            return;
         }
         let t2 = t2.unwrap();
         if t2.total() == 0 {
-            return
+            return;
         }
 
         let delta = t2 - t1;
