@@ -1314,8 +1314,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             if msg.has_extra_msg() {
                 // A learner can't vote so it sends the wake-up msg to others to find out whether
                 // it is removed due to conf change or merge.
-                need_gc_msg |=
-                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
             }
             let not_exist = util::find_peer(region, from_store_id).is_none();
             self.ctx
