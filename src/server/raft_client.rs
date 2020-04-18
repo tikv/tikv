@@ -242,7 +242,7 @@ impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
 struct RaftMsgCollector(usize);
 impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
     fn collect(&mut self, v: &mut Vec<RaftMessage>, e: RaftMessage) -> Option<RaftMessage> {
-        let mut msg_size = e.start_key.len() + e.end_key.len() + mem::size_of::<RaftMessage>();
+        let mut msg_size = e.start_key.len() + e.end_key.len();
         for entry in e.get_message().get_entries() {
             msg_size += entry.data.len();
         }
