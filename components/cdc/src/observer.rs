@@ -3,11 +3,12 @@
 use std::cell::RefCell;
 use std::sync::{Arc, RwLock};
 
+use engine_rocks::RocksEngine;
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;
 use raftstore::Error as RaftStoreError;
-use tikv_util::collections::HashSet;
+use tikv_util::collections::HashMap;
 use tikv_util::worker::Scheduler;
 
 use crate::endpoint::{Deregister, Task};
@@ -23,7 +24,7 @@ pub struct CdcObserver {
     sched: Scheduler<Task>,
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
-    observe_regions: Arc<RwLock<HashSet<u64>>>,
+    observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
     cmd_batches: RefCell<Vec<CmdBatch>>,
 }
 
@@ -40,7 +41,7 @@ impl CdcObserver {
         }
     }
 
-    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost) {
+    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
         // 100 is the priority of the observer. CDC should have a high priority.
         coprocessor_host
             .registry
@@ -55,18 +56,36 @@ impl CdcObserver {
 
     /// Subscribe an region, the observer will sink events of the region into
     /// its scheduler.
-    pub fn subscribe_region(&self, region_id: u64) {
-        self.observe_regions.write().unwrap().insert(region_id);
+    ///
+    /// Return pervious ObserveID if there is one.
+    pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
+        self.observe_regions
+            .write()
+            .unwrap()
+            .insert(region_id, observe_id)
     }
 
     /// Stops observe the region.
-    pub fn unsubscribe_region(&self, region_id: u64) {
-        self.observe_regions.write().unwrap().remove(&region_id);
+    ///
+    /// Return ObserverID if unsubscribe successfully.
+    pub fn unsubscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
+        let mut regions = self.observe_regions.write().unwrap();
+        // To avoid ABA problem, we must check the unique ObserveID.
+        if let Some(oid) = regions.get(&region_id) {
+            if *oid == observe_id {
+                return regions.remove(&region_id);
+            }
+        }
+        None
     }
 
     /// Check whether the region is subscribed or not.
-    pub fn is_subscribed(&self, region_id: u64) -> bool {
-        self.observe_regions.read().unwrap().contains(&region_id)
+    pub fn is_subscribed(&self, region_id: u64) -> Option<ObserveID> {
+        self.observe_regions
+            .read()
+            .unwrap()
+            .get(&region_id)
+            .cloned()
     }
 }
 
@@ -102,11 +121,12 @@ impl RoleObserver for CdcObserver {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
         if role != StateRole::Leader {
             let region_id = ctx.region().get_id();
-            if self.is_subscribed(region_id) {
+            if let Some(observe_id) = self.is_subscribed(region_id) {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::NotLeader(region_id, None);
                 let deregister = Deregister::Region {
                     region_id,
+                    observe_id,
                     err: CdcError::Request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
@@ -126,11 +146,12 @@ impl RegionChangeObserver for CdcObserver {
     ) {
         if let RegionChangeEvent::Destroy = event {
             let region_id = ctx.region().get_id();
-            if self.is_subscribed(region_id) {
+            if let Some(observe_id) = self.is_subscribed(region_id) {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::RegionNotFound(region_id);
                 let deregister = Deregister::Region {
                     region_id,
+                    observe_id,
                     err: CdcError::Request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
@@ -177,12 +198,18 @@ mod tests {
         observer.on_role_change(&mut ctx, StateRole::Follower);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
-        observer.subscribe_region(1);
+        let oid = ObserveID::new();
+        observer.subscribe_region(1, oid);
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, StateRole::Follower);
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::Deregister(Deregister::Region { region_id, .. }) => {
+            Task::Deregister(Deregister::Region {
+                region_id,
+                observe_id,
+                ..
+            }) => {
                 assert_eq!(region_id, 1);
+                assert_eq!(observe_id, oid);
             }
             _ => panic!("unexpected task"),
         };
@@ -191,8 +218,12 @@ mod tests {
         observer.on_role_change(&mut ctx, StateRole::Leader);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
+        // unsubscribed fail if observer id is different.
+        assert_eq!(observer.unsubscribe_region(1, ObserveID::new()), None);
+
         // No event if it is unsubscribed.
-        observer.unsubscribe_region(1);
+        let oid_ = observer.unsubscribe_region(1, oid).unwrap();
+        assert_eq!(oid_, oid);
         observer.on_role_change(&mut ctx, StateRole::Follower);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 

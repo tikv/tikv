@@ -181,8 +181,10 @@ pub enum SignificantMsg {
     /// Capture the changes of the region.
     CaptureChange {
         cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
         callback: Callback<RocksEngine>,
     },
+    LeaderCallback(Callback<RocksEngine>),
 }
 
 /// Message that will be sent to a peer.
@@ -311,7 +313,7 @@ pub enum PeerMsg<E: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes },
+    ApplyRes { res: ApplyTaskRes<E> },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
