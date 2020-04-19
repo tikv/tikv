@@ -106,8 +106,12 @@ impl Diagnostics for Service {
             .spawn_fn(move || {
                 let s = match tp {
                     ServerInfoType::LoadInfo | ServerInfoType::All => {
-                        let load = (sysinfo::NICLoad::snapshot(), sysinfo::IOLoad::snapshot());
-                        let when = Instant::now() + Duration::from_millis(100);
+                        let load = (
+                            sys::cpu_time_snapshot(),
+                            sysinfo::NICLoad::snapshot(),
+                            sysinfo::IOLoad::snapshot(),
+                        );
+                        let when = Instant::now() + Duration::from_millis(1000);
                         (Some(load), when)
                     }
                     _ => (None, Instant::now()),
@@ -156,7 +160,9 @@ mod sys {
     use tikv_util::sys::cpu_time::LiunxStyleCpuTime;
     use tikv_util::sys::sys_quota::SysQuota;
 
-    fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
+    type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
+
+    fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>) {
         // CPU load
         {
             let load = sysinfo::get_avg_load();
@@ -179,16 +185,9 @@ mod sys {
             collector.push(item);
         }
 
-        let t1 = LiunxStyleCpuTime::current();
-        if t1.is_err() {
+        if prev_cpu.is_none() {
             return;
         }
-        let t1 = t1.unwrap();
-        if t1.total() == 0 {
-            return;
-        }
-
-        std::thread::sleep(std::time::Duration::from_secs(1));
 
         let t2 = LiunxStyleCpuTime::current();
         if t2.is_err() {
@@ -199,7 +198,7 @@ mod sys {
             return;
         }
 
-        let delta = t2 - t1;
+        let delta = t2 - prev_cpu.unwrap();
         let delta_total = delta.total() as f64;
         let data: Vec<(&'static str, f64)> = vec![
             ("user", delta.user as f64 / delta_total),
@@ -285,7 +284,7 @@ mod sys {
         collector: &mut Vec<ServerInfoItem>,
     ) {
         let current = sysinfo::NICLoad::snapshot();
-        let rate = |cur, prev| (cur - prev) as f64 / 0.5;
+        let rate = |cur, prev| (cur - prev) as f64;
         for (name, cur) in current.into_iter() {
             let prev = match prev_nic.get(&name) {
                 Some(p) => p,
@@ -321,7 +320,7 @@ mod sys {
         collector: &mut Vec<ServerInfoItem>,
     ) {
         let current = sysinfo::IOLoad::snapshot();
-        let rate = |cur, prev| (cur - prev) as f64 / 0.5;
+        let rate = |cur, prev| (cur - prev) as f64;
         for (name, cur) in current.into_iter() {
             let prev = match prev_io.get(&name) {
                 Some(p) => p,
@@ -364,15 +363,28 @@ mod sys {
         }
     }
 
+    pub fn cpu_time_snapshot() -> CpuTimeSnapshot {
+        let t1 = LiunxStyleCpuTime::current();
+        if t1.is_err() {
+            return None;
+        }
+        let t1 = t1.unwrap();
+        if t1.total() == 0 {
+            return None;
+        }
+        Some(t1)
+    }
+
     /// load_info collects CPU/Memory/IO/Network load information
     pub fn load_info(
-        (prev_nic, prev_io): (
+        (prev_cpu, prev_nic, prev_io): (
+            CpuTimeSnapshot,
             HashMap<String, sysinfo::NICLoad>,
             HashMap<String, sysinfo::IOLoad>,
         ),
         collector: &mut Vec<ServerInfoItem>,
     ) {
-        cpu_load_info(collector);
+        cpu_load_info(prev_cpu, collector);
         mem_load_info(collector);
         nic_load_info(prev_nic, collector);
         io_load_info(prev_io, collector);
@@ -587,10 +599,11 @@ mod sys {
         use super::*;
         #[test]
         fn test_load_info() {
+            let prev_cpu = cpu_time_snapshot();
             let prev_nic = sysinfo::NICLoad::snapshot();
             let prev_io = sysinfo::IOLoad::snapshot();
             let mut collector = vec![];
-            load_info((prev_nic, prev_io), &mut collector);
+            load_info((prev_cpu, prev_nic, prev_io), &mut collector);
             #[cfg(linux)]
             let tps = vec!["cpu", "memory", "net", "io"];
             #[cfg(not(linux))]
