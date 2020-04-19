@@ -23,8 +23,8 @@ use crate::storage::{
 };
 use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
-use futures::{future, Async, Future, Sink, Stream};
 use futures::future::Either;
+use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
@@ -1135,13 +1135,20 @@ fn future_handle_empty(
 ) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
     let mut res = BatchCommandsEmptyResponse::default();
     res.set_test_id(req.get_test_id());
+    // `BatchCommandsNotify` processes futures in notify. If delay_time is too small, notify
+    // can be called immediately, so the future is polled recursively and lead to deadlock.
     if req.get_delay_time() < 10 {
         Either::A(future::result(Ok(res)))
     } else {
-        Either::B(tikv_util::timer::GLOBAL_TIMER_HANDLE
-            .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
-            .map(move |_| res)
-            .map_err(|_| unreachable!()))
+        Either::B(
+            tikv_util::timer::GLOBAL_TIMER_HANDLE
+                .delay(
+                    std::time::Instant::now()
+                        + std::time::Duration::from_millis(req.get_delay_time()),
+                )
+                .map(move |_| res)
+                .map_err(|_| unreachable!()),
+        )
     }
 }
 

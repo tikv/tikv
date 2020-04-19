@@ -2,8 +2,8 @@
 
 use futures::{Future, Sink, Stream};
 use grpcio::*;
-use kvproto::tikvpb::*;
 use kvproto::tikvpb::TikvClient;
+use kvproto::tikvpb::*;
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
@@ -71,7 +71,9 @@ fn test_empty_commands() {
         let mut batch_req = BatchCommandsRequest::default();
         for i in 0..10 {
             let mut req = batch_commands_request::Request::default();
-            req.cmd = Some(batch_commands_request::request::Cmd::Empty(Default::default()));
+            req.cmd = Some(batch_commands_request::request::Cmd::Empty(
+                Default::default(),
+            ));
             batch_req.mut_requests().push(req);
             batch_req.mut_request_ids().push(i);
         }
