@@ -9,7 +9,7 @@ use libc;
 use procinfo::pid as pid_info;
 
 use prometheus::core::{Collector, Desc};
-use prometheus::{proto, Gauge, Opts};
+use prometheus::{self, proto, Gauge, Opts};
 
 /// Monitors memory of the current process.
 pub fn monitor_memory() -> Result<()> {

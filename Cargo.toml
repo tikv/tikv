@@ -130,6 +130,9 @@ arrow = "0.10.0"
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+procinfo = {version = "0.3", optional = true}
+
 [workspace]
 members = [
   "fuzz",
