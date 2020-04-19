@@ -32,8 +32,8 @@ use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter>>,
+    snap_paths: HashMap<u64, (SnapManager<RocksEngine>, TempDir)>,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine>>>,
 }
 
 #[derive(Clone)]
@@ -121,7 +121,8 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
-    post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost)>>,
+    #[allow(clippy::type_complexity)]
+    post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
 }
 
 impl NodeCluster {
@@ -138,7 +139,10 @@ impl NodeCluster {
 
 impl NodeCluster {
     #[allow(dead_code)]
-    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<ServerRaftStoreRouter> {
+    pub fn get_node_router(
+        &self,
+        node_id: u64,
+    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine>> {
         self.trans
             .core
             .lock()
@@ -152,7 +156,11 @@ impl NodeCluster {
     // Set a function that will be invoked after creating each CoprocessorHost. The first argument
     // of `op` is the node_id.
     // Set this before invoking `run_node`.
-    pub fn post_create_coprocessor_host(&mut self, op: Box<dyn Fn(u64, &mut CoprocessorHost)>) {
+    #[allow(clippy::type_complexity)]
+    pub fn post_create_coprocessor_host(
+        &mut self,
+        op: Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>,
+    ) {
         self.post_create_coprocessor_host = Some(op)
     }
 
