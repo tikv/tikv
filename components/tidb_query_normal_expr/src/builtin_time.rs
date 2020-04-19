@@ -551,6 +551,32 @@ impl ScalarFunc {
         let time = Time::from_days(ctx, days)?;
         Ok(Some(Cow::Owned(time)))
     }
+    
+    #[inline]
+    pub fn make_date<'a>(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let mut year = try_opt!(self.children[0].eval_int(ctx, row)) as u32;
+        let mut days = try_opt!(self.children[1].eval_int(ctx, row)) as u32;
+        if days <= 0 || year > 9999 {
+            year = 10000 // for returning error
+        }
+        if year < 70 {
+            year += 2000;
+        } else if year < 100 {
+           year += 1900;
+        }
+        year -= 1;
+        let d4 = year/4;
+        let d100 = year/100;
+        let d400 = year/400;
+        let leap = d4-d100+d400;
+        days = days + leap + year*365 + 365;
+        let time = Time::from_days(ctx, days)?;
+        Ok(Some(Cow::Owned(time)))
+    }
 }
 
 #[cfg(test)]
@@ -1796,5 +1822,29 @@ mod tests {
 
         // test NULL case
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Month, Datum::Null);
+    }
+    
+    #[test]
+    fn test_make_date() {
+        let cases = vec![
+            (2014, 224234, "2627-12-07"),
+            (2014, 1, "2014-01-01"),
+            (7900, 705000, "9830-03-23"),
+            (7901, 705000, "9831-03-23"),
+            (7904, 705000, "9834-03-22"),
+            (8000, 705000, "9930-03-23"),
+            (8001, 705000, "9931-03-24"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            let datetime = Time::parse_date(&mut ctx, exp).unwrap();
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::MakeDate,
+                Datum::I64(arg1),
+                Datum::I64(arg2),
+                Datum::Time(datetime),
+            );
+        }
     }
 }
