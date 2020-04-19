@@ -4,7 +4,7 @@ use std::ffi::CString;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::{i64, mem};
+use std::i64;
 
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
