@@ -7,7 +7,7 @@ use super::{
 
 use std::{
     convert::TryInto,
-    io::{Error, ErrorKind, Result},
+    io::{Error, ErrorKind, Read, Result},
     sync::Arc,
 };
 
@@ -120,10 +120,7 @@ impl GCSStorage {
         })
     }
 
-    fn set_auth<R>(&self, req: &mut http::Request<R>, scope: tame_gcs::Scopes) -> Result<()>
-    where
-        R: AsyncRead + Send + Unpin,
-    {
+    fn set_auth(&self, req: &mut reqwest::Request, scope: tame_gcs::Scopes) -> Result<()> {
         let token_or_request = self
             .svc_access
             .get_token(&[scope])
@@ -136,9 +133,10 @@ impl GCSStorage {
                 ..
             } => {
                 // Use blocking IO.
-                let res = block_on_external_io(self.client.execute(request.into())).map_err(|e| {
-                    Error::new(ErrorKind::Other, format!("request token failed: {}", e))
-                })?;
+                let res =
+                    block_on_external_io(self.client.execute(request.into())).map_err(|e| {
+                        Error::new(ErrorKind::Other, format!("request token failed: {}", e))
+                    })?;
                 let response = self.convert_response(res)?;
 
                 self.svc_access
@@ -161,17 +159,13 @@ impl GCSStorage {
         Ok(())
     }
 
-    fn make_request<R: 'static>(
+    fn make_request(
         &self,
-        mut req: http::Request<R>,
+        mut req: reqwest::Request,
         scope: tame_gcs::Scopes,
-    ) -> Result<reqwest::Response>
-    where
-        R: AsyncRead + Send + Unpin,
-    {
+    ) -> Result<reqwest::Response> {
         self.set_auth(&mut req, scope)?;
-        let request = self.convert_request(req)?;
-        let response = block_on_external_io(self.client.execute(request))
+        let response = block_on_external_io(self.client.execute(req))
             .map_err(|e| Error::new(ErrorKind::Other, format!("make request fail: {}", e)))?;
         if !response.status().is_success() {
             let status = response.status();
@@ -262,7 +256,7 @@ impl ExternalStorage for GCSStorage {
                     format!("failed to create insert request: {}", e),
                 )
             })?;
-        self.make_request(req, tame_gcs::Scopes::ReadWrite)?;
+        self.make_request(self.convert_request(req)?, tame_gcs::Scopes::ReadWrite)?;
 
         Ok(())
     }
@@ -279,9 +273,15 @@ impl ExternalStorage for GCSStorage {
             Ok(request) => request,
             Err(e) => return GCSStorage::error_to_async_read(ErrorKind::Other, e),
         };
-        let (parts, _) = request.into_parts();
+        // The body is actually an std::io::Empty. The use of read_to_end is only to convert it
+        // into something convenient to convert into reqwest::Body.
+        let (parts, mut body) = request.into_parts();
+        let mut body_content = vec![];
+        if let Err(e) = body.read_to_end(&mut body_content) {
+            return GCSStorage::error_to_async_read(ErrorKind::Other, e);
+        }
         let response = match self.make_request(
-            http::Request::from_parts(parts, futures_util::io::empty()),
+            http::Request::from_parts(parts, body_content).into(),
             tame_gcs::Scopes::ReadOnly,
         ) {
             Ok(response) => response,
