@@ -64,7 +64,7 @@ impl SyncBenchRouter {
     }
 }
 
-impl RaftStoreRouter for SyncBenchRouter {
+impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
         Ok(())
     }
