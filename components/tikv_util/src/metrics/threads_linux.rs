@@ -31,6 +31,7 @@ struct ThreadsCollector {
     pid: pid_t,
     descs: Vec<Desc>,
     metrics: Mutex<Metrics>,
+    tid_retriever: Mutex<TidRetriever>,
 }
 
 impl ThreadsCollector {
@@ -92,6 +93,7 @@ impl ThreadsCollector {
                 voluntary_ctxt_switches,
                 nonvoluntary_ctxt_switches,
             }),
+            tid_retriever: Mutex::new(TidRetriever::new(pid)),
         }
     }
 }
@@ -107,8 +109,11 @@ impl Collector for ThreadsCollector {
         // Clean previous threads state.
         metrics.threads_state.reset();
 
-        let tids = get_thread_ids(self.pid).unwrap();
+        let mut tid_retriever = self.tid_retriever.lock().unwrap();
+        let tids = tid_retriever.get_tids();
+
         for tid in tids {
+            let tid = *tid;
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 // Threads CPU time.
                 let total = cpu_total(&stat);
@@ -285,6 +290,48 @@ lazy_static! {
             libc::sysconf(libc::_SC_CLK_TCK) as f64
         }
     };
+}
+
+const TID_MIN_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
+const TID_MAX_UPDATE_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+/// A helper that buffers the thread id list internally.
+struct TidRetriever {
+    pid: pid_t,
+    tid_buffer: Vec<i32>,
+    tid_buffer_last_update: Instant,
+    tid_buffer_update_interval: Duration,
+}
+
+impl TidRetriever {
+    pub fn new(pid: pid_t) -> Self {
+        Self {
+            pid,
+            tid_buffer: get_thread_ids(pid).unwrap(),
+            tid_buffer_last_update: Instant::now(),
+            tid_buffer_update_interval: TID_MIN_UPDATE_INTERVAL,
+        }
+    }
+
+    pub fn get_tids(&mut self) -> &[pid_t] {
+        // Update the tid list according to tid_buffer_update_interval.
+        // If tid is not changed, update the tid list less frequently.
+        if self.tid_buffer_last_update.elapsed() >= self.tid_buffer_update_interval {
+            let new_tid_buffer = get_thread_ids(self.pid).unwrap();
+            if new_tid_buffer == self.tid_buffer {
+                self.tid_buffer_update_interval *= 2;
+                if self.tid_buffer_update_interval > TID_MAX_UPDATE_INTERVAL {
+                    self.tid_buffer_update_interval = TID_MAX_UPDATE_INTERVAL;
+                }
+            } else {
+                self.tid_buffer = new_tid_buffer;
+                self.tid_buffer_update_interval = TID_MIN_UPDATE_INTERVAL;
+                self.tid_buffer_last_update = Instant::now();
+            }
+        }
+
+        &self.tid_buffer
+    }
 }
 
 #[cfg(test)]
