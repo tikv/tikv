@@ -20,8 +20,8 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
-use kvproto::replicate_mode::{
-    DrAutoSyncState, RegionReplicateStatus, RegionReplicateStatusState, ReplicateStatusMode,
+use kvproto::replication_modepb::{
+    DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
 };
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -56,7 +56,9 @@ use super::peer_storage::{
 };
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState, ReplicationMode};
+use super::util::{
+    self, check_region_epoch, is_initial_msg, Lease, LeaseState, ReplicationControl,
+};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -337,34 +339,34 @@ impl Peer {
         Ok(peer)
     }
 
-    pub fn init_commit_group(&mut self, mode: &mut ReplicationMode) {
-        debug!("init commit group"; "mode" => ?mode, "regioni_id" => self.region_id, "peer_id" => self.peer.id);
-        if mode.status.mode == ReplicateStatusMode::Majority {
+    pub fn init_commit_group(&mut self, control: &mut ReplicationControl) {
+        debug!("init commit group"; "control" => ?control, "regioni_id" => self.region_id, "peer_id" => self.peer.id);
+        if control.status.mode == ReplicationMode::Majority {
             self.replication_mode_version = 0;
             return;
         }
         if self.get_store().region().get_peers().is_empty() {
             return;
         }
-        self.replication_mode_version = mode.status.get_dr_autosync().state_id;
-        if mode.status.get_dr_autosync().state == DrAutoSyncState::Async {
+        self.replication_mode_version = control.status.get_dr_auto_sync().state_id;
+        if control.status.get_dr_auto_sync().state == DrAutoSyncState::Async {
             return;
         }
-        mode.calculate_commit_group(self.get_store().region().get_peers());
+        control.calculate_commit_group(self.get_store().region().get_peers());
         self.raft_group
             .raft
-            .assign_commit_groups(&mode.commit_group_buffer);
+            .assign_commit_groups(&control.commit_group_buffer);
     }
 
-    pub fn switch_commit_group(&mut self, mode: &Mutex<ReplicationMode>) {
-        debug!("switch commit group"; "mode" => ?mode, "regioni_id" => self.region_id, "peer_id" => self.peer.id);
-        let mut guard = mode.lock().unwrap();
-        let clear = if guard.status.mode == ReplicateStatusMode::Majority {
+    pub fn switch_commit_group(&mut self, control: &Mutex<ReplicationControl>) {
+        debug!("switch commit group"; "control" => ?control, "regioni_id" => self.region_id, "peer_id" => self.peer.id);
+        let mut guard = control.lock().unwrap();
+        let clear = if guard.status.mode == ReplicationMode::Majority {
             self.replication_mode_version = 0;
             true
         } else {
-            self.replication_mode_version = guard.status.get_dr_autosync().state_id;
-            guard.status.get_dr_autosync().state == DrAutoSyncState::Async
+            self.replication_mode_version = guard.status.get_dr_auto_sync().state_id;
+            guard.status.get_dr_auto_sync().state == DrAutoSyncState::Async
         };
         if clear {
             drop(guard);
@@ -2550,16 +2552,16 @@ impl Peer {
         None
     }
 
-    fn region_replicate_status(&mut self) -> Option<RegionReplicateStatus> {
+    fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {
         if self.replication_mode_version == 0 {
             return None;
         }
-        let mut status = RegionReplicateStatus::default();
+        let mut status = RegionReplicationStatus::default();
         status.state_id = self.replication_mode_version;
         status.state = match self.raft_group.raft.check_group_commit_consistent() {
-            Some(true) => RegionReplicateStatusState::IntegrityOverLabel,
-            Some(false) => RegionReplicateStatusState::Majority,
-            None => RegionReplicateStatusState::Unknown,
+            Some(true) => RegionReplicationState::IntegrityOverLabel,
+            Some(false) => RegionReplicationState::SimpleMajority,
+            None => RegionReplicationState::Unknown,
         };
         Some(status)
     }
@@ -2575,7 +2577,7 @@ impl Peer {
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
-            replicate_status: self.region_replicate_status(),
+            replication_status: self.region_replication_status(),
         };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(

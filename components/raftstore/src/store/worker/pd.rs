@@ -18,7 +18,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::replicate_mode::RegionReplicateStatus;
+use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
@@ -107,7 +107,7 @@ where
         written_keys: u64,
         approximate_size: Option<u64>,
         approximate_keys: Option<u64>,
-        replicate_status: Option<RegionReplicateStatus>,
+        replication_status: Option<RegionReplicationStatus>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -216,14 +216,14 @@ where
             Task::Heartbeat {
                 ref region,
                 ref peer,
-                ref replicate_status,
+                ref replication_status,
                 ..
             } => write!(
                 f,
                 "heartbeat for region {:?}, leader {}, replicate status {:?}",
                 region,
                 peer.get_id(),
-                replicate_status
+                replication_status
             ),
             Task::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)
@@ -528,7 +528,7 @@ where
         region: metapb::Region,
         peer: metapb::Peer,
         region_stat: RegionStat,
-        replicate_status: Option<RegionReplicateStatus>,
+        replication_status: Option<RegionReplicationStatus>,
     ) {
         self.store_stat
             .region_bytes_written
@@ -545,7 +545,7 @@ where
 
         let f = self
             .pd_client
-            .region_heartbeat(term, region.clone(), peer, region_stat, replicate_status)
+            .region_heartbeat(term, region.clone(), peer, region_stat, replication_status)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -917,7 +917,7 @@ where
                 written_keys,
                 approximate_size,
                 approximate_keys,
-                replicate_status,
+                replication_status,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
                     get_region_approximate_size(&self.db, &region, 0).unwrap_or_default()
@@ -973,7 +973,7 @@ where
                         approximate_keys,
                         last_report_ts,
                     },
-                    replicate_status,
+                    replication_status,
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {

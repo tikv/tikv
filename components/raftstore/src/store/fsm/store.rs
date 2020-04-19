@@ -13,8 +13,8 @@ use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
-use kvproto::replicate_modepb::{ReplicateStatus, ReplicateStatusMode};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
+use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::{Ready, StateRole};
 use std::cmp::{Ord, Ordering as CmpOrdering};
@@ -45,7 +45,7 @@ use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
-use crate::store::util::{is_initial_msg, ReplicationMode};
+use crate::store::util::{is_initial_msg, ReplicationControl};
 use crate::store::worker::{
     CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask, CompactRunner, CompactTask,
     ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
@@ -198,7 +198,7 @@ impl<E: KvEngine> RaftRouter<E> {
     }
 
     fn report_status_update(&self) {
-        self.broadcast_normal(|| PeerMsg::ReplicateModeUpdate)
+        self.broadcast_normal(|| PeerMsg::ReplicationModeUpdate)
     }
 
     pub fn report_resolved(&self, store_id: u64, label_id: u64) {
@@ -242,7 +242,7 @@ pub struct PollContext<T, C: 'static> {
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
-    pub replication_mode: Arc<Mutex<ReplicationMode>>,
+    pub replication_control: Arc<Mutex<ReplicationControl>>,
 }
 
 impl<T, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollContext<T, C> {
@@ -755,7 +755,7 @@ pub struct RaftPollerBuilder<T, C> {
     global_stat: GlobalStoreStat,
     pub engines: KvEngines<RocksEngine, RocksEngine>,
     applying_snap_count: Arc<AtomicUsize>,
-    replication_mode: Arc<Mutex<ReplicationMode>>,
+    replication_control: Arc<Mutex<ReplicationControl>>,
 }
 
 impl<T: Transport, C> RaftPollerBuilder<T, C> {
@@ -779,7 +779,7 @@ impl<T: Transport, C> RaftPollerBuilder<T, C> {
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
-        let mut mode = self.replication_mode.lock().unwrap();
+        let mut mode = self.replication_control.lock().unwrap();
         kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
             let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
@@ -967,7 +967,7 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
-            replication_mode: self.replication_mode.clone(),
+            replication_control: self.replication_control.clone(),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
@@ -1028,7 +1028,7 @@ impl RaftBatchSystem {
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         dyn_cfg: Box<dyn DynamicConfig>,
-        replication_mode: Arc<Mutex<ReplicationMode>>,
+        replication_control: Arc<Mutex<ReplicationControl>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1072,7 +1072,7 @@ impl RaftBatchSystem {
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
             future_poller: workers.future_poller.sender().clone(),
-            replication_mode,
+            replication_control,
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
@@ -1499,7 +1499,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             region_id,
             target.clone(),
         )?;
-        let mut guard = self.ctx.replication_mode.lock().unwrap();
+        let mut guard = self.ctx.replication_control.lock().unwrap();
         peer.peer.init_commit_group(&mut *guard);
         drop(guard);
         // following snapshot may overlap, should insert into region_ranges after
@@ -2063,21 +2063,21 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         self.ctx.router.report_unreachable(store_id);
     }
 
-    fn on_replication_mode_update(&mut self, status: ReplicateStatus) {
-        let mut mode = self.ctx.replication_mode.lock().unwrap();
-        if mode.status.mode == status.mode {
-            if status.mode == ReplicateStatusMode::Majority {
+    fn on_replication_mode_update(&mut self, status: ReplicationStatus) {
+        let mut control = self.ctx.replication_control.lock().unwrap();
+        if control.status.mode == status.mode {
+            if status.mode == ReplicationMode::Majority {
                 return;
             }
-            let exist_dr = mode.status.get_dr_autosync();
-            let dr = status.get_dr_autosync();
+            let exist_dr = control.status.get_dr_auto_sync();
+            let dr = status.get_dr_auto_sync();
             if exist_dr.state_id == dr.state_id && exist_dr.state == dr.state {
                 return;
             }
         }
         info!("updating replication mode"; "status" => ?status);
-        mode.status = status;
-        drop(mode);
+        control.status = status;
+        drop(control);
         self.ctx.router.report_status_update()
     }
 }

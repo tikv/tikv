@@ -7,7 +7,7 @@ use std::{fmt, u64};
 
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
-use kvproto::replicate_mode::ReplicateStatus;
+use kvproto::replication_modepb::ReplicationStatus;
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
@@ -656,13 +656,13 @@ impl StoreGroup {
 }
 
 #[derive(Default, Debug)]
-pub struct ReplicationMode {
-    pub status: ReplicateStatus,
+pub struct ReplicationControl {
+    pub status: ReplicationStatus,
     pub group: StoreGroup,
     pub commit_group_buffer: Vec<(u64, u64)>,
 }
 
-impl ReplicationMode {
+impl ReplicationControl {
     pub fn calculate_commit_group(&mut self, peers: &[metapb::Peer]) {
         self.commit_group_buffer.clear();
         for p in peers {

@@ -15,8 +15,8 @@ use tokio_timer::timer::Handle;
 use kvproto::configpb;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
-use kvproto::replicate_mode::{
-    DrAutoSyncState, RegionReplicateStatus, ReplicateStatus, ReplicateStatusMode,
+use kvproto::replication_modepb::{
+    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
 };
 use raft::eraftpb;
 
@@ -233,8 +233,8 @@ struct Cluster {
 
     gc_safe_point: u64,
 
-    replication_status: Option<ReplicateStatus>,
-    region_replication_status: HashMap<u64, RegionReplicateStatus>,
+    replication_status: Option<ReplicationStatus>,
+    region_replication_status: HashMap<u64, RegionReplicationStatus>,
 }
 
 impl Cluster {
@@ -612,7 +612,7 @@ impl Cluster {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
-        replicate_status: Option<RegionReplicateStatus>,
+        replication_status: Option<RegionReplicationStatus>,
     ) -> Result<pdpb::RegionHeartbeatResponse> {
         for peer in region.get_peers() {
             self.down_peers.remove(&peer.get_id());
@@ -634,7 +634,7 @@ impl Cluster {
             .insert(region.get_id(), region_stat.last_report_ts);
         self.region_last_report_term.insert(region.get_id(), term);
 
-        if let Some(status) = replicate_status {
+        if let Some(status) = replication_status {
             self.region_replication_status.insert(region.id, status);
         }
 
@@ -997,22 +997,22 @@ impl TestPdClient {
     }
 
     pub fn configure_dr_auto_sync(&self, label_key: &str) {
-        let mut status = ReplicateStatus::default();
-        status.mode = ReplicateStatusMode::DrAutosync;
-        status.mut_dr_autosync().label_key = label_key.to_owned();
-        status.mut_dr_autosync().state_id = 1;
+        let mut status = ReplicationStatus::default();
+        status.mode = ReplicationMode::DrAutoSync;
+        status.mut_dr_auto_sync().label_key = label_key.to_owned();
+        status.mut_dr_auto_sync().state_id = 1;
         self.cluster.wl().replication_status = Some(status);
     }
 
     pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
         let mut cluster = self.cluster.wl();
         let status = cluster.replication_status.as_mut().unwrap();
-        let mut dr = status.mut_dr_autosync();
+        let mut dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
         dr.state = state;
     }
 
-    pub fn region_replicate_status(&self, region_id: u64) -> RegionReplicateStatus {
+    pub fn region_replication_status(&self, region_id: u64) -> RegionReplicationStatus {
         self.cluster
             .rl()
             .region_replication_status
@@ -1068,7 +1068,7 @@ impl PdClient for TestPdClient {
         &self,
         store: metapb::Store,
         region: metapb::Region,
-    ) -> Result<Option<ReplicateStatus>> {
+    ) -> Result<Option<ReplicationStatus>> {
         if self.is_cluster_bootstrapped().unwrap() || !self.is_regions_empty() {
             self.cluster.wl().set_bootstrap(true);
             return Err(Error::ClusterBootstrapped(self.cluster_id));
@@ -1089,7 +1089,7 @@ impl PdClient for TestPdClient {
         self.cluster.rl().alloc_id()
     }
 
-    fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicateStatus>> {
+    fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         self.check_bootstrap()?;
         let mut cluster = self.cluster.wl();
         cluster.put_store(store)?;
@@ -1147,7 +1147,7 @@ impl PdClient for TestPdClient {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
-        replicate_status: Option<RegionReplicateStatus>,
+        replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
@@ -1157,7 +1157,7 @@ impl PdClient for TestPdClient {
             region,
             leader.clone(),
             region_stat,
-            replicate_status,
+            replication_status,
         );
         match resp {
             Ok(resp) => {
@@ -1271,7 +1271,7 @@ impl PdClient for TestPdClient {
         Box::new(ok(resp))
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<Option<ReplicateStatus>> {
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }

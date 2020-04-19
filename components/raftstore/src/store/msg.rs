@@ -11,7 +11,7 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::replicate_mode::ReplicateStatus;
+use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -318,7 +318,9 @@ pub enum PeerMsg<E: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes<E> },
+    ApplyRes {
+        res: ApplyTaskRes<E>,
+    },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
@@ -330,7 +332,7 @@ pub enum PeerMsg<E: KvEngine> {
     CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
-    ReplicateModeUpdate,
+    ReplicationModeUpdate,
 }
 
 impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
@@ -349,7 +351,7 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
-            PeerMsg::ReplicateModeUpdate => write!(fmt, "ReplicateModeUpdate"),
+            PeerMsg::ReplicationModeUpdate => write!(fmt, "ReplicationModeUpdate"),
         }
     }
 }
@@ -383,7 +385,7 @@ pub enum StoreMsg {
     /// Messge only used for test
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
-    ReplicationModeUpdate(ReplicateStatus),
+    ReplicationModeUpdate(ReplicationStatus),
 }
 
 impl fmt::Debug for StoreMsg {
@@ -408,7 +410,7 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
-            StoreMsg::ReplicationModeUpdate(_) => write!(fmt, "ReplicateModeUpdate"),
+            StoreMsg::ReplicationModeUpdate(_) => write!(fmt, "ReplicationModeUpdate"),
         }
     }
 }

@@ -12,7 +12,7 @@ use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::replicate_mode::{RegionReplicateStatus, ReplicateStatus};
+use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
@@ -138,7 +138,7 @@ impl PdClient for RpcClient {
         &self,
         stores: metapb::Store,
         region: metapb::Region,
-    ) -> Result<Option<ReplicateStatus>> {
+    ) -> Result<Option<ReplicationStatus>> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["bootstrap_cluster"])
             .start_coarse_timer();
@@ -152,7 +152,7 @@ impl PdClient for RpcClient {
             client.bootstrap_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
-        Ok(resp.replicate_status.take())
+        Ok(resp.replication_status.take())
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
@@ -187,7 +187,7 @@ impl PdClient for RpcClient {
         Ok(resp.get_id())
     }
 
-    fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicateStatus>> {
+    fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["put_store"])
             .start_coarse_timer();
@@ -201,7 +201,7 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.replicate_status.take())
+        Ok(resp.replication_status.take())
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
@@ -305,7 +305,7 @@ impl PdClient for RpcClient {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
-        replicate_status: Option<RegionReplicateStatus>,
+        replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
 
@@ -322,8 +322,8 @@ impl PdClient for RpcClient {
         req.set_keys_read(region_stat.read_keys);
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
-        if let Some(s) = replicate_status {
-            req.set_replicate_status(s);
+        if let Some(s) = replication_status {
+            req.set_replication_status(s);
         }
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(region_stat.last_report_ts.into_inner());
@@ -437,7 +437,7 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<Option<ReplicateStatus>> {
+    fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
         let timer = Instant::now();
 
         let mut req = pdpb::StoreHeartbeatRequest::default();
@@ -457,7 +457,7 @@ impl PdClient for RpcClient {
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
                 check_resp_header(resp.get_header())?;
-                Ok(resp.replicate_status.take())
+                Ok(resp.replication_status.take())
             })) as PdFuture<_>
         };
 

@@ -3,7 +3,7 @@
 use std::thread;
 use std::time::Duration;
 
-use kvproto::replicate_mode::*;
+use kvproto::replication_modepb::*;
 use raft::eraftpb::ConfChangeType;
 use std::sync::mpsc;
 use test_raftstore::*;
@@ -59,9 +59,9 @@ fn test_integrity_over_first_label() {
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
     thread::sleep(Duration::from_millis(100));
-    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    let state = cluster.pd_client.region_replication_status(region.get_id());
     assert_eq!(state.state_id, 1);
-    assert_eq!(state.state, RegionReplicateStatusState::IntegrityOverLabel);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 
     cluster.clear_send_filters();
     cluster.add_send_filter(IsolationFilterFactory::new(3));
@@ -83,9 +83,9 @@ fn test_integrity_over_first_label() {
         Err(mpsc::RecvTimeoutError::Timeout)
     );
     must_get_none(&cluster.get_engine(1), b"k2");
-    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    let state = cluster.pd_client.region_replication_status(region.get_id());
     assert_eq!(state.state_id, 1);
-    assert_eq!(state.state, RegionReplicateStatusState::IntegrityOverLabel);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 
     cluster
         .pd_client
@@ -93,9 +93,9 @@ fn test_integrity_over_first_label() {
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     thread::sleep(Duration::from_millis(100));
-    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    let state = cluster.pd_client.region_replication_status(region.get_id());
     assert_eq!(state.state_id, 2);
-    assert_eq!(state.state, RegionReplicateStatusState::Majority);
+    assert_eq!(state.state, RegionReplicationState::SimpleMajority);
 
     cluster
         .pd_client
@@ -119,16 +119,16 @@ fn test_integrity_over_first_label() {
         Err(mpsc::RecvTimeoutError::Timeout)
     );
     must_get_none(&cluster.get_engine(1), b"k3");
-    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    let state = cluster.pd_client.region_replication_status(region.get_id());
     assert_eq!(state.state_id, 3);
-    assert_eq!(state.state, RegionReplicateStatusState::Majority);
+    assert_eq!(state.state, RegionReplicationState::SimpleMajority);
 
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
     thread::sleep(Duration::from_millis(100));
-    let state = cluster.pd_client.region_replicate_status(region.get_id());
+    let state = cluster.pd_client.region_replication_status(region.get_id());
     assert_eq!(state.state_id, 3);
-    assert_eq!(state.state, RegionReplicateStatusState::IntegrityOverLabel);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 }
 
 /// Conf change should consider labels when IntegrityOverFirstLabel is chosen.

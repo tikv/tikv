@@ -224,7 +224,7 @@ impl Simulator for ServerCluster {
         let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
         // Create pd client, snapshot manager, server.
-        let (worker, resolver, meta) =
+        let (worker, resolver, control) =
             resolve::new_resolver(Arc::clone(&self.pd_client), router.clone()).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
@@ -285,7 +285,7 @@ impl Simulator for ServerCluster {
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
-            meta,
+            control,
         );
 
         // Register the role change observer of the lock manager.

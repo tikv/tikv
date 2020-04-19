@@ -5,11 +5,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use kvproto::metapb;
-use kvproto::replicate_mode::ReplicateStatusMode;
+use kvproto::replication_modepb::ReplicationMode;
 
 use engine_traits::KvEngine;
 use pd_client::{take_peer_address, PdClient};
-use raftstore::store::util::ReplicationMode;
+use raftstore::store::util::ReplicationControl;
 use raftstore::store::RaftRouter;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
@@ -48,7 +48,7 @@ struct StoreAddr {
 struct Runner<T: PdClient, E: KvEngine> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
-    mode: Arc<Mutex<ReplicationMode>>,
+    control: Arc<Mutex<ReplicationControl>>,
     router: Option<RaftRouter<E>>,
 }
 
@@ -77,19 +77,21 @@ impl<T: PdClient, E: KvEngine> Runner<T, E> {
         let pd_client = Arc::clone(&self.pd_client);
         let mut s = box_try!(pd_client.get_store(store_id));
         let mut label_id = None;
-        let mut mode = self.mode.lock().unwrap();
-        let label_key = &mode.status.get_dr_autosync().label_key;
-        if mode.status.mode == ReplicateStatusMode::DrAutosync {
-            if mode.group.label_id(store_id).is_none() {
+        let mut control = self.control.lock().unwrap();
+        let label_key = &control.status.get_dr_auto_sync().label_key;
+        if control.status.mode == ReplicationMode::DrAutoSync {
+            if control.group.label_id(store_id).is_none() {
                 for l in s.get_labels() {
                     if l.key == *label_key {
-                        label_id = mode.group.register_store(store_id, l.value.to_lowercase());
+                        label_id = control
+                            .group
+                            .register_store(store_id, l.value.to_lowercase());
                         break;
                     }
                 }
             }
         }
-        drop(mode);
+        drop(control);
         if let (Some(label_id), Some(router)) = (label_id, &self.router) {
             router.report_resolved(store_id, label_id);
         }
@@ -135,23 +137,23 @@ pub fn new_resolver<T, E>(
 ) -> Result<(
     Worker<Task>,
     PdStoreAddrResolver,
-    Arc<Mutex<ReplicationMode>>,
+    Arc<Mutex<ReplicationControl>>,
 )>
 where
     T: PdClient + 'static,
     E: KvEngine,
 {
     let mut worker = Worker::new("addr-resolver");
-    let mode = Arc::new(Mutex::new(ReplicationMode::default()));
+    let control = Arc::new(Mutex::new(ReplicationControl::default()));
     let runner = Runner {
         pd_client,
         store_addrs: HashMap::default(),
-        mode: mode.clone(),
+        control: control.clone(),
         router: Some(router),
     };
     box_try!(worker.start(runner));
     let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver, mode))
+    Ok((worker, resolver, control))
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -211,7 +213,7 @@ mod tests {
         Runner {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
-            mode: Default::default(),
+            control: Default::default(),
             router: None,
         }
     }

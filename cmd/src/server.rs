@@ -28,7 +28,7 @@ use raftstore::{
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
         new_compaction_listener,
-        util::ReplicationMode,
+        util::ReplicationControl,
         LocalReader, PdTask, SnapManagerBuilder, SplitCheckRunner,
     },
 };
@@ -120,7 +120,7 @@ struct TiKVServer {
     router: RaftRouter<RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
-    mode: Arc<Mutex<ReplicationMode>>,
+    control: Arc<Mutex<ReplicationControl>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<Engines>,
@@ -167,7 +167,7 @@ impl TiKVServer {
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
-        let (resolve_worker, resolver, mode) =
+        let (resolve_worker, resolver, control) =
             resolve::new_resolver(Arc::clone(&pd_client), router.clone())
                 .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
@@ -182,7 +182,7 @@ impl TiKVServer {
             router,
             system: Some(system),
             resolver,
-            mode,
+            control,
             store_path,
             encryption_key_manager: None,
             engines: None,
@@ -608,7 +608,7 @@ impl TiKVServer {
             &server_config,
             raft_store,
             self.pd_client.clone(),
-            self.mode.clone(),
+            self.control.clone(),
         );
 
         node.start(

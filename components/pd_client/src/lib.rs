@@ -35,7 +35,7 @@ use futures::Future;
 use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb;
-use kvproto::replicate_mode::{RegionReplicateStatus, ReplicateStatus};
+use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
@@ -100,7 +100,7 @@ pub trait PdClient: Send + Sync {
         &self,
         _stores: metapb::Store,
         _region: metapb::Region,
-    ) -> Result<Option<ReplicateStatus>> {
+    ) -> Result<Option<ReplicationStatus>> {
         unimplemented!();
     }
 
@@ -119,7 +119,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Informs PD when the store starts or some store information changes.
-    fn put_store(&self, _store: metapb::Store) -> Result<Option<ReplicateStatus>> {
+    fn put_store(&self, _store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         unimplemented!();
     }
 
@@ -172,7 +172,7 @@ pub trait PdClient: Send + Sync {
         _region: metapb::Region,
         _leader: metapb::Peer,
         _region_stat: RegionStat,
-        _replicate_status: Option<RegionReplicateStatus>,
+        _replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         unimplemented!();
     }
@@ -203,7 +203,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Sends store statistics regularly.
-    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<Option<ReplicateStatus>> {
+    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
         unimplemented!();
     }
 
