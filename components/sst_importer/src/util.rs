@@ -58,7 +58,7 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
 pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     path: P,
     clone: Q,
-    encryption_key_manager: &Option<Arc<DataKeyManager>>,
+    encryption_key_manager: Option<&Arc<DataKeyManager>>,
 ) -> Result<()> {
     let path = path.as_ref().to_str().unwrap();
     let clone = clone.as_ref().to_str().unwrap();
@@ -88,9 +88,12 @@ fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::prepare_sst_for_ingestion;
+
     use engine_rocks::{
-        util::new_engine, RocksCFOptions, RocksColumnFamilyOptions, RocksDBOptions, RocksEngine,
-        RocksIngestExternalFileOptions, RocksSstWriterBuilder, RocksTitanDBOptions,
+        util::{new_engine, RocksCFOptions},
+        RocksColumnFamilyOptions, RocksDBOptions, RocksEngine, RocksIngestExternalFileOptions,
+        RocksSstWriterBuilder, RocksTitanDBOptions,
     };
     use engine_traits::{
         CFHandleExt, CfName, ColumnFamilyOptions, DBOptions, ImportExt, IngestExternalFileOptions,
@@ -164,13 +167,13 @@ mod tests {
 
         // The first ingestion will hard link sst_path to sst_clone.
         check_hard_link(&sst_path, 1);
-        db.prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
+        prepare_sst_for_ingestion(&sst_path, &sst_clone, None).unwrap();
         db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
             .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         // If we prepare again, it will use hard link too.
-        db.prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
+        prepare_sst_for_ingestion(&sst_path, &sst_clone, None).unwrap();
         db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
             .unwrap();
         check_hard_link(&sst_path, 2);
@@ -182,7 +185,7 @@ mod tests {
 
         // The second ingestion will copy sst_path to sst_clone.
         check_hard_link(&sst_path, 2);
-        db.prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
+        prepare_sst_for_ingestion(&sst_path, &sst_clone, None).unwrap();
         db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
             .unwrap();
         check_hard_link(&sst_path, 2);

@@ -77,7 +77,7 @@ impl SSTImporter {
     }
 
     pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
-        match self.dir.ingest(meta, engine, &self.key_manager) {
+        match self.dir.ingest(meta, engine, self.key_manager.as_ref()) {
             Ok(_) => {
                 info!("ingest"; "meta" => ?meta);
                 Ok(())
@@ -425,13 +425,13 @@ impl ImportDir {
         &self,
         meta: &SstMeta,
         engine: &E,
-        key_manager: &Option<Arc<DataKeyManager>>,
+        key_manager: Option<&Arc<DataKeyManager>>,
     ) -> Result<()> {
         let start = Instant::now();
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
         let cf = engine.cf_handle(cf).expect("bad cf name");
-        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_ref())?;
+        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
         let length = meta.get_length();
         let crc32 = meta.get_crc32();
         // FIXME perform validate_sst_for_ingestion after we can handle sst file size correctly.
