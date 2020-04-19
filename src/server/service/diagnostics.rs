@@ -438,7 +438,7 @@ mod sys {
             let free = disk.get_available_space();
             let used = total - free;
             let free_pct = (free as f64) / (total as f64);
-            let used_pct = (free as f64) / (total as f64);
+            let used_pct = (used as f64) / (total as f64);
             let infos = vec![
                 ("type", format!("{:?}", disk.get_type())),
                 (

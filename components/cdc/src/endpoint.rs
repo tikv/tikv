@@ -205,7 +205,7 @@ pub struct Endpoint<T> {
     min_ts_region_id: u64,
 }
 
-impl<T: 'static + RaftStoreRouter> Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -774,7 +774,7 @@ impl Initializer {
     }
 }
 
-impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
@@ -808,7 +808,7 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter> RunnableWithTimer<Task, ()> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for Endpoint<T> {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         if self.min_resolved_ts != TimeStamp::max() {
