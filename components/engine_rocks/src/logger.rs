@@ -3,26 +3,26 @@
 use libc;
 use rocksdb::{DBInfoLogLevel as InfoLogLevel, Logger};
 use std::ffi::VaList;
-use std::mem;
+use std::mem::ManuallyDrop;
 
 #[derive(Default)]
 pub struct RocksdbLogger();
 
 impl Logger for RocksdbLogger {
-    fn logv(&self, log_level: InfoLogLevel, format: &str, ap: VaList) {
-        const BUF_SIZE: usize = 1024;
-        let mut buffer = Vec::<u8>::with_capacity(BUF_SIZE);
-        let buffer_ptr = buffer.as_mut_ptr();
+    fn logv(&self, log_level: InfoLogLevel, format: &str, mut ap: VaList) {
         unsafe {
+            const BUF_SIZE: usize = 1024 * 1024 * 2;
+            let buffer = vec![0u8; BUF_SIZE];
             // We're passing the buffer to C, so let's make
             // Rust forget about it for a while.
-            mem::forget(buffer);
 
+            let mut buffer = ManuallyDrop::new(buffer);
+            let buffer_ptr = buffer.as_mut_ptr();
             let bytes_written = libc::snprintf(
                 buffer_ptr as *mut libc::c_char,
-                BUF_SIZE as libc::size_t,
+                std::mem::size_of::<[u8; BUF_SIZE]>(),
                 format.as_ptr() as *const i8,
-                ap,
+                ap.as_va_list(),
             ) as usize;
 
             let buffer = Vec::from_raw_parts(buffer_ptr, bytes_written, BUF_SIZE);
