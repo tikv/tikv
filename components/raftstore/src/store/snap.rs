@@ -1532,7 +1532,7 @@ pub mod tests {
     use std::f64::INFINITY;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
-    use std::path::{PathBuf, Path};
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
