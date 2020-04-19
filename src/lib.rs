@@ -123,6 +123,8 @@ extern crate hyper;
 extern crate tokio_threadpool;
 #[macro_use]
 extern crate more_asserts;
+#[cfg(target_os = "linux")]
+extern crate procinfo;
 
 #[macro_use]
 pub mod util;

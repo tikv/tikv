@@ -131,7 +131,7 @@ arrow = "0.10.0"
 signal = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = {version = "0.3", optional = true}
+procinfo = "0.3"
 
 [workspace]
 members = [
