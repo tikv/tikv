@@ -126,6 +126,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Substring2Args
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::DateDiff
+            | ScalarFuncSig::MakeDate
             | ScalarFuncSig::AddDatetimeAndDuration
             | ScalarFuncSig::AddDatetimeAndString
             | ScalarFuncSig::AddDurationAndDuration
@@ -932,6 +933,7 @@ dispatch_call! {
         SubDatetimeAndString => sub_datetime_and_string,
         SubTimeDateTimeNull => sub_time_datetime_null,
         FromDays => from_days,
+        MakeDate => make_date,
 
         IfNullTime => if_null_time,
         IfTime => if_time,
