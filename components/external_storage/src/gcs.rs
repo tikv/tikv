@@ -52,10 +52,7 @@ impl GCSStorage {
         let svc_access = ServiceAccountAccess::new(svc_info).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidInput,
-                format!(
-                    "invalid credentials_blob {}: {}",
-                    config.credentials_blob, e
-                ),
+                format!("invalid credentials_blob {}", e),
             )
         })?;
         let client = Client::builder().build().map_err(|e| {
