@@ -39,15 +39,14 @@ use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_
 use encryption::EncryptionConfig;
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
-    db_exist, get_cf_handle, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-    NoopSliceTransform,
+    db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
-use engine::DB;
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
-    RangePropertiesCollectorFactory, RocksEventListener, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
+use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, ConfigClient, Error as PdError};
@@ -1176,12 +1175,12 @@ pub enum DBType {
 }
 
 pub struct DBConfigManger {
-    db: Arc<DB>,
+    db: RocksEngine,
     db_type: DBType,
 }
 
 impl DBConfigManger {
-    pub fn new(db: Arc<DB>, db_type: DBType) -> Self {
+    pub fn new(db: RocksEngine, db_type: DBType) -> Self {
         DBConfigManger { db, db_type }
     }
 }
@@ -1194,7 +1193,7 @@ impl DBConfigManger {
 
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
         self.validate_cf(cf)?;
-        let handle = get_cf_handle(&self.db, cf)?;
+        let handle = self.db.cf_handle(cf)?;
         self.db.set_options_cf(handle, opts)?;
         // Write config to metric
         for (cfg_name, cfg_value) in opts {
@@ -1214,7 +1213,7 @@ impl DBConfigManger {
 
     fn set_block_cache_size(&self, cf: &str, size: ReadableSize) -> Result<(), Box<dyn Error>> {
         self.validate_cf(cf)?;
-        let handle = get_cf_handle(&self.db, cf)?;
+        let handle = self.db.cf_handle(cf)?;
         let opt = self.db.get_options_cf(handle);
         opt.set_block_cache_capacity(size.0)?;
         // Write config to metric
@@ -1498,6 +1497,9 @@ macro_rules! readpool_config {
             }
 
             pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+                if self.use_unified_pool() {
+                    return Ok(());
+                }
                 if self.high_concurrency == 0 {
                     return Err(format!(
                         "readpool.{}.high-concurrency should be > 0",
@@ -1600,6 +1602,11 @@ macro_rules! readpool_config {
                 assert!(invalid_cfg.validate().is_err());
                 invalid_cfg.max_tasks_per_worker_low = 100;
                 assert!(cfg.validate().is_ok());
+
+                let mut invalid_but_unified = cfg.clone();
+                invalid_but_unified.use_unified_pool = Some(true);
+                invalid_but_unified.low_concurrency = 0;
+                assert!(invalid_but_unified.validate().is_ok());
             }
         }
     };
@@ -1696,10 +1703,9 @@ impl ReadPoolConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.is_unified_pool_enabled() {
             self.unified.validate()?;
-        } else {
-            self.storage.validate()?;
-            self.coprocessor.validate()?;
         }
+        self.storage.validate()?;
+        self.coprocessor.validate()?;
         Ok(())
     }
 }
@@ -1760,28 +1766,6 @@ mod readpool_tests {
 
     #[test]
     fn test_unified_enabled() {
-        // Allow invalid storage and coprocessor config when yatp is used.
-        let unified = UnifiedReadPoolConfig::default();
-        assert!(unified.validate().is_ok());
-        let storage = StorageReadPoolConfig {
-            use_unified_pool: Some(true),
-            high_concurrency: 0,
-            ..Default::default()
-        };
-        assert!(storage.validate().is_err());
-        let coprocessor = CoprReadPoolConfig {
-            high_concurrency: 0,
-            ..Default::default()
-        };
-        assert!(coprocessor.validate().is_err());
-        let cfg = ReadPoolConfig {
-            unified,
-            storage,
-            coprocessor,
-        };
-        assert!(cfg.is_unified_pool_enabled());
-        assert!(cfg.validate().is_ok());
-
         // Yatp config must be valid when yatp is used.
         let unified = UnifiedReadPoolConfig {
             min_thread_count: 0,
@@ -1821,6 +1805,51 @@ mod readpool_tests {
 
         cfg.coprocessor.use_unified_pool = Some(false);
         assert!(!cfg.is_unified_pool_enabled());
+    }
+
+    #[test]
+    fn test_partially_unified() {
+        let storage = StorageReadPoolConfig {
+            use_unified_pool: Some(false),
+            low_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(!storage.use_unified_pool());
+        let coprocessor = CoprReadPoolConfig {
+            use_unified_pool: Some(true),
+            ..Default::default()
+        };
+        assert!(coprocessor.use_unified_pool());
+        let mut cfg = ReadPoolConfig {
+            storage,
+            coprocessor,
+            ..Default::default()
+        };
+        assert!(cfg.is_unified_pool_enabled());
+        assert!(cfg.validate().is_err());
+        cfg.storage.low_concurrency = 1;
+        assert!(cfg.validate().is_ok());
+
+        let storage = StorageReadPoolConfig {
+            use_unified_pool: Some(true),
+            ..Default::default()
+        };
+        assert!(storage.use_unified_pool());
+        let coprocessor = CoprReadPoolConfig {
+            use_unified_pool: Some(false),
+            low_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(!coprocessor.use_unified_pool());
+        let mut cfg = ReadPoolConfig {
+            storage,
+            coprocessor,
+            ..Default::default()
+        };
+        assert!(cfg.is_unified_pool_enabled());
+        assert!(cfg.validate().is_err());
+        cfg.coprocessor.low_concurrency = 1;
+        assert!(cfg.validate().is_ok());
     }
 }
 
@@ -2477,7 +2506,7 @@ impl ConfigHandler {
     pub fn start(
         id: String,
         mut controller: ConfigController,
-        scheduler: FutureScheduler<PdTask>,
+        scheduler: FutureScheduler<PdTask<RocksEngine>>,
     ) -> CfgResult<Self> {
         if controller.get_current().enable_dynamic_config {
             if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
@@ -2642,6 +2671,7 @@ mod tests {
 
     use super::*;
     use engine::rocks::util::new_engine_opt;
+    use engine_traits::DBOptions as DBOptionsTrait;
     use kvproto::configpb::Version;
     use slog::Level;
     use std::cmp::Ordering;
@@ -2831,10 +2861,10 @@ mod tests {
         assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
     }
 
-    fn new_engines(cfg: TiKvConfig) -> (Arc<DB>, ConfigController) {
+    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let engine = Arc::new(
+        let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
                 path,
                 DBOptions::new(),
@@ -2846,7 +2876,7 @@ mod tests {
                 ],
             )
             .unwrap(),
-        );
+        ));
 
         let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
         cfg_controller.register(

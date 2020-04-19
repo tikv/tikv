@@ -2,7 +2,6 @@
 
 use futures::sync::oneshot;
 use futures::{future, Future};
-use futures03::prelude::*;
 use kvproto::kvrpcpb::CommandPri;
 use std::cell::Cell;
 use std::future::Future as StdFuture;
@@ -88,7 +87,7 @@ impl ReadPoolHandle {
                     CommandPri::Low => read_pool_low,
                 };
 
-                pool.spawn(move || Box::pin(f.never_error()).compat())?;
+                pool.spawn(f)?;
             }
             ReadPoolHandle::Yatp {
                 remote,
