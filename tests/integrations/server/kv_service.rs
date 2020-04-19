@@ -2,13 +2,8 @@
 
 use futures::{Future, Sink, Stream};
 use grpcio::*;
-<<<<<<< HEAD
-use kvproto::tikvpb::BatchCommandsRequest;
-use kvproto::tikvpb_grpc::TikvClient;
-=======
-use kvproto::tikvpb::TikvClient;
 use kvproto::tikvpb::*;
->>>>>>> bd21a5b... kv_service: fix batch empty request deadlock (#7535)
+use kvproto::tikvpb_grpc::TikvClient;
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;

@@ -1427,16 +1427,6 @@ fn handle_batch_commands_request<E: Engine, L: LockMgr>(
 fn future_handle_empty(
     req: BatchCommandsEmptyRequest,
 ) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
-<<<<<<< HEAD
-    tikv_util::timer::GLOBAL_TIMER_HANDLE
-        .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
-        .map(move |_| {
-            let mut res = BatchCommandsEmptyResponse::new();
-            res.set_test_id(req.get_test_id());
-            res
-        })
-        .map_err(|_| unreachable!())
-=======
     let mut res = BatchCommandsEmptyResponse::default();
     res.set_test_id(req.get_test_id());
     // `BatchCommandsNotify` processes futures in notify. If delay_time is too small, notify
@@ -1454,7 +1444,6 @@ fn future_handle_empty(
                 .map_err(|_| unreachable!()),
         )
     }
->>>>>>> bd21a5b... kv_service: fix batch empty request deadlock (#7535)
 }
 
 fn future_get<E: Engine, L: LockMgr>(
