@@ -80,7 +80,7 @@ fn test_upload_sst() {
 
 #[test]
 fn test_ingest_sst() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
 
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
 
@@ -101,28 +101,41 @@ fn test_ingest_sst() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
-    // Cann't upload the same file again.
+    // Can't upload the same file again.
     assert!(send_upload_sst(&import, &meta, &data).is_err());
 
     ingest.set_sst(meta.clone());
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
+}
+
+#[test]
+fn test_ingest_sst_without_crc32() {
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_sst_without_crc32")
+        .tempdir()
+        .unwrap();
+
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
 
     // Set crc32 == 0 and length != 0 still ingest success
     send_upload_sst(&import, &meta, &data).unwrap();
-    let crc32 = meta.get_crc32();
     meta.set_crc32(0);
-    meta.set_length(data.len() as u64);
+
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx.clone());
     ingest.set_sst(meta.clone());
     let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
-    meta.set_crc32(crc32);
+    assert!(!resp.has_error(), "{:?}", resp.get_error());
 
     // Check ingested kvs
     check_ingested_kvs(&tikv, &ctx, sst_range);
-
-    // Upload the same file again to check if the ingested file has been deleted.
-    send_upload_sst(&import, &meta, &data).unwrap();
 }
 
 #[test]

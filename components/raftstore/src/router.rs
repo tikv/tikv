@@ -9,16 +9,19 @@ use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use raft::SnapshotStatus;
 
 /// Routes messages to the raftstore.
-pub trait RaftStoreRouter: Send + Clone {
+pub trait RaftStoreRouter<E>: Send + Clone
+where
+    E: KvEngine,
+{
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()>;
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()>;
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -53,20 +56,23 @@ pub trait RaftStoreRouter: Send + Clone {
         )
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()>;
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<E>) -> RaftStoreResult<()>;
 }
 
 #[derive(Clone)]
 pub struct RaftStoreBlackHole;
 
-impl RaftStoreRouter for RaftStoreBlackHole {
+impl<E> RaftStoreRouter<E> for RaftStoreBlackHole
+where
+    E: KvEngine,
+{
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         Ok(())
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksEngine>) -> RaftStoreResult<()> {
+    fn send_command(&self, _: RaftCmdRequest, _: Callback<E>) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -77,24 +83,30 @@ impl RaftStoreRouter for RaftStoreBlackHole {
 
     fn broadcast_unreachable(&self, _: u64) {}
 
-    fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<E>) -> RaftStoreResult<()> {
         Ok(())
     }
 }
 
 /// A router that routes messages to the raftstore
 #[derive(Clone)]
-pub struct ServerRaftStoreRouter {
-    router: RaftRouter<RocksEngine>,
-    local_reader: LocalReader<RaftRouter<RocksEngine>, RocksEngine>,
+pub struct ServerRaftStoreRouter<E>
+where
+    E: KvEngine,
+{
+    router: RaftRouter<E>,
+    local_reader: LocalReader<RaftRouter<E>, E>,
 }
 
-impl ServerRaftStoreRouter {
+impl<E> ServerRaftStoreRouter<E>
+where
+    E: KvEngine,
+{
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<RocksEngine>,
-        local_reader: LocalReader<RaftRouter<RocksEngine>, RocksEngine>,
-    ) -> ServerRaftStoreRouter {
+        router: RaftRouter<E>,
+        local_reader: LocalReader<RaftRouter<E>, E>,
+    ) -> ServerRaftStoreRouter<E> {
         ServerRaftStoreRouter {
             router,
             local_reader,
@@ -119,7 +131,10 @@ pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreErro
     }
 }
 
-impl RaftStoreRouter for ServerRaftStoreRouter {
+impl<E> RaftStoreRouter<E> for ServerRaftStoreRouter<E>
+where
+    E: KvEngine,
+{
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
         self.router
@@ -127,9 +142,9 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> RaftStoreResult<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
-        if LocalReader::<RaftRouter<RocksEngine>, RocksEngine>::acceptable(&cmd.request) {
+        if LocalReader::<RaftRouter<E>, E>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd);
             Ok(())
         } else {
@@ -153,7 +168,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         Ok(())
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<E>) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_send_error(region_id, e))

@@ -9,6 +9,8 @@ pub struct PerfStatisticsFields {
     pub block_cache_hit_count: usize,
     pub block_read_count: usize,
     pub block_read_byte: usize,
+    pub encrypt_data_nanos: usize,
+    pub decrypt_data_nanos: usize,
 }
 
 /// Store statistics we need. Data comes from RocksDB's `PerfContext`.
@@ -36,6 +38,8 @@ impl PerfStatisticsInstant {
             block_cache_hit_count: perf_context.block_cache_hit_count() as usize,
             block_read_count: perf_context.block_read_count() as usize,
             block_read_byte: perf_context.block_read_byte() as usize,
+            encrypt_data_nanos: perf_context.encrypt_data_nanos() as usize,
+            decrypt_data_nanos: perf_context.decrypt_data_nanos() as usize,
         })
     }
 
@@ -47,7 +51,7 @@ impl PerfStatisticsInstant {
 }
 
 /// Store statistics we need. Data comes from RocksDB's `PerfContext`.
-/// This this statistics store delta values between two instant statistics.
+/// This statistics store delta values between two instant statistics.
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign)]
 pub struct PerfStatisticsDelta(pub PerfStatisticsFields);
 
@@ -73,6 +77,7 @@ mod tests {
             block_cache_hit_count: 3,
             block_read_count: 4,
             block_read_byte: 5,
+            ..Default::default()
         };
         let f2 = PerfStatisticsFields {
             internal_key_skipped_count: 2,
@@ -80,6 +85,7 @@ mod tests {
             block_cache_hit_count: 5,
             block_read_count: 7,
             block_read_byte: 11,
+            ..Default::default()
         };
         let f3 = f1 + f2;
         assert_eq!(f3.internal_key_skipped_count, 3);
@@ -112,6 +118,7 @@ mod tests {
             block_cache_hit_count: 3,
             block_read_count: 4,
             block_read_byte: 5,
+            ..Default::default()
         });
         assert_eq!(stats.0.block_cache_hit_count, 3);
         stats.0.block_cache_hit_count = 6;

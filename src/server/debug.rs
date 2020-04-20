@@ -15,7 +15,7 @@ use engine::rocks::{
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines};
-use engine_rocks::{CloneCompat, Compat, RocksWriteBatch};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch};
 use engine_traits::{
     IterOptions, Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection,
     TablePropertiesExt, WriteBatch, WriteOptions,
@@ -509,7 +509,7 @@ impl Debugger {
                 })?;
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
-            let peer_storage = box_try!(PeerStorage::new(
+            let peer_storage = box_try!(PeerStorage::<RocksEngine, RocksEngine>::new(
                 self.engines.c(),
                 region,
                 fake_snap_worker.scheduler(),
@@ -1460,8 +1460,13 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let mut region = Region::default();
     region.mut_peers().push(Peer::default());
-    let default_cf_size = box_try!(get_region_approximate_keys_cf(db.c(), CF_DEFAULT, &region));
-    let write_cf_size = box_try!(get_region_approximate_keys_cf(db.c(), CF_WRITE, &region));
+    let default_cf_size = box_try!(get_region_approximate_keys_cf(
+        db.c(),
+        CF_DEFAULT,
+        &region,
+        0
+    ));
+    let write_cf_size = box_try!(get_region_approximate_keys_cf(db.c(), CF_WRITE, &region, 0));
 
     let cf = if default_cf_size >= write_cf_size {
         CF_DEFAULT
