@@ -597,29 +597,32 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe_closure_duration(|| {
-                        let cf = Self::rawkv_cf(&cf)?;
-                        // no scan_count for this kind of op.
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let cf = Self::rawkv_cf(&cf)?;
+                    // no scan_count for this kind of op.
 
-                        let key_len = key.len();
-                        let r = snapshot.get_cf(cf, &Key::from_encoded(key))?;
-                        if let Some(ref value) = r {
-                            let mut stats = Statistics::default();
-                            stats.data.flow_stats.read_keys = 1;
-                            stats.data.flow_stats.read_bytes = key_len + value.len();
-                            tls_collect_read_flow(ctx.get_region_id(), &stats);
-                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                                .get(CMD)
-                                .observe(1 as f64);
-                        }
-                        Ok(r)
-                    });
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                result
+                    let key_len = key.len();
+                    let r = snapshot.get_cf(cf, &Key::from_encoded(key))?;
+                    if let Some(ref value) = r {
+                        let mut stats = Statistics::default();
+                        stats.data.flow_stats.read_keys = 1;
+                        stats.data.flow_stats.read_bytes = key_len + value.len();
+                        tls_collect_read_flow(ctx.get_region_id(), &stats);
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(1 as f64);
+                    }
+
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
+                    Ok(r)
+                }
             },
             priority,
             thread_rng().next_u64(),
