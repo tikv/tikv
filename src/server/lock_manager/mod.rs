@@ -231,20 +231,12 @@ impl LockMgr for LockManager {
         }
     }
 
-    fn wake_up(
-        &self,
-        lock_ts: u64,
-        hashes: Option<Vec<u64>>,
-        commit_ts: u64,
-        is_pessimistic_txn: bool,
-    ) {
+    fn wake_up(&self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64, is_pessimistic_txn: bool) {
         // If `hashes` is some, there may be some waiters waiting for these locks.
         // Try to wake up them.
-        if self.has_waiter() {
-            if let Some(hashes) = hashes {
-                self.waiter_mgr_scheduler
-                    .wake_up(lock_ts, hashes, commit_ts);
-            }
+        if !hashes.is_empty() && self.has_waiter() {
+            self.waiter_mgr_scheduler
+                .wake_up(lock_ts, hashes, commit_ts);
         }
         // If a pessimistic transaction is committed or rolled back and it once sent requests to
         // detect deadlock, clean up its wait-for entries in the deadlock detector.
@@ -327,7 +319,7 @@ mod tests {
         let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
         lock_mgr.wait_for(waiter.start_ts, waiter.cb, waiter.pr, waiter.lock, true, 0);
         assert!(lock_mgr.has_waiter());
-        lock_mgr.wake_up(lock.ts, Some(vec![lock.hash]), 30, false);
+        lock_mgr.wake_up(lock.ts, vec![lock.hash], 30, false);
         assert_elapsed(
             || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, 30),
             0,
@@ -362,7 +354,7 @@ mod tests {
             200,
         );
         // Waiter2 releases its lock.
-        lock_mgr.wake_up(20, Some(vec![20]), 20, true);
+        lock_mgr.wake_up(20, vec![20], 20, true);
         assert_elapsed(
             || expect_write_conflict(f1.wait().unwrap(), 10, lock_info1, 20),
             0,
@@ -384,24 +376,24 @@ mod tests {
             );
             assert!(lock_mgr.has_waiter());
             assert_eq!(lock_mgr.remove_from_detected(30), !is_first_lock);
-            lock_mgr.wake_up(40, Some(vec![40]), 40, false);
+            lock_mgr.wake_up(40, vec![40], 40, false);
             f.wait().unwrap().unwrap_err();
         }
         assert!(!lock_mgr.has_waiter());
 
         // If key_hashes is none, no wake up.
         let prev_wake_up = TASK_COUNTER_VEC.wake_up.get();
-        lock_mgr.wake_up(10, None, 10, false);
+        lock_mgr.wake_up(10, vec![], 10, false);
         assert_eq!(TASK_COUNTER_VEC.wake_up.get(), prev_wake_up);
 
         // If it's non-pessimistic-txn, no clean up.
         let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
-        lock_mgr.wake_up(10, None, 10, false);
+        lock_mgr.wake_up(10, vec![], 10, false);
         assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
 
         // If the txn doesn't wait for locks, no clean up.
         let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
-        lock_mgr.wake_up(10, None, 10, true);
+        lock_mgr.wake_up(10, vec![], 10, true);
         assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
 
         // If timeout is negative, no wait for.
