@@ -41,7 +41,7 @@ pub fn create_raft_storage<S>(
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
-    S: RaftStoreRouter + 'static,
+    S: RaftStoreRouter<RocksEngine> + 'static,
 {
     let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
     Ok(store)
@@ -118,10 +118,10 @@ where
         &mut self,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask>,
+        snap_mgr: SnapManager<RocksEngine>,
+        pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost,
+        coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
     ) -> Result<()>
@@ -332,10 +332,10 @@ where
         store_id: u64,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask>,
+        snap_mgr: SnapManager<RocksEngine>,
+        pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost,
+        coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
     ) -> Result<()>

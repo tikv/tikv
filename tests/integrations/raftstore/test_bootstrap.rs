@@ -91,7 +91,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(dir).unwrap())
+        Arc::new(SSTImporter::new(dir, None).unwrap())
     };
 
     // try to restart this node, will clear the prepare data
