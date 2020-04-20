@@ -218,7 +218,7 @@ impl Simulator for NodeCluster {
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir).unwrap())
+            Arc::new(SSTImporter::new(dir, None).unwrap())
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
