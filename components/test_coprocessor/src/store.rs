@@ -210,6 +210,7 @@ impl<E: Engine> Store<E> {
             IsolationLevel::Si,
             true,
             Default::default(),
+            false,
         )
     }
 
