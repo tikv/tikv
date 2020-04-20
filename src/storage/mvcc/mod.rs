@@ -8,8 +8,17 @@ mod write;
 
 pub use self::lock::{Lock, LockType};
 pub use self::reader::*;
+<<<<<<< HEAD
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
+=======
+pub use self::txn::{MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
+pub use crate::new_txn;
+pub use txn_types::{
+    Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
+    SHORT_VALUE_MAX_LEN,
+};
+>>>>>>> b4dd42f... txn: only wake up waiters when locks are indeed released (#7379)
 
 use std::error;
 use std::io;
