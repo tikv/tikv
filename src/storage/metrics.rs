@@ -53,18 +53,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     });
 }
 
-pub fn tls_processing_read_observe_duration<F, R>(cmd: CommandKind, f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    let now = tikv_util::time::Instant::now_coarse();
-    let ret = f();
-    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-        .get(cmd)
-        .observe(now.elapsed_secs());
-    ret
-}
-
 pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
     TLS_STORAGE_METRICS.with(|m| {
         m.borrow_mut()
