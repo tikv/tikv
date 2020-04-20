@@ -33,13 +33,15 @@ impl MemoryCollector {
         let vsize = Gauge::with_opts(Opts::new(
             "process_virtual_memory_bytes",
             "Virtual memory size in bytes.",
-        )).unwrap();
+        ))
+        .unwrap();
         descs.extend(vsize.desc().into_iter().cloned());
 
         let rss = Gauge::with_opts(Opts::new(
             "process_resident_memory_bytes",
             "Resident memory size in bytes.",
-        )).unwrap();
+        ))
+        .unwrap();
         descs.extend(rss.desc().into_iter().cloned());
 
         Self {

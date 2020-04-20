@@ -3,6 +3,7 @@
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
