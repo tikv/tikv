@@ -13,9 +13,9 @@ pub use crate::codec::mysql::{Decimal, Duration, Json, JsonType, Time as DateTim
 pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
 
-use crate::{EvalType, FieldTypeTp};
+use crate::EvalType;
 
-use crate::codec::convert::ToInt;
+use crate::codec::convert::ConvertTo;
 use crate::expr::EvalContext;
 use tidb_query_common::error::Result;
 
@@ -43,7 +43,7 @@ impl AsMySQLBool for Real {
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        Ok(!self.is_empty() && self.to_int(context, FieldTypeTp::LongLong)? != 0)
+        Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
     }
 }
 
@@ -122,3 +122,64 @@ impl_evaluable_type! { Bytes }
 impl_evaluable_type! { DateTime }
 impl_evaluable_type! { Duration }
 impl_evaluable_type! { Json }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64;
+
+    #[test]
+    fn test_bytes_to_bool() {
+        let tests: Vec<(&'static [u8], Option<bool>)> = vec![
+            (b"", Some(false)),
+            (b" 23", Some(true)),
+            (b"-1", Some(true)),
+            (b"1.11", Some(true)),
+            (b"1.11.00", None),
+            (b"xx", None),
+            (b"0x00", None),
+            (b"11.xx", None),
+            (b"xx.11", None),
+            (
+                b".0000000000000000000000000000000000000000000000000000001",
+                Some(true),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (i, (v, expect)) in tests.into_iter().enumerate() {
+            let rb: Result<bool> = v.to_vec().as_mysql_bool(&mut ctx);
+            match expect {
+                Some(val) => {
+                    assert_eq!(rb.unwrap(), val);
+                }
+                None => {
+                    assert!(
+                        rb.is_err(),
+                        "index: {}, {:?} should not be converted, but got: {:?}",
+                        i,
+                        v,
+                        rb
+                    );
+                }
+            }
+        }
+
+        // test overflow
+        let mut ctx = EvalContext::default();
+        let val: Result<bool> = f64::INFINITY
+            .to_string()
+            .as_bytes()
+            .to_vec()
+            .as_mysql_bool(&mut ctx);
+        assert!(val.is_err());
+
+        let mut ctx = EvalContext::default();
+        let val: Result<bool> = f64::NEG_INFINITY
+            .to_string()
+            .as_bytes()
+            .to_vec()
+            .as_mysql_bool(&mut ctx);
+        assert!(val.is_err());
+    }
+}
