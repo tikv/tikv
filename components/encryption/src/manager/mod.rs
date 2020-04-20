@@ -165,7 +165,7 @@ impl Dicts {
         file.iv = iv.as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
         file.method = compat(method);
-        self.file_dict.files.insert(fname.to_owned(), file.clone());
+        self.file_dict.files.insert(fname.to_owned(), file);
         self.save_file_dict()?;
         if method != EncryptionMethod::Plaintext {
             info!("new encrypted file"; 
