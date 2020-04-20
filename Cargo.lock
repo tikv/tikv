@@ -2811,7 +2811,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=086b7059482f1b06748e20c9a43efbc78b7252b2#086b7059482f1b06748e20c9a43efbc78b7252b2"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=fd122caa03de8e7e5e4fae9372583aebf19e39f6#fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 dependencies = [
  "cfg-if",
  "fnv",
@@ -2826,7 +2826,7 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=a626d449eaebd5e8ce337f95c1d6dc9800f25df7#a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=fd122caa03de8e7e5e4fae9372583aebf19e39f6#fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 dependencies = [
  "proc-macro-hack",
  "static-metric-proc-macros",
@@ -3913,7 +3913,7 @@ checksum = "4edf667ea8f60afc06d6aeec079d20d5800351109addec1faea678a8663da4e1"
 [[package]]
 name = "static-metric-proc-macros"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-prometheus.git?rev=a626d449eaebd5e8ce337f95c1d6dc9800f25df7#a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
+source = "git+https://github.com/tikv/rust-prometheus.git?rev=fd122caa03de8e7e5e4fae9372583aebf19e39f6#fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 dependencies = [
  "lazy_static",
  "proc-macro-hack",
@@ -4697,6 +4697,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam",
+ "derive_more 0.99.3",
  "fail",
  "fs2",
  "futures 0.1.29",
