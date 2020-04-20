@@ -31,9 +31,7 @@ fn test_update_config() {
     assert_eq!(cfg_controller.get_current(), &cfg);
 
     // update to invalid config
-    cfg_controller
-        .update(change("raftstore.raft-log-gc-threshold", "0"))
-        .unwrap();
+    let res = cfg_controller.update(change("raftstore.raft-log-gc-threshold", "0"));
     assert!(res.is_err());
     assert_eq!(cfg_controller.get_current(), &cfg);
 
