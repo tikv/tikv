@@ -160,8 +160,9 @@ impl Dicts {
     }
 
     fn new_file(&mut self, fname: &str, method: EncryptionMethod) -> Result<&FileInfo> {
+        let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
-        file.iv = Iv::new_ctr().as_slice().to_vec();
+        file.iv = iv.as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
         file.method = compat(method);
         self.file_dict.files.insert(fname.to_owned(), file.clone());
@@ -170,7 +171,7 @@ impl Dicts {
             info!("new encrypted file"; 
                   "fname" => fname, 
                   "method" => format!("{:?}", method), 
-                  "iv" => hex::encode(file.iv));
+                  "iv" => hex::encode(iv.as_slice()));
         }
         Ok(self.file_dict.files.get(fname).unwrap())
     }
