@@ -1909,7 +1909,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git#98f910b71904ff7190e26a483b242ad5d7330c31"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#e0c6e8842f22790e4f26ba3abbd9e01983ab95f1"
+>>>>>>> ee4c92d... server: Rename: Rename `binary_path` to `deploy_path`. (#7562)
 dependencies = [
  "futures 0.1.29",
  "grpcio",
