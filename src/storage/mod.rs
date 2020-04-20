@@ -445,56 +445,48 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe_closure_duration(|| {
-                        let snap_store = SnapshotStore::new(
-                            snapshot,
-                            start_ts,
-                            ctx.get_isolation_level(),
-                            !ctx.get_not_fill_cache(),
-                            bypass_locks,
-                            false,
-                        );
+                {
+                    let begin_instant = Instant::now_coarse();
 
-                        let mut scanner;
-                        if !reverse_scan {
-                            scanner = snap_store.scanner(
-                                false,
-                                key_only,
-                                false,
-                                Some(start_key),
-                                end_key,
-                            )?;
-                        } else {
-                            scanner = snap_store.scanner(
-                                true,
-                                key_only,
-                                false,
-                                end_key,
-                                Some(start_key),
-                            )?;
-                        };
-                        let res = scanner.scan(limit);
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                        bypass_locks,
+                        false,
+                    );
 
-                        let statistics = scanner.take_statistics();
-                        metrics::tls_collect_scan_details(CMD, &statistics);
-                        metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    let mut scanner;
+                    if !reverse_scan {
+                        scanner =
+                            snap_store.scanner(false, key_only, false, Some(start_key), end_key)?;
+                    } else {
+                        scanner =
+                            snap_store.scanner(true, key_only, false, end_key, Some(start_key))?;
+                    };
+                    let res = scanner.scan(limit);
 
-                        res.map_err(Error::from).map(|results| {
-                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                                .get(CMD)
-                                .observe(results.len() as f64);
-                            results
-                                .into_iter()
-                                .map(|x| x.map_err(Error::from))
-                                .collect()
-                        })
-                    });
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                result
+                    let statistics = scanner.take_statistics();
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
+                    res.map_err(Error::from).map(|results| {
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(results.len() as f64);
+                        results
+                            .into_iter()
+                            .map(|x| x.map_err(Error::from))
+                            .collect()
+                    })
+                }
             },
             priority,
             start_ts.into_inner(),
