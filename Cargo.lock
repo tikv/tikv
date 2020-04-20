@@ -2006,7 +2006,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#eca6976f9c72f1cfed2ba7b148949df5180bd41f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2025,7 +2025,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#eca6976f9c72f1cfed2ba7b148949df5180bd41f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3368,7 +3368,7 @@ checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#eca6976f9c72f1cfed2ba7b148949df5180bd41f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3852,6 +3852,8 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "encryption",
+ "engine_rocks",
  "engine_traits",
  "external_storage",
  "futures 0.1.29",
@@ -4638,6 +4640,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam",
+ "derive_more 0.99.3",
  "fail",
  "fs2",
  "futures 0.1.29",
