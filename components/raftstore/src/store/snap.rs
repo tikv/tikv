@@ -1129,6 +1129,7 @@ impl<E: KvEngine> SnapManager<E> {
 
     pub fn init(&self) -> io::Result<()> {
         // Use write lock so only one thread initialize the directory at a time.
+        let _lock = self.core.registry.wl();
         let path = Path::new(&self.base);
         if !path.exists() {
             fs::create_dir_all(path)?;
@@ -1158,6 +1159,8 @@ impl<E: KvEngine> SnapManager<E> {
 
     // Return all snapshots which is idle not being used.
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
+        // Use a lock to protect the directory when scanning.
+        let registry = self.core.registry.wl();
         let path = Path::new(&self.base);
         let read_dir = fs::read_dir(path)?;
         // Remove the duplicate snap keys.
@@ -1201,7 +1204,7 @@ impl<E: KvEngine> SnapManager<E> {
                     return None;
                 }
                 let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
-                if self.has_registered(&snap_key) {
+                if registry.contains_key(&snap_key) {
                     // Skip those registered snapshot.
                     return None;
                 }
