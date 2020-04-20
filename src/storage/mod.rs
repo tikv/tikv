@@ -51,6 +51,7 @@ use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
 use rand::prelude::*;
 use std::sync::{atomic, Arc};
+use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -1084,62 +1085,63 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe_closure_duration(|| {
-                        let mut statistics = Statistics::default();
-                        if !Self::check_key_ranges(&ranges, reverse) {
-                            return Err(box_err!("Invalid KeyRanges"));
+                {
+                    let begin_instant = Instant::now();
+                    let mut statistics = Statistics::default();
+                    if !Self::check_key_ranges(&ranges, reverse) {
+                        return Err(box_err!("Invalid KeyRanges"));
+                    };
+                    let mut result = Vec::new();
+                    let ranges_len = ranges.len();
+                    for i in 0..ranges_len {
+                        let start_key = Key::from_encoded(ranges[i].take_start_key());
+                        let end_key = ranges[i].take_end_key();
+                        let end_key = if end_key.is_empty() {
+                            if i + 1 == ranges_len {
+                                None
+                            } else {
+                                Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
+                            }
+                        } else {
+                            Some(Key::from_encoded(end_key))
                         };
-                        let mut result = Vec::new();
-                        let ranges_len = ranges.len();
-                        for i in 0..ranges_len {
-                            let start_key = Key::from_encoded(ranges[i].take_start_key());
-                            let end_key = ranges[i].take_end_key();
-                            let end_key = if end_key.is_empty() {
-                                if i + 1 == ranges_len {
-                                    None
-                                } else {
-                                    Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
-                                }
-                            } else {
-                                Some(Key::from_encoded(end_key))
-                            };
-                            let pairs = if reverse {
-                                Self::reverse_raw_scan(
-                                    &snapshot,
-                                    &cf,
-                                    &start_key,
-                                    end_key,
-                                    each_limit,
-                                    &mut statistics,
-                                    key_only,
-                                )?
-                            } else {
-                                Self::forward_raw_scan(
-                                    &snapshot,
-                                    &cf,
-                                    &start_key,
-                                    end_key,
-                                    each_limit,
-                                    &mut statistics,
-                                    key_only,
-                                )?
-                            };
-                            result.extend(pairs.into_iter());
-                        }
+                        let pairs = if reverse {
+                            Self::reverse_raw_scan(
+                                &snapshot,
+                                &cf,
+                                &start_key,
+                                end_key,
+                                each_limit,
+                                &mut statistics,
+                                key_only,
+                            )?
+                        } else {
+                            Self::forward_raw_scan(
+                                &snapshot,
+                                &cf,
+                                &start_key,
+                                end_key,
+                                each_limit,
+                                &mut statistics,
+                                key_only,
+                            )?
+                        };
+                        result.extend(pairs.into_iter());
+                    }
 
-                        metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                            .get(CMD)
-                            .observe(statistics.write.flow_stats.read_keys as f64);
-                        metrics::tls_collect_scan_details(CMD, &statistics);
-                        Ok(result)
-                    });
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                result
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(statistics.write.flow_stats.read_keys as f64);
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+                    Ok(result)
+                }
             },
             priority,
             thread_rng().next_u64(),
