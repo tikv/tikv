@@ -768,10 +768,12 @@ mod log {
     use futures::stream::{iter_ok, Stream};
     use itertools::Itertools;
     use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
+    use lazy_static::lazy_static;
     use nom::bytes::complete::{tag, take};
     use nom::character::complete::{alpha1, space0, space1};
     use nom::sequence::tuple;
     use nom::*;
+    use regex::Regex;
     use rev_lines;
 
     const INVALID_TIMESTAMP: i64 = -1;
@@ -960,6 +962,29 @@ mod log {
         }
     }
 
+<<<<<<< HEAD
+=======
+    lazy_static! {
+        static ref NUM_REGEX: Regex = Regex::new(r"^\d{4}").unwrap();
+    }
+
+    // Returns true if target 'filename' is part of given 'log_file'
+    fn is_log_file(filename: &str, log_file: &str) -> bool {
+        // for not rotated nomral file
+        if filename == log_file {
+            return true;
+        }
+
+        // for rotated *.<rotated-datetime> file
+        if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
+            if NUM_REGEX.is_match(res) {
+                return true;
+            }
+        }
+        false
+    }
+
+>>>>>>> 700f23b... tikv_util: fix compatibility issue in tikv rotating log file naming (#7437)
     fn parse_time(input: &str) -> IResult<&str, &str> {
         let (input, (_, _, time, _)) =
             tuple((space0, tag("["), take(TIMESTAMP_LENGTH), tag("]")))(input)?;
