@@ -185,7 +185,7 @@ impl Dicts {
 
         // TOOD GC unused data keys.
         self.save_file_dict()?;
-        if file.method != EncryptionMethod::Plaintext {
+        if file.method != compat(EncryptionMethod::Plaintext) {
             info!("delete encrypted file"; "fname" => fname);
         }
         Ok(())
@@ -212,7 +212,7 @@ impl Dicts {
         let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
         self.save_file_dict()?;
-        if method != EncryptionMethod::Plaintext {
+        if method != compat(EncryptionMethod::Plaintext) {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
         }
         Ok(())
@@ -228,7 +228,7 @@ impl Dicts {
         let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
         self.save_file_dict()?;
-        if method != EncryptionMethod::Plaintext {
+        if method != compat(EncryptionMethod::Plaintext) {
             info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
         }
         Ok(())
