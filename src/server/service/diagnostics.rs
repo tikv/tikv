@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::stream::iter_ok;
 use futures::{Future, Sink, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
