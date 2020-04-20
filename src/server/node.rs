@@ -81,7 +81,9 @@ where
         store.set_status_address(cfg.status_addr.clone());
 
         if let Ok(path) = std::env::current_exe() {
-            store.set_binary_path(path.to_string_lossy().to_string());
+            if let Some(path) = path.parent() {
+                store.set_deploy_path(path.to_string_lossy().to_string());
+            }
         };
 
         store.set_start_timestamp(chrono::Local::now().timestamp());
