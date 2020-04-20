@@ -48,7 +48,7 @@ hex = "0.3"
 [dependencies.prometheus]
 version = "0.4.2"
 default-features = false
-features = ["nightly", "push", "process"]
+features = ["nightly", "push"]
 
 [dependencies.prometheus-static-metric]
 version = "0.1.4"

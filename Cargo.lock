@@ -227,7 +227,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "621fc7ecb8008f86d7fb9b95356cd692ce9514b80a86d85b397f32a22da7b9e2"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
 ]
 
 [[package]]
@@ -296,7 +296,7 @@ checksum = "c0940dc441f31689269e10ac70eb1002a3a1d3ad1390e030043662eb7fe4688b"
 dependencies = [
  "block-padding",
  "byte-tools",
- "byteorder 1.2.7",
+ "byteorder",
  "generic-array",
 ]
 
@@ -341,12 +341,6 @@ checksum = "e3b5ca7a04898ad4bcd41c90c5285445ff5b791899bb1b0abdd2a2aa791211d7"
 
 [[package]]
 name = "byteorder"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4ca3a1755927e5b00c3fe43250053b957b5c074d9f17782b88ef7aa0fb4dfe2"
-
-[[package]]
-name = "byteorder"
 version = "1.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94f88df23a25417badc922ab0f5716cc1330e87f71ddd9203b3a3ccd9cedf75d"
@@ -357,7 +351,7 @@ version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "206fdffcfa2df7cbe15601ef46c813fce0965eb3286db6b56c583b814b51c81c"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "either",
  "iovec",
 ]
@@ -553,7 +547,7 @@ dependencies = [
 name = "codec"
 version = "0.0.1"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "bytes 0.4.12",
  "failure",
  "libc",
@@ -722,7 +716,7 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76f9212ddf2f4a9eb2d401635190600656a1f88a932ef53d06e7fa4c7e02fb8e"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "cast",
  "itertools 0.8.2",
 ]
@@ -1359,7 +1353,7 @@ dependencies = [
 name = "fuzz-targets"
 version = "0.0.1"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "failure",
  "tikv",
  "tikv_util",
@@ -1395,7 +1389,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
 ]
 
 [[package]]
@@ -1475,7 +1469,7 @@ version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ac030ae20dee464c5d0f36544d8b914a6bc606da44a57e052d2b0f5dae129e0"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "bytes 0.4.12",
  "fnv",
  "futures 0.1.29",
@@ -1512,7 +1506,7 @@ version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64b7d419d0622ae02fe5da6b9a5e1964b610a65bb37923b976aeebb6dbb8f86e"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "scopeguard",
  "serde",
 ]
@@ -2255,7 +2249,7 @@ name = "murmur3"
 version = "0.4.0"
 source = "git+https://github.com/pingcap/murmur3.git#4af9e1a8f2d4206d90d81f11e513fb03c87208bf"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
 ]
 
 [[package]]
@@ -2318,12 +2312,6 @@ name = "nodrop"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a2228dca57108069a5262f2ed8bd2e82496d2e074a06d1ccc7ce1687b6ae0a2"
-
-[[package]]
-name = "nom"
-version = "1.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5b8c256fd9471521bcb84c3cdba98921497f1a331cbc15b8030fc63b82050ce"
 
 [[package]]
 name = "nom"
@@ -2710,22 +2698,10 @@ dependencies = [
 
 [[package]]
 name = "procinfo"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f42e8578852a3306838981aedad8c5642ba794929aa12af0c9eb6c072b77af6c"
-dependencies = [
- "byteorder 0.5.1",
- "libc",
- "nom 1.2.4",
- "rustc_version 0.1.7",
-]
-
-[[package]]
-name = "procinfo"
 version = "0.4.2"
 source = "git+https://github.com/tikv/procinfo-rs#ac3841d271fe2e4e865afdce60bb6a166044f7c7"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "libc",
  "nom 2.2.1",
  "rustc_version 0.2.2",
@@ -2753,7 +2729,6 @@ dependencies = [
  "hyper 0.9.18",
  "lazy_static 0.2.8",
  "libc",
- "procinfo 0.3.1",
  "protobuf",
  "quick-error 0.2.2",
  "spin 0.4.9",
@@ -2777,7 +2752,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9f36c478cd43382388dfc3a3679af175c03d19ed8039e79a3e4447e944cd3f3"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "bytes 0.4.12",
 ]
 
@@ -2787,7 +2762,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96d14b1c185652833d24aaad41c5832b0be5616a590227c1fbff57c616754b23"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "bytes 0.4.12",
  "prost-derive 0.5.0",
 ]
@@ -3188,7 +3163,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03b418169fb9c46533f326efd6eed2576699c44ca92d3052a066214a8d828929"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "rand_core 0.3.1",
 ]
 
@@ -3280,7 +3255,7 @@ version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92b73c2a1770c255c240eaa4ee600df1704a38dc3feaa6e949e7fcd4f8dc09f9"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
 ]
 
 [[package]]
@@ -3490,7 +3465,7 @@ version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7540fc8b0c49f096ee9c961cda096467dce8084bec6bdca2fc83895fd9b28cb8"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
 ]
 
 [[package]]
@@ -4121,7 +4096,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e6b677dd1e8214ea1ef4297f85dbcbed8e8cdddb561040cc998ca2551c37561"
 dependencies = [
- "byteorder 1.2.7",
+ "byteorder",
  "winapi 0.3.8",
 ]
 
@@ -4230,7 +4205,7 @@ dependencies = [
  "base64 0.10.0",
  "batch-system",
  "bitflags",
- "byteorder 1.2.7",
+ "byteorder",
  "bytes 0.4.12",
  "chrono",
  "chrono-tz",
@@ -4275,7 +4250,7 @@ dependencies = [
  "ordered-float",
  "panic_hook",
  "pprof",
- "procinfo 0.4.2",
+ "procinfo",
  "profiler",
  "prometheus",
  "prometheus-static-metric",
@@ -4345,7 +4320,7 @@ version = "0.1.0"
 dependencies = [
  "async-speed-limit",
  "backtrace 0.2.3",
- "byteorder 1.2.7",
+ "byteorder",
  "chrono",
  "crc32fast",
  "crossbeam 0.5.0",
@@ -4360,7 +4335,7 @@ dependencies = [
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "openssl",
  "panic_hook",
- "procinfo 0.4.2",
+ "procinfo",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
