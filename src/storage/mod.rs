@@ -651,21 +651,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe_closure_duration(|| {
-                        let cf = Self::rawkv_cf(&cf)?;
-                        let mut results = vec![];
-                        // TODO: optimize using seek.
-                        for get in gets {
-                            results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
-                        }
-                        Ok(results)
-                    });
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                result
+                {
+                    let begin_instant = Instant::now_coarse();
+
+                    let cf = Self::rawkv_cf(&cf)?;
+                    let mut results = vec![];
+                    // TODO: optimize using seek.
+                    for get in gets {
+                        results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
+                    }
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
+                    Ok(results)
+                }
             },
             priority,
             thread_rng().next_u64(),
