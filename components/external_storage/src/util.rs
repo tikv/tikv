@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::READ_BUF_SIZE;
+
 use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
