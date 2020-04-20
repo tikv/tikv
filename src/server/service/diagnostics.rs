@@ -794,7 +794,7 @@ mod log {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     use std::path::Path;
 
-    use chrono::{DateTime};
+    use chrono::DateTime;
     use futures::stream::{iter_ok, Stream};
     use itertools::Itertools;
     use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
@@ -803,8 +803,8 @@ mod log {
     use nom::character::complete::{alpha1, space0, space1};
     use nom::sequence::tuple;
     use nom::*;
-    use rev_lines;
     use regex::Regex;
+    use rev_lines;
 
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
