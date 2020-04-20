@@ -90,7 +90,7 @@ where
 fn test_lock_manager_cfg_update() {
     const DEFAULT_TIMEOUT: u64 = 3000;
     const DEFAULT_DELAY: u64 = 100;
-    let mut cfg = TiKvConfig::default();
+    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(DEFAULT_TIMEOUT);
     cfg.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(DEFAULT_DELAY);
     cfg.validate().unwrap();

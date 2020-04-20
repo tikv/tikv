@@ -18,7 +18,7 @@ use tikv::import::SSTImporter;
 use engine::Engines;
 use engine_traits::ALL_CFS;
 use pd_client::PdClient;
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};
 
@@ -140,12 +140,10 @@ where
 
 #[test]
 fn test_update_raftstore_config() {
-    let dir = Builder::new().tempdir().unwrap();
-    let mut config = TiKvConfig::default();
+    let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
     config.enable_dynamic_config = false;
-    config.storage.data_dir = dir.path().display().to_string();
     config.validate().unwrap();
-    let (mut cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &dir);
+    let (mut cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
 
     // dispatch updated config
     let change = {
@@ -172,14 +170,12 @@ fn test_update_raftstore_config() {
 
 #[test]
 fn test_update_apply_store_config() {
-    let dir = Builder::new().tempdir().unwrap();
-    let mut config = TiKvConfig::default();
+    let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
     config.enable_dynamic_config = false;
     config.raft_store.sync_log = true;
-    config.storage.data_dir = dir.path().display().to_string();
     config.validate().unwrap();
     let (mut cfg_controller, raft_router, apply_router, mut system) =
-        start_raftstore(config.clone(), &dir);
+        start_raftstore(config.clone(), &_dir);
 
     // register region
     let region_id = 1;

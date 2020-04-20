@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::path::Path;
 use std::sync::mpsc::{self, sync_channel};
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,21 +15,15 @@ use raftstore::store::{SplitCheckRunner as Runner, SplitCheckTask as Task};
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv_util::worker::{Scheduler, Worker};
 
-use tempfile::{Builder, TempDir};
-
-fn tmp_engine() -> (Arc<DB>, TempDir) {
-    let path = Builder::new().prefix("test-config").tempdir().unwrap();
-    (
-        Arc::new(
-            rocks::util::new_engine(
-                path.path().join("db").to_str().unwrap(),
-                None,
-                &["split-check-config"],
-                None,
-            )
-            .unwrap(),
-        ),
-        path,
+fn tmp_engine<P: AsRef<Path>>(path: P) -> Arc<DB> {
+    Arc::new(
+        rocks::util::new_engine(
+            path.as_ref().to_str().unwrap(),
+            None,
+            &["split-check-config"],
+            None,
+        )
+        .unwrap(),
     )
 }
 
@@ -68,10 +63,9 @@ where
 
 #[test]
 fn test_update_split_check_config() {
-    let (engine, _dir) = tmp_engine();
-    let mut cfg = TiKvConfig::default();
+    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
-    cfg.storage.data_dir = _dir.path().display().to_string();
+    let engine = tmp_engine(&cfg.storage.data_dir);
     let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine);
     let scheduler = worker.scheduler();
 

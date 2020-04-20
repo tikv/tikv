@@ -2224,6 +2224,13 @@ impl TiKvConfig {
         self.raft_store.write_into_metrics();
         self.rocksdb.write_into_metrics();
     }
+
+    pub fn with_tmp() -> Result<(TiKvConfig, tempfile::TempDir), IoError> {
+        let tmp = tempfile::tempdir()?;
+        let mut cfg = TiKvConfig::default();
+        cfg.storage.data_dir = tmp.path().display().to_string();
+        Ok((cfg, tmp))
+    }
 }
 
 /// Prevents launching with an incompatible configuration
@@ -2477,7 +2484,7 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::{Builder, TempDir};
+    use tempfile::Builder;
 
     use super::*;
     use engine::rocks::util::new_engine_opt;
@@ -2691,12 +2698,10 @@ mod tests {
         }
     }
 
-    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController, TempDir) {
-        let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
-        let path = tmp.path().to_str().unwrap();
+    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {
         let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
-                path,
+                &cfg.storage.data_dir,
                 DBOptions::new(),
                 vec![
                     CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
@@ -2713,18 +2718,18 @@ mod tests {
             Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
         );
-        (engine, cfg_controller, tmp)
+        (engine, cfg_controller)
     }
 
     #[test]
     fn test_change_rocksdb_config() {
-        let mut cfg = TiKvConfig::default();
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.rocksdb.max_background_jobs = 2;
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.validate().unwrap();
-        let (db, mut cfg_controller, _dir) = new_engines(cfg);
+        let (db, mut cfg_controller) = new_engines(cfg);
 
         // update max_background_jobs
         let db_opts = db.get_db_options();

@@ -4,15 +4,7 @@ use configuration::{ConfigChange, Configuration};
 use raftstore::store::Config as RaftstoreConfig;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tempfile::{Builder, TempDir};
 use tikv::config::*;
-
-fn config_with_dir() -> (TiKvConfig, TempDir) {
-    let mut cfg = TiKvConfig::default();
-    let dir = Builder::new().prefix("test-config").tempdir().unwrap();
-    cfg.storage.data_dir = format!("{}", dir.path().display());
-    (cfg, dir)
-}
 
 fn change(name: &str, value: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
@@ -22,7 +14,7 @@ fn change(name: &str, value: &str) -> HashMap<String, String> {
 
 #[test]
 fn test_update_config() {
-    let (cfg, _dir) = config_with_dir();
+    let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     let mut cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current().clone();
 
@@ -73,7 +65,7 @@ fn test_dispatch_change() {
         }
     }
 
-    let (cfg, _dir) = config_with_dir();
+    let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     let mut cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current().clone();
     let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
