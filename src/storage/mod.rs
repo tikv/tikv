@@ -295,6 +295,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                if let Some(cache) = snapshot.get_cache() {
+                    let mut result = Vec::with_capacity(gets.len());
+                    for get in gets {
+                        result.push(Ok(cache.get(&get.key)));
+                    }
+                    return Ok(result);
+                }
+
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     let mut snap_store = SnapshotStore::new(

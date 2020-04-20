@@ -317,7 +317,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.peer.build_cache(self.ctx, builder);
                 }
                 PeerMsg::BuildCacheRes { cache, apply_state } => {
-                    self.fsm.peer.on_build_cache_res(cache, apply_state);
+                    self.fsm
+                        .peer
+                        .on_build_cache_res(self.ctx, cache, apply_state);
                 }
                 PeerMsg::Noop => {}
             }

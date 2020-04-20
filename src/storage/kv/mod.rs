@@ -128,7 +128,7 @@ pub trait Snapshot: Send + Clone {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
-    fn get_cache(&self) -> Option<Arc<dyn RegionCache>> {
+    fn get_cache(&self) -> Option<&Arc<dyn RegionCache>> {
         None
     }
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>>;

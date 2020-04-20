@@ -422,8 +422,8 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn get_cache(&self) -> Option<Arc<dyn RegionCache>> {
-        self.cache.clone()
+    fn get_cache(&self) -> Option<&Arc<dyn RegionCache>> {
+        self.cache.as_ref()
     }
 
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
