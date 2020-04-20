@@ -250,9 +250,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
-                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                                .get(CMD)
-                                .observe(1 as f64);
+                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                             r
                         });
 
@@ -609,9 +607,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         stats.data.flow_stats.read_keys = 1;
                         stats.data.flow_stats.read_bytes = key_len + value.len();
                         tls_collect_read_flow(ctx.get_region_id(), &stats);
-                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                            .get(CMD)
-                            .observe(1 as f64);
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     }
 
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
