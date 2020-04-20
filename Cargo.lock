@@ -3022,7 +3022,11 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/tipb.git?branch=release-3.0#bec3080a542893538eca1bfd707108c31f003f63"
+=======
+source = "git+https://github.com/pingcap/tipb.git#7316d94df1eed974822e2f3e70dc3e0aea1a6b0a"
+>>>>>>> b2a27d2... tidb_query: add is true/false keep null ScalarFuncSig (#7532)
 dependencies = [
  "protobuf 2.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
