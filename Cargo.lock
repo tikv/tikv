@@ -4640,6 +4640,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam",
+ "derive_more 0.99.3",
  "fail",
  "fs2",
  "futures 0.1.29",
