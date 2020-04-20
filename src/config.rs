@@ -5,7 +5,7 @@
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
 
-use std::cmp::{self, Ord, Ordering};
+use std::cmp;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
@@ -13,11 +13,7 @@ use std::i32;
 use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
 use std::usize;
-
-use kvproto::configpb::{self, StatusCode};
 
 use configuration::{
     rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult,
@@ -48,18 +44,19 @@ use engine_rocks::{
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
+<<<<<<< HEAD
 use pd_client::{Config as PdConfig, ConfigClient, Error as PdError};
 use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
+=======
+use pd_client::Config as PdConfig;
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
-use raftstore::store::PdTask;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
-use tikv_util::worker::FutureScheduler;
-use tikv_util::Either;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -2174,6 +2171,13 @@ impl TiKvConfig {
         self.raft_store.write_into_metrics();
         self.rocksdb.write_into_metrics();
     }
+
+    pub fn with_tmp() -> Result<(TiKvConfig, tempfile::TempDir), IoError> {
+        let tmp = tempfile::tempdir()?;
+        let mut cfg = TiKvConfig::default();
+        cfg.storage.data_dir = tmp.path().display().to_string();
+        Ok((cfg, tmp))
+    }
 }
 
 /// Prevents launching with an incompatible configuration
@@ -2238,74 +2242,77 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
-    // This helper function translate nested module config to a list
-    // of name/value pair and seperated module by '.' in the name field,
-    // by recursive call helper function with an prefix which represent
-    // th prefix of current module. And also compatible the field name
-    // in config struct with the name in toml file.
-    fn helper(prefix: String, change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
-        let mut entries = Vec::with_capacity(change.len());
-
-        for (mut name, value) in change {
-            if name == "raft_store" {
-                name = "raftstore".to_owned();
-            } else {
-                name = name.replace("_", "-");
-            }
-            if !prefix.is_empty() {
-                let mut p = prefix.clone();
-                p.push_str(&format!(".{}", name));
-                name = p;
-            }
-            if let ConfigValue::Module(change) = value {
-                if !change.is_empty() {
-                    entries.append(&mut helper(name, change)?);
-                }
-            } else {
-                let mut e = configpb::ConfigEntry::default();
-                e.set_name(name);
-                e.set_value(from_change_value(value)?);
-                entries.push(e);
-            }
-        }
-        Ok(entries)
-    };
-    helper("".to_owned(), change)
+lazy_static! {
+    pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
 }
 
-fn from_change_value(v: ConfigValue) -> CfgResult<String> {
-    let s = match v {
-        ConfigValue::Duration(_) => {
-            let v: ReadableDuration = v.into();
-            toml::to_string(&v)?
+fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> {
+    fn helper(
+        mut fields: Vec<String>,
+        dst: &mut ConfigChange,
+        typed: &ConfigChange,
+        value: String,
+    ) -> CfgResult<()> {
+        if let Some(mut f) = fields.pop() {
+            if f == "raftstore" {
+                f = "raft_store".to_owned();
+            } else {
+                f = f.replace("-", "_");
+            }
+            return match typed.get(&f) {
+                None => Err(format!("unexpect fields: {}", f).into()),
+                Some(ConfigValue::Skip) => {
+                    Err(format!("fields {:?} can not be change", fields).into())
+                }
+                Some(ConfigValue::Module(m)) => {
+                    if let ConfigValue::Module(n_dst) = dst
+                        .entry(f)
+                        .or_insert_with(|| ConfigValue::Module(HashMap::new()))
+                    {
+                        return helper(fields, n_dst, m, value);
+                    }
+                    panic!("unexpect config value");
+                }
+                Some(v) => {
+                    if fields.is_empty() {
+                        return match to_change_value(&value, v) {
+                            Err(_) => Err(format!("failed to parse: {}", value).into()),
+                            Ok(v) => {
+                                dst.insert(f, v);
+                                Ok(())
+                            }
+                        };
+                    }
+                    Err(format!("unexpect fields: {:?}", fields).into())
+                }
+            };
         }
-        ConfigValue::Size(_) => {
-            let v: ReadableSize = v.into();
-            toml::to_string(&v)?
-        }
-        ConfigValue::U64(ref v) => toml::to_string(v)?,
-        ConfigValue::F64(ref v) => toml::to_string(v)?,
-        ConfigValue::Usize(ref v) => toml::to_string(v)?,
-        ConfigValue::Bool(ref v) => toml::to_string(v)?,
-        ConfigValue::String(ref v) => toml::to_string(v)?,
+        Ok(())
+    }
+    let mut res = HashMap::new();
+    for (name, value) in change {
+        let fields: Vec<_> = name.as_str().split('.').collect();
+        let fields: Vec<_> = fields.into_iter().map(|s| s.to_owned()).rev().collect();
+        helper(fields, &mut res, &TIKVCONFIG_TYPED, value)?;
+    }
+    Ok(res)
+}
+
+fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
+    let res = match typed {
+        ConfigValue::Duration(_) => ConfigValue::from(v.parse::<ReadableDuration>()?),
+        ConfigValue::Size(_) => ConfigValue::from(v.parse::<ReadableSize>()?),
+        ConfigValue::U64(_) => ConfigValue::from(v.parse::<u64>()?),
+        ConfigValue::F64(_) => ConfigValue::from(v.parse::<f64>()?),
+        ConfigValue::U32(_) => ConfigValue::from(v.parse::<u32>()?),
+        ConfigValue::I32(_) => ConfigValue::from(v.parse::<i32>()?),
+        ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
+        ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
+        ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
+        ConfigValue::Other(_) => ConfigValue::Other(v.to_owned()),
         _ => unreachable!(),
     };
-    Ok(s)
-}
-
-/// Comparing two `Version` with the assumption of `global` and `local`
-/// should be monotonically increased, if `global` or `local` of _current config_
-/// less than _incoming config_ means there are update in _incoming config_
-pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) -> Ordering {
-    match (
-        Ord::cmp(&current.local, &incoming.local),
-        Ord::cmp(&current.global, &incoming.global),
-    ) {
-        (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
-        (Ordering::Less, _) | (_, Ordering::Less) => Ordering::Less,
-        _ => Ordering::Greater,
-    }
+    Ok(res)
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -2354,44 +2361,22 @@ impl From<&str> for Module {
 pub struct ConfigController {
     current: TiKvConfig,
     config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
-    start_version: Option<configpb::Version>,
-    persist_update: bool,
 }
 
 impl ConfigController {
-    pub fn new(current: TiKvConfig, version: configpb::Version, persist_update: bool) -> Self {
+    pub fn new(current: TiKvConfig) -> Self {
         ConfigController {
             current,
             config_mgrs: HashMap::new(),
-            start_version: Some(version),
-            persist_update,
         }
     }
 
-    pub fn update_or_rollback(
-        &mut self,
-        mut incoming: TiKvConfig,
-    ) -> CfgResult<Either<ConfigChange, bool>> {
-        // Config from PD have not been checked, call `compatible_adjust()`
-        // and `validate()` before use it
-        incoming.compatible_adjust();
-        let rollback = incoming.validate_with_rollback(&self.current);
-        if !rollback.is_empty() {
-            return Ok(Either::Left(rollback));
-        }
-        let diff = self.current.diff(&incoming);
-        if diff.is_empty() {
-            return Ok(Either::Right(false));
-        } else {
-            // validate current config after apply diff, we can't just validate the
-            // incoming config because some configs are skip and incoming config not
-            // equal to current config + diff
-            let mut current = self.current.clone();
-            current.update(diff.clone());
-            let rollback = current.validate_with_rollback(&self.current);
-            if !rollback.is_empty() {
-                return Ok(Either::Left(rollback));
-            }
+    pub fn update(&mut self, change: HashMap<String, String>) -> CfgResult<()> {
+        let diff = to_config_change(change)?;
+        {
+            let mut incoming = self.current.clone();
+            incoming.update(diff.clone());
+            incoming.validate()?;
         }
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {
@@ -2414,12 +2399,17 @@ impl ConfigController {
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
         self.current.update(to_update);
-        if self.persist_update {
-            if let Err(e) = persist_config(&incoming) {
-                return Err(e.into());
-            }
+        // TODO: persist config to the orignal config file
+        if let Err(e) = persist_config(&self.current) {
+            return Err(e.into());
         }
-        Ok(Either::Right(true))
+        Ok(())
+    }
+
+    pub fn update_config(&mut self, name: &str, value: &str) -> CfgResult<()> {
+        let mut m = HashMap::new();
+        m.insert(name.to_owned(), value.to_owned());
+        self.update(m)
     }
 
     pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
@@ -2437,6 +2427,7 @@ impl ConfigController {
     }
 }
 
+<<<<<<< HEAD
 pub struct ConfigHandler {
     id: String,
     version: configpb::Version,
@@ -2606,15 +2597,21 @@ impl DynamicConfig for ConfigHandler {
     }
 }
 
+=======
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
 #[cfg(test)]
 mod tests {
     use tempfile::Builder;
 
     use super::*;
     use engine::rocks::util::new_engine_opt;
+<<<<<<< HEAD
     use kvproto::configpb::Version;
+=======
+    use engine_traits::DBOptions as DBOptionsTrait;
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     use slog::Level;
-    use std::cmp::Ordering;
+    use std::sync::Arc;
     use toml;
 
     #[test]
@@ -2755,58 +2752,84 @@ mod tests {
     }
 
     #[test]
-    fn test_config_change_to_config_entry() {
+    fn test_to_config_change() {
+        assert_eq!(
+            to_change_value("10h", &ConfigValue::Duration(0)).unwrap(),
+            ConfigValue::from(ReadableDuration::hours(10))
+        );
+        assert_eq!(
+            to_change_value("100MB", &ConfigValue::Size(0)).unwrap(),
+            ConfigValue::from(ReadableSize::mb(100))
+        );
+        assert_eq!(
+            to_change_value("10000", &ConfigValue::U64(0)).unwrap(),
+            ConfigValue::from(10000u64)
+        );
+
         let old = TiKvConfig::default();
         let mut incoming = TiKvConfig::default();
         incoming.refresh_config_interval = ReadableDuration::hours(10);
-        let diff = to_config_entry(old.diff(&incoming)).unwrap();
-        assert_eq!(diff.len(), 1);
-        assert_eq!(diff[0].name, "refresh-config-interval");
-        assert_eq!(
-            diff[0].value,
-            toml::to_string(&incoming.refresh_config_interval).unwrap()
+        incoming.coprocessor.region_split_keys = 10000;
+        incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
+        incoming.raft_store.sync_log = false;
+        incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
+        let diff = old.diff(&incoming);
+        let mut change = HashMap::new();
+        change.insert("refresh-config-interval".to_owned(), "10h".to_owned());
+        change.insert(
+            "coprocessor.region-split-keys".to_owned(),
+            "10000".to_owned(),
         );
-    }
+        change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
+        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
+        change.insert(
+            "rocksdb.defaultcf.block-cache-size".to_owned(),
+            "500MB".to_owned(),
+        );
+        let res = to_config_change(change).unwrap();
+        assert_eq!(diff, res);
 
-    #[test]
-    fn test_cmp_version() {
-        fn new_version((g1, l1): (u64, u64), (g2, l2): (u64, u64)) -> (Version, Version) {
-            let mut v1 = Version::default();
-            v1.set_global(g1);
-            v1.set_local(l1);
-            let mut v2 = Version::default();
-            v2.set_global(g2);
-            v2.set_local(l2);
-            (v1, v2)
+        // illegal cases
+        let cases = vec![
+            // wrong value type
+            ("gc.max-write-bytes-per-sec".to_owned(), "10s".to_owned()),
+            (
+                "pessimistic-txn.wait-for-lock-timeout".to_owned(),
+                "1MB".to_owned(),
+            ),
+            // missing or unknown config fields
+            ("xxx.yyy".to_owned(), "12".to_owned()),
+            (
+                "rocksdb.defaultcf.block-cache-size.xxx".to_owned(),
+                "50MB".to_owned(),
+            ),
+            ("rocksdb.xxx.block-cache-size".to_owned(), "50MB".to_owned()),
+            ("rocksdb.block-cache-size".to_owned(), "50MB".to_owned()),
+            // not support change config
+            (
+                "raftstore.raft-heartbeat-ticks".to_owned(),
+                "100".to_owned(),
+            ),
+            ("raftstore.prevote".to_owned(), "false".to_owned()),
+        ];
+        for (name, value) in cases {
+            let mut change = HashMap::new();
+            change.insert(name, value);
+            assert!(to_config_change(change).is_err());
         }
-
-        let (v1, v2) = new_version((10, 10), (10, 10));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Equal);
-
-        // either global or local of v1 less than global or local of v2
-        // Ordering::Less shuold be returned
-        let (small, big) = (10, 11);
-        let (v1, v2) = new_version((small, 10), (big, 10));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-        let (v1, v2) = new_version((small, 20), (big, 10));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-        let (v1, v2) = new_version((small, 10), (big, 20));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-
-        let (v1, v2) = new_version((10, small), (10, big));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-        let (v1, v2) = new_version((20, small), (10, big));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
-        let (v1, v2) = new_version((10, small), (20, big));
-        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
     }
 
+<<<<<<< HEAD
     fn new_engines(cfg: TiKvConfig) -> (Arc<DB>, ConfigController) {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
+=======
+    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {
+        let engine = RocksEngine::from_db(Arc::new(
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
             new_engine_opt(
-                path,
+                &cfg.storage.data_dir,
                 DBOptions::new(),
                 vec![
                     CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
@@ -2818,7 +2841,7 @@ mod tests {
             .unwrap(),
         );
 
-        let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
+        let mut cfg_controller = ConfigController::new(cfg);
         cfg_controller.register(
             Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
@@ -2828,25 +2851,22 @@ mod tests {
 
     #[test]
     fn test_change_rocksdb_config() {
-        let mut cfg = TiKvConfig::default();
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.rocksdb.max_background_jobs = 2;
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.validate().unwrap();
-        let (db, mut cfg_controller) = new_engines(cfg.clone());
+        let (db, mut cfg_controller) = new_engines(cfg);
 
         // update max_background_jobs
         let db_opts = db.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 2);
 
-        let mut incoming = cfg.clone();
-        incoming.rocksdb.max_background_jobs = 8;
-        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-        assert!(rollback.right().unwrap());
-
-        let db_opts = db.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 8);
+        cfg_controller
+            .update_config("rocksdb.max-background-jobs", "8")
+            .unwrap();
+        assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
 
         // update some configs on default cf
         let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
@@ -2855,12 +2875,20 @@ mod tests {
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(64).0);
         assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(8).0);
 
-        let mut incoming = cfg;
-        incoming.rocksdb.defaultcf.disable_auto_compactions = true;
-        incoming.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(32);
-        incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(256);
-        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-        assert!(rollback.right().unwrap());
+        let mut change = HashMap::new();
+        change.insert(
+            "rocksdb.defaultcf.disable-auto-compactions".to_owned(),
+            "true".to_owned(),
+        );
+        change.insert(
+            "rocksdb.defaultcf.target-file-size-base".to_owned(),
+            "32MB".to_owned(),
+        );
+        change.insert(
+            "rocksdb.defaultcf.block-cache-size".to_owned(),
+            "256MB".to_owned(),
+        );
+        cfg_controller.update(change).unwrap();
 
         let cf_opts = db.get_options_cf(defaultcf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
@@ -2902,52 +2930,5 @@ mod tests {
             cfg.validate().unwrap();
             assert_eq!(c, cfg);
         }
-    }
-
-    #[test]
-    fn test_invalid_config_rollback() {
-        let mut valid_cfg = TiKvConfig::default();
-        assert!(valid_cfg.validate().is_ok());
-        // Valid config do not have rollback
-        assert!(valid_cfg
-            .validate_with_rollback(&TiKvConfig::default())
-            .is_empty());
-
-        // Call validate_with_rollback with an invalid config will
-        // return a rollback of the cause of invalid
-        let mut c = valid_cfg.clone();
-        // invalid config
-        c.gc.batch_keys = 0;
-        // valid config
-        c.raft_store.raft_log_gc_threshold = 200;
-        assert!(c.validate().is_err());
-        let rollback = to_config_entry(c.validate_with_rollback(&valid_cfg)).unwrap();
-        assert_eq!(rollback.len(), 1);
-        assert_eq!(rollback[0].name, "gc.batch-keys");
-        assert_eq!(
-            rollback[0].value,
-            toml::to_string(&valid_cfg.gc.batch_keys).unwrap()
-        );
-
-        // Some check in `validate` may relative to many configs and if
-        // the config can not pass the check, a rollback of all config
-        // relative to the check will return
-        let mut c = valid_cfg.clone();
-        // config check: region_max_keys >= region_split_keys
-        c.coprocessor.region_max_keys = 0;
-        assert!(c.validate().is_err());
-        let mut rollback = to_config_entry(c.validate_with_rollback(&valid_cfg)).unwrap();
-        rollback.sort_unstable_by(|a, b| a.name.partial_cmp(&b.name).unwrap());
-        assert_eq!(rollback.len(), 2);
-        assert_eq!(rollback[0].name, "coprocessor.region-max-keys");
-        assert_eq!(
-            rollback[0].value,
-            toml::to_string(&valid_cfg.coprocessor.region_max_keys).unwrap()
-        );
-        assert_eq!(rollback[1].name, "coprocessor.region-split-keys");
-        assert_eq!(
-            rollback[1].value,
-            toml::to_string(&valid_cfg.coprocessor.region_split_keys).unwrap()
-        );
     }
 }

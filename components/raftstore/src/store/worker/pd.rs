@@ -5,12 +5,10 @@ use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use futures::sync::oneshot;
 use futures::Future;
 use tokio_core::reactor::Handle;
-use tokio_timer::Delay;
 
 use engine::rocks::util::*;
 use engine::rocks::DB;
@@ -31,7 +29,7 @@ use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
 use pd_client::metrics::*;
-use pd_client::{ConfigClient, Error, PdClient, RegionStat};
+use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
@@ -66,12 +64,6 @@ impl FlowStatsReporter for Scheduler<Task> {
             error!("Failed to send read flow statistics"; "err" => ?e);
         }
     }
-}
-
-pub trait DynamicConfig: Send + 'static {
-    fn refresh(&mut self, cfg_client: &dyn ConfigClient);
-    fn refresh_interval(&self) -> Duration;
-    fn get(&self) -> String;
 }
 
 /// Uses an asynchronous thread to tell PD something.
@@ -125,10 +117,6 @@ pub enum Task {
         cpu_usages: RecordPairVec,
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
-    },
-    RefreshConfig,
-    GetConfig {
-        cfg_sender: oneshot::Sender<String>,
     },
 }
 
@@ -242,8 +230,6 @@ impl Display for Task {
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
             ),
-            Task::RefreshConfig => write!(f, "refresh config"),
-            Task::GetConfig {..} => write!(f, "get config"),
         }
     }
 }
@@ -325,12 +311,24 @@ impl StatsMonitor {
     }
 }
 
+<<<<<<< HEAD
 pub struct Runner<T: PdClient + ConfigClient> {
     store_id: u64,
     pd_client: Arc<T>,
     config_handler: Box<dyn DynamicConfig>,
     router: RaftRouter<RocksEngine>,
     db: Arc<DB>,
+=======
+pub struct Runner<E, T>
+where
+    E: KvEngine,
+    T: PdClient,
+{
+    store_id: u64,
+    pd_client: Arc<T>,
+    router: RaftRouter<E>,
+    db: E,
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -344,16 +342,30 @@ pub struct Runner<T: PdClient + ConfigClient> {
     stats_monitor: StatsMonitor,
 }
 
+<<<<<<< HEAD
 impl<T: PdClient + ConfigClient> Runner<T> {
+=======
+impl<E, T> Runner<E, T>
+where
+    E: KvEngine,
+    T: PdClient,
+{
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
+<<<<<<< HEAD
         config_handler: Box<dyn DynamicConfig>,
         router: RaftRouter<RocksEngine>,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
+=======
+        router: RaftRouter<E>,
+        db: E,
+        scheduler: Scheduler<Task<E>>,
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
         store_heartbeat_interval: u64,
     ) -> Runner<T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
@@ -365,7 +377,6 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         Runner {
             store_id,
             pd_client,
-            config_handler,
             router,
             db,
             is_hb_receiver_scheduled: false,
@@ -814,33 +825,19 @@ impl<T: PdClient + ConfigClient> Runner<T> {
         self.store_stat.store_read_io_rates = read_io_rates;
         self.store_stat.store_write_io_rates = write_io_rates;
     }
-
-    fn handle_refresh_config(&mut self, handle: &Handle) {
-        self.config_handler.refresh(self.pd_client.as_ref() as _);
-
-        let scheduler = self.scheduler.clone();
-        let when = Instant::now() + self.config_handler.refresh_interval();
-        let f = Delay::new(when)
-            .map_err(|e| warn!("timeout timer delay errored"; "err" => ?e))
-            .then(move |_| {
-                if let Err(e) = scheduler.schedule(Task::RefreshConfig) {
-                    error!("failed to schedule refresh config task"; "err" => ?e)
-                }
-                Ok(())
-            });
-        handle.spawn(f);
-    }
-
-    fn handle_get_config(&self, cfg_sender: oneshot::Sender<String>) {
-        let cfg = self.config_handler.get();
-        let _ = cfg_sender
-            .send(cfg)
-            .map_err(|_| error!("failed to send config"));
-    }
 }
 
+<<<<<<< HEAD
 impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task, handle: &Handle) {
+=======
+impl<E, T> Runnable<Task<E>> for Runner<E, T>
+where
+    E: KvEngine,
+    T: PdClient,
+{
+    fn run(&mut self, task: Task<E>, handle: &Handle) {
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
@@ -952,8 +949,6 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 read_io_rates,
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
-            Task::RefreshConfig => self.handle_refresh_config(handle),
-            Task::GetConfig { cfg_sender } => self.handle_get_config(cfg_sender),
         };
     }
 

@@ -265,6 +265,57 @@ impl Into<ReadableDuration> for ConfigValue {
     }
 }
 
+impl FromStr for ReadableDuration {
+    type Err = String;
+
+    fn from_str(dur_str: &str) -> Result<ReadableDuration, String> {
+        let dur_str = dur_str.trim();
+        if !dur_str.is_ascii() {
+            return Err(format!("unexpect ascii string: {}", dur_str));
+        }
+        let err_msg = "valid duration, only d, h, m, s, ms are supported.".to_owned();
+        let mut left = dur_str.as_bytes();
+        let mut last_unit = DAY + 1;
+        let mut dur = 0f64;
+        while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
+            let (first, second) = left.split_at(idx);
+            let unit = if second.starts_with(b"ms") {
+                left = &left[idx + 2..];
+                MS
+            } else {
+                let u = match second[0] {
+                    b'd' => DAY,
+                    b'h' => HOUR,
+                    b'm' => MINUTE,
+                    b's' => SECOND,
+                    _ => return Err(err_msg),
+                };
+                left = &left[idx + 1..];
+                u
+            };
+            if unit >= last_unit {
+                return Err("d, h, m, s, ms should occur in given order.".to_owned());
+            }
+            // do we need to check 12h360m?
+            let number_str = unsafe { str::from_utf8_unchecked(first) };
+            dur += match number_str.trim().parse::<f64>() {
+                Ok(n) => n * unit as f64,
+                Err(_) => return Err(err_msg),
+            };
+            last_unit = unit;
+        }
+        if !left.is_empty() {
+            return Err(err_msg);
+        }
+        if dur.is_sign_negative() {
+            return Err("duration should be positive.".to_owned());
+        }
+        let secs = dur as u64 / SECOND as u64;
+        let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
+        Ok(ReadableDuration(Duration::new(secs, millis)))
+    }
+}
+
 impl ReadableDuration {
     pub fn secs(secs: u64) -> ReadableDuration {
         ReadableDuration(Duration::new(secs, 0))
@@ -363,56 +414,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
             where
                 E: de::Error,
             {
-                let dur_str = dur_str.trim();
-                if !dur_str.is_ascii() {
-                    return Err(E::invalid_value(Unexpected::Str(dur_str), &"ascii string"));
-                }
-                let err_msg = "valid duration, only d, h, m, s, ms are supported.";
-                let mut left = dur_str.as_bytes();
-                let mut last_unit = DAY + 1;
-                let mut dur = 0f64;
-                while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
-                    let (first, second) = left.split_at(idx);
-                    let unit = if second.starts_with(b"ms") {
-                        left = &left[idx + 2..];
-                        MS
-                    } else {
-                        let u = match second[0] {
-                            b'd' => DAY,
-                            b'h' => HOUR,
-                            b'm' => MINUTE,
-                            b's' => SECOND,
-                            _ => return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg)),
-                        };
-                        left = &left[idx + 1..];
-                        u
-                    };
-                    if unit >= last_unit {
-                        return Err(E::invalid_value(
-                            Unexpected::Str(dur_str),
-                            &"d, h, m, s, ms should occur in given order.",
-                        ));
-                    }
-                    // do we need to check 12h360m?
-                    let number_str = unsafe { str::from_utf8_unchecked(first) };
-                    dur += match number_str.trim().parse::<f64>() {
-                        Ok(n) => n * unit as f64,
-                        Err(_) => return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg)),
-                    };
-                    last_unit = unit;
-                }
-                if !left.is_empty() {
-                    return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg));
-                }
-                if dur.is_sign_negative() {
-                    return Err(E::invalid_value(
-                        Unexpected::Str(dur_str),
-                        &"duration should be positive.",
-                    ));
-                }
-                let secs = dur as u64 / SECOND as u64;
-                let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
-                Ok(ReadableDuration(Duration::new(secs, millis)))
+                dur_str.parse().map_err(E::custom)
             }
         }
 

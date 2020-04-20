@@ -2,7 +2,6 @@
 
 use futures::future::{err, ok};
 use futures::stream::Stream;
-use futures::sync::oneshot;
 use futures::{self, Future};
 use hyper::server::Builder as HyperBuilder;
 use hyper::service::service_fn;
@@ -21,17 +20,20 @@ use tokio_threadpool::{Builder, ThreadPool};
 use std::error::Error as StdError;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use super::Result;
+<<<<<<< HEAD
 use crate::config::TiKvConfig;
 use raftstore::store::PdTask;
+=======
+use crate::config::ConfigController;
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
 use tikv_util::security::SecurityConfig;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::worker::FutureScheduler;
 
 mod profiler_guard {
     use tikv_alloc::error::ProfResult;
@@ -87,11 +89,19 @@ pub struct StatusServer {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
+<<<<<<< HEAD
     pd_sender: Arc<FutureScheduler<PdTask>>,
 }
 
 impl StatusServer {
     pub fn new(status_thread_pool_size: usize, pd_sender: FutureScheduler<PdTask>) -> Self {
+=======
+    cfg_controller: Option<ConfigController>,
+}
+
+impl StatusServer {
+    pub fn new(status_thread_pool_size: usize, cfg_controller: ConfigController) -> Self {
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
@@ -108,7 +118,7 @@ impl StatusServer {
             tx,
             rx: Some(rx),
             addr: None,
-            pd_sender: Arc::new(pd_sender),
+            cfg_controller: Some(cfg_controller),
         }
     }
 
@@ -213,35 +223,50 @@ impl StatusServer {
             .unwrap()
     }
 
+<<<<<<< HEAD
     fn config_handler(
         pd_sender: &FutureScheduler<PdTask>,
+=======
+    fn get_config(
+        cfg_controller: &ConfigController,
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        let (cfg_sender, rx) = oneshot::channel();
-        if pd_sender
-            .schedule(PdTask::GetConfig { cfg_sender })
-            .is_err()
-        {
-            error!("failed to schedule GetConfig task");
-        }
-        let res = rx.then(|res| {
-            let err_resp = || {
-                StatusServer::err_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal Server Error",
-                )
-            };
-            match res {
-                Ok(cfg) => {
-                    match serde_json::to_string(&toml::from_str::<TiKvConfig>(&cfg).unwrap()) {
-                        Ok(json) => Ok(Response::builder()
-                            .header(header::CONTENT_TYPE, "application/json")
-                            .body(Body::from(json))
-                            .unwrap()),
-                        Err(_) => Ok(err_resp()),
+        let res = match serde_json::to_string(cfg_controller.get_current()) {
+            Ok(json) => Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json))
+                .unwrap(),
+            Err(_) => StatusServer::err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+            ),
+        };
+        Box::new(ok(res))
+    }
+
+    fn update_config(
+        cfg_controller: Arc<RwLock<ConfigController>>,
+        req: Request<Body>,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        let res = req.into_body().concat2().and_then(move |body| {
+            let res = match serde_json::from_slice(body.into_bytes().as_ref()) {
+                Ok(change) => match cfg_controller.write().unwrap().update(change) {
+                    Err(e) => StatusServer::err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("fail to update, error: {:?}", e),
+                    ),
+                    Ok(_) => {
+                        let mut resp = Response::default();
+                        *resp.status_mut() = StatusCode::OK;
+                        resp
                     }
-                }
-                Err(_) => Ok(err_resp()),
-            }
+                },
+                Err(_) => StatusServer::err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "fail to decode".to_owned(),
+                ),
+            };
+            ok(res)
         });
         Box::new(res)
     }
@@ -397,10 +422,11 @@ impl StatusServer {
         I::Error: Into<Box<dyn StdError + Send + Sync>>,
         I::Item: AsyncRead + AsyncWrite + Send + 'static,
     {
-        let pd_sender = self.pd_sender.clone();
+        // TODO: use future lock
+        let cfg_controller = Arc::new(RwLock::new(self.cfg_controller.take().unwrap()));
         // Start to serve.
         let server = builder.serve(move || {
-            let pd_sender = pd_sender.clone();
+            let cfg_controller = cfg_controller.clone();
             // Create a status service.
             service_fn(
                     move |req: Request<Body>| -> Box<
@@ -420,7 +446,12 @@ impl StatusServer {
                             (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
-                            (Method::GET, "/config") => Self::config_handler(&pd_sender),
+                            (Method::GET, "/config") => {
+                                Self::get_config(&cfg_controller.read().unwrap())
+                            }
+                            (Method::POST, "/config") => {
+                                Self::update_config(cfg_controller.clone(), req)
+                            }
                             (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
                             _ => Box::new(ok(StatusServer::err_response(
                                 StatusCode::NOT_FOUND,
@@ -575,21 +606,22 @@ mod tests {
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;
     use openssl::ssl::{SslConnector, SslMethod};
-    use tokio_core::reactor::Handle;
 
     use std::env;
     use std::path::PathBuf;
 
-    use crate::config::TiKvConfig;
+    use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
+<<<<<<< HEAD
     use raftstore::store::PdTask;
+=======
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     use test_util::new_security_cfg;
     use tikv_util::security::SecurityConfig;
-    use tikv_util::worker::{dummy_future_scheduler, FutureRunnable, FutureWorker};
 
     #[test]
     fn test_status_service() {
-        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
+        let mut status_server = StatusServer::new(1, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -654,6 +686,7 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
+<<<<<<< HEAD
         struct Runner;
         impl FutureRunnable<PdTask> for Runner {
             fn run(&mut self, t: PdTask, _: &Handle) {
@@ -667,6 +700,9 @@ mod tests {
         worker.start(Runner).unwrap();
 
         let mut status_server = StatusServer::new(1, worker.scheduler());
+=======
+        let mut status_server = StatusServer::new(1, ConfigController::default());
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -702,7 +738,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
+        let mut status_server = StatusServer::new(1, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -834,7 +870,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
+        let mut status_server = StatusServer::new(1, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -875,7 +911,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, dummy_future_scheduler());
+        let mut status_server = StatusServer::new(1, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -934,4 +970,83 @@ mod tests {
             "snap-sender"
         );
     }
+<<<<<<< HEAD
+=======
+
+    fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
+        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let _ = status_server.start(
+            "127.0.0.1:0".to_string(),
+            &new_security_cfg(Some(allowed_cn)),
+        );
+
+        let mut connector = HttpConnector::new(1);
+        connector.enforce_http(false);
+        let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
+        ssl.set_certificate_file(
+            format!(
+                "{}",
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("components/test_util/data/server.pem")
+                    .display()
+            ),
+            SslFiletype::PEM,
+        )
+        .unwrap();
+        ssl.set_private_key_file(
+            format!(
+                "{}",
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("components/test_util/data/key.pem")
+                    .display()
+            ),
+            SslFiletype::PEM,
+        )
+        .unwrap();
+        ssl.set_ca_file(format!(
+            "{}",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("components/test_util/data/ca.pem")
+                .display()
+        ))
+        .unwrap();
+
+        let ssl = HttpsConnector::with_connector(connector, ssl).unwrap();
+        let client = Client::builder().build::<_, Body>(ssl);
+
+        let uri = Uri::builder()
+            .scheme("https")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/metrics")
+            .build()
+            .unwrap();
+
+        if expected {
+            let handle = status_server.thread_pool.spawn_handle(lazy(move || {
+                client
+                    .get(uri)
+                    .map(|res| {
+                        assert_eq!(res.status(), StatusCode::OK);
+                    })
+                    .map_err(|err| {
+                        panic!("response status is not OK: {:?}", err);
+                    })
+            }));
+            handle.wait().unwrap();
+        } else {
+            let handle = status_server.thread_pool.spawn_handle(lazy(move || {
+                client
+                    .get(uri)
+                    .map(|_| {
+                        panic!("response status should be err");
+                    })
+                    .map_err(|err| {
+                        assert!(err.is_connect());
+                    })
+            }));
+            let _ = handle.wait();
+        }
+        status_server.stop();
+    }
+>>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
 }
