@@ -2263,7 +2263,13 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
-    let opts = cfg.rocksdb.build_opt();
+    let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
+        .unwrap()
+        .map(|key_manager| Arc::new(key_manager));
+    let env = get_env(key_manager, None).unwrap();
+    let mut opts = cfg.rocksdb.build_opt();
+    opts.set_env(env);
+
     engine::rocks::run_ldb_tool(&args, &opts);
 }
 
