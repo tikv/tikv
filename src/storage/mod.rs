@@ -234,39 +234,39 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                        bypass_locks,
+                        false,
+                    );
+                    let result = snap_store
+                        .get(&key, &mut statistics)
+                        // map storage::txn::Error -> storage::Error
+                        .map_err(Error::from)
+                        .map(|r| {
+                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                                .get(CMD)
+                                .observe(1 as f64);
+                            r
+                        });
 
-                let result = SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe_closure_duration(|| {
-                        let mut statistics = Statistics::default();
-                        let snap_store = SnapshotStore::new(
-                            snapshot,
-                            start_ts,
-                            ctx.get_isolation_level(),
-                            !ctx.get_not_fill_cache(),
-                            bypass_locks,
-                            false,
-                        );
-                        let result = snap_store
-                            .get(&key, &mut statistics)
-                            // map storage::txn::Error -> storage::Error
-                            .map_err(Error::from)
-                            .map(|r| {
-                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                                    .get(CMD)
-                                    .observe(1 as f64);
-                                r
-                            });
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
 
-                        metrics::tls_collect_scan_details(CMD, &statistics);
-                        metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-
-                        result
-                    });
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                result
+                    result
+                }
             },
             priority,
             start_ts.into_inner(),
