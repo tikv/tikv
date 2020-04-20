@@ -333,7 +333,7 @@ impl TiKVServer {
     }
 
     fn init_engines(&mut self) {
-        let env = get_env(self.encryption_key_manager.clone(), None).unwrap();
+        let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
@@ -523,7 +523,8 @@ impl TiKVServer {
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
-        let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+        let importer =
+            Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(

@@ -581,7 +581,7 @@ impl Snap {
                             mthd,
                             &enc_info.key,
                             Mode::Encrypt,
-                            Some(&enc_info.iv),
+                            Iv::from_slice(&enc_info.iv)?,
                         )
                         .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
                     );
@@ -710,12 +710,11 @@ impl Snap {
             check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum, mgr)?;
 
             if !for_send && !plain_file_used(cf_file.cf) {
-                engine.prepare_sst_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
-                if let Some(mgr) = self.encryption_key_manager.as_ref() {
-                    let src = cf_file.path.to_str().unwrap();
-                    let dst = cf_file.clone_path.to_str().unwrap();
-                    mgr.link_file(src, dst)?;
-                }
+                sst_importer::prepare_sst_for_ingestion(
+                    &cf_file.path,
+                    &cf_file.clone_path,
+                    self.encryption_key_manager.as_ref(),
+                )?;
             }
         }
         Ok(())
