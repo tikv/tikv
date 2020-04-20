@@ -297,40 +297,41 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe_closure_duration(|| {
-                        let mut statistics = Statistics::default();
-                        let mut snap_store = SnapshotStore::new(
-                            snapshot,
-                            TimeStamp::zero(),
-                            ctx.get_isolation_level(),
-                            !ctx.get_not_fill_cache(),
-                            Default::default(),
-                            false,
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
+                    let mut snap_store = SnapshotStore::new(
+                        snapshot,
+                        TimeStamp::zero(),
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                        Default::default(),
+                        false,
+                    );
+                    let mut results = vec![];
+                    // TODO: optimize using seek.
+                    for mut get in gets {
+                        snap_store.set_start_ts(get.ts.unwrap());
+                        snap_store.set_isolation_level(get.ctx.get_isolation_level());
+                        // The bypass_locks set will be checked at most once. `TsSet::vec`
+                        // is more efficient here.
+                        snap_store
+                            .set_bypass_locks(TsSet::vec_from_u64s(get.ctx.take_resolved_locks()));
+                        results.push(
+                            snap_store
+                                .get(&get.key, &mut statistics)
+                                .map_err(Error::from),
                         );
-                        let mut results = vec![];
-                        // TODO: optimize using seek.
-                        for mut get in gets {
-                            snap_store.set_start_ts(get.ts.unwrap());
-                            snap_store.set_isolation_level(get.ctx.get_isolation_level());
-                            // The bypass_locks set will be checked at most once. `TsSet::vec`
-                            // is more efficient here.
-                            snap_store.set_bypass_locks(TsSet::vec_from_u64s(
-                                get.ctx.take_resolved_locks(),
-                            ));
-                            results.push(
-                                snap_store
-                                    .get(&get.key, &mut statistics)
-                                    .map_err(Error::from),
-                            );
-                        }
-                        results
-                    });
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                Ok(result)
+                    }
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
+                    Ok(results)
+                }
             },
             priority,
             thread_rng().next_u64(),
