@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::hash_map::Entry;
+use std::fs::File;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -13,6 +14,7 @@ use protobuf::Message;
 use crate::config::{EncryptionConfig, MasterKeyConfig};
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
+use crate::io::EncrypterWriter;
 use crate::master_key::{create_backend, Backend, PlaintextBackend};
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -158,17 +160,24 @@ impl Dicts {
     }
 
     fn new_file(&mut self, fname: &str, method: EncryptionMethod) -> Result<&FileInfo> {
+        let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
-        file.iv = Iv::new_ctr().as_slice().to_vec();
+        file.iv = iv.as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
         file.method = compat(method);
         self.file_dict.files.insert(fname.to_owned(), file);
         self.save_file_dict()?;
+        if method != EncryptionMethod::Plaintext {
+            info!("new encrypted file"; 
+                  "fname" => fname, 
+                  "method" => format!("{:?}", method), 
+                  "iv" => hex::encode(iv.as_slice()));
+        }
         Ok(self.file_dict.files.get(fname).unwrap())
     }
 
     fn delete_file(&mut self, fname: &str) -> Result<()> {
-        self.file_dict.files.remove(fname).ok_or_else(|| {
+        let file = self.file_dict.files.remove(fname).ok_or_else(|| {
             Error::Io(IoError::new(
                 ErrorKind::NotFound,
                 format!("file not found, {}", fname),
@@ -176,7 +185,11 @@ impl Dicts {
         })?;
 
         // TOOD GC unused data keys.
-        self.save_file_dict()
+        self.save_file_dict()?;
+        if file.method != compat(EncryptionMethod::Plaintext) {
+            info!("delete encrypted file"; "fname" => fname);
+        }
+        Ok(())
     }
 
     fn link_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
@@ -197,8 +210,13 @@ impl Dicts {
                 format!("file already exists, {}", dst_fname),
             )));
         }
+        let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict()
+        self.save_file_dict()?;
+        if method != compat(EncryptionMethod::Plaintext) {
+            info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        }
+        Ok(())
     }
 
     fn rename_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
@@ -208,8 +226,13 @@ impl Dicts {
                 format!("file not found, {}", src_fname),
             ))
         })?;
+        let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict()
+        self.save_file_dict()?;
+        if method != compat(EncryptionMethod::Plaintext) {
+            info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        }
+        Ok(())
     }
 
     fn rotate_key(&mut self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
@@ -392,6 +415,23 @@ impl DataKeyManager {
             master_key,
             method,
         }))
+    }
+
+    pub fn create_file<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
+        let fname = path.as_ref().to_str().ok_or_else(|| {
+            Error::Other(box_err!(
+                "failed to convert path to string {:?}",
+                path.as_ref()
+            ))
+        })?;
+        let file = self.new_file(fname)?;
+        let file_writer = File::create(path)?;
+        EncrypterWriter::new(
+            file_writer,
+            crypter::encryption_method_from_db_encryption_method(file.method),
+            &file.key,
+            Iv::from_slice(&file.iv)?,
+        )
     }
 }
 
