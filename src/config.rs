@@ -2694,7 +2694,7 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.validate().unwrap();
-        let (db, mut cfg_controller, _dir) = new_engines(cfg.clone());
+        let (db, mut cfg_controller, _dir) = new_engines(cfg);
 
         // update max_background_jobs
         let db_opts = db.get_db_options();
