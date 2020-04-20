@@ -696,42 +696,42 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe_closure_duration(|| {
-                        let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
-                        let cf = Self::rawkv_cf(&cf)?;
-                        // no scan_count for this kind of op.
-                        let mut stats = Statistics::default();
-                        let result: Vec<Result<KvPair>> = keys
-                            .into_iter()
-                            .map(|k| {
-                                let v = snapshot.get_cf(cf, &k);
-                                (k, v)
-                            })
-                            .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
-                            .map(|(k, v)| match v {
-                                Ok(Some(v)) => {
-                                    stats.data.flow_stats.read_keys += 1;
-                                    stats.data.flow_stats.read_bytes +=
-                                        k.as_encoded().len() + v.len();
-                                    Ok((k.into_encoded(), v))
-                                }
-                                Err(e) => Err(Error::from(e)),
-                                _ => unreachable!(),
-                            })
-                            .collect();
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
+                    let cf = Self::rawkv_cf(&cf)?;
+                    // no scan_count for this kind of op.
+                    let mut stats = Statistics::default();
+                    let result: Vec<Result<KvPair>> = keys
+                        .into_iter()
+                        .map(|k| {
+                            let v = snapshot.get_cf(cf, &k);
+                            (k, v)
+                        })
+                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        .map(|(k, v)| match v {
+                            Ok(Some(v)) => {
+                                stats.data.flow_stats.read_keys += 1;
+                                stats.data.flow_stats.read_bytes += k.as_encoded().len() + v.len();
+                                Ok((k.into_encoded(), v))
+                            }
+                            Err(e) => Err(Error::from(e)),
+                            _ => unreachable!(),
+                        })
+                        .collect();
 
-                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                            .get(CMD)
-                            .observe(stats.data.flow_stats.read_keys as f64);
-                        tls_collect_read_flow(ctx.get_region_id(), &stats);
-                        Ok(result)
-                    });
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                result
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(stats.data.flow_stats.read_keys as f64);
+                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+                    Ok(result)
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -976,47 +976,50 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe_closure_duration(|| {
-                        let end_key = end_key.map(Key::from_encoded);
+                {
+                    let begin_instant = Instant::now_coarse();
 
-                        let mut statistics = Statistics::default();
-                        let result = if reverse {
-                            Self::reverse_raw_scan(
-                                &snapshot,
-                                &cf,
-                                &Key::from_encoded(key),
-                                end_key,
-                                limit,
-                                &mut statistics,
-                                key_only,
-                            )
-                            .map_err(Error::from)
-                        } else {
-                            Self::forward_raw_scan(
-                                &snapshot,
-                                &cf,
-                                &Key::from_encoded(key),
-                                end_key,
-                                limit,
-                                &mut statistics,
-                                key_only,
-                            )
-                            .map_err(Error::from)
-                        };
+                    let end_key = end_key.map(Key::from_encoded);
 
-                        metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                            .get(CMD)
-                            .observe(statistics.write.flow_stats.read_keys as f64);
-                        metrics::tls_collect_scan_details(CMD, &statistics);
-                        result
-                    });
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                result
+                    let mut statistics = Statistics::default();
+                    let result = if reverse {
+                        Self::reverse_raw_scan(
+                            &snapshot,
+                            &cf,
+                            &Key::from_encoded(key),
+                            end_key,
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        )
+                        .map_err(Error::from)
+                    } else {
+                        Self::forward_raw_scan(
+                            &snapshot,
+                            &cf,
+                            &Key::from_encoded(key),
+                            end_key,
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        )
+                        .map_err(Error::from)
+                    };
+
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(statistics.write.flow_stats.read_keys as f64);
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
+                    result
+                }
             },
             priority,
             thread_rng().next_u64(),
