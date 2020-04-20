@@ -68,7 +68,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SSTImporter::new(&p).unwrap())
+        Arc::new(SSTImporter::new(&p, None).unwrap())
     };
     let snap_mgr = {
         let p = dir
