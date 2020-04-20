@@ -232,18 +232,22 @@ impl LockMgr for LockManager {
 
     fn wake_up(
         &self,
+<<<<<<< HEAD
         lock_ts: u64,
         hashes: Option<Vec<u64>>,
         commit_ts: u64,
+=======
+        lock_ts: TimeStamp,
+        hashes: Vec<u64>,
+        commit_ts: TimeStamp,
+>>>>>>> b4dd42f... txn: only wake up waiters when locks are indeed released (#7379)
         is_pessimistic_txn: bool,
     ) {
         // If `hashes` is some, there may be some waiters waiting for these locks.
         // Try to wake up them.
-        if self.has_waiter() {
-            if let Some(hashes) = hashes {
-                self.waiter_mgr_scheduler
-                    .wake_up(lock_ts, hashes, commit_ts);
-            }
+        if !hashes.is_empty() && self.has_waiter() {
+            self.waiter_mgr_scheduler
+                .wake_up(lock_ts, hashes, commit_ts);
         }
         // If a pessimistic transaction is committed or rolled back and it once sent requests to
         // detect deadlock, clean up its wait-for entries in the deadlock detector.
@@ -326,7 +330,11 @@ mod tests {
         let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
         lock_mgr.wait_for(waiter.start_ts, waiter.cb, waiter.pr, waiter.lock, true, 0);
         assert!(lock_mgr.has_waiter());
+<<<<<<< HEAD
         lock_mgr.wake_up(lock.ts, Some(vec![lock.hash]), 30, false);
+=======
+        lock_mgr.wake_up(lock.ts, vec![lock.hash], 30.into(), false);
+>>>>>>> b4dd42f... txn: only wake up waiters when locks are indeed released (#7379)
         assert_elapsed(
             || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, 30),
             0,
@@ -361,7 +369,11 @@ mod tests {
             200,
         );
         // Waiter2 releases its lock.
+<<<<<<< HEAD
         lock_mgr.wake_up(20, Some(vec![20]), 20, true);
+=======
+        lock_mgr.wake_up(20.into(), vec![20], 20.into(), true);
+>>>>>>> b4dd42f... txn: only wake up waiters when locks are indeed released (#7379)
         assert_elapsed(
             || expect_write_conflict(f1.wait().unwrap(), 10, lock_info1, 20),
             0,
@@ -382,13 +394,19 @@ mod tests {
                 0,
             );
             assert!(lock_mgr.has_waiter());
+<<<<<<< HEAD
             assert_eq!(lock_mgr.remove_from_detected(30), !is_first_lock);
             lock_mgr.wake_up(40, Some(vec![40]), 40, false);
+=======
+            assert_eq!(lock_mgr.remove_from_detected(30.into()), !is_first_lock);
+            lock_mgr.wake_up(40.into(), vec![40], 40.into(), false);
+>>>>>>> b4dd42f... txn: only wake up waiters when locks are indeed released (#7379)
             f.wait().unwrap().unwrap_err();
         }
         assert!(!lock_mgr.has_waiter());
 
         // If key_hashes is none, no wake up.
+<<<<<<< HEAD
         let prev_wake_up = TASK_COUNTER_VEC.wake_up.get();
         lock_mgr.wake_up(10, None, 10, false);
         assert_eq!(TASK_COUNTER_VEC.wake_up.get(), prev_wake_up);
@@ -402,6 +420,21 @@ mod tests {
         let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
         lock_mgr.wake_up(10, None, 10, true);
         assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
+=======
+        let prev_wake_up = TASK_COUNTER_METRICS.wake_up.get();
+        lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
+        assert_eq!(TASK_COUNTER_METRICS.wake_up.get(), prev_wake_up);
+
+        // If it's non-pessimistic-txn, no clean up.
+        let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
+        lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
+        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
+
+        // If the txn doesn't wait for locks, no clean up.
+        let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
+        lock_mgr.wake_up(10.into(), vec![], 10.into(), true);
+        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
+>>>>>>> b4dd42f... txn: only wake up waiters when locks are indeed released (#7379)
 
         // If timeout is negative, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10, 20, 20);
