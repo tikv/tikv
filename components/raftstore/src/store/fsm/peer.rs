@@ -1904,7 +1904,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_check_merge(&mut self) {
-        if self.fsm.stopped || self.fsm.peer.pending_remove || self.fsm.peer.pending_merge_state.is_none() {
+        if self.fsm.stopped
+            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_merge_state.is_none()
+        {
             return;
         }
         self.register_merge_check_tick();
