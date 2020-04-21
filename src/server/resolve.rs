@@ -1,12 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use kvproto::metapb;
+use kvproto::replication_modepb::ReplicationMode;
 
 use pd_client::{take_peer_address, PdClient};
+use raftstore::store::GlobalReplicationState;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -44,6 +46,7 @@ struct StoreAddr {
 struct Runner<T: PdClient> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
+    state: Arc<Mutex<GlobalReplicationState>>,
 }
 
 impl<T: PdClient> Runner<T> {
@@ -70,6 +73,19 @@ impl<T: PdClient> Runner<T> {
     fn get_address(&self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
         let mut s = box_try!(pd_client.get_store(store_id));
+        let mut state = self.state.lock().unwrap();
+        let label_key = &state.status.get_dr_auto_sync().label_key;
+        if state.status.mode == ReplicationMode::DrAutoSync {
+            if state.group.group_id(store_id).is_none() {
+                for l in s.get_labels() {
+                    if l.key == *label_key {
+                        state.group.register_store(store_id, l.value.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        drop(state);
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
             return Err(box_err!("store {} has been removed", store_id));
@@ -106,19 +122,26 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T>(pd_client: Arc<T>) -> Result<(Worker<Task>, PdStoreAddrResolver)>
+pub fn new_resolver<T>(
+    pd_client: Arc<T>,
+) -> Result<(
+    Worker<Task>,
+    PdStoreAddrResolver,
+    Arc<Mutex<GlobalReplicationState>>,
+)>
 where
     T: PdClient + 'static,
 {
     let mut worker = Worker::new("addr-resolver");
-
+    let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
         pd_client,
         store_addrs: HashMap::default(),
+        state: state.clone(),
     };
     box_try!(worker.start(runner));
     let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver))
+    Ok((worker, resolver, state))
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -177,6 +200,7 @@ mod tests {
         Runner {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
+            state: Default::default(),
         }
     }
 

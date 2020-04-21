@@ -27,7 +27,8 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-        new_compaction_listener, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+        new_compaction_listener, GlobalReplicationState, LocalReader, SnapManagerBuilder,
+        SplitCheckRunner,
     },
 };
 use std::{
@@ -118,6 +119,7 @@ struct TiKVServer {
     router: RaftRouter<RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
+    state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<Engines>,
@@ -160,11 +162,12 @@ impl TiKVServer {
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
-        let (resolve_worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
-            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
-
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+
+        let (resolve_worker, resolver, state) = resolve::new_resolver(Arc::clone(&pd_client))
+            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
+
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
@@ -177,6 +180,7 @@ impl TiKVServer {
             router,
             system: Some(system),
             resolver,
+            state,
             store_path,
             encryption_key_manager: None,
             engines: None,
@@ -553,6 +557,7 @@ impl TiKVServer {
             &server_config,
             raft_store,
             self.pd_client.clone(),
+            self.state.clone(),
         );
 
         node.start(

@@ -16,14 +16,14 @@ use engine_rocks::{CloneCompat, Compat, RocksEngine};
 use engine_traits::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
+use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::PdTask;
-use raftstore::store::SplitCheckTask;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
+use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
 use tikv_util::worker::Worker;
@@ -57,6 +57,7 @@ pub struct Node<C: PdClient + 'static> {
     has_started: bool,
 
     pd_client: Arc<C>,
+    state: Arc<Mutex<GlobalReplicationState>>,
 }
 
 impl<C> Node<C>
@@ -69,6 +70,7 @@ where
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
+        state: Arc<Mutex<GlobalReplicationState>>,
     ) -> Node<C> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
@@ -109,6 +111,7 @@ where
             pd_client,
             system,
             has_started: false,
+            state,
         }
     }
 
@@ -151,6 +154,11 @@ where
             self.bootstrap_cluster(&engines, first_region)?;
         }
 
+        // Put store only if the cluster is bootstrapped.
+        info!("put store to PD"; "store" => ?&self.store);
+        let status = self.pd_client.put_store(self.store.clone())?;
+        self.load_all_stores(status);
+
         self.start_store(
             store_id,
             engines,
@@ -162,10 +170,6 @@ where
             importer,
             split_check_worker,
         )?;
-
-        // Put store only if the cluster is bootstrapped.
-        info!("put store to PD"; "store" => ?&self.store);
-        self.pd_client.put_store(self.store.clone())?;
 
         Ok(())
     }
@@ -216,6 +220,34 @@ where
     fn alloc_id(&self) -> Result<u64> {
         let id = self.pd_client.alloc_id()?;
         Ok(id)
+    }
+
+    fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
+        let status = match status {
+            Some(s) => s,
+            None => {
+                info!("no status is returned, using majority mode");
+                return;
+            }
+        };
+        info!("initializing replication mode"; "status" => ?status, "store_id" => self.store.id);
+        let stores = match self.pd_client.get_all_stores(false) {
+            Ok(stores) => stores,
+            Err(e) => panic!("failed to load all stores: {:?}", e),
+        };
+        let label_key = &status.get_dr_auto_sync().label_key;
+        let mut control = self.state.lock().unwrap();
+        for store in stores {
+            for l in store.get_labels() {
+                if l.key == *label_key {
+                    control
+                        .group
+                        .register_store(store.id, l.value.to_lowercase());
+                    break;
+                }
+            }
+        }
+        control.status = status;
     }
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
