@@ -2213,22 +2213,15 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         cache: Arc<dyn RegionCache>,
-        last_apply_state: RaftApplyState,
+        _apply_state: RaftApplyState,
     ) {
         ctx.raft_metrics.propose.build_cache_resp += 1;
-        let apply_state = self.get_store().apply_state();
-        if *apply_state == last_apply_state {
-            info!("build a in-memory-table for region"; "region_id" => self.region_id);
-            self.region_cache = Some(cache.clone());
-            let mut meta = ctx.store_meta.lock().unwrap();
-            if let Some(mut reader) = meta.readers.get_mut(&self.region_id) {
-                reader.cache = Some(cache);
-            }
-        } else {
-            warn!("fail to build a in-memory-table for region";
-                "region_id" => self.region_id,
-                "last_apply_index" => last_apply_state.get_applied_index(),
-                "apply_index" => apply_state.get_applied_index());
+        //let apply_state = self.get_store().apply_state();
+        info!("build a in-memory-table for region"; "region_id" => self.region_id);
+        self.region_cache = Some(cache.clone());
+        let mut meta = ctx.store_meta.lock().unwrap();
+        if let Some(mut reader) = meta.readers.get_mut(&self.region_id) {
+            reader.cache = Some(cache);
         }
     }
 
