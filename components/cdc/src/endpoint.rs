@@ -554,14 +554,18 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let tso = self.pd_client.get_tso();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
-        let regions: Vec<u64> = self.capture_regions.keys().copied().collect();
+        let regions: Vec<(u64, ObserveID)> = self
+            .capture_regions
+            .iter()
+            .map(|(region_id, delegate)| (*region_id, delegate.id))
+            .collect();
         let fut = tso.join(timeout.map_err(|_| unreachable!())).then(
             move |tso: pd_client::Result<(TimeStamp, ())>| {
                 // Ignore get tso errors since we will retry every `min_ts_interval`.
                 let (min_ts, _) = tso.unwrap_or((TimeStamp::default(), ()));
                 // TODO: send a message to raftstore would consume too much cpu time,
                 // try to handle it outside raftstore.
-                for region_id in regions {
+                for (region_id, observe_id) in regions {
                     let scheduler_clone = scheduler.clone();
                     if let Err(e) = raft_router.significant_send(
                         region_id,
@@ -577,12 +581,19 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                             }
                         }))),
                     ) {
-                        // TODO: should we try to deregister region here?
                         warn!(
                             "send LeaderCallback for advancing resolved ts failed";
                             "err" => ?e,
                             "min_ts" => min_ts,
                         );
+                        let deregister = Deregister::Region {
+                            observe_id,
+                            region_id,
+                            err: Error::Request(e.into()),
+                        };
+                        if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                            error!("schedule cdc task failed"; "error" => ?e);
+                        }
                     }
                 }
                 match scheduler.schedule(Task::RegisterMinTsEvent) {
