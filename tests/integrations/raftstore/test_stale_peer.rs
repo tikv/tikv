@@ -203,7 +203,7 @@ fn test_server_stale_peer_without_data_right_derive_when_split() {
     test_stale_peer_without_data(&mut cluster, true);
 }
 
-/// A help function for testing the behaviour of the gc of stale learner
+/// A help function for testing the behavior of the gc of stale learner
 /// which is out or region.
 #[test]
 fn test_stale_learner() {
