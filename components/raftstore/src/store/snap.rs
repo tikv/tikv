@@ -1959,7 +1959,7 @@ pub mod tests {
         .unwrap();
         assert!(s1.exists());
 
-        let mut s2 = Snap::new_for_building(dir.path(), &key, mgr_core.clone()).unwrap();
+        let mut s2 = Snap::new_for_building(dir.path(), &key, mgr_core).unwrap();
         assert!(s2.exists());
 
         Snapshot::<RocksEngine>::build(
@@ -2179,7 +2179,7 @@ pub mod tests {
         assert!(
             Snap::new_for_receiving(dst_dir.path(), &key, mgr_core.clone(), snap_meta,).is_err()
         );
-        assert!(Snap::new_for_applying(dst_dir.path(), &key, mgr_core.clone(),).is_err());
+        assert!(Snap::new_for_applying(dst_dir.path(), &key, mgr_core).is_err());
     }
 
     #[test]
@@ -2248,13 +2248,10 @@ pub mod tests {
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
         assert!(Snap::new_for_applying(dst_dir.path(), &key, mgr_core.clone(),).is_err());
-        assert!(Snap::new_for_receiving(
-            dst_dir.path(),
-            &key,
-            mgr_core.clone(),
-            snap_data.take_meta(),
-        )
-        .is_err());
+        assert!(
+            Snap::new_for_receiving(dst_dir.path(), &key, mgr_core, snap_data.take_meta(),)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2322,8 +2319,7 @@ pub mod tests {
         region.set_id(2);
         snap_data.set_region(region);
         let s3 = Snap::new_for_building(&path, &key2, mgr_core.clone()).unwrap();
-        let s4 =
-            Snap::new_for_receiving(&path, &key2, mgr_core.clone(), snap_data.take_meta()).unwrap();
+        let s4 = Snap::new_for_receiving(&path, &key2, mgr_core, snap_data.take_meta()).unwrap();
 
         assert!(s1.exists());
         assert!(s2.exists());
