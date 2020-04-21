@@ -26,6 +26,11 @@ lazy_static! {
         "The minimal resolved ts for current regions"
     )
     .unwrap();
+    pub static ref CDC_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_cdc_pending_bytes",
+        "Bytes in memory of a pending region"
+    )
+    .unwrap();
     pub static ref CDC_CAPTURED_REGION_COUNT: IntGauge = register_int_gauge!(
         "tikv_cdc_captured_region_total",
         "Total number of CDC captured regions"

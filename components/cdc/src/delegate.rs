@@ -164,6 +164,23 @@ impl Downstream {
 struct Pending {
     pub downstreams: Vec<Downstream>,
     pub locks: Vec<PendingLock>,
+    pub pending_bytes: usize,
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        CDC_PENDING_BYTES_GAUGE.sub(self.pending_bytes as i64);
+    }
+}
+
+impl Pending {
+    fn take_downstreams(&mut self) -> Vec<Downstream> {
+        mem::take(&mut self.downstreams)
+    }
+
+    fn take_locks(&mut self) -> Vec<PendingLock> {
+        mem::take(&mut self.locks)
+    }
 }
 
 enum PendingLock {
@@ -348,13 +365,13 @@ impl Delegate {
         );
         // Mark the delegate as initialized.
         self.region = Some(region);
-        if let Some(pending) = self.pending.take() {
+        if let Some(mut pending) = self.pending.take() {
             // Re-subscribe pending downstreams.
-            for downstream in pending.downstreams {
+            for downstream in pending.take_downstreams() {
                 self.subscribe(downstream);
             }
 
-            for lock in pending.locks {
+            for lock in pending.take_locks() {
                 match lock {
                     PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
                     PendingLock::Untrack {
@@ -546,15 +563,14 @@ impl Delegate {
                         ),
                         None => {
                             assert!(self.pending.is_some(), "region resolver not ready");
-                            self.pending
-                                .as_mut()
-                                .unwrap()
-                                .locks
-                                .push(PendingLock::Untrack {
-                                    key: row.key.clone(),
-                                    start_ts: row.start_ts.into(),
-                                    commit_ts: commit_ts.map(Into::into),
-                                });
+                            let pending = self.pending.as_mut().unwrap();
+                            pending.locks.push(PendingLock::Untrack {
+                                key: row.key.clone(),
+                                start_ts: row.start_ts.into(),
+                                commit_ts: commit_ts.map(Into::into),
+                            });
+                            pending.pending_bytes += row.key.len();
+                            CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
                         }
                     }
 
@@ -584,14 +600,13 @@ impl Delegate {
                         }
                         None => {
                             assert!(self.pending.is_some(), "region resolver not ready");
-                            self.pending
-                                .as_mut()
-                                .unwrap()
-                                .locks
-                                .push(PendingLock::Track {
-                                    key: row.key.clone(),
-                                    start_ts: row.start_ts.into(),
-                                });
+                            let pending = self.pending.as_mut().unwrap();
+                            pending.locks.push(PendingLock::Track {
+                                key: row.key.clone(),
+                                start_ts: row.start_ts.into(),
+                            });
+                            pending.pending_bytes += row.key.len();
+                            CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
                         }
                     }
 
