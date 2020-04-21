@@ -646,7 +646,9 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
-            let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts)?;
+            // The rollback must be protected, see more on
+            // [issue #7364](https://github.com/tikv/tikv/issues/7364)
+            let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts, true)?;
 
             wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());

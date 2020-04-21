@@ -535,7 +535,9 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
-        self.cleanup(key, 0)
+        // Rollback is called only if the transaction is known to fail. Under the circumstances,
+        // the rollback record needn't be protected.
+        self.cleanup(key, 0, false)
     }
 
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
@@ -544,7 +546,7 @@ impl<S: Snapshot> MvccTxn<S> {
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.
-    pub fn cleanup(&mut self, key: Key, current_ts: u64) -> Result<bool> {
+    pub fn cleanup(&mut self, key: Key, current_ts: u64, protect_rollback: bool) -> Result<bool> {
         match self.reader.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
@@ -589,9 +591,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
                         // Insert a Rollback to Write CF in case that a stale prewrite
                         // command is received after a cleanup command.
-                        // The rollback must be protected, see more on
-                        // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-                        let write = Write::new_rollback(ts, true);
+                        let write = Write::new_rollback(ts, protect_rollback);
                         self.put_write(key, ts, write.to_bytes());
                         Ok(false)
                     }
@@ -1617,7 +1617,9 @@ mod tests {
         must_rollback_collapsed(&engine, k, 32);
         must_rollback_collapsed(&engine, k, 33);
         must_acquire_pessimistic_lock_err(&engine, k, k, 32, 32);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 32, 34);
+        // Currently we cannot avoid this.
+        must_acquire_pessimistic_lock(&engine, k, k, 32, 34);
+        must_pessimistic_rollback(&engine, k, 32, 34);
         must_unlocked(&engine, k);
 
         // Acquire lock when there is lock with different for_update_ts.
