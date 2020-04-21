@@ -21,13 +21,13 @@ use super::Result;
 ///    validation.
 /// 3. If the file has been ingested to `RocksDB`, we should not modified the
 ///    global seqno directly, because that may corrupt RocksDB's data.
-#[cfg(target_os = "linux")]
 pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     path: P,
     clone: Q,
     encryption_key_manager: Option<&DataKeyManager>,
 ) -> Result<()> {
-    use std::os::linux::fs::MetadataExt;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
 
     let path = path.as_ref().to_str().unwrap();
     let clone = clone.as_ref().to_str().unwrap();
@@ -36,33 +36,20 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         fs::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
     }
 
-    let meta = fs::metadata(path).map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
+    #[cfg(unix)]
+    let nlink = fs::metadata(path)
+        .map_err(|e| format!("read metadata from {}: {:?}", path, e))?
+        .nlink();
+    #[cfg(not(unix))]
+    let nlink = 0;
 
-    if meta.st_nlink() == 1 {
+    if nlink == 1 {
         // RocksDB must not have this file, we can make a hard link.
         fs::hard_link(path, clone)
             .map_err(|e| format!("link from {} to {}: {:?}", path, clone, e))?;
     } else {
         // RocksDB may have this file, we should make a copy.
         copy_and_sync(path, clone)
-            .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
-    }
-    if let Some(key_manager) = encryption_key_manager {
-        key_manager.link_file(path, clone)?;
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
-    path: P,
-    clone: Q,
-    encryption_key_manager: Option<&Arc<DataKeyManager>>,
-) -> Result<()> {
-    let path = path.as_ref().to_str().unwrap();
-    let clone = clone.as_ref().to_str().unwrap();
-    if !Path::new(clone).exists() {
-        copy_and_sync(path, clone)?
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
     }
     if let Some(key_manager) = encryption_key_manager {
@@ -103,13 +90,13 @@ mod tests {
     use tempfile::Builder;
     use tikv_util::file::calc_crc32;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
-        use std::os::linux::fs::MetadataExt;
-        assert_eq!(fs::metadata(path).unwrap().st_nlink(), nlink);
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(fs::metadata(path).unwrap().nlink(), nlink);
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     fn check_hard_link<P: AsRef<Path>>(_: P, _: u64) {
         // Just do nothing
     }
