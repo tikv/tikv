@@ -68,7 +68,7 @@ pub trait LockManager: Clone + Send + 'static {
     fn wake_up(
         &self,
         lock_ts: TimeStamp,
-        hashes: Option<Vec<u64>>,
+        hashes: Vec<u64>,
         commit_ts: TimeStamp,
         is_pessimistic_txn: bool,
     );
@@ -100,7 +100,7 @@ impl LockManager for DummyLockManager {
     fn wake_up(
         &self,
         _lock_ts: TimeStamp,
-        _hashes: Option<Vec<u64>>,
+        _hashes: Vec<u64>,
         _commit_ts: TimeStamp,
         _is_pessimistic_txn: bool,
     ) {

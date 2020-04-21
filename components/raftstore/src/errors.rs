@@ -11,8 +11,6 @@ use prost::{DecodeError, EncodeError};
 use protobuf::ProtobufError;
 
 use kvproto::{errorpb, metapb};
-use pd_client;
-use raft;
 use tikv_util::codec;
 
 use super::coprocessor::Error as CopError;
@@ -128,6 +126,16 @@ quick_error! {
             from()
             cause(err)
             display("Snapshot {}", err)
+        }
+        SstImporter(err: sst_importer::Error) {
+            from()
+            cause(err)
+            description(err.description())
+            display("SstImporter {}", err)
+        }
+        Encryption(err: encryption::Error) {
+            from()
+            display("Encryption {}", err)
         }
     }
 }
