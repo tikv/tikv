@@ -50,7 +50,6 @@ use crate::store::worker::{
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
     RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
-use crate::store::DynamicConfig;
 use crate::store::PdTask;
 use crate::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
@@ -59,7 +58,7 @@ use crate::store::{
 use crate::Result;
 use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::{ConfigClient, PdClient};
+use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
@@ -996,7 +995,7 @@ impl RaftBatchSystem {
     }
 
     // TODO: reduce arguments
-    pub fn spawn<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
+    pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
@@ -1010,7 +1009,6 @@ impl RaftBatchSystem {
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
-        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1058,28 +1056,16 @@ impl RaftBatchSystem {
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
         if engine.support_write_batch_vec() {
-            self.start_system::<T, C, RocksWriteBatchVec>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-                dyn_cfg,
-            )?;
+            self.start_system::<T, C, RocksWriteBatchVec>(workers, region_peers, builder, auto_split_controller)?;
         } else {
-            self.start_system::<T, C, RocksWriteBatch>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-                dyn_cfg,
-            )?;
+            self.start_system::<T, C, RocksWriteBatch>(workers, region_peers, builder, auto_split_controller)?;
         }
         Ok(())
     }
 
     fn start_system<
         T: Transport + 'static,
-        C: PdClient + ConfigClient + 'static,
+        C: PdClient + 'static,
         W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
     >(
         &mut self,
@@ -1087,7 +1073,6 @@ impl RaftBatchSystem {
         region_peers: Vec<SenderFsmPair<RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
-        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1174,7 +1159,6 @@ impl RaftBatchSystem {
         let pd_runner = PdRunner::new(
             store.get_id(),
             Arc::clone(&pd_client),
-            dyn_cfg,
             self.router.clone(),
             engines.kv,
             workers.pd_worker.scheduler(),

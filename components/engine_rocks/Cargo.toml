@@ -39,7 +39,7 @@ features = ["encryption", "static_libcpp"]
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
-rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
+rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 
 [dev-dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
