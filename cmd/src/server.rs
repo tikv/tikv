@@ -557,13 +557,6 @@ impl TiKVServer {
 
         let auto_split_controller = AutoSplitController::new(split_config_manager);
 
-        let config_client = ConfigHandler::start(
-            self.config.server.advertise_addr.clone(),
-            cfg_controller,
-            pd_worker.scheduler(),
-        )
-        .unwrap_or_else(|e| fatal!("failed to start config client: {}", e));
-
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config,

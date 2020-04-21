@@ -1184,6 +1184,7 @@ fn send_destroy_peer_message(
 mod tests {
     use engine_rocks::RocksEngine;
     use std::sync::Mutex;
+    use std::time::Instant;
     use tikv_util::worker::FutureWorker;
 
     use super::*;

@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::mem;
 
 use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
-use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
+use crate::storage::kv::{FlowStatsReporter, Statistics};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use raftstore::store::ReadStats;
@@ -16,7 +16,6 @@ use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
-    local_read_flow_stats: HashMap<u64, FlowStatistics>,
     local_read_stats: ReadStats,
 }
 
