@@ -964,6 +964,122 @@ impl<T> Tracker<T> {
     }
 }
 
+use std::collections::HashMap;
+
+#[derive(Debug)]
+enum TomlLine {
+    Table(String),
+    KVPair(String),
+    Unknown,
+}
+
+impl TomlLine {
+    fn encode_kv(key: &str, val: &str) -> String {
+        format!("{} = {}", key, val)
+    }
+
+    fn parse_kv(s: &str) -> TomlLine {
+        let mut v: Vec<_> = s.split('=').map(|s| s.trim().to_owned()).rev().collect();
+        if v.is_empty() || v.len() > 2 || !TomlLine::is_valid_key(v[v.len() - 1].as_str()) {
+            return TomlLine::Unknown;
+        }
+        TomlLine::KVPair(v.pop().unwrap())
+    }
+
+    fn parse(s: &str) -> TomlLine {
+        let s = s.trim();
+        if let Some(k) = s
+            .strip_prefix('[')
+            .map(|s| s.strip_suffix(']'))
+            .flatten()
+            .map(str::trim)
+        {
+            return if TomlLine::is_valid_key(k) {
+                TomlLine::Table(k.to_owned())
+            } else {
+                TomlLine::Unknown
+            };
+        }
+        TomlLine::parse_kv(s.strip_prefix('#').unwrap_or(s))
+    }
+
+    fn is_valid_key(s: &str) -> bool {
+        !(s.is_empty() || s.starts_with('.') || s.ends_with('.'))
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+    }
+
+    fn concat_key(k1: &str, k2: &str) -> String {
+        match (k1.is_empty(), k2.is_empty()) {
+            (false, false) => format!("{}.{}", k1, k2),
+            (_, true) => k1.to_owned(),
+            (true, _) => k2.to_owned(),
+        }
+    }
+}
+
+struct TomlWriter {
+    dst: Vec<u8>,
+    current_table: String,
+}
+
+impl TomlWriter {
+    fn new() -> TomlWriter {
+        TomlWriter {
+            dst: Vec::new(),
+            current_table: "".to_owned(),
+        }
+    }
+
+    fn write_change(&mut self, src: String, mut change: HashMap<String, String>) {
+        for line in src.lines() {
+            match TomlLine::parse(&line) {
+                TomlLine::Table(keys) => {
+                    self.write_current_table(&mut change);
+                    self.write(line.as_bytes());
+                    self.current_table = keys;
+                }
+                TomlLine::KVPair(keys) => {
+                    match change.remove(&TomlLine::concat_key(
+                        self.current_table.as_str(),
+                        keys.as_str(),
+                    )) {
+                        None => self.write(line.as_bytes()),
+                        Some(chg) => self.write(TomlLine::encode_kv(&keys, &chg).as_bytes()),
+                    }
+                }
+                TomlLine::Unknown => self.write(line.as_bytes()),
+            }
+        }
+        if !change.is_empty() {
+            for (k, chg) in change {
+                self.write(TomlLine::encode_kv(k.as_str(), &chg).as_bytes());
+            }
+        }
+    }
+
+    fn write_current_table(&mut self, change: &mut HashMap<String, String>) {
+        let keys: Vec<_> = change
+            .keys()
+            .filter_map(|k| k.split('.').last())
+            .map(str::to_owned)
+            .collect();
+        for k in keys {
+            if let Some(chg) = change.remove(&TomlLine::concat_key(
+                self.current_table.as_str(),
+                k.as_str(),
+            )) {
+                self.write(TomlLine::encode_kv(k.as_str(), &chg).as_bytes());
+            }
+        }
+    }
+
+    fn write(&mut self, s: &[u8]) {
+        self.dst.extend_from_slice(s);
+        self.dst.push(b'\n');
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -1312,5 +1428,52 @@ mod tests {
         }
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
+    }
+
+    #[test]
+    fn test_toml_expr() {
+        let cfg = r#"
+## commet1
+log-level = "info"
+[readpool.storage]
+## commet2
+normal-concurrency = 1
+# high-concurrency = 1
+
+## commet3
+[readpool.coprocessor]
+normal-concurrency = 1
+"#;
+        let mut m = HashMap::new();
+        m.insert("log-file".to_owned(), "log-file-name".to_owned());
+        m.insert("readpool.storage.xxx".to_owned(), "zzz".to_owned());
+        m.insert("readpool.storage.yyy".to_owned(), "zzz".to_owned());
+        m.insert(
+            "readpool.storage.high-concurrency".to_owned(),
+            "345".to_owned(),
+        );
+        m.insert(
+            "readpool.coprocessor.normal-concurrency".to_owned(),
+            "123".to_owned(),
+        );
+
+        let mut t = TomlWriter::new();
+        t.write_change(cfg.to_owned(), m);
+        let expect = r#"
+## commet1
+log-level = "info"
+log-file = log-file-name
+[readpool.storage]
+## commet2
+normal-concurrency = 1
+high-concurrency = 345
+
+## commet3
+xxx = zzz
+yyy = zzz
+[readpool.coprocessor]
+normal-concurrency = 123
+"#;
+        assert_eq!(expect.as_bytes(), t.dst.as_slice());
     }
 }
