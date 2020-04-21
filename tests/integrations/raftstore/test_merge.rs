@@ -1069,7 +1069,7 @@ fn test_merge_isloated_stale_learner() {
     pd_client.must_remove_peer(left.get_id(), new_learner_peer(2, 2));
 
     pd_client.must_merge(right.get_id(), left.get_id());
-    
+
     region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
 
