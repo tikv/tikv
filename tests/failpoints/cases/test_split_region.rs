@@ -107,7 +107,6 @@ fn test_pause_split_when_snap_gen_will_split() {
 
     assert_ne!(left, right);
     assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
 
     fail::remove(is_generating_snapshot);
