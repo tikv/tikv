@@ -819,6 +819,7 @@ mod log {
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
 
+    #[derive(Default)]
     struct LogIterator {
         search_files: Vec<(i64, File)>,
         currrent_lines: Option<std::io::Lines<BufReader<File>>>,
@@ -1097,6 +1098,9 @@ mod log {
         log_file: P,
         mut req: SearchLogRequest,
     ) -> Result<impl Stream<Item = SearchLogResponse, Error = ()>, Error> {
+        if !log_file.as_ref().exists() {
+            return Ok(bacth_log_item(LogIterator::default()));
+        }
         let begin_time = req.get_start_time();
         let end_time = req.get_end_time();
         let levels = req.take_levels();
