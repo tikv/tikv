@@ -1380,7 +1380,6 @@ impl<E: KvEngine> SnapManager<E> {
         if need_clean {
             registry.remove(key);
         }
-        drop(registry);
         if handled {
             notify_stats(self.router.as_ref());
             return;
