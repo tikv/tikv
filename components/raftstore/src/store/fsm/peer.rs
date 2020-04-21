@@ -58,7 +58,7 @@ use crate::store::{
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
-const REGION_SPLIT_SKIP_MAX_COUNT: u8 = 3;
+const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -101,7 +101,7 @@ pub struct PeerFsm<E: KvEngine> {
     mailbox: Option<BasicMailbox<PeerFsm<E>>>,
     pub receiver: Receiver<PeerMsg<E>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
-    skip_split_count: u8,
+    skip_split_count: usize,
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -2570,8 +2570,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     #[inline]
-    fn region_split_skip_max_count(&self) -> u8 {
-        fail_point!("region_split_skip_max_count", |_| { u8::max_value() });
+    fn region_split_skip_max_count(&self) -> usize {
+        fail_point!("region_split_skip_max_count", |_| { usize::max_value() });
         REGION_SPLIT_SKIP_MAX_COUNT
     }
 
