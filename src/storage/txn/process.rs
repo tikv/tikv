@@ -647,7 +647,9 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
 
             let mut released_locks = ReleasedLocks::new(start_ts, 0);
-            released_locks.push(txn.cleanup(key, current_ts)?);
+            // The rollback must be protected, see more on
+            // [issue #7364](https://github.com/tikv/tikv/issues/7364)
+            released_locks.push(txn.cleanup(key, current_ts, true)?);
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());

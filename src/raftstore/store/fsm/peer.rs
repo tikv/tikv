@@ -388,6 +388,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        // Apply committed entries more quickly.
+        if self.fsm.peer.raft_group.get_store().committed_index()
+            > self.fsm.peer.raft_group.get_store().applied_index()
+        {
+            self.fsm.has_ready = true;
+        }
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
