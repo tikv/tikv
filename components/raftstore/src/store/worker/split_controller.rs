@@ -294,10 +294,6 @@ impl ReadStats {
     pub fn is_empty(&self) -> bool {
         self.region_infos.is_empty() && self.flows.is_empty()
     }
-
-    pub fn set_flows(&mut self, flows: HashMap<u64, FlowStatistics>) {
-        self.flows = flows;
-    }
 }
 
 pub struct AutoSplitController {
