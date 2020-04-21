@@ -170,14 +170,14 @@ pub struct Peer {
     pub peer: metapb::Peer,
 
     /// The Raft state machine of this Peer.
-    pub raft_group: RawNode<PeerStorage>,
+    pub raft_group: RawNode<PeerStorage<RocksEngine, RocksEngine>>,
     /// The cache of meta information for Region's other Peers.
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
 
     proposals: ProposalQueue,
-    apply_proposals: Vec<Proposal>,
+    apply_proposals: Vec<Proposal<RocksEngine>>,
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
@@ -249,7 +249,7 @@ impl Peer {
     pub fn new(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask>,
+        sched: Scheduler<RegionTask<RocksEngine>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
         peer: metapb::Peer,
@@ -579,7 +579,7 @@ impl Peer {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
-        host: &CoprocessorHost,
+        host: &CoprocessorHost<RocksEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
     ) {
@@ -620,12 +620,12 @@ impl Peer {
     }
 
     #[inline]
-    pub fn get_store(&self) -> &PeerStorage {
+    pub fn get_store(&self) -> &PeerStorage<RocksEngine, RocksEngine> {
         self.raft_group.store()
     }
 
     #[inline]
-    pub fn mut_store(&mut self) -> &mut PeerStorage {
+    pub fn mut_store(&mut self) -> &mut PeerStorage<RocksEngine, RocksEngine> {
         self.raft_group.mut_store()
     }
 
@@ -1074,7 +1074,7 @@ impl Peer {
         self.get_store().last_index() >= index && self.get_store().last_term() >= term
     }
 
-    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
+    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal<RocksEngine>> {
         if self.apply_proposals.is_empty() {
             return None;
         }

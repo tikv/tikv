@@ -20,8 +20,6 @@ use super::{
 };
 use kvproto::backup::S3 as Config;
 
-const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
-
 /// S3 compatible storage
 #[derive(Clone)]
 pub struct S3Storage {
@@ -92,9 +90,7 @@ impl ExternalStorage for S3Storage {
         let req = PutObjectRequest {
             key,
             bucket: self.config.bucket.clone(),
-            body: Some(ByteStream::new(
-                AsyncReadAsSyncStreamOfBytes::with_capacity(reader, READ_BUF_SIZE),
-            )),
+            body: Some(ByteStream::new(AsyncReadAsSyncStreamOfBytes::new(reader))),
             content_length: Some(content_length as i64),
             acl: get_var(&self.config.acl),
             server_side_encryption: get_var(&self.config.sse),

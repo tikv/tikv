@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Borrow;
 use std::marker::PhantomData;
 use std::time::Duration;
 use std::{mem, thread, u64};
@@ -16,7 +15,7 @@ use crate::storage::kv::{
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
-    MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
+    MvccReader, MvccTxn, ReleasedLock, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{
     commands::{
@@ -459,31 +458,37 @@ fn process_read_impl<E: Engine>(
     }
 }
 
-// If lock_mgr has waiters, there may be some transactions waiting for these keys,
-// so calculates keys' hashes to wake up them.
-fn gen_key_hashes_if_needed<L: LockManager, K: Borrow<Key>>(
-    lock_mgr: &Option<L>,
-    keys: &[K],
-) -> Option<Vec<u64>> {
-    lock_mgr.as_ref().and_then(|lm| {
-        if lm.has_waiter() {
-            Some(keys.iter().map(|key| key.borrow().gen_hash()).collect())
-        } else {
-            None
-        }
-    })
+#[derive(Default)]
+struct ReleasedLocks {
+    start_ts: TimeStamp,
+    commit_ts: TimeStamp,
+    hashes: Vec<u64>,
+    pessimistic: bool,
 }
 
-// Wake up pessimistic transactions that waiting for these locks
-fn wake_up_waiters_if_needed<L: LockManager>(
-    lock_mgr: &Option<L>,
-    lock_ts: TimeStamp,
-    key_hashes: Option<Vec<u64>>,
-    commit_ts: TimeStamp,
-    is_pessimistic_txn: bool,
-) {
-    if let Some(lm) = lock_mgr {
-        lm.wake_up(lock_ts, key_hashes, commit_ts, is_pessimistic_txn);
+impl ReleasedLocks {
+    fn new(start_ts: TimeStamp, commit_ts: TimeStamp) -> Self {
+        Self {
+            start_ts,
+            commit_ts,
+            ..Default::default()
+        }
+    }
+
+    fn push(&mut self, lock: Option<ReleasedLock>) {
+        if let Some(lock) = lock {
+            self.hashes.push(lock.hash);
+            if !self.pessimistic {
+                self.pessimistic = lock.pessimistic;
+            }
+        }
+    }
+
+    // Wake up pessimistic transactions that waiting for these locks.
+    fn wake_up<L: LockManager>(self, lock_mgr: Option<&L>) {
+        if let Some(lm) = lock_mgr {
+            lm.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
+        }
     }
 }
 
@@ -696,23 +701,16 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     commit_ts,
                 }));
             }
-            // Pessimistic txn needs key_hashes to wake up waiters
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
-
             let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache());
-            let mut is_pessimistic_txn = false;
-            let rows = keys.len();
-            for k in keys {
-                is_pessimistic_txn = txn.commit(k, commit_ts)?;
-            }
 
-            wake_up_waiters_if_needed(
-                &lock_mgr,
-                lock_ts,
-                key_hashes,
-                commit_ts,
-                is_pessimistic_txn,
-            );
+            let rows = keys.len();
+            // Pessimistic txn needs key_hashes to wake up waiters
+            let mut released_locks = ReleasedLocks::new(lock_ts, commit_ts);
+            for k in keys {
+                released_locks.push(txn.commit(k, commit_ts)?);
+            }
+            released_locks.wake_up(lock_mgr.as_ref());
+
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
                 txn_status: TxnStatus::committed(commit_ts),
@@ -725,42 +723,27 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             current_ts,
             ..
         }) => {
-            let mut keys = vec![key];
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
-
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
 
+            let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-            let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts, true)?;
+            released_locks.push(txn.cleanup(key, current_ts, true)?);
+            released_locks.wake_up(lock_mgr.as_ref());
 
-            wake_up_waiters_if_needed(
-                &lock_mgr,
-                start_ts,
-                key_hashes,
-                TimeStamp::zero(),
-                is_pessimistic_txn,
-            );
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), 1, cmd.ctx, None)
         }
         CommandKind::Rollback(Rollback { keys, start_ts, .. }) => {
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
-
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
-            let mut is_pessimistic_txn = false;
-            let rows = keys.len();
-            for k in keys {
-                is_pessimistic_txn = txn.rollback(k)?;
-            }
 
-            wake_up_waiters_if_needed(
-                &lock_mgr,
-                start_ts,
-                key_hashes,
-                TimeStamp::zero(),
-                is_pessimistic_txn,
-            );
+            let rows = keys.len();
+            let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
+            for k in keys {
+                released_locks.push(txn.rollback(k)?);
+            }
+            released_locks.wake_up(lock_mgr.as_ref());
+
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
         }
@@ -770,15 +753,16 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for_update_ts,
         }) => {
             assert!(lock_mgr.is_some());
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
-            let rows = keys.len();
-            for k in keys {
-                txn.pessimistic_rollback(k, for_update_ts)?;
-            }
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, TimeStamp::zero(), true);
+            let rows = keys.len();
+            let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
+            for k in keys {
+                released_locks.push(txn.pessimistic_rollback(k, for_update_ts)?);
+            }
+            released_locks.wake_up(lock_mgr.as_ref());
+
             statistics.add(&txn.take_statistics());
             (
                 ProcessResult::MultiRes { results: vec![] },
@@ -793,80 +777,45 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             mut scan_key,
             key_locks,
         }) => {
-            // Map (txn's start_ts, is_pessimistic_txn) => Option<key_hashes>
-            let (mut txn_to_keys, has_waiter) = if let Some(lm) = lock_mgr.as_ref() {
-                (Some(HashMap::default()), lm.has_waiter())
-            } else {
-                (None, false)
-            };
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), !cmd.ctx.get_not_fill_cache());
 
             let mut scan_key = scan_key.take();
-            let mut modifies: Vec<Modify> = vec![];
             let mut write_size = 0;
             let rows = key_locks.len();
+            // Map txn's start_ts to ReleasedLocks
+            let mut released_locks = HashMap::default();
             for (current_key, current_lock) in key_locks {
-                if let Some(txn_to_keys) = txn_to_keys.as_mut() {
-                    txn_to_keys
-                        .entry((current_lock.ts, !current_lock.for_update_ts.is_zero()))
-                        .and_modify(|key_hashes: &mut Option<Vec<u64>>| {
-                            if let Some(key_hashes) = key_hashes {
-                                key_hashes.push(current_key.gen_hash());
-                            }
-                        })
-                        .or_insert_with(|| {
-                            if has_waiter {
-                                Some(vec![current_key.gen_hash()])
-                            } else {
-                                None
-                            }
-                        });
-                }
+                txn.set_start_ts(current_lock.ts);
+                let commit_ts = *txn_status
+                    .get(&current_lock.ts)
+                    .expect("txn status not found");
 
-                let mut txn = MvccTxn::new(
-                    snapshot.clone(),
-                    current_lock.ts,
-                    !cmd.ctx.get_not_fill_cache(),
-                );
-                let status = txn_status.get(&current_lock.ts);
-                let commit_ts = match status {
-                    Some(ts) => *ts,
-                    None => panic!("txn status {} not found.", current_lock.ts),
-                };
-                if !commit_ts.is_zero() {
-                    if current_lock.ts >= commit_ts {
-                        return Err(Error::from(ErrorInner::InvalidTxnTso {
-                            start_ts: current_lock.ts,
-                            commit_ts,
-                        }));
-                    }
-                    txn.commit(current_key.clone(), commit_ts)?;
+                let released = if commit_ts.is_zero() {
+                    txn.rollback(current_key.clone())?
+                } else if commit_ts > current_lock.ts {
+                    txn.commit(current_key.clone(), commit_ts)?
                 } else {
-                    txn.rollback(current_key.clone())?;
-                }
+                    return Err(Error::from(ErrorInner::InvalidTxnTso {
+                        start_ts: current_lock.ts,
+                        commit_ts,
+                    }));
+                };
+                released_locks
+                    .entry(current_lock.ts)
+                    .or_insert_with(|| ReleasedLocks::new(current_lock.ts, commit_ts))
+                    .push(released);
+
                 write_size += txn.write_size();
-
-                statistics.add(&txn.take_statistics());
-                modifies.append(&mut txn.into_modifies());
-
                 if write_size >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(current_key);
                     break;
                 }
             }
-            if let Some(txn_to_keys) = txn_to_keys {
-                txn_to_keys
-                    .into_iter()
-                    .for_each(|((ts, is_pessimistic_txn), key_hashes)| {
-                        wake_up_waiters_if_needed(
-                            &lock_mgr,
-                            ts,
-                            key_hashes,
-                            TimeStamp::zero(),
-                            is_pessimistic_txn,
-                        );
-                    });
-            }
+            released_locks
+                .into_iter()
+                .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr.as_ref()));
 
+            statistics.add(&txn.take_statistics());
             let pr = if scan_key.is_none() {
                 ProcessResult::Res
             } else {
@@ -875,36 +824,28 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         .into(),
                 }
             };
-
-            (pr, modifies, rows, cmd.ctx, None)
+            (pr, txn.into_modifies(), rows, cmd.ctx, None)
         }
         CommandKind::ResolveLockLite(ResolveLockLite {
             start_ts,
             commit_ts,
             resolve_keys,
         }) => {
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &resolve_keys);
-
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+
             let rows = resolve_keys.len();
-            let mut is_pessimistic_txn = false;
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
             // to control the write_size as ResolveLock.
+            let mut released_locks = ReleasedLocks::new(start_ts, commit_ts);
             for key in resolve_keys {
-                if !commit_ts.is_zero() {
-                    is_pessimistic_txn = txn.commit(key, commit_ts)?;
+                released_locks.push(if !commit_ts.is_zero() {
+                    txn.commit(key, commit_ts)?
                 } else {
-                    is_pessimistic_txn = txn.rollback(key)?;
-                }
+                    txn.rollback(key)?
+                });
             }
+            released_locks.wake_up(lock_mgr.as_ref());
 
-            wake_up_waiters_if_needed(
-                &lock_mgr,
-                start_ts,
-                key_hashes,
-                commit_ts,
-                is_pessimistic_txn,
-            );
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
         }
@@ -931,30 +872,19 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             rollback_if_not_exist,
         }) => {
             let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache());
-            let (txn_status, is_pessimistic_txn) = txn.check_txn_status(
-                primary_key.clone(),
+
+            let mut released_locks = ReleasedLocks::new(lock_ts, TimeStamp::zero());
+            let (txn_status, released) = txn.check_txn_status(
+                primary_key,
                 caller_start_ts,
                 current_ts,
                 rollback_if_not_exist,
             )?;
-
-            // The lock is possibly resolved here only when the `check_txn_status` cleaned up the
-            // lock, and this may happen only when it returns `TtlExpire` or `LockNotExist`.
-            match txn_status {
-                TxnStatus::TtlExpire | TxnStatus::LockNotExist => {
-                    let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
-                    wake_up_waiters_if_needed(
-                        &lock_mgr,
-                        lock_ts,
-                        key_hashes,
-                        TimeStamp::zero(),
-                        is_pessimistic_txn,
-                    );
-                }
-                TxnStatus::RolledBack
-                | TxnStatus::Committed { .. }
-                | TxnStatus::Uncommitted { .. } => {}
-            };
+            released_locks.push(released);
+            // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
+            if let TxnStatus::TtlExpire = txn_status {
+                released_locks.wake_up(lock_mgr.as_ref());
+            }
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus { txn_status };

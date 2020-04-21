@@ -106,8 +106,12 @@ impl Diagnostics for Service {
             .spawn_fn(move || {
                 let s = match tp {
                     ServerInfoType::LoadInfo | ServerInfoType::All => {
-                        let load = (sysinfo::NICLoad::snapshot(), sysinfo::IOLoad::snapshot());
-                        let when = Instant::now() + Duration::from_millis(100);
+                        let load = (
+                            sys::cpu_time_snapshot(),
+                            sysinfo::NICLoad::snapshot(),
+                            sysinfo::IOLoad::snapshot(),
+                        );
+                        let when = Instant::now() + Duration::from_millis(1000);
                         (Some(load), when)
                     }
                     _ => (None, Instant::now()),
@@ -148,16 +152,17 @@ impl Diagnostics for Service {
 
 mod sys {
     use std::collections::HashMap;
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
     use std::string::ToString;
 
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
     use sysinfo::{DiskExt, ProcessExt, SystemExt};
     use tikv_util::config::KB;
+    use tikv_util::sys::cpu_time::LiunxStyleCpuTime;
     use tikv_util::sys::sys_quota::SysQuota;
 
-    fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
+    type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
+
+    fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>) {
         // CPU load
         {
             let load = sysinfo::get_avg_load();
@@ -179,46 +184,48 @@ mod sys {
             item.set_pairs(pairs.into());
             collector.push(item);
         }
-        // https://www.kernel.org/doc/Documentation/filesystems/proc.txt
-        // We ignore the error because some operating systems don't contain procfs.
-        if let Ok(file) = File::open("/proc/stat") {
-            let names = vec![
-                "user",
-                "nice",
-                "system",
-                "idle",
-                "iowait",
-                "irq",
-                "softirq",
-                "steal",
-                "guest",
-                "guest_nice",
-            ];
-            for line in BufReader::new(file).lines() {
-                if let Ok(line) = line {
-                    if !line.starts_with("cpu") {
-                        continue;
-                    }
-                    let mut parts = line.split_whitespace();
-                    let name = match parts.nth(0) {
-                        Some(name) if name != "cpu" => name,
-                        _ => continue,
-                    };
-                    let mut pairs = vec![];
-                    for (val, name) in parts.zip(&names) {
-                        let mut pair = ServerInfoPair::default();
-                        pair.set_key((*name).to_string());
-                        pair.set_value(val.to_string());
-                        pairs.push(pair);
-                    }
-                    let mut item = ServerInfoItem::default();
-                    item.set_tp("cpu".to_string());
-                    item.set_name(name.to_string());
-                    item.set_pairs(pairs.into());
-                    collector.push(item);
-                }
-            }
+
+        if prev_cpu.is_none() {
+            return;
         }
+
+        let t2 = LiunxStyleCpuTime::current();
+        if t2.is_err() {
+            return;
+        }
+        let t2 = t2.unwrap();
+        if t2.total() == 0 {
+            return;
+        }
+
+        let delta = t2 - prev_cpu.unwrap();
+        let delta_total = delta.total() as f64;
+        let data: Vec<(&'static str, f64)> = vec![
+            ("user", delta.user as f64 / delta_total),
+            ("system", delta.system as f64 / delta_total),
+            ("idle", delta.idle as f64 / delta_total),
+            ("nice", delta.nice as f64 / delta_total),
+            ("iowait", delta.iowait as f64 / delta_total),
+            ("irq", delta.irq as f64 / delta_total),
+            ("softirq", delta.softirq as f64 / delta_total),
+            ("steal", delta.steal as f64 / delta_total),
+            ("guest", delta.guest as f64 / delta_total),
+            ("guest_nice", delta.guest_nice as f64 / delta_total),
+        ];
+
+        let mut pairs = vec![];
+        for (key, value) in data {
+            let mut pair = ServerInfoPair::default();
+            pair.set_key(key.to_string());
+            pair.set_value(format!("{:.2}", value));
+            pairs.push(pair);
+        }
+
+        let mut item = ServerInfoItem::default();
+        item.set_tp("cpu".to_string());
+        item.set_name("usage".to_string());
+        item.set_pairs(pairs.into());
+        collector.push(item);
     }
 
     fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
@@ -277,7 +284,7 @@ mod sys {
         collector: &mut Vec<ServerInfoItem>,
     ) {
         let current = sysinfo::NICLoad::snapshot();
-        let rate = |cur, prev| (cur - prev) as f64 / 0.5;
+        let rate = |cur, prev| (cur - prev) as f64;
         for (name, cur) in current.into_iter() {
             let prev = match prev_nic.get(&name) {
                 Some(p) => p,
@@ -313,7 +320,7 @@ mod sys {
         collector: &mut Vec<ServerInfoItem>,
     ) {
         let current = sysinfo::IOLoad::snapshot();
-        let rate = |cur, prev| (cur - prev) as f64 / 0.5;
+        let rate = |cur, prev| (cur - prev) as f64;
         for (name, cur) in current.into_iter() {
             let prev = match prev_io.get(&name) {
                 Some(p) => p,
@@ -356,15 +363,28 @@ mod sys {
         }
     }
 
+    pub fn cpu_time_snapshot() -> CpuTimeSnapshot {
+        let t1 = LiunxStyleCpuTime::current();
+        if t1.is_err() {
+            return None;
+        }
+        let t1 = t1.unwrap();
+        if t1.total() == 0 {
+            return None;
+        }
+        Some(t1)
+    }
+
     /// load_info collects CPU/Memory/IO/Network load information
     pub fn load_info(
-        (prev_nic, prev_io): (
+        (prev_cpu, prev_nic, prev_io): (
+            CpuTimeSnapshot,
             HashMap<String, sysinfo::NICLoad>,
             HashMap<String, sysinfo::IOLoad>,
         ),
         collector: &mut Vec<ServerInfoItem>,
     ) {
-        cpu_load_info(collector);
+        cpu_load_info(prev_cpu, collector);
         mem_load_info(collector);
         nic_load_info(prev_nic, collector);
         io_load_info(prev_io, collector);
@@ -438,7 +458,7 @@ mod sys {
             let free = disk.get_available_space();
             let used = total - free;
             let free_pct = (free as f64) / (total as f64);
-            let used_pct = (free as f64) / (total as f64);
+            let used_pct = (used as f64) / (total as f64);
             let infos = vec![
                 ("type", format!("{:?}", disk.get_type())),
                 (
@@ -579,10 +599,11 @@ mod sys {
         use super::*;
         #[test]
         fn test_load_info() {
+            let prev_cpu = cpu_time_snapshot();
             let prev_nic = sysinfo::NICLoad::snapshot();
             let prev_io = sysinfo::IOLoad::snapshot();
             let mut collector = vec![];
-            load_info((prev_nic, prev_io), &mut collector);
+            load_info((prev_cpu, prev_nic, prev_io), &mut collector);
             #[cfg(linux)]
             let tps = vec!["cpu", "memory", "net", "io"];
             #[cfg(not(linux))]
@@ -605,30 +626,27 @@ mod sys {
                 .collect::<Vec<&str>>();
             assert_eq!(keys, vec!["load1", "load5", "load15"]);
             // cpu_stat
-            #[cfg(linux)]
-            {
-                let cpu_stat = cpu_info.next().unwrap();
-                let keys = cpu_load
-                    .get_pairs()
-                    .iter()
-                    .map(|x| x.get_key())
-                    .collect::<Vec<&str>>();
-                assert_eq!(
-                    keys,
-                    vec![
-                        "user",
-                        "nice",
-                        "system",
-                        "idle",
-                        "iowait",
-                        "irq",
-                        "softirq",
-                        "steal",
-                        "guest",
-                        "guest_nice",
-                    ]
-                );
-            }
+            let cpu_stat = cpu_info.next().unwrap();
+            let keys = cpu_stat
+                .get_pairs()
+                .iter()
+                .map(|x| x.get_key())
+                .collect::<Vec<&str>>();
+            assert_eq!(
+                keys,
+                vec![
+                    "user",
+                    "system",
+                    "idle",
+                    "nice",
+                    "iowait",
+                    "irq",
+                    "softirq",
+                    "steal",
+                    "guest",
+                    "guest_nice",
+                ]
+            );
             // memory
             for name in vec!["virtual", "swap"].into_iter() {
                 let item = collector
@@ -794,16 +812,17 @@ mod log {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     use std::path::Path;
 
-    use chrono::{DateTime, NaiveDateTime};
+    use chrono::DateTime;
     use futures::stream::{iter_ok, Stream};
     use itertools::Itertools;
     use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
+    use lazy_static::lazy_static;
     use nom::bytes::complete::{tag, take};
     use nom::character::complete::{alpha1, space0, space1};
     use nom::sequence::tuple;
     use nom::*;
+    use regex::Regex;
     use rev_lines;
-    use tikv_util::logger::DATETIME_ROTATE_SUFFIX;
 
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
@@ -991,6 +1010,10 @@ mod log {
         }
     }
 
+    lazy_static! {
+        static ref NUM_REGEX: Regex = Regex::new(r"^\d{4}").unwrap();
+    }
+
     // Returns true if target 'filename' is part of given 'log_file'
     fn is_log_file(filename: &str, log_file: &str) -> bool {
         // for not rotated nomral file
@@ -1000,7 +1023,7 @@ mod log {
 
         // for rotated *.<rotated-datetime> file
         if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
-            if NaiveDateTime::parse_from_str(res, DATETIME_ROTATE_SUFFIX).is_ok() {
+            if NUM_REGEX.is_match(res) {
                 return true;
             }
         }
