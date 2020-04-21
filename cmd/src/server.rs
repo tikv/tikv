@@ -373,7 +373,9 @@ impl TiKVServer {
             engines.kv.c().clone(),
             store_meta.clone(),
             self.router.clone(),
-            Some(Arc::new(TxnRegionCacheBuilderFactory::new())),
+            Some(Arc::new(TxnRegionCacheBuilderFactory::new(
+                self.pd_client.clone(),
+            ))),
         );
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
