@@ -322,6 +322,7 @@ where
     // It can only handle read command.
     pub fn propose_raft_command(&self, cmd: RaftCommand<E>) {
         let region_id = cmd.request.get_header().get_region_id();
+        let mut build_cache_region = None;
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
@@ -335,6 +336,10 @@ where
                             .insert(region_id, Some(delegate));
                         metrics.local_executed_requests += 1;
                         return;
+                    }
+
+                    if *delegate.read_times.borrow() > CACHE_SAMPLE {
+                        build_cache_region = Some(delegate.region.clone());
                     }
                     break;
                 }
@@ -370,19 +375,14 @@ where
             }
         }
         // Remove delegate for updating it by next cmd execution.
-        self.delegates.borrow_mut().remove(&region_id).map(|ret| {
-            if let Some(delegate) = ret {
-                if *delegate.read_times.borrow() > CACHE_SAMPLE {
-                    self.cache_factory.as_ref().map(|factory| {
-                        let _ = self
-                            .router
-                            .build_cache(factory.create_builder(delegate.region.clone()));
-                        fail_point!("raftstore::read::build_cache");
-                        let mut metrics = self.metrics.borrow_mut();
-                        metrics.build_cache_requests += 1;
-                    });
-                }
-            }
+        self.delegates.borrow_mut().remove(&region_id);
+        build_cache_region.map(|region| {
+            self.cache_factory.as_ref().map(|factory| {
+                let _ = self.router.build_cache(factory.create_builder(region));
+                fail_point!("raftstore::read::build_cache");
+                let mut metrics = self.metrics.borrow_mut();
+                metrics.build_cache_requests += 1;
+            });
         });
         // Forward to raftstore.
         self.redirect(cmd);
@@ -973,9 +973,9 @@ mod tests {
         req.set_cmd_type(CmdType::Snap);
         cmd.set_requests(vec![req].into());
 
+        let remote = lease.maybe_new_remote_lease(term6).unwrap();
+        lease.renew(monotonic_raw_now());
         {
-            let remote = lease.maybe_new_remote_lease(term6).unwrap();
-            lease.renew(monotonic_raw_now());
             let mut meta = store_meta.lock().unwrap();
             let read_delegate = ReadDelegate {
                 tag: String::new(),
@@ -1003,11 +1003,10 @@ mod tests {
             );
 
             must_not_redirect(&mut reader, &rx, task);
-            if i == CACHE_SAMPLE {
-                assert!(create_flag.load(Ordering::Acquire));
-            } else {
-                assert!(!create_flag.load(Ordering::Acquire));
-            }
+            assert!(!create_flag.load(Ordering::Acquire));
         }
+        lease.expire();
+        must_redirect(&mut reader, &rx, cmd);
+        assert!(create_flag.load(Ordering::Acquire));
     }
 }
