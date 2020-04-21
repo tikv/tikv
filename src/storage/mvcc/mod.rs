@@ -7,7 +7,7 @@ mod reader;
 mod txn;
 
 pub use self::reader::*;
-pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
+pub use self::txn::{MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
