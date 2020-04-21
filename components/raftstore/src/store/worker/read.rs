@@ -33,8 +33,6 @@ const CACHE_SAMPLE: u64 = 4 * 150;
 #[cfg(test)]
 const CACHE_SAMPLE: u64 = 4;
 
-const MIN_CACHE_TIME: f64 = 4.0;
-
 /// A read only delegate of `Peer`.
 #[derive(Derivative)]
 #[derivative(Clone, Debug)]
@@ -324,10 +322,10 @@ where
     // It can only handle read command.
     pub fn propose_raft_command(&self, cmd: RaftCommand<E>) {
         let region_id = cmd.request.get_header().get_region_id();
-        let mut metrics = self.metrics.borrow_mut();
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
+                    let mut metrics = self.metrics.borrow_mut();
                     if let Some(resp) =
                         delegate.handle_read(&self.kv_engine, &cmd.request, &mut *metrics)
                     {
@@ -380,6 +378,7 @@ where
                             .router
                             .build_cache(factory.create_builder(delegate.region.clone()));
                         fail_point!("raftstore::read::build_cache");
+                        let mut metrics = self.metrics.borrow_mut();
                         metrics.build_cache_requests += 1;
                     });
                 }
