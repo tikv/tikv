@@ -2165,12 +2165,15 @@ impl Peer {
             poll_ctx.current_time = Some(monotonic_raw_now());
         }
 
+        poll_ctx.raft_metrics.propose.build_cache += 1;
         let current_time = poll_ctx.current_time.unwrap();
         if current_time - self.last_propose_time
             < time::Duration::from_std(Duration::from_secs(100)).unwrap()
         {
             return;
         }
+
+        fail_point!("raftstore::store::peer::build_cache");
         self.last_propose_time = current_time;
         let region_id = self.region_id;
         let router = poll_ctx.router.clone();
@@ -2213,6 +2216,7 @@ impl Peer {
         cache: Arc<dyn RegionCache>,
         last_apply_state: RaftApplyState,
     ) {
+        ctx.raft_metrics.propose.build_cache_resp += 1;
         let apply_state = self.get_store().apply_state();
         if *apply_state == last_apply_state {
             info!("build a in-memory-table for region"; "region_id" => self.region_id);

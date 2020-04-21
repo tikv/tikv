@@ -29,7 +29,7 @@ use crate::store::RegionCache;
 use tikv_util::time::monotonic_raw_now;
 
 #[cfg(not(test))]
-const CACHE_SAMPLE: u64 = 60 * 100;
+const CACHE_SAMPLE: u64 = 60 * 50;
 #[cfg(test)]
 const CACHE_SAMPLE: u64 = 4;
 
@@ -98,13 +98,16 @@ impl ReadDelegate {
         if self.cache.is_some() {
             return None;
         }
-        let count = self.read_times.borrow_mut();
+        let mut count = self.read_times.borrow_mut();
+        *count += 1;
         if *count > CACHE_SAMPLE {
             let mut t = self.last_check_time.borrow_mut();
             if t.elapsed_secs() < MIN_CACHE_TIME {
                 *t = Instant::now();
+                *count = 0;
                 return Some(self.region.clone());
             }
+            *count = 0;
             *t = Instant::now();
         }
         None
@@ -130,8 +133,6 @@ impl ReadDelegate {
                             metrics.cache_hit_requests += 1;
                         }
                     }
-                    let mut count = self.read_times.borrow_mut();
-                    *count += 1;
                     let mut resp = executor.execute(req, &self.region, None);
                     // Leader can read local if and only if it is in lease.
                     cmd_resp::bind_term(&mut resp.response, term);
@@ -351,6 +352,8 @@ where
                         if let Some(factory) = self.cache_factory.as_ref() {
                             if let Some(region) = delegate.get_region_meta_if_hot() {
                                 let _ = self.router.build_cache(factory.create_builder(region));
+                                fail_point!("raftstore::read::build_cache");
+                                metrics.build_cache_requests += 1;
                             }
                         }
 
@@ -488,6 +491,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 #[derive(Clone)]
 struct ReadMetrics {
+    build_cache_requests: i64,
     cache_hit_requests: i64,
     local_executed_requests: i64,
     // TODO: record rejected_by_read_quorum.
@@ -508,6 +512,7 @@ struct ReadMetrics {
 impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
+            build_cache_requests: 0,
             cache_hit_requests: 0,
             local_executed_requests: 0,
             rejected_by_store_id_mismatch: 0,
@@ -591,6 +596,10 @@ impl ReadMetrics {
         if self.cache_hit_requests > 0 {
             LOCAL_READ_CACHE_HIT_REQUESTS.inc_by(self.cache_hit_requests);
             self.cache_hit_requests = 0;
+        }
+        if self.build_cache_requests > 0 {
+            LOCAL_READ_BUILD_CACHE_REQUESTS.inc_by(self.build_cache_requests);
+            self.build_cache_requests = 0;
         }
     }
 }
