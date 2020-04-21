@@ -929,7 +929,7 @@ fn test_merge_cascade_merge_isolated() {
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
-// Test if a learner can be destroyed properly when it's isloated and removed
+// Test if a learner can be destroyed properly when it's isloated and removed by conf change
 // before its region merge to another region
 #[test]
 fn test_merge_isloated_not_in_merge_learner() {
@@ -958,13 +958,59 @@ fn test_merge_isloated_not_in_merge_learner() {
     pd_client.must_remove_peer(left.get_id(), new_learner_peer(2, 2));
 
     pd_client.must_add_peer(left.get_id(), new_peer(3, 3));
-
     pd_client.must_remove_peer(left.get_id(), left_on_store1);
 
     pd_client.must_add_peer(right.get_id(), new_peer(3, 4));
     pd_client.must_remove_peer(right.get_id(), right_on_store1);
 
     pd_client.must_merge(left.get_id(), right.get_id());
-    // Add a new learner on store 2
+    // Add a new learner on store 2 to trigger peer 2 send wake-up msg to other peers
     pd_client.must_add_peer(right.get_id(), new_learner_peer(2, 5));
+}
+
+// Test if a learner can be destroyed properly when it's isloated and removed by conf change
+// before another region merge to its region
+#[test]
+fn test_merge_isloated_stale_learner() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    // Do not rely on pd to remove stale peer
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(2);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::minutes(10);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    pd_client.must_add_peer(left.get_id(), new_learner_peer(2, 2));
+    // Ensure this learner exists
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    cluster.stop_node(2);
+
+    pd_client.must_remove_peer(left.get_id(), new_learner_peer(2, 2));
+
+    pd_client.must_merge(right.get_id(), left.get_id());
+
+    region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let new_left = pd_client.get_region(b"k1").unwrap();
+    assert_ne!(left.get_id(), new_left.get_id());
+    // Add a new learner on store 2 to trigger peer 2 send wake-up msg to other peers
+    pd_client.must_add_peer(new_left.get_id(), new_learner_peer(2, 5));
+    cluster.must_put(b"k123", b"v123");
+
+    cluster.run_node(2).unwrap();
+    // We can see if the old peer 2 is destroyed
+    must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
 }
