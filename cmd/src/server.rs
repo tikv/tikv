@@ -27,7 +27,8 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-        new_compaction_listener, LocalReader, SnapManagerBuilder, SplitCheckRunner, AutoSplitController, SplitConfigManager
+        new_compaction_listener, AutoSplitController, LocalReader, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager,
     },
 };
 use std::{

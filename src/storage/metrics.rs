@@ -10,8 +10,8 @@ use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerG
 use crate::storage::kv::{FlowStatsReporter, Statistics};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
-use raftstore::store::ReadStats;
 use raftstore::store::util::build_key_range;
+use raftstore::store::ReadStats;
 use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {

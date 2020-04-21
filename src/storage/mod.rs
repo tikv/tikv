@@ -294,8 +294,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                
-
                 for get in &gets {
                     if let Ok(key) = get.key.to_owned().into_raw() {
                         tls_collect_qps(
@@ -312,7 +310,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
-              
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
@@ -374,8 +372,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-
-                
                 let mut key_ranges = vec![];
                 for key in &keys {
                     if let Ok(key) = key.to_owned().into_raw() {
@@ -467,9 +463,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-
-                
-
                 if let Ok(start_key) = start_key.to_owned().into_raw() {
                     let mut key = vec![];
                     if let Some(end_key) = &end_key {
@@ -641,8 +634,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-
-                
                 tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -698,9 +689,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-
-                
-
                 for get in &gets {
                     if let Ok(key) = get.key.to_owned().into_raw() {
                         // todo no raw?
@@ -760,15 +748,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-
-                
-
                 let mut key_ranges = vec![];
                 for key in &keys {
                     key_ranges.push(build_key_range(key, key, false));
                 }
                 tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
-              
+
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
@@ -1049,7 +1034,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                
                 {
                     let end_key = match &end_key {
                         Some(end_key) => end_key.to_vec(),
