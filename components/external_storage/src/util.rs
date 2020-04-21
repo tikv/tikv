@@ -1,8 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::READ_BUF_SIZE;
+
 use bytes::Bytes;
 use futures::stream::{self, Stream};
-use futures_io::AsyncRead;
+use futures_util::io::AsyncRead;
 use std::{
     future::Future,
     io, iter,
@@ -25,10 +27,10 @@ pub struct AsyncReadAsSyncStreamOfBytes<R> {
 }
 
 impl<R> AsyncReadAsSyncStreamOfBytes<R> {
-    pub fn with_capacity(reader: R, capacity: usize) -> Self {
+    pub fn new(reader: R) -> Self {
         Self {
             reader: Mutex::new(reader),
-            buf: vec![0; capacity],
+            buf: vec![0; READ_BUF_SIZE],
         }
     }
 }
