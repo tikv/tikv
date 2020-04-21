@@ -214,8 +214,12 @@ impl Simulator for NodeCluster {
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(
+            engines.kv.c().clone(),
+            store_meta.clone(),
+            router.clone(),
+            Some(Arc::new(TestRegionCacheBuilderFactory::new())),
+        );
         let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
 
         let mut split_check_worker = Worker::new("split-check");

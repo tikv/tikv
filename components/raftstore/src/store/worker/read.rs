@@ -94,28 +94,6 @@ impl ReadDelegate {
         }
     }
 
-    fn get_region_meta_if_hot(&self) -> Option<metapb::Region> {
-        if self.cache.is_some() {
-            return None;
-        }
-        let mut count = self.read_times.borrow_mut();
-        *count += 1;
-        if *count > CACHE_SAMPLE {
-            let mut t = self.last_check_time.borrow_mut();
-            let region = if self.region.get_id() == 124 {
-                Some(self.region.clone())
-            } else if t.elapsed_secs() < MIN_CACHE_TIME {
-                Some(self.region.clone())
-            } else {
-                None
-            };
-            *count = 0;
-            *t = Instant::now();
-            return region;
-        }
-        None
-    }
-
     // TODO: return ReadResponse once we remove batch snapshot.
     fn handle_read<E: KvEngine>(
         &self,
@@ -136,6 +114,8 @@ impl ReadDelegate {
                             metrics.cache_hit_requests += 1;
                         }
                     }
+                    let mut x = self.read_times.borrow_mut();
+                    *x += 1;
                     let mut resp = executor.execute(req, &self.region, None);
                     // Leader can read local if and only if it is in lease.
                     cmd_resp::bind_term(&mut resp.response, term);
@@ -344,22 +324,13 @@ where
     // It can only handle read command.
     pub fn propose_raft_command(&self, cmd: RaftCommand<E>) {
         let region_id = cmd.request.get_header().get_region_id();
+        let mut metrics = self.metrics.borrow_mut();
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
-                    let mut metrics = self.metrics.borrow_mut();
                     if let Some(resp) =
                         delegate.handle_read(&self.kv_engine, &cmd.request, &mut *metrics)
                     {
-                        //self.cache_factory.as_ref().map(|factory| {
-                        if let Some(factory) = self.cache_factory.as_ref() {
-                            if let Some(region) = delegate.get_region_meta_if_hot() {
-                                let _ = self.router.build_cache(factory.create_builder(region));
-                                fail_point!("raftstore::read::build_cache");
-                                metrics.build_cache_requests += 1;
-                            }
-                        }
-
                         cmd.callback.invoke_read(resp);
                         self.delegates
                             .borrow_mut()
@@ -401,7 +372,19 @@ where
             }
         }
         // Remove delegate for updating it by next cmd execution.
-        self.delegates.borrow_mut().remove(&region_id);
+        self.delegates.borrow_mut().remove(&region_id).map(|ret| {
+            if let Some(delegate) = ret {
+                if *delegate.read_times.borrow() > CACHE_SAMPLE {
+                    self.cache_factory.as_ref().map(|factory| {
+                        let _ = self
+                            .router
+                            .build_cache(factory.create_builder(delegate.region.clone()));
+                        fail_point!("raftstore::read::build_cache");
+                        metrics.build_cache_requests += 1;
+                    });
+                }
+            }
+        });
         // Forward to raftstore.
         self.redirect(cmd);
     }

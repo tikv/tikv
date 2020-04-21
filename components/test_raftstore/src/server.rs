@@ -9,13 +9,14 @@ use grpcio::{EnvBuilder, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
 use kvproto::import_sstpb::create_import_sst;
+use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
 use super::*;
 use engine::Engines;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
@@ -23,8 +24,11 @@ use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SplitCheckRunner;
-use raftstore::store::{Callback, LocalReader, SnapManager};
-use raftstore::Result;
+use raftstore::store::{
+    Callback, LocalReader, RegionCache, RegionCacheBuilder, RegionCacheBuilderFactory, SnapManager,
+};
+use raftstore::{Error as RaftError, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -50,6 +54,44 @@ type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
+
+pub struct TestRegionCacheBuilderFactory {
+    build: Arc<AtomicBool>,
+}
+
+struct TestRegionCacheBuilder {
+    build: Arc<AtomicBool>,
+}
+
+impl TestRegionCacheBuilderFactory {
+    pub fn new() -> TestRegionCacheBuilderFactory {
+        Self {
+            build: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn has_build(&self) -> bool {
+        self.build.load(Ordering::Acquire)
+    }
+}
+
+impl RegionCacheBuilder<RocksEngine> for TestRegionCacheBuilder {
+    fn build(&self, _snap: RocksSnapshot) -> Result<Arc<dyn RegionCache>> {
+        self.build.store(true, Ordering::Release);
+        Err(RaftError::Other("no suported for region cache".into()))
+    }
+    fn region_id(&self) -> u64 {
+        0
+    }
+}
+
+impl RegionCacheBuilderFactory<RocksEngine> for TestRegionCacheBuilderFactory {
+    fn create_builder(&self, _region: metapb::Region) -> Box<dyn RegionCacheBuilder<RocksEngine>> {
+        Box::new(TestRegionCacheBuilder {
+            build: self.build.clone(),
+        })
+    }
+}
 
 struct ServerMeta {
     node: Node<TestPdClient>,
@@ -145,8 +187,12 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(
+            engines.kv.c().clone(),
+            store_meta.clone(),
+            router.clone(),
+            Some(Arc::new(TestRegionCacheBuilderFactory::new())),
+        );
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
