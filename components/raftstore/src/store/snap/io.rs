@@ -5,7 +5,7 @@ use std::{fs, usize};
 
 use engine_traits::CfName;
 use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
-use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
+use engine_traits::{Iterable, SstWriter, SstWriterBuilder};
 use engine_traits::{Mutable, WriteBatch};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::time::Limiter;
@@ -61,6 +61,7 @@ where
 /// otherwise the file will be created and synchronized.
 pub fn build_sst_cf_file<E>(
     path: &str,
+    engine: &E,
     snap: &E::Snapshot,
     cf: CfName,
     start_key: &[u8],
@@ -70,7 +71,7 @@ pub fn build_sst_cf_file<E>(
 where
     E: KvEngine,
 {
-    let mut sst_writer = create_sst_file_writer::<E>(snap, cf, path)?;
+    let mut sst_writer = create_sst_file_writer::<E>(engine, cf, path)?;
     let mut stats = BuildStatistics::default();
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
@@ -108,12 +109,12 @@ where
 {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
 
-    let mut write_to_wb = |batch: &mut Vec<_>, wb: &E::WriteBatch| {
+    let mut write_to_wb = |batch: &mut Vec<_>, wb: &mut E::WriteBatch| {
         callback(batch);
         batch.drain(..).try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))
     };
 
-    let wb = db.write_batch();
+    let mut wb = db.write_batch();
     // Collect keys to a vec rather than wb so that we can invoke the callback less times.
     let mut batch = Vec::with_capacity(1024);
     let mut batch_data_size = 0;
@@ -125,7 +126,7 @@ where
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if !batch.is_empty() {
-                box_try!(write_to_wb(&mut batch, &wb));
+                box_try!(write_to_wb(&mut batch, &mut wb));
                 box_try!(db.write(&wb));
             }
             return Ok(());
@@ -134,7 +135,7 @@ where
         batch_data_size += key.len() + value.len();
         batch.push((key, value));
         if batch_data_size >= batch_size {
-            box_try!(write_to_wb(&mut batch, &wb));
+            box_try!(write_to_wb(&mut batch, &mut wb));
             box_try!(db.write(&wb));
             wb.clear();
             batch_data_size = 0;
@@ -153,15 +154,10 @@ where
     Ok(())
 }
 
-fn create_sst_file_writer<E>(
-    snap: &E::Snapshot,
-    cf: CfName,
-    path: &str,
-) -> Result<E::SstWriter, Error>
+fn create_sst_file_writer<E>(engine: &E, cf: CfName, path: &str) -> Result<E::SstWriter, Error>
 where
     E: KvEngine,
 {
-    let engine = snap.get_db();
     let builder = E::SstWriterBuilder::new().set_db(&engine).set_cf(cf);
     let writer = box_try!(builder.build(path));
     Ok(writer)
@@ -275,9 +271,11 @@ mod tests {
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
+                let engine = db.c();
                 let stats = build_sst_cf_file::<RocksEngine>(
                     &sst_file_path.to_str().unwrap(),
-                    &RocksSnapshot::new(Arc::clone(&db)),
+                    engine,
+                    &engine.snapshot(),
                     CF_DEFAULT,
                     b"a",
                     b"z",

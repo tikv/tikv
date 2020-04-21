@@ -3,6 +3,7 @@
 mod kv_service;
 mod lock_manager;
 mod raft_client;
+mod security;
 
 use std::sync::Arc;
 
@@ -138,6 +139,16 @@ trait MockKvService {
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
+    unary_call!(ver_get, VerGetRequest, VerGetResponse);
+    unary_call!(ver_batch_get, VerBatchGetRequest, VerBatchGetResponse);
+    unary_call!(ver_mut, VerMutRequest, VerMutResponse);
+    unary_call!(ver_batch_mut, VerBatchMutRequest, VerBatchMutResponse);
+    unary_call!(ver_scan, VerScanRequest, VerScanResponse);
+    unary_call!(
+        ver_delete_range,
+        VerDeleteRangeRequest,
+        VerDeleteRangeResponse
+    );
     unary_call!(
         unsafe_destroy_range,
         UnsafeDestroyRangeRequest,
@@ -164,6 +175,7 @@ trait MockKvService {
         PhysicalScanLockResponse
     );
     unary_call!(coprocessor, Request, Response);
+    sstream_call!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call!(coprocessor_stream, Request, Response);
     cstream_call!(raft, RaftMessage, Done);
     cstream_call!(batch_raft, BatchRaftMessage, Done);
@@ -229,6 +241,16 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
+    unary_call_dispatch!(ver_get, VerGetRequest, VerGetResponse);
+    unary_call_dispatch!(ver_batch_get, VerBatchGetRequest, VerBatchGetResponse);
+    unary_call_dispatch!(ver_mut, VerMutRequest, VerMutResponse);
+    unary_call_dispatch!(ver_batch_mut, VerBatchMutRequest, VerBatchMutResponse);
+    unary_call_dispatch!(ver_scan, VerScanRequest, VerScanResponse);
+    unary_call_dispatch!(
+        ver_delete_range,
+        VerDeleteRangeRequest,
+        VerDeleteRangeResponse
+    );
     unary_call_dispatch!(
         unsafe_destroy_range,
         UnsafeDestroyRangeRequest,
@@ -255,6 +277,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         PhysicalScanLockResponse
     );
     unary_call_dispatch!(coprocessor, Request, Response);
+    sstream_call_dispatch!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call_dispatch!(coprocessor_stream, Request, Response);
     cstream_call_dispatch!(raft, RaftMessage, Done);
     cstream_call_dispatch!(batch_raft, BatchRaftMessage, Done);

@@ -76,6 +76,25 @@ pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
     }
 }
 
+/// Calculates crc32 and decrypted size for a given reader.
+pub fn calc_crc32_and_size<R: Read>(reader: &mut R) -> io::Result<(u32, u64)> {
+    let mut digest = crc32fast::Hasher::new();
+    let (mut buf, mut fsize) = (vec![0; DIGEST_BUFFER_SIZE], 0);
+    loop {
+        match reader.read(&mut buf[..]) {
+            Ok(0) => {
+                return Ok((digest.finalize(), fsize as u64));
+            }
+            Ok(n) => {
+                digest.update(&buf[..n]);
+                fsize += n;
+            }
+            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+    }
+}
+
 /// Calculates the given content's CRC32 checksum.
 pub fn calc_crc32_bytes(contents: &[u8]) -> u32 {
     let mut digest = crc32fast::Hasher::new();
@@ -110,7 +129,7 @@ impl<R> Sha256Reader<R> {
 impl<R: Read> Read for Sha256Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let len = self.reader.read(buf)?;
-        (*self.hasher).lock().unwrap().update(&buf[..len])?;
+        self.hasher.lock().unwrap().update(&buf[..len])?;
         Ok(len)
     }
 }

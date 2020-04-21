@@ -32,7 +32,6 @@ pub use self::util::RECONNECT_INTERVAL_SEC;
 use std::ops::Deref;
 
 use futures::Future;
-use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb;
 use tikv_util::time::UnixSecs;
@@ -237,40 +236,6 @@ pub trait PdClient: Send + Sync {
     /// Gets a timestamp from PD.
     fn get_tso(&self) -> PdFuture<TimeStamp> {
         unimplemented!()
-    }
-
-    /// Spawns a PD future on the client.
-    fn spawn(&self, _: PdFuture<()>) {
-        unimplemented!()
-    }
-}
-
-/// ConfigClient used for manage config
-pub trait ConfigClient: Send + Sync {
-    fn register_config(
-        &self,
-        _id: String,
-        _version: configpb::Version,
-        _cfg: String,
-    ) -> Result<configpb::CreateResponse> {
-        unimplemented!()
-    }
-
-    fn get_config(
-        &self,
-        _id: String,
-        _version: configpb::Version,
-    ) -> Result<configpb::GetResponse> {
-        unimplemented!()
-    }
-
-    fn update_config(
-        &self,
-        _id: String,
-        _version: configpb::Version,
-        _entries: Vec<configpb::ConfigEntry>,
-    ) -> Result<configpb::UpdateResponse> {
-        unimplemented!();
     }
 }
 

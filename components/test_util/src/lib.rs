@@ -1,12 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![cfg_attr(test, feature(test))]
-#[cfg(test)]
+#![feature(test)]
+
 extern crate test;
+#[macro_use]
+extern crate slog_global;
 
 mod kv_generator;
 mod logging;
 mod macros;
+mod runner;
 mod security;
 
 use std::env;
@@ -14,6 +17,9 @@ use std::env;
 pub use crate::kv_generator::*;
 pub use crate::logging::*;
 pub use crate::macros::*;
+pub use crate::runner::{
+    clear_failpoints, run_failpoint_tests, run_test_with_hook, run_tests, TestHook,
+};
 pub use crate::security::*;
 
 pub fn setup_for_ci() {
@@ -41,4 +47,12 @@ pub fn setup_for_ci() {
     }
 
     tikv_util::check_environment_variables();
+
+    if let Err(e) = tikv_util::config::check_max_open_fds(4096) {
+        panic!(
+            "To run test, please make sure the maximum number of open file descriptors not \
+             less than 4096: {:?}",
+            e
+        );
+    }
 }

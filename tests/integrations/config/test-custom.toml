@@ -1,10 +1,9 @@
 log-level = "debug"
 log-file = "foo"
+slow-log-file = "slow_foo"
+slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
-
-[readpool]
-unify-read-pool = true
 
 [readpool.unified]
 min-thread-count = 5
@@ -13,6 +12,7 @@ stack-size = "20MB"
 max-tasks-per-worker = 2200
 
 [readpool.storage]
+use-unified-pool = true
 high-concurrency = 1
 normal-concurrency = 3
 low-concurrency = 7
@@ -22,6 +22,7 @@ max-tasks-per-worker-low = 2500
 stack-size = "20MB"
 
 [readpool.coprocessor]
+use-unified-pool = false
 high-concurrency = 2
 normal-concurrency = 4
 low-concurrency = 6
@@ -146,6 +147,7 @@ store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = false
+early-apply = false
 
 [coprocessor]
 split-region-on-table = false
@@ -182,6 +184,7 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 enable-unordered-write = true
+enable-multi-batch-write = false
 
 [rocksdb.titan]
 enabled = true
@@ -243,6 +246,10 @@ discardable-ratio = 0.00156
 sample-ratio = 0.982
 merge-small-file-threshold = "21KB"
 blob-run-mode = "fallback"
+level-merge = true
+range-merge = true
+max-sorted-runs = 100
+gc-merge-rewrite = true
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -454,12 +461,29 @@ discardable-ratio = 0.00156
 sample-ratio = 0.982
 merge-small-file-threshold = "21KB"
 blob-run-mode = "fallback"
+level-merge = true
+range-merge = true
+max-sorted-runs = 100
+gc-merge-rewrite = true
 
 [security]
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
-cipher-file = "invalid path"
+cert-allowed-cn = [
+    "example.tikv.com",
+]
+
+[encryption]
+data-encryption-method = "aes128-ctr"
+data-key-rotation-period = "14d"
+
+[encryption.master-key]
+type = "file"
+path = "/master/key/path"
+
+[encryption.previous-master-key]
+type = "plaintext"
 
 [import]
 num-threads = 123
@@ -469,3 +493,10 @@ stream-channel-window = 123
 ratio-threshold = 1.2
 batch-keys = 256
 max-write-bytes-per-sec = "10MB"
+
+[pessimistic-txn]
+enabled = false
+wait-for-lock-timeout = "10ms"
+wake-up-delay-duration = 100 # test backward compatible
+pipelined = true
+

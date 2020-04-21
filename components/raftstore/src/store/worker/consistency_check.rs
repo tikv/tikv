@@ -52,11 +52,11 @@ where
     }
 }
 
-pub struct Runner<C: CasualRouter> {
+pub struct Runner<C: CasualRouter<RocksEngine>> {
     router: C,
 }
 
-impl<C: CasualRouter> Runner<C> {
+impl<C: CasualRouter<RocksEngine>> Runner<C> {
     pub fn new(router: C) -> Runner<C> {
         Runner { router }
     }
@@ -72,9 +72,7 @@ impl<C: CasualRouter> Runner<C> {
             "region_id" => region_id,
             "index" => index,
         );
-        REGION_HASH_COUNTER_VEC
-            .with_label_values(&["compute", "all"])
-            .inc();
+        REGION_HASH_COUNTER.compute.all.inc();
 
         let timer = REGION_HASH_HISTOGRAM.start_coarse_timer();
         let mut digest = crc32fast::Hasher::new();
@@ -91,9 +89,7 @@ impl<C: CasualRouter> Runner<C> {
                 Ok(true)
             });
             if let Err(e) = res {
-                REGION_HASH_COUNTER_VEC
-                    .with_label_values(&["compute", "failed"])
-                    .inc();
+                REGION_HASH_COUNTER.compute.failed.inc();
                 error!(
                     "failed to calculate hash";
                     "region_id" => region_id,
@@ -108,9 +104,7 @@ impl<C: CasualRouter> Runner<C> {
         digest.update(&region_state_key);
         match snap.get_value_cf(CF_RAFT, &region_state_key) {
             Err(e) => {
-                REGION_HASH_COUNTER_VEC
-                    .with_label_values(&["compute", "failed"])
-                    .inc();
+                REGION_HASH_COUNTER.compute.failed.inc();
                 error!(
                     "failed to get region state";
                     "region_id" => region_id,
@@ -140,14 +134,18 @@ impl<C: CasualRouter> Runner<C> {
     }
 }
 
-impl<C: CasualRouter> Runnable<Task<RocksEngine>> for Runner<C> {
-    fn run(&mut self, task: Task<RocksEngine>) {
+impl<C, E> Runnable<Task<E>> for Runner<C>
+where
+    C: CasualRouter<RocksEngine>,
+    E: KvEngine,
+{
+    fn run(&mut self, task: Task<E>) {
         match task {
             Task::ComputeHash {
                 region,
                 index,
                 snap,
-            } => self.compute_hash::<RocksEngine>(region, index, snap),
+            } => self.compute_hash::<E>(region, index, snap),
         }
     }
 }
@@ -158,7 +156,7 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};
@@ -196,7 +194,7 @@ mod tests {
         // hash should also contains region state key.
         digest.update(&keys::region_state_key(region.get_id()));
         let sum = digest.finalize();
-        runner.run(Task::ComputeHash {
+        runner.run(Task::<RocksEngine>::ComputeHash {
             index: 10,
             region: region.clone(),
             snap: RocksSnapshot::new(Arc::clone(&db)),

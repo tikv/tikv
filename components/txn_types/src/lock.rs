@@ -27,11 +27,12 @@ const TXN_SIZE_PREFIX: u8 = b't';
 const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 impl LockType {
-    pub fn from_mutation(mutation: &Mutation) -> LockType {
+    pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
         match *mutation {
-            Mutation::Put(_) | Mutation::Insert(_) => LockType::Put,
-            Mutation::Delete(_) => LockType::Delete,
-            Mutation::Lock(_) => LockType::Lock,
+            Mutation::Put(_) | Mutation::Insert(_) => Some(LockType::Put),
+            Mutation::Delete(_) => Some(LockType::Delete),
+            Mutation::Lock(_) => Some(LockType::Lock),
+            Mutation::CheckNotExists(_) => None,
         }
     }
 
@@ -187,6 +188,11 @@ impl Lock {
             return Ok(());
         }
 
+        if self.min_commit_ts > ts {
+            // Ignore lock when min_commit_ts > ts
+            return Ok(());
+        }
+
         if bypass_locks.contains(self.ts) {
             return Ok(());
         }
@@ -231,7 +237,7 @@ mod tests {
             ),
         ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
-            let lt = LockType::from_mutation(&mutation);
+            let lt = LockType::from_mutation(&mutation).unwrap();
             assert_eq!(
                 lt, lock_type,
                 "#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
@@ -433,7 +439,19 @@ mod tests {
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        lock.check_ts_conflict(&key, TimeStamp::max(), &empty)
+        lock.clone()
+            .check_ts_conflict(&key, TimeStamp::max(), &empty)
+            .unwrap_err();
+
+        // Ignore the lock if read ts is less than min_commit_ts
+        lock.min_commit_ts = 150.into();
+        lock.clone()
+            .check_ts_conflict(&key, 140.into(), &empty)
+            .unwrap();
+        lock.clone()
+            .check_ts_conflict(&key, 150.into(), &empty)
+            .unwrap_err();
+        lock.check_ts_conflict(&key, 160.into(), &empty)
             .unwrap_err();
     }
 }

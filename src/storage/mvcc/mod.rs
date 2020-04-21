@@ -7,7 +7,7 @@ mod reader;
 mod txn;
 
 pub use self::reader::*;
-pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
+pub use self::txn::{MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
@@ -363,6 +363,48 @@ pub mod tests {
         Ok(())
     }
 
+    pub fn try_prewrite_check_not_exists<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: impl Into<TimeStamp>,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        txn.prewrite(
+            Mutation::CheckNotExists(Key::from_raw(key)),
+            pk,
+            false,
+            0,
+            0,
+            TimeStamp::default(),
+        )?;
+        Ok(())
+    }
+
+    pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: impl Into<TimeStamp>,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        txn.pessimistic_prewrite(
+            Mutation::CheckNotExists(Key::from_raw(key)),
+            pk,
+            false,
+            0,
+            TimeStamp::default(),
+            0,
+            TimeStamp::default(),
+            false,
+        )?;
+        Ok(())
+    }
+
     pub fn must_prewrite_put_impl<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -391,6 +433,7 @@ pub mod tests {
                 for_update_ts,
                 txn_size,
                 min_commit_ts,
+                false,
             )
             .unwrap();
         }
@@ -518,6 +561,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap_err()
         }
@@ -578,6 +622,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap();
         }
@@ -629,6 +674,7 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
+                false,
             )
             .unwrap();
         }
@@ -684,6 +730,7 @@ pub mod tests {
         lock_ttl: u64,
         for_update_ts: impl Into<TimeStamp>,
         need_value: bool,
+        min_commit_ts: impl Into<TimeStamp>,
     ) -> Option<Value> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -696,6 +743,7 @@ pub mod tests {
                 lock_ttl,
                 for_update_ts.into(),
                 need_value,
+                min_commit_ts.into(),
             )
             .unwrap();
         let modifies = txn.into_modifies();
@@ -722,7 +770,16 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
     ) -> Option<Value> {
-        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, 0, for_update_ts.into(), true)
+        must_acquire_pessimistic_lock_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            0,
+            for_update_ts.into(),
+            true,
+            TimeStamp::zero(),
+        )
     }
 
     pub fn must_acquire_pessimistic_lock_with_ttl<E: Engine>(
@@ -741,6 +798,7 @@ pub mod tests {
             ttl,
             for_update_ts.into(),
             false,
+            TimeStamp::zero(),
         )
         .is_none());
     }
@@ -753,7 +811,18 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
         lock_ttl: u64,
     ) {
-        must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, lock_ttl);
+        let for_update_ts = for_update_ts.into();
+        let min_commit_ts = for_update_ts.next();
+        must_acquire_pessimistic_lock_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            lock_ttl,
+            for_update_ts,
+            false,
+            min_commit_ts,
+        );
     }
 
     pub fn must_acquire_pessimistic_lock_err<E: Engine>(
@@ -763,7 +832,15 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
     ) -> Error {
-        must_acquire_pessimistic_lock_err_impl(engine, key, pk, start_ts, for_update_ts, false)
+        must_acquire_pessimistic_lock_err_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            for_update_ts,
+            false,
+            TimeStamp::zero(),
+        )
     }
 
     pub fn must_acquire_pessimistic_lock_return_value_err<E: Engine>(
@@ -773,7 +850,15 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
     ) -> Error {
-        must_acquire_pessimistic_lock_err_impl(engine, key, pk, start_ts, for_update_ts, true)
+        must_acquire_pessimistic_lock_err_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            for_update_ts,
+            true,
+            TimeStamp::zero(),
+        )
     }
 
     pub fn must_acquire_pessimistic_lock_err_impl<E: Engine>(
@@ -783,6 +868,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
         need_value: bool,
+        min_commit_ts: impl Into<TimeStamp>,
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -794,6 +880,7 @@ pub mod tests {
             0,
             for_update_ts.into(),
             need_value,
+            min_commit_ts.into(),
         )
         .unwrap_err()
     }

@@ -1,12 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::DB;
-use engine_rocks::Compat;
-use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{KvEngine, TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use std::sync::Arc;
 
 use tikv_util::config::ReadableSize;
 
@@ -14,7 +11,7 @@ use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::size::get_region_approximate_size_cf;
 use super::Host;
-use engine_rocks::RangeProperties;
+use engine_rocks::properties::RangeProperties;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -37,7 +34,10 @@ impl Checker {
     }
 }
 
-impl SplitChecker for Checker {
+impl<E> SplitChecker<E> for Checker
+where
+    E: KvEngine,
+{
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
             self.buckets.push(entry.key().to_vec());
@@ -58,11 +58,7 @@ impl SplitChecker for Checker {
         }
     }
 
-    fn approximate_split_keys(
-        &mut self,
-        region: &Region,
-        engine: &Arc<DB>,
-    ) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
         let ks = box_try!(get_region_approximate_middle(engine, region)
             .map(|keys| keys.map_or(vec![], |key| vec![key])));
 
@@ -79,12 +75,15 @@ pub struct HalfCheckObserver;
 
 impl Coprocessor for HalfCheckObserver {}
 
-impl SplitCheckObserver for HalfCheckObserver {
+impl<E> SplitCheckObserver<E> for HalfCheckObserver
+where
+    E: KvEngine,
+{
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
-        host: &mut Host,
-        _: &Arc<DB>,
+        host: &mut Host<'_, E>,
+        _: &E,
         policy: CheckPolicy,
     ) {
         if host.auto_split() {
@@ -109,8 +108,11 @@ fn half_split_bucket_size(region_max_size: u64) -> u64 {
 }
 
 /// Get region approximate middle key based on default and write cf size.
-pub fn get_region_approximate_middle(db: &Arc<DB>, region: &Region) -> Result<Option<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+pub fn get_region_approximate_middle(
+    db: &impl KvEngine,
+    region: &Region,
+) -> Result<Option<Vec<u8>>> {
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
@@ -131,13 +133,13 @@ pub fn get_region_approximate_middle(db: &Arc<DB>, region: &Region) -> Result<Op
 /// The returned key maybe is timestamped if transaction KV is used,
 /// and must start with "z".
 fn get_region_approximate_middle_cf(
-    db: &Arc<DB>,
+    db: &impl KvEngine,
     cfname: &str,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
+    let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
 
     let mut keys = Vec::new();
     for (_, v) in collection.iter() {
@@ -169,14 +171,15 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine_rocks::Compat;
     use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
-    use crate::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::store::{SplitCheckRunner, SplitCheckTask};
+    use engine_rocks::properties::RangePropertiesCollectorFactory;
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
     use tikv_util::worker::Runnable;
@@ -212,7 +215,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
         let mut runnable = SplitCheckRunner::new(
-            Arc::clone(&engine),
+            engine.c().clone(),
             tx.clone(),
             CoprocessorHost::new(tx),
             cfg,
@@ -274,7 +277,7 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region)
+        let middle_key = get_region_approximate_middle_cf(engine.c(), CF_DEFAULT, &region)
             .unwrap()
             .unwrap();
 

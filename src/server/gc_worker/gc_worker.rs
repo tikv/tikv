@@ -7,11 +7,8 @@ use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use engine::rocks::util::get_cf_handle;
-use engine::rocks::DB;
-use engine::util::delete_all_in_range_cf;
-use engine_rocks::{Compat, RocksEngine};
-use engine_traits::TablePropertiesExt;
+use engine_rocks::RocksEngine;
+use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
@@ -22,7 +19,9 @@ use crate::server::metrics::*;
 use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
 };
-use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
+use crate::storage::mvcc::{
+    check_need_gc, check_region_need_gc, Error as MvccError, MvccReader, MvccTxn,
+};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
@@ -93,13 +92,13 @@ pub enum GcTask {
 }
 
 impl GcTask {
-    pub fn get_label(&self) -> &'static str {
+    pub fn get_enum_label(&self) -> GcCommandKind {
         match self {
-            GcTask::Gc { .. } => "gc",
-            GcTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
-            GcTask::PhysicalScanLock { .. } => "physical_scan_lock",
+            GcTask::Gc { .. } => GcCommandKind::gc,
+            GcTask::UnsafeDestroyRange { .. } => GcCommandKind::unsafe_destroy_range,
+            GcTask::PhysicalScanLock { .. } => GcCommandKind::physical_scan_lock,
             #[cfg(any(test, feature = "testexport"))]
-            GcTask::Validate(_) => "validate_config",
+            GcTask::Validate(_) => GcCommandKind::validate_config,
         }
     }
 }
@@ -137,8 +136,8 @@ impl Display for GcTask {
 /// Used to perform GC operations on the engine.
 struct GcRunner<E: Engine> {
     engine: E,
-    local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    local_storage: Option<RocksEngine>,
+    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
     region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
@@ -153,8 +152,8 @@ struct GcRunner<E: Engine> {
 impl<E: Engine> GcRunner<E> {
     pub fn new(
         engine: E,
-        local_storage: Option<Arc<DB>>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        local_storage: Option<RocksEngine>,
+        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         cfg_tracker: Tracker<GcConfig>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
@@ -248,10 +247,7 @@ impl<E: Engine> GcRunner<E> {
         let start_key = keys::data_key(region_info.region.get_start_key());
         let end_key = keys::data_end_key(region_info.region.get_end_key());
 
-        let collection = match db
-            .c()
-            .get_range_properties_cf(CF_WRITE, &start_key, &end_key)
-        {
+        let collection = match db.get_range_properties_cf(CF_WRITE, &start_key, &end_key) {
             Ok(c) => c,
             Err(e) => {
                 error!(
@@ -264,7 +260,7 @@ impl<E: Engine> GcRunner<E> {
                 return true;
             }
         };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, collection)
+        check_need_gc(safe_point, self.cfg.ratio_threshold, &collection)
     }
 
     /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
@@ -276,7 +272,7 @@ impl<E: Engine> GcRunner<E> {
     ) -> Result<(Vec<Key>, Option<Key>)> {
         let snapshot = self.get_snapshot(ctx)?;
         let mut reader = MvccReader::new(
-            snapshot,
+            snapshot.clone(),
             Some(ScanMode::Forward),
             !ctx.get_not_fill_cache(),
             ctx.get_isolation_level(),
@@ -286,7 +282,8 @@ impl<E: Engine> GcRunner<E> {
 
         // range start gc with from == None, and this is an optimization to
         // skip gc before scanning all data.
-        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.cfg.ratio_threshold);
+        let skip_gc = is_range_start
+            && !check_region_need_gc(&self.engine, snapshot, safe_point, self.cfg.ratio_threshold);
         let res = if skip_gc {
             GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
@@ -430,9 +427,8 @@ impl<E: Engine> GcRunner<E> {
         // First, call delete_files_in_range to free as much disk space as possible
         let delete_files_start_time = Instant::now();
         for cf in cfs {
-            let cf_handle = get_cf_handle(local_storage, cf).unwrap();
             local_storage
-                .delete_files_in_range_cf(cf_handle, &start_data_key, &end_data_key, false)
+                .delete_files_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!(
@@ -451,7 +447,8 @@ impl<E: Engine> GcRunner<E> {
         let cleanup_all_start_time = Instant::now();
         for cf in cfs {
             // TODO: set use_delete_range with config here.
-            delete_all_in_range_cf(local_storage, cf, &start_data_key, &end_data_key, false)
+            local_storage
+                .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!(
@@ -519,10 +516,12 @@ impl<E: Engine> GcRunner<E> {
 
     fn update_statistics_metrics(&mut self) {
         let stats = mem::replace(&mut self.stats, Statistics::default());
-        for (cf, details) in stats.details().iter() {
+
+        for (cf, details) in stats.details_enum().iter() {
             for (tag, count) in details.iter() {
-                GC_KEYS_COUNTER_VEC
-                    .with_label_values(&[cf, *tag])
+                GC_KEYS_COUNTER_STATIC
+                    .get(*cf)
+                    .get(*tag)
                     .inc_by(*count as i64);
             }
         }
@@ -541,17 +540,18 @@ impl<E: Engine> GcRunner<E> {
 impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
     #[inline]
     fn run(&mut self, task: GcTask, _handle: &Handle) {
-        let label = task.get_label();
-        GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
+        let enum_label = task.get_enum_label();
+
+        GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
 
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
         let update_metrics = |is_err| {
             GC_TASK_DURATION_HISTOGRAM_VEC
-                .with_label_values(&[label])
+                .with_label_values(&[enum_label.get_str()])
                 .observe(duration_to_sec(timer.elapsed()));
 
             if is_err {
-                GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();
+                GC_GCTASK_FAIL_COUNTER_STATIC.get(enum_label).inc();
             }
         };
 
@@ -569,7 +569,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 callback(res);
                 self.update_statistics_metrics();
                 slow_log!(
-                    timer,
+                    T timer,
                     "GC on region {}, epoch {:?}, safe_point {}",
                     ctx.get_region_id(),
                     ctx.get_region_epoch(),
@@ -586,7 +586,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
-                    timer,
+                    T timer,
                     "UnsafeDestroyRange start_key {:?}, end_key {:?}",
                     start_key,
                     end_key
@@ -603,7 +603,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
-                    timer,
+                    T timer,
                     "PhysicalScanLock start_key {:?}, max_ts {}, limit {}",
                     start_key,
                     max_ts,
@@ -656,9 +656,9 @@ pub fn sync_gc(
 pub struct GcWorker<E: Engine> {
     engine: E,
     /// `local_storage` represent the underlying RocksDB of the `engine`.
-    local_storage: Option<Arc<DB>>,
+    local_storage: Option<RocksEngine>,
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
     /// Access the region's meta before getting snapshot, which will wake hibernating regions up.
     /// This is useful to do the `need_gc` check without waking hibernatin regions up.
     /// This is not set for tests.
@@ -720,8 +720,8 @@ impl<E: Engine> Drop for GcWorker<E> {
 impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
-        local_storage: Option<Arc<DB>>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        local_storage: Option<RocksEngine>,
+        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
     ) -> GcWorker<E> {
@@ -771,7 +771,7 @@ impl<E: Engine> GcWorker<E> {
 
     pub fn start_observe_lock_apply(
         &mut self,
-        coprocessor_host: &mut CoprocessorHost,
+        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
         let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
@@ -919,6 +919,7 @@ mod tests {
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{txn::commands, Storage, TestStorageBuilder};
+    use engine_rocks::Compat;
     use futures::Future;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
@@ -1023,7 +1024,13 @@ mod tests {
             .build()
             .unwrap();
         let db = engine.get_rocksdb();
-        let mut gc_worker = GcWorker::new(engine, Some(db), None, None, GcConfig::default());
+        let mut gc_worker = GcWorker::new(
+            engine,
+            Some(db.c().clone()),
+            None,
+            None,
+            GcConfig::default(),
+        );
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1181,8 +1188,13 @@ mod tests {
         let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
             .build()
             .unwrap();
-        let mut gc_worker =
-            GcWorker::new(prefixed_engine, Some(db), None, None, GcConfig::default());
+        let mut gc_worker = GcWorker::new(
+            prefixed_engine,
+            Some(db.c().clone()),
+            None,
+            None,
+            GcConfig::default(),
+        );
         gc_worker.start().unwrap();
 
         let physical_scan_lock = |max_ts: u64, start_key, limit| {

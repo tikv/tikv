@@ -16,8 +16,6 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_destroy_local_reader() {
-    let _guard = crate::setup();
-
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
 
@@ -78,8 +76,6 @@ fn test_destroy_local_reader() {
 
 #[test]
 fn test_write_after_destroy() {
-    let _guard = crate::setup();
-
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
 
@@ -149,7 +145,6 @@ fn test_write_after_destroy() {
 
 #[test]
 fn test_tick_after_destroy() {
-    let _guard = crate::setup();
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
 
@@ -194,7 +189,6 @@ fn test_tick_after_destroy() {
 
 #[test]
 fn test_stale_peer_cache() {
-    let _guard = crate::setup();
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
 
@@ -221,8 +215,6 @@ fn test_stale_peer_cache() {
 // 7. so the disk configuration `[1, 2, 3]` is different from memory configuration `[1, 2, 3, 4]`.
 #[test]
 fn test_redundant_conf_change_by_snapshot() {
-    let _guard = crate::setup();
-
     let mut cluster = new_node_cluster(0, 4);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
     cluster.cfg.raft_store.merge_max_log_gap = 4;
@@ -285,7 +277,6 @@ fn test_redundant_conf_change_by_snapshot() {
 
 #[test]
 fn test_handle_conf_change_when_apply_fsm_resume_pending_state() {
-    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();

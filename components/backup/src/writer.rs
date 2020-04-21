@@ -101,6 +101,7 @@ impl Writer {
         file.set_total_kvs(self.total_kvs);
         file.set_total_bytes(self.total_bytes);
         file.set_cf(cf.to_owned());
+        file.set_size(sst_info.file_size());
         Ok(file)
     }
 
@@ -269,7 +270,8 @@ impl BackupRawKVWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::Iterable;
+    use engine_rocks::Compat;
+    use engine_traits::Iterable;
     use std::collections::BTreeMap;
     use std::f64::INFINITY;
     use std::path::Path;
@@ -295,18 +297,19 @@ mod tests {
         }
         for (cf, kv) in kvs {
             let mut map = BTreeMap::new();
-            db.scan_cf(
-                cf,
-                keys::DATA_MIN_KEY,
-                keys::DATA_MAX_KEY,
-                false,
-                |key, value| {
-                    map.insert(key.to_owned(), value.to_owned());
-                    Ok(true)
-                },
-            )
-            .unwrap();
-            assert_eq!(map.len(), kv.len(), "{:?} {:?}", map, kv);
+            db.c()
+                .scan_cf(
+                    cf,
+                    keys::DATA_MIN_KEY,
+                    keys::DATA_MAX_KEY,
+                    false,
+                    |key, value| {
+                        map.insert(key.to_owned(), value.to_owned());
+                        Ok(true)
+                    },
+                )
+                .unwrap();
+            assert_eq!(map.len(), kv.len(), "{} {:?} {:?}", cf, map, kv);
             for (k, v) in *kv {
                 assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());
             }
@@ -393,10 +396,7 @@ mod tests {
             &[
                 (
                     engine_traits::CF_DEFAULT,
-                    &[
-                        (&keys::data_key(&[b'a']), &[b'a']),
-                        (&keys::data_key(&[]), &[]),
-                    ],
+                    &[(&keys::data_key(&[b'a']), &[b'a'])],
                 ),
                 (
                     engine_traits::CF_WRITE,

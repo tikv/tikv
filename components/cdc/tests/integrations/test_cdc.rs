@@ -1,156 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::Cell;
 use std::sync::*;
 use std::time::Duration;
 
-use futures::{Future, Stream};
-use grpcio::{ChannelBuilder, Environment};
+use crate::{new_event_feed, TestSuite};
+use futures::sink::Sink;
+use futures::Future;
+use grpcio::WriteFlags;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
-    create_change_data,
     event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataClient, ChangeDataRequest,
+    ChangeDataRequest,
 };
 use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
-use raftstore::coprocessor::CoprocessorHost;
-use test_raftstore::*;
-use tikv_util::collections::HashMap;
-use tikv_util::worker::Worker;
-use tikv_util::HandyRwLock;
-use txn_types::TimeStamp;
+use test_raftstore::sleep_ms;
 
-use cdc::{CdcObserver, Task};
-
-struct TestSuite {
-    cluster: Cluster<ServerCluster>,
-    endpoints: HashMap<u64, Worker<Task>>,
-    obs: HashMap<u64, CdcObserver>,
-    tikv_cli: TikvClient,
-    cdc_cli: ChangeDataClient,
-
-    _env: Arc<Environment>,
-}
-
-impl TestSuite {
-    fn new(count: usize) -> TestSuite {
-        super::init();
-        let mut cluster = new_server_cluster(1, count);
-
-        let pd_cli = cluster.pd_client.clone();
-        let mut endpoints = HashMap::default();
-        let mut obs = HashMap::default();
-        // Hack! node id are generated from 1..count+1.
-        for id in 1..=count as u64 {
-            // Create and run cdc endpoints.
-            let worker = Worker::new(format!("cdc-{}", id));
-            let mut sim = cluster.sim.wl();
-
-            // Register cdc service to gRPC server.
-            let scheduler = worker.scheduler();
-            sim.pending_services
-                .entry(id)
-                .or_default()
-                .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone()))
-                }));
-            let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
-            obs.insert(id, cdc_ob.clone());
-            sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
-                move |host: &mut CoprocessorHost| {
-                    cdc_ob.register_to(host);
-                },
-            ));
-            endpoints.insert(id, worker);
-        }
-
-        cluster.run();
-        for (id, worker) in &mut endpoints {
-            let sim = cluster.sim.rl();
-            let apply_router = (*sim).get_apply_router(*id);
-            let cdc_ob = obs.get(&id).unwrap().clone();
-            let mut cdc_endpoint =
-                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), apply_router, cdc_ob);
-            cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
-            cdc_endpoint.set_scan_batch_size(2);
-            worker.start(cdc_endpoint).unwrap();
-        }
-
-        let region = cluster.get_region(&[]);
-        let leader = cluster.leader_of_region(region.get_id()).unwrap();
-        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
-        let env = Arc::new(Environment::new(1));
-        let channel = ChannelBuilder::new(env.clone()).connect(&leader_addr);
-        let tikv_cli = TikvClient::new(channel.clone());
-        let cdc_cli = ChangeDataClient::new(channel);
-
-        TestSuite {
-            cluster,
-            endpoints,
-            obs,
-            tikv_cli,
-            cdc_cli,
-            _env: env,
-        }
-    }
-
-    fn stop(mut self) {
-        for (_, mut worker) in self.endpoints {
-            worker.stop().unwrap().join().unwrap();
-        }
-        self.cluster.shutdown();
-    }
-
-    fn must_kv_prewrite(&mut self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
-        let mut prewrite_req = PrewriteRequest::default();
-        prewrite_req.set_context(self.get_context(1));
-        prewrite_req.set_mutations(muts.into_iter().collect());
-        prewrite_req.primary_lock = pk;
-        prewrite_req.start_version = ts.into_inner();
-        prewrite_req.lock_ttl = prewrite_req.start_version + 1;
-        let prewrite_resp = self.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
-        assert!(
-            !prewrite_resp.has_region_error(),
-            "{:?}",
-            prewrite_resp.get_region_error()
-        );
-        assert!(
-            prewrite_resp.errors.is_empty(),
-            "{:?}",
-            prewrite_resp.get_errors()
-        );
-    }
-
-    fn must_kv_commit(&mut self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
-        let mut commit_req = CommitRequest::default();
-        commit_req.set_context(self.get_context(1));
-        commit_req.start_version = start_ts.into_inner();
-        commit_req.set_keys(keys.into_iter().collect());
-        commit_req.commit_version = commit_ts.into_inner();
-        let commit_resp = self.tikv_cli.kv_commit(&commit_req).unwrap();
-        assert!(
-            !commit_resp.has_region_error(),
-            "{:?}",
-            commit_resp.get_region_error()
-        );
-        assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
-    }
-
-    fn get_context(&mut self, region_id: u64) -> Context {
-        let epoch = self.cluster.get_region_epoch(region_id);
-        let leader = self.cluster.leader_of_region(region_id).unwrap();
-        let mut context = Context::default();
-        context.set_region_id(region_id);
-        context.set_peer(leader);
-        context.set_region_epoch(epoch);
-        context
-    }
-}
+use cdc::Task;
 
 #[test]
 fn test_cdc_basic() {
@@ -159,28 +27,10 @@ fn test_cdc_basic() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
-        }
-    };
-    for _ in 0..2 {
-        let event = receive_event(true);
-        match event {
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    receive_event(true).into_iter().for_each(|e| {
+        match e.event.unwrap() {
             // Even if there is no write,
             // resolved ts should be advanced regularly.
             Event_oneof_event::ResolvedTs(ts) => assert_ne!(0, ts),
@@ -193,7 +43,7 @@ fn test_cdc_basic() {
             }
             _ => panic!("unknown event"),
         }
-    }
+    });
 
     // There must be a delegate.
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
@@ -214,9 +64,10 @@ fn test_cdc_basic() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone().into_bytes();
     mutation.value = v.into_bytes();
-    suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
-    let event = receive_event(false);
-    match event {
+    suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
             assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
@@ -224,23 +75,25 @@ fn test_cdc_basic() {
         _ => panic!("unknown event"),
     }
 
-    // Commit
-    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut counter = 0;
     loop {
-        let event = receive_event(true);
         // Even if there is no write,
         // resolved ts should be advanced regularly.
-        if let Event_oneof_event::ResolvedTs(_) = event {
-            counter += 1;
-            if counter > 5 {
-                break;
+        for e in receive_event(true) {
+            if let Event_oneof_event::ResolvedTs(_) = e.event.unwrap() {
+                counter += 1;
             }
         }
+        if counter > 5 {
+            break;
+        }
     }
-    suite.must_kv_commit(vec![k.into_bytes()], start_ts, commit_ts);
-    let event = receive_event(false);
-    match event {
+    // Commit
+    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k.into_bytes()], start_ts, commit_ts);
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
             assert_eq!(entries.entries[0].get_type(), EventLogType::Commit);
@@ -251,8 +104,9 @@ fn test_cdc_basic() {
     // Split region 1
     let region1 = suite.cluster.get_region(&[]);
     suite.cluster.must_split(&region1, b"key2");
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
@@ -268,15 +122,16 @@ fn test_cdc_basic() {
         ))
         .unwrap();
 
-    // The second stream.
+    // request again.
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed2 = suite.cdc_cli.event_feed(&req).unwrap();
-    event_feed_wrap.replace(Some(event_feed2));
-    let event = receive_event(false);
-
-    match event {
+    let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
@@ -285,6 +140,8 @@ fn test_cdc_basic() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         _ => panic!("unknown event"),
     }
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(200);
     scheduler
         .schedule(Task::Validate(
             1,
@@ -295,8 +152,8 @@ fn test_cdc_basic() {
         ))
         .unwrap();
 
-    // Drop event_feed2 and cancel its server streaming.
-    event_feed_wrap.replace(None);
+    // Drop stream and cancel its server streaming.
+    event_feed_wrap.as_ref().replace(None);
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
     scheduler
@@ -312,10 +169,12 @@ fn test_cdc_basic() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(Default::default()); // Zero region epoch.
-    let event_feed3 = suite.cdc_cli.event_feed(&req).unwrap();
-    event_feed_wrap.replace(Some(event_feed3));
-    let event = receive_event(false);
-    match event {
+    let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
@@ -335,29 +194,15 @@ fn test_cdc_not_leader() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
-        }
-    };
-
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let req_tx = req_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
     // Make sure region 1 is registered.
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
@@ -367,7 +212,8 @@ fn test_cdc_not_leader() {
         }
         _ => panic!("unknown event"),
     }
-
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(200);
     // There must be a delegate.
     let scheduler = suite
         .endpoints
@@ -391,7 +237,8 @@ fn test_cdc_not_leader() {
         .obs
         .get(&leader.get_store_id())
         .unwrap()
-        .is_subscribed(1));
+        .is_subscribed(1)
+        .is_some());
 
     // Transfer leader.
     let peer = suite
@@ -402,8 +249,9 @@ fn test_cdc_not_leader() {
         .find(|p| *p != leader)
         .unwrap();
     suite.cluster.must_transfer_leader(1, peer);
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
         }
@@ -413,7 +261,8 @@ fn test_cdc_not_leader() {
         .obs
         .get(&leader.get_store_id())
         .unwrap()
-        .is_subscribed(1));
+        .is_subscribed(1)
+        .is_some());
 
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
@@ -428,7 +277,25 @@ fn test_cdc_not_leader() {
         .unwrap();
     rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
-    event_feed_wrap.replace(None);
+    // Try to subscribe again.
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    // Should failed with not leader error.
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_not_leader(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+    assert!(!suite
+        .obs
+        .get(&leader.get_store_id())
+        .unwrap()
+        .is_subscribed(1)
+        .is_some());
+
+    event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
 
@@ -439,29 +306,12 @@ fn test_cdc_stale_epoch_after_region_ready() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
-        }
-    };
-
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Make sure region 1 is registered.
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
@@ -475,27 +325,43 @@ fn test_cdc_stale_epoch_after_region_ready() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(Default::default()); // zero epoch is always stale.
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-    let feed1_holder = event_feed_wrap.replace(Some(event_feed));
+    let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    let _resp_rx = event_feed_wrap.as_ref().replace(Some(resp_rx));
+    let req_tx = req_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
     // Must receive epoch not match error.
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_epoch_not_match(), "{:?}", err);
         }
         _ => panic!("unknown event"),
     }
 
-    // Must not receive any error on event feed 1.
-    event_feed_wrap.replace(feed1_holder);
-    let event = receive_event(true);
-    match event {
-        Event_oneof_event::ResolvedTs(ts) => assert_ne!(0, ts),
+    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    // Must receive epoch not match error.
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_epoch_not_match(), "{:?}", err);
+        }
         _ => panic!("unknown event"),
     }
 
     // Cancel event feed before finishing test.
-    event_feed_wrap.replace(None);
+    event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
 
@@ -510,10 +376,10 @@ fn test_cdc_scan() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone();
     mutation.value = v.clone();
-    suite.must_kv_prewrite(vec![mutation], k.clone(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
     // Commit
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(vec![k.clone()], start_ts, commit_ts);
+    suite.must_kv_commit(1, vec![k.clone()], start_ts, commit_ts);
 
     // Prewrite again
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
@@ -521,33 +387,19 @@ fn test_cdc_scan() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone();
     mutation.value = v.clone();
-    suite.must_kv_prewrite(vec![mutation], k.clone(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
 
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
-        }
-    };
-
-    let event = receive_event(false);
-    match event {
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    if events.len() == 1 {
+        events.extend(receive_event(false).into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events);
+    match events.remove(0).event.unwrap() {
         // Batch size is set to 2.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
@@ -568,8 +420,7 @@ fn test_cdc_scan() {
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
     }
-    let event = receive_event(false);
-    match event {
+    match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
@@ -585,24 +436,28 @@ fn test_cdc_scan() {
     let checkpoint_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     // Commit = 6;
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(vec![k.clone()], start_ts, commit_ts);
+    suite.must_kv_commit(1, vec![k.clone()], start_ts, commit_ts);
     // Prewrite delete
     // Start = 7;
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Del);
     mutation.key = k.clone();
-    suite.must_kv_prewrite(vec![mutation], k.clone(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
 
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.checkpoint_ts = checkpoint_ts.into_inner();
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed2 = suite.cdc_cli.event_feed(&req).unwrap();
-    let event_feed1 = event_feed_wrap.replace(Some(event_feed2));
-
-    let event = receive_event(false);
-    match event {
+    let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    if events.len() == 1 {
+        events.extend(receive_event(false).into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events);
+    match events.remove(0).event.unwrap() {
         // Batch size is set to 2.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
@@ -625,8 +480,8 @@ fn test_cdc_scan() {
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
     }
-    let event = receive_event(false);
-    match event {
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
@@ -638,9 +493,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
     }
 
-    event_feed_wrap.replace(None);
-    drop(event_feed1);
-
+    event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
 
@@ -651,29 +504,12 @@ fn test_cdc_tso_failure() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    let event_feed = suite.cdc_cli.event_feed(&req).unwrap();
-
-    let event_feed_wrap = Cell::new(Some(event_feed));
-    let receive_event = |keep_resolved_ts: bool| loop {
-        let (change_data, events) =
-            match event_feed_wrap.replace(None).unwrap().into_future().wait() {
-                Ok(res) => res,
-                Err(e) => panic!("receive failed {:?}", e.0),
-            };
-        event_feed_wrap.set(Some(events));
-        let mut change_data = change_data.unwrap();
-        assert_eq!(change_data.events.len(), 1);
-        let change_data_event = &mut change_data.events[0];
-        let event = change_data_event.event.take().unwrap();
-        match event {
-            Event_oneof_event::ResolvedTs(_) if !keep_resolved_ts => continue,
-            other => return other,
-        }
-    };
-
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Make sure region 1 is registered.
-    let event = receive_event(false);
-    match event {
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
@@ -687,14 +523,232 @@ fn test_cdc_tso_failure() {
     suite.cluster.pd_client.trigger_tso_failure();
 
     // Make sure resolved ts can be advanced normally even with few tso failures.
-    for _ in 0..10 {
-        let event = receive_event(true);
-        match event {
-            Event_oneof_event::ResolvedTs(ts) => assert_ne!(0, ts),
-            _ => panic!("unknown event"),
+    let mut counter = 0;
+    let mut previous_ts = 0;
+    loop {
+        // Even if there is no write,
+        // resolved ts should be advanced regularly.
+        for e in receive_event(true) {
+            match e.event.unwrap() {
+                Event_oneof_event::ResolvedTs(ts) => {
+                    assert!(ts >= previous_ts);
+                    previous_ts = ts;
+                    counter += 1;
+                }
+                _ => panic!("unknown event"),
+            }
+        }
+        if counter > 5 {
+            break;
         }
     }
 
-    event_feed_wrap.replace(None);
+    event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_region_split() {
+    let mut suite = TestSuite::new(3);
+
+    let region = suite.cluster.get_region(&[]);
+    let mut req = ChangeDataRequest::default();
+    req.region_id = region.get_id();
+    req.set_region_epoch(region.get_region_epoch().clone());
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let req_tx = req_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+    // Make sure region 1 is registered.
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+    // Split region.
+    suite.cluster.must_split(&region, b"k0");
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_epoch_not_match(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+    // Try to subscribe region again.
+    let region = suite.cluster.get_region(b"k0");
+    // Ensure it is the previous region.
+    assert_eq!(req.get_region_id(), region.get_id());
+    req.set_region_epoch(region.get_region_epoch().clone());
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}
+
+#[cfg(feature = "failpoints")]
+#[test]
+fn test_duplicate_subscribe() {
+    let mut suite = TestSuite::new(3);
+
+    let region = suite.cluster.get_region(&[]);
+    let mut req = ChangeDataRequest::default();
+    req.region_id = region.get_id();
+    req.set_region_epoch(region.get_region_epoch().clone());
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let req_tx = req_tx
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+    // Make sure region 1 is registered.
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+    // Try to subscribe again.
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    // Should receive duplicate request error.
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_duplicate_request(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_batch_size_limit() {
+    let mut suite = TestSuite::new(1);
+
+    // Prewrite
+    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = vec![0; 6 * 1024 * 1024];
+    let mut m2 = Mutation::default();
+    let k2 = b"k2".to_vec();
+    m2.set_op(Op::Put);
+    m2.key = k2.clone();
+    m2.value = b"v2".to_vec();
+    suite.must_kv_prewrite(1, vec![m1, m2], k1.clone(), start_ts);
+    // Commit
+    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k1, k2], start_ts, commit_ts);
+
+    let mut req = ChangeDataRequest::default();
+    req.region_id = 1;
+    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events.len());
+    while events.len() < 3 {
+        events.extend(receive_event(false).into_iter());
+    }
+    assert_eq!(events.len(), 3, "{:?}", events.len());
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
+            assert_eq!(e.key, b"k1", "{:?}", e.key);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    }
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
+            assert_eq!(e.key, b"k2", "{:?}", e.key);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    }
+    match events.pop().unwrap().event.unwrap() {
+        // Then it outputs Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            let e = &es.entries[0];
+            assert_eq!(
+                e.get_type(),
+                EventLogType::Initialized,
+                "{:?}",
+                e.get_type()
+            );
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    }
+
+    // Prewrite
+    let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let mut m3 = Mutation::default();
+    let k3 = b"k3".to_vec();
+    m3.set_op(Op::Put);
+    m3.key = k3.clone();
+    m3.value = vec![0; 7 * 1024 * 1024];
+    let mut m4 = Mutation::default();
+    let k4 = b"k4".to_vec();
+    m4.set_op(Op::Put);
+    m4.key = k4;
+    m4.value = b"v4".to_vec();
+    suite.must_kv_prewrite(1, vec![m3, m4], k3, start_ts);
+
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 2);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
+            assert_eq!(e.key, b"k4", "{:?}", e.key);
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
+            assert_eq!(e.key, b"k3", "{:?}", e.key);
+        }
+        Event_oneof_event::Error(e) => panic!("{:?}", e),
+        Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
+        Event_oneof_event::Admin(e) => panic!("{:?}", e),
+    }
+
+    event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }

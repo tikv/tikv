@@ -40,7 +40,7 @@ impl SyncBenchRouter {
 }
 
 impl SyncBenchRouter {
-    fn invoke(&self, cmd: RaftCommand) {
+    fn invoke(&self, cmd: RaftCommand<RocksEngine>) {
         let mut response = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
@@ -64,7 +64,7 @@ impl SyncBenchRouter {
     }
 }
 
-impl RaftStoreRouter for SyncBenchRouter {
+impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
         Ok(())
     }
@@ -78,7 +78,7 @@ impl RaftStoreRouter for SyncBenchRouter {
         Ok(())
     }
 
-    fn casual_send(&self, _: u64, _: CasualMessage) -> Result<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> Result<()> {
         Ok(())
     }
 
@@ -137,7 +137,10 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
+    let kv = RaftKv::new(
+        SyncBenchRouter::new(region.clone(), db.clone()),
+        RocksEngine::from_db(db),
+    );
 
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
@@ -162,7 +165,10 @@ fn bench_async_write(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
+    let kv = RaftKv::new(
+        SyncBenchRouter::new(region.clone(), db.clone()),
+        RocksEngine::from_db(db),
+    );
 
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());

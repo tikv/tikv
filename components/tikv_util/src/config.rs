@@ -15,7 +15,7 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
-use super::time::SlowTimer;
+use super::time::Instant;
 use crate::slow_log;
 use configuration::ConfigValue;
 
@@ -265,6 +265,57 @@ impl Into<ReadableDuration> for ConfigValue {
     }
 }
 
+impl FromStr for ReadableDuration {
+    type Err = String;
+
+    fn from_str(dur_str: &str) -> Result<ReadableDuration, String> {
+        let dur_str = dur_str.trim();
+        if !dur_str.is_ascii() {
+            return Err(format!("unexpect ascii string: {}", dur_str));
+        }
+        let err_msg = "valid duration, only d, h, m, s, ms are supported.".to_owned();
+        let mut left = dur_str.as_bytes();
+        let mut last_unit = DAY + 1;
+        let mut dur = 0f64;
+        while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
+            let (first, second) = left.split_at(idx);
+            let unit = if second.starts_with(b"ms") {
+                left = &left[idx + 2..];
+                MS
+            } else {
+                let u = match second[0] {
+                    b'd' => DAY,
+                    b'h' => HOUR,
+                    b'm' => MINUTE,
+                    b's' => SECOND,
+                    _ => return Err(err_msg),
+                };
+                left = &left[idx + 1..];
+                u
+            };
+            if unit >= last_unit {
+                return Err("d, h, m, s, ms should occur in given order.".to_owned());
+            }
+            // do we need to check 12h360m?
+            let number_str = unsafe { str::from_utf8_unchecked(first) };
+            dur += match number_str.trim().parse::<f64>() {
+                Ok(n) => n * unit as f64,
+                Err(_) => return Err(err_msg),
+            };
+            last_unit = unit;
+        }
+        if !left.is_empty() {
+            return Err(err_msg);
+        }
+        if dur.is_sign_negative() {
+            return Err("duration should be positive.".to_owned());
+        }
+        let secs = dur as u64 / SECOND as u64;
+        let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
+        Ok(ReadableDuration(Duration::new(secs, millis)))
+    }
+}
+
 impl ReadableDuration {
     pub fn secs(secs: u64) -> ReadableDuration {
         ReadableDuration(Duration::new(secs, 0))
@@ -283,6 +334,10 @@ impl ReadableDuration {
 
     pub fn hours(hours: u64) -> ReadableDuration {
         ReadableDuration::minutes(hours * 60)
+    }
+
+    pub fn days(days: u64) -> ReadableDuration {
+        ReadableDuration::hours(days * 24)
     }
 
     pub fn as_secs(&self) -> u64 {
@@ -363,56 +418,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
             where
                 E: de::Error,
             {
-                let dur_str = dur_str.trim();
-                if !dur_str.is_ascii() {
-                    return Err(E::invalid_value(Unexpected::Str(dur_str), &"ascii string"));
-                }
-                let err_msg = "valid duration, only d, h, m, s, ms are supported.";
-                let mut left = dur_str.as_bytes();
-                let mut last_unit = DAY + 1;
-                let mut dur = 0f64;
-                while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
-                    let (first, second) = left.split_at(idx);
-                    let unit = if second.starts_with(b"ms") {
-                        left = &left[idx + 2..];
-                        MS
-                    } else {
-                        let u = match second[0] {
-                            b'd' => DAY,
-                            b'h' => HOUR,
-                            b'm' => MINUTE,
-                            b's' => SECOND,
-                            _ => return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg)),
-                        };
-                        left = &left[idx + 1..];
-                        u
-                    };
-                    if unit >= last_unit {
-                        return Err(E::invalid_value(
-                            Unexpected::Str(dur_str),
-                            &"d, h, m, s, ms should occur in given order.",
-                        ));
-                    }
-                    // do we need to check 12h360m?
-                    let number_str = unsafe { str::from_utf8_unchecked(first) };
-                    dur += match number_str.trim().parse::<f64>() {
-                        Ok(n) => n * unit as f64,
-                        Err(_) => return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg)),
-                    };
-                    last_unit = unit;
-                }
-                if !left.is_empty() {
-                    return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg));
-                }
-                if dur.is_sign_negative() {
-                    return Err(E::invalid_value(
-                        Unexpected::Str(dur_str),
-                        &"duration should be positive.",
-                    ));
-                }
-                let secs = dur as u64 / SECOND as u64;
-                let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
-                Ok(ReadableDuration(Duration::new(secs, millis)))
+                dur_str.parse().map_err(E::custom)
             }
         }
 
@@ -425,15 +431,24 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let parent = Path::new(path);
-    let p = parent.join(Path::new(sub_path));
-    if p.exists() && p.is_file() {
-        return Err(format!("{}/{} is not a directory!", path, sub_path).into());
+    let mut path = Path::new(path).canonicalize()?;
+    if !sub_path.is_empty() {
+        path = path.join(Path::new(sub_path));
     }
-    if !p.exists() {
-        fs::create_dir_all(p.as_path())?;
+    if path.exists() && path.is_file() {
+        return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
     }
-    Ok(format!("{}", p.canonicalize()?.display()))
+    Ok(format!("{}", path.display()))
+}
+
+pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
+    if !path.is_empty() {
+        let p = Path::new(path);
+        if !p.exists() {
+            fs::create_dir_all(p)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -937,9 +952,9 @@ impl<T> Tracker<T> {
             match self.inner.value.try_read() {
                 Ok(value) => Some(value),
                 Err(_) => {
-                    let t = SlowTimer::new();
+                    let t = Instant::now_coarse();
                     let value = self.inner.value.read().unwrap();
-                    slow_log!(t, "{} tracker get updated value", self.tag);
+                    slow_log!(t.elapsed(), "{} tracker get updated value", self.tag);
                     Some(value)
                 }
             }
@@ -1120,25 +1135,29 @@ mod tests {
 
     #[test]
     fn test_canonicalize_path() {
-        let tmp_dir = Builder::new()
+        let tmp = Builder::new()
             .prefix("test-canonicalize")
             .tempdir()
             .unwrap();
-        let path1 = format!(
-            "{}",
-            tmp_dir.path().to_path_buf().join("test1.dump").display()
-        );
-        let res_path1 = canonicalize_path(&path1).unwrap();
-        assert!(Path::new(&path1).exists());
+        let tmp_dir = tmp.path();
+
+        let res_path1 = canonicalize_sub_path(tmp_dir.to_str().unwrap(), "test1.dump").unwrap();
+        assert!(!Path::new(&res_path1).exists());
         assert_eq!(
             Path::new(&res_path1),
-            Path::new(&path1).canonicalize().unwrap()
+            tmp_dir.canonicalize().unwrap().join("test1.dump")
         );
 
-        let path2 = format!(
-            "{}",
-            tmp_dir.path().to_path_buf().join("test2.dump").display()
+        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
+        assert!(canonicalize_path(&path2).is_err());
+        ensure_dir_exist(&path2).unwrap();
+        let res_path2 = canonicalize_path(&path2).unwrap();
+        assert_eq!(
+            Path::new(&res_path2),
+            Path::new(&path2).canonicalize().unwrap()
         );
+
+        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2.dump").display());
         {
             File::create(&path2).unwrap();
         }

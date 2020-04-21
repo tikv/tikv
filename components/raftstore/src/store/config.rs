@@ -157,6 +157,8 @@ pub struct Config {
     pub future_poll_size: usize,
     #[config(hidden)]
     pub hibernate_regions: bool,
+    #[config(hidden)]
+    pub early_apply: bool,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -226,12 +228,13 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
-            apply_max_batch_size: 1024,
+            apply_max_batch_size: 256,
             apply_pool_size: 2,
-            store_max_batch_size: 1024,
+            store_max_batch_size: 256,
             store_pool_size: 2,
             future_poll_size: 1,
             hibernate_regions: true,
+            early_apply: true,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

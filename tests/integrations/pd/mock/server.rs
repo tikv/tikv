@@ -77,8 +77,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         {
             let addrs: Vec<String> = server
                 .bind_addrs()
-                .iter()
-                .map(|addr| format!("{}:{}", addr.0, addr.1))
+                .map(|(host, port)| format!("{}:{}", host, port))
                 .collect();
             self.mocker.default_handler.set_endpoints(addrs.clone());
             if let Some(case) = self.mocker.case.as_ref() {
@@ -97,7 +96,12 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn bind_addrs(&self) -> Vec<(String, u16)> {
-        self.server.as_ref().unwrap().bind_addrs().to_vec()
+        self.server
+            .as_ref()
+            .unwrap()
+            .bind_addrs()
+            .map(|(host, port)| (host.clone(), port))
+            .collect()
     }
 }
 
@@ -405,6 +409,15 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _ctx: RpcContext<'_>,
         _req: ScanRegionsRequest,
         _sink: UnarySink<ScanRegionsResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn update_service_gc_safe_point(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: UpdateServiceGcSafePointRequest,
+        _sink: UnarySink<UpdateServiceGcSafePointResponse>,
     ) {
         unimplemented!()
     }

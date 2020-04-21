@@ -7,8 +7,7 @@ use std::time;
 use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
-use engine::IterOption;
-use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
 use tikv::storage::CfStatistics;
@@ -190,7 +189,7 @@ fn test_read_on_replica() {
 }
 
 #[test]
-fn test_invaild_read_index_when_no_leader() {
+fn test_invalid_read_index_when_no_leader() {
     // Initialize cluster
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(3));
@@ -200,50 +199,52 @@ fn test_invaild_read_index_when_no_leader() {
     pd_client.disable_default_operator();
 
     // Set region and peers
-    let r1 = cluster.run_conf_change();
-    let p1 = new_peer(1, 1);
+    cluster.run();
     cluster.must_put(b"k0", b"v0");
-    let p2 = new_peer(2, 2);
-    cluster.pd_client.must_add_peer(r1, p2.clone());
-    let p3 = new_peer(3, 3);
-    cluster.pd_client.must_add_peer(r1, p3);
-    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
-
     // Transfer leader to p2
     let region = cluster.get_region(b"k0");
-    cluster.must_transfer_leader(region.get_id(), p2);
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let mut follower_peers = region.get_peers().to_vec();
+    follower_peers.retain(|p| p.get_id() != leader.get_id());
+    let follower = follower_peers.pop().unwrap();
 
-    // Delay all raft messages to p1.
+    // Delay all raft messages on follower.
     let heartbeat_filter = Box::new(
-        RegionPacketFilter::new(region.get_id(), 1)
+        RegionPacketFilter::new(region.get_id(), follower.get_store_id())
             .direction(Direction::Recv)
             .msg_type(MessageType::MsgHeartbeat)
             .when(Arc::new(AtomicBool::new(true))),
     );
-    cluster.sim.wl().add_recv_filter(1, heartbeat_filter);
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(follower.get_store_id(), heartbeat_filter);
     let vote_resp_filter = Box::new(
-        RegionPacketFilter::new(region.get_id(), 1)
+        RegionPacketFilter::new(region.get_id(), follower.get_store_id())
             .direction(Direction::Recv)
             .msg_type(MessageType::MsgRequestVoteResponse)
             .when(Arc::new(AtomicBool::new(true))),
     );
-    cluster.sim.wl().add_recv_filter(1, vote_resp_filter);
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(follower.get_store_id(), vote_resp_filter);
 
     // wait for election timeout
     thread::sleep(time::Duration::from_millis(300));
-    // send read index requests to p1
+    // send read index requests to follower
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
         vec![new_read_index_cmd()],
         true,
     );
-    request.mut_header().set_peer(p1);
+    request.mut_header().set_peer(follower.clone());
     let (cb, rx) = make_cb(&request);
     cluster
         .sim
         .rl()
-        .async_command_on_node(1, request, cb)
+        .async_command_on_node(follower.get_store_id(), request, cb)
         .unwrap();
 
     let resp = rx.recv_timeout(time::Duration::from_millis(500)).unwrap();
@@ -309,7 +310,7 @@ fn assert_none_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) 
 fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut cursor = snapshot
-        .iter(IterOption::default(), ScanMode::Mixed)
+        .iter(IterOptions::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -326,7 +327,7 @@ fn assert_seek_cf<E: Engine>(
 ) {
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut cursor = snapshot
-        .iter_cf(cf, IterOption::default(), ScanMode::Mixed)
+        .iter_cf(cf, IterOptions::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -401,7 +402,7 @@ fn seek<E: Engine>(ctx: &Context, engine: &E) {
     assert_seek(ctx, engine, b"x\x00", (b"z", b"2"));
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut iter = snapshot
-        .iter(IterOption::default(), ScanMode::Mixed)
+        .iter(IterOptions::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CfStatistics::default();
     assert!(!iter
@@ -416,7 +417,7 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     must_put(ctx, engine, b"z", b"2");
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut cursor = snapshot
-        .iter(IterOption::default(), ScanMode::Mixed)
+        .iter(IterOptions::default(), ScanMode::Mixed)
         .unwrap();
     assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
     assert_near_seek(&mut cursor, b"a", (b"x", b"1"));

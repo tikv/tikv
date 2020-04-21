@@ -14,14 +14,14 @@ use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
 use engine::rocks::Writable;
-use engine::*;
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::Compat;
+use engine_traits::Peekable;
+use engine_traits::{SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::SnapManager;
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::ConfigHandler;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
@@ -680,9 +680,9 @@ fn test_debug_raft_log() {
     entry.set_index(1);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42]);
-    engine.put_msg(&key, &entry).unwrap();
+    engine.c().put_msg(&key, &entry).unwrap();
     assert_eq!(
-        engine.get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
+        engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
         entry
     );
 
@@ -710,15 +710,18 @@ fn test_debug_region_info() {
 
     let raft_engine = cluster.get_raft_engine(store_id);
     let kv_engine = cluster.get_engine(store_id);
-    let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
 
     let region_id = 100;
     let raft_state_key = keys::raft_state_key(region_id);
     let mut raft_state = raft_serverpb::RaftLocalState::default();
     raft_state.set_last_index(42);
-    raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+    raft_engine
+        .c()
+        .put_msg(&raft_state_key, &raft_state)
+        .unwrap();
     assert_eq!(
         raft_engine
+            .c()
             .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
             .unwrap()
             .unwrap(),
@@ -729,10 +732,12 @@ fn test_debug_region_info() {
     let mut apply_state = raft_serverpb::RaftApplyState::default();
     apply_state.set_applied_index(42);
     kv_engine
-        .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
+        .c()
+        .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
         .unwrap();
     assert_eq!(
         kv_engine
+            .c()
             .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .unwrap(),
@@ -743,10 +748,12 @@ fn test_debug_region_info() {
     let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     kv_engine
-        .put_msg_cf(raft_cf, &region_state_key, &region_state)
+        .c()
+        .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
         .unwrap();
     assert_eq!(
         kv_engine
+            .c()
             .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .unwrap(),
@@ -784,9 +791,9 @@ fn test_debug_region_size() {
     region.set_end_key(b"z".to_vec());
     let mut state = RegionLocalState::default();
     state.set_region(region);
-    let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
     engine
-        .put_msg_cf(cf_raft, &region_state_key, &state)
+        .c()
+        .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
 
     let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
@@ -912,13 +919,10 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router);
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(dir).unwrap())
+        Arc::new(SSTImporter::new(dir, None).unwrap())
     };
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
-    let cfg_controller = Default::default();
-    let config_client =
-        ConfigHandler::start(String::new(), cfg_controller, pd_worker.scheduler()).unwrap();
     let e = node
         .start(
             engines,
@@ -929,7 +933,6 @@ fn test_double_run_node() {
             coprocessor_host,
             importer,
             Worker::new("split"),
-            Box::new(config_client),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

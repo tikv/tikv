@@ -6,9 +6,11 @@ use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
 
+use encryption::Error as EncryptionError;
 use grpcio::Error as GrpcError;
+use kvproto::import_sstpb;
 use tokio_sync::oneshot::error::RecvError;
-use uuid::{parser::ParseError, BytesError};
+use uuid::Error as UuidError;
 
 use crate::metrics::*;
 
@@ -17,7 +19,6 @@ pub fn error_inc(err: &Error) {
         Error::Io(..) => "io",
         Error::Grpc(..) => "grpc",
         Error::Uuid(..) => "uuid",
-        Error::UuidBytes(..) => "uuid_bytes",
         Error::RocksDB(..) => "rocksdb",
         Error::EngineTraits(..) => "engine_traits",
         Error::ParseIntError(..) => "parse_int",
@@ -28,6 +29,7 @@ pub fn error_inc(err: &Error) {
         Error::CannotReadExternalStorage(..) => "read_external_storage",
         Error::WrongKeyPrefix(..) => "wrong_prefix",
         Error::BadFormat(..) => "bad_format",
+        Error::Encryption(..) => "encryption",
         _ => return,
     };
     IMPORTER_ERROR_VEC.with_label_values(&[label]).inc();
@@ -46,12 +48,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Uuid(err: ParseError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        UuidBytes(err: BytesError) {
+        Uuid(err: UuidError) {
             from()
             cause(err)
             description(err.description())
@@ -103,7 +100,20 @@ quick_error! {
         BadFormat(msg: String) {
             display("bad format {}", msg)
         }
+        Encryption(err: EncryptionError) {
+            from()
+            description("encryption error")
+            display("Encryption {:?}", err)
+        }
     }
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl From<Error> for import_sstpb::Error {
+    fn from(e: Error) -> import_sstpb::Error {
+        let mut err = import_sstpb::Error::default();
+        err.set_message(format!("{}", e));
+        err
+    }
+}

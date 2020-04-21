@@ -16,6 +16,8 @@ extern crate serde_derive;
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
+#[macro_use]
+extern crate derive_more;
 #[cfg(test)]
 extern crate test;
 
@@ -497,6 +499,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 false, // Use sync logger to avoid an unnecessary log thread.
                 false, // It is initialized already.
                 vec![],
+                0,
             );
         }
 
@@ -555,7 +558,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
-    use fs2;
     use tempfile::Builder;
 
     #[test]
@@ -725,16 +727,15 @@ mod tests {
             .tempdir()
             .unwrap();
         let data_path = tmp_dir.path();
-        let disk_stats_before = fs2::statvfs(data_path).unwrap();
-        let cap1 = disk_stats_before.available_space();
-        let reserve_size = 64 * 1024;
+        let file_path = data_path.join(SPACE_PLACEHOLDER_FILE);
+        let file = file_path.as_path();
+        let reserve_size = 4096 * 4;
+        assert!(!file.exists());
         reserve_space_for_recover(data_path, reserve_size).unwrap();
-        let disk_stats_after = fs2::statvfs(data_path).unwrap();
-        let cap2 = disk_stats_after.available_space();
-        assert_eq!(cap1 - cap2, reserve_size);
+        assert!(file.exists());
+        let meta = file.metadata().unwrap();
+        assert_eq!(meta.len(), reserve_size);
         reserve_space_for_recover(data_path, 0).unwrap();
-        let disk_stats = fs2::statvfs(data_path).unwrap();
-        let cap3 = disk_stats.available_space();
-        assert_eq!(cap1, cap3);
+        assert!(!file.exists());
     }
 }

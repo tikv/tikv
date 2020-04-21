@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Deref;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -13,13 +12,12 @@ use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
 use grpcio::{
-    CallOption, Channel, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
 };
-use kvproto::configpb::ConfigClient;
 use kvproto::pdpb::{
-    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient, RegionHeartbeatRequest,
-    RegionHeartbeatResponse, ResponseHeader,
+    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
+    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
 use tokio_timer::timer::Handle;
 
@@ -27,33 +25,6 @@ use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
-
-pub struct PdClientStub {
-    pd_client: PdClient,
-    config_client: ConfigClient,
-}
-
-impl PdClientStub {
-    fn new(ch: Channel) -> Self {
-        // reuse the same channel for tow different client
-        PdClientStub {
-            pd_client: PdClient::new(ch.clone()),
-            config_client: ConfigClient::new(ch),
-        }
-    }
-
-    pub fn config(&self) -> &ConfigClient {
-        &self.config_client
-    }
-}
-
-impl Deref for PdClientStub {
-    type Target = PdClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.pd_client
-    }
-}
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -344,6 +315,7 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
 where
     F: Fn(&PdClientStub) -> GrpcResult<R>,
 {
+    let mut err = None;
     for _ in 0..retry {
         // DO NOT put any lock operation in match statement, or it will cause dead lock!
         let ret = { func(&client.inner.rl().client_stub).map_err(Error::Grpc) };
@@ -356,11 +328,12 @@ where
                 if let Err(e) = client.reconnect() {
                     error!("reconnect failed"; "err" => ?e);
                 }
+                err.replace(e);
             }
         }
     }
 
-    Err(box_err!("fail to request"))
+    Err(err.unwrap_or(box_err!("fail to request")))
 }
 
 pub fn validate_endpoints(
