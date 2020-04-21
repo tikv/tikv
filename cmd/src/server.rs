@@ -131,10 +131,6 @@ struct Engines {
 }
 
 struct Servers {
-<<<<<<< HEAD
-    pd_sender: FutureScheduler<PdTask>,
-=======
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     lock_mgr: Option<LockManager>,
     server: Server<ServerRaftStoreRouter, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,

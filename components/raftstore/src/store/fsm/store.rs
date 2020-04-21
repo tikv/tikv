@@ -1065,28 +1065,11 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-<<<<<<< HEAD
-        self.start_system(workers, region_peers, builder, dyn_cfg)?;
+        self.start_system(workers, region_peers, builder)?;
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
-=======
-        let engine = builder.engines.kv.clone();
-        if engine.support_write_batch_vec() {
-            self.start_system::<T, C, RocksWriteBatchVec>(workers, region_peers, builder)?;
-        } else {
-            self.start_system::<T, C, RocksWriteBatch>(workers, region_peers, builder)?;
-        }
-        Ok(())
-    }
-
-    fn start_system<
-        T: Transport + 'static,
-        C: PdClient + 'static,
-        W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
-    >(
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
+    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         mut workers: Workers,
         region_peers: Vec<SenderFsmPair<RocksEngine>>,

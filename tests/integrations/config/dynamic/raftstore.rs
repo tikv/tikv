@@ -62,18 +62,13 @@ fn start_raftstore(
     let engines = create_tmp_engine(dir);
     let host = CoprocessorHost::default();
     let importer = {
-<<<<<<< HEAD
-        let dir = Builder::new().prefix("store-config").tempdir().unwrap();
-        Arc::new(SSTImporter::new(dir.path()).unwrap())
-=======
         let p = dir
             .path()
             .join("store-config-importer")
             .as_path()
             .display()
             .to_string();
-        Arc::new(SSTImporter::new(&p, None).unwrap())
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
+        Arc::new(SSTImporter::new(&p).unwrap())
     };
     let snap_mgr = {
         let p = dir

@@ -13,6 +13,7 @@ use std::i32;
 use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::usize;
 
 use configuration::{
@@ -44,12 +45,8 @@ use engine_rocks::{
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
-<<<<<<< HEAD
-use pd_client::{Config as PdConfig, ConfigClient, Error as PdError};
-use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-=======
 use pd_client::Config as PdConfig;
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
+use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
@@ -2427,189 +2424,12 @@ impl ConfigController {
     }
 }
 
-<<<<<<< HEAD
-pub struct ConfigHandler {
-    id: String,
-    version: configpb::Version,
-    config_controller: ConfigController,
-}
-
-impl ConfigHandler {
-    pub fn start(
-        id: String,
-        mut controller: ConfigController,
-        scheduler: FutureScheduler<PdTask>,
-    ) -> CfgResult<Self> {
-        if controller.get_current().enable_dynamic_config {
-            if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
-                return Err(format!("failed to schedule refresh config task: {:?}", e).into());
-            }
-        }
-        let version = controller.start_version.take().unwrap_or_default();
-        Ok(ConfigHandler {
-            id,
-            version,
-            config_controller: controller,
-        })
-    }
-
-    pub fn get_id(&self) -> String {
-        self.id.clone()
-    }
-
-    pub fn get_version(&self) -> &configpb::Version {
-        &self.version
-    }
-
-    pub fn get_config(&self) -> &TiKvConfig {
-        self.config_controller.get_current()
-    }
-}
-
-#[derive(Debug)]
-pub enum CfgError {
-    Pd(PdError),
-    TomlDe(toml::de::Error),
-    TomlSer(toml::ser::Error),
-    Other(Box<dyn std::error::Error + Sync + Send>),
-}
-
-impl ConfigHandler {
-    /// Register the local config to pd and get the latest
-    /// version and config
-    pub fn create(
-        id: String,
-        cfg_client: Arc<impl ConfigClient>,
-        local_config: TiKvConfig,
-    ) -> Result<(configpb::Version, TiKvConfig), CfgError> {
-        let cfg = toml::to_string(&local_config.get_encoder()).map_err(CfgError::TomlSer)?;
-        let version = configpb::Version::default();
-        let mut resp = cfg_client
-            .register_config(id, version, cfg)
-            .map_err(CfgError::Pd)?;
-        match resp.get_status().get_code() {
-            StatusCode::Ok | StatusCode::WrongVersion => {
-                let mut incoming: TiKvConfig =
-                    toml::from_str(resp.get_config()).map_err(CfgError::TomlDe)?;
-                let mut version = resp.take_version();
-                incoming.compatible_adjust();
-                if let Err(e) = incoming.validate() {
-                    warn!(
-                        "config from pd is invalid, fallback to local config";
-                        "version" => ?version,
-                        "error" => ?e,
-                    );
-                    version = configpb::Version::default();
-                    incoming =
-                        get_last_config(&local_config.storage.data_dir).unwrap_or(local_config);
-                }
-                info!("register config success"; "version" => ?version);
-                Ok((version, incoming))
-            }
-            _ => Err(CfgError::Other(
-                format!("failed to register config, response: {:?}", resp).into(),
-            )),
-        }
-    }
-
-    /// Update the local config if remote config had been changed,
-    /// rollback the remote config if the change are invalid.
-    pub fn refresh_config(&mut self, cfg_client: &dyn ConfigClient) -> CfgResult<()> {
-        let mut resp = cfg_client.get_config(self.get_id(), self.version.clone())?;
-        let version = resp.take_version();
-        match resp.get_status().get_code() {
-            StatusCode::Ok => Ok(()),
-            StatusCode::WrongVersion if cmp_version(&self.version, &version) == Ordering::Less => {
-                let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
-                match self.config_controller.update_or_rollback(incoming)? {
-                    Either::Left(rollback_change) => {
-                        warn!(
-                            "tried to update local config to an invalid config";
-                            "version" => ?version
-                        );
-                        let entries = to_config_entry(rollback_change)?;
-                        self.update_config(version, entries, cfg_client)?;
-                    }
-                    Either::Right(updated) => {
-                        if updated {
-                            info!("local config updated"; "version" => ?version);
-                        } else {
-                            info!("config version upated"; "version" => ?version);
-                        }
-                        self.version = version;
-                    }
-                }
-                Ok(())
-            }
-            code => {
-                warn!(
-                    "failed to get remote config";
-                    "status" => ?code,
-                    "version" => ?version
-                );
-                Err(format!("{:?}", resp).into())
-            }
-        }
-    }
-
-    fn update_config(
-        &mut self,
-        version: configpb::Version,
-        entries: Vec<configpb::ConfigEntry>,
-        cfg_client: &dyn ConfigClient,
-    ) -> CfgResult<()> {
-        let mut resp = cfg_client.update_config(self.get_id(), version, entries)?;
-        match resp.get_status().get_code() {
-            StatusCode::Ok => {
-                self.version = resp.take_version();
-                Ok(())
-            }
-            code => {
-                debug!("failed to update remote config"; "status" => ?code);
-                Err(format!("{:?}", resp).into())
-            }
-        }
-    }
-}
-
-use raftstore::store::DynamicConfig;
-impl DynamicConfig for ConfigHandler {
-    fn refresh(&mut self, cfg_client: &dyn ConfigClient) {
-        debug!(
-            "refresh config";
-            "component id" => self.get_id(),
-            "version" => ?self.get_version()
-        );
-        if let Err(e) = self.refresh_config(cfg_client) {
-            warn!(
-                "failed to refresh config";
-                "component id" => self.get_id(),
-                "version" => ?self.get_version(),
-                "err" => ?e
-            )
-        }
-    }
-    fn refresh_interval(&self) -> Duration {
-        Duration::from(self.config_controller.current.refresh_config_interval)
-    }
-    fn get(&self) -> String {
-        toml::to_string(self.get_config()).unwrap()
-    }
-}
-
-=======
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
 #[cfg(test)]
 mod tests {
     use tempfile::Builder;
 
     use super::*;
     use engine::rocks::util::new_engine_opt;
-<<<<<<< HEAD
-    use kvproto::configpb::Version;
-=======
-    use engine_traits::DBOptions as DBOptionsTrait;
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     use slog::Level;
     use std::sync::Arc;
     use toml;
@@ -2819,15 +2639,8 @@ mod tests {
         }
     }
 
-<<<<<<< HEAD
     fn new_engines(cfg: TiKvConfig) -> (Arc<DB>, ConfigController) {
-        let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
-        let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
-=======
-    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {
-        let engine = RocksEngine::from_db(Arc::new(
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
             new_engine_opt(
                 &cfg.storage.data_dir,
                 DBOptions::new(),

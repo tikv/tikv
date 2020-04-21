@@ -311,24 +311,11 @@ impl StatsMonitor {
     }
 }
 
-<<<<<<< HEAD
-pub struct Runner<T: PdClient + ConfigClient> {
+pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
-    config_handler: Box<dyn DynamicConfig>,
     router: RaftRouter<RocksEngine>,
     db: Arc<DB>,
-=======
-pub struct Runner<E, T>
-where
-    E: KvEngine,
-    T: PdClient,
-{
-    store_id: u64,
-    pd_client: Arc<T>,
-    router: RaftRouter<E>,
-    db: E,
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -342,30 +329,15 @@ where
     stats_monitor: StatsMonitor,
 }
 
-<<<<<<< HEAD
-impl<T: PdClient + ConfigClient> Runner<T> {
-=======
-impl<E, T> Runner<E, T>
-where
-    E: KvEngine,
-    T: PdClient,
-{
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
+impl<T: PdClient> Runner<T> {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-<<<<<<< HEAD
-        config_handler: Box<dyn DynamicConfig>,
         router: RaftRouter<RocksEngine>,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
-=======
-        router: RaftRouter<E>,
-        db: E,
-        scheduler: Scheduler<Task<E>>,
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
         store_heartbeat_interval: u64,
     ) -> Runner<T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
@@ -827,17 +799,8 @@ where
     }
 }
 
-<<<<<<< HEAD
-impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task, handle: &Handle) {
-=======
-impl<E, T> Runnable<Task<E>> for Runner<E, T>
-where
-    E: KvEngine,
-    T: PdClient,
-{
-    fn run(&mut self, task: Task<E>, handle: &Handle) {
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {

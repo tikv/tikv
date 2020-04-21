@@ -23,12 +23,7 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
 use super::Result;
-<<<<<<< HEAD
-use crate::config::TiKvConfig;
-use raftstore::store::PdTask;
-=======
 use crate::config::ConfigController;
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
@@ -89,19 +84,11 @@ pub struct StatusServer {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
-<<<<<<< HEAD
-    pd_sender: Arc<FutureScheduler<PdTask>>,
-}
-
-impl StatusServer {
-    pub fn new(status_thread_pool_size: usize, pd_sender: FutureScheduler<PdTask>) -> Self {
-=======
     cfg_controller: Option<ConfigController>,
 }
 
 impl StatusServer {
     pub fn new(status_thread_pool_size: usize, cfg_controller: ConfigController) -> Self {
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
@@ -223,13 +210,8 @@ impl StatusServer {
             .unwrap()
     }
 
-<<<<<<< HEAD
-    fn config_handler(
-        pd_sender: &FutureScheduler<PdTask>,
-=======
     fn get_config(
         cfg_controller: &ConfigController,
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let res = match serde_json::to_string(cfg_controller.get_current()) {
             Ok(json) => Response::builder()
@@ -612,10 +594,6 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
-<<<<<<< HEAD
-    use raftstore::store::PdTask;
-=======
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
     use test_util::new_security_cfg;
     use tikv_util::security::SecurityConfig;
 
@@ -686,23 +664,7 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-<<<<<<< HEAD
-        struct Runner;
-        impl FutureRunnable<PdTask> for Runner {
-            fn run(&mut self, t: PdTask, _: &Handle) {
-                match t {
-                    PdTask::GetConfig { cfg_sender } => cfg_sender.send(String::new()).unwrap(),
-                    _ => unreachable!(),
-                }
-            }
-        }
-        let mut worker = FutureWorker::new("test-worker");
-        worker.start(Runner).unwrap();
-
-        let mut status_server = StatusServer::new(1, worker.scheduler());
-=======
         let mut status_server = StatusServer::new(1, ConfigController::default());
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -970,83 +932,4 @@ mod tests {
             "snap-sender"
         );
     }
-<<<<<<< HEAD
-=======
-
-    fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
-        let _ = status_server.start(
-            "127.0.0.1:0".to_string(),
-            &new_security_cfg(Some(allowed_cn)),
-        );
-
-        let mut connector = HttpConnector::new(1);
-        connector.enforce_http(false);
-        let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
-        ssl.set_certificate_file(
-            format!(
-                "{}",
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("components/test_util/data/server.pem")
-                    .display()
-            ),
-            SslFiletype::PEM,
-        )
-        .unwrap();
-        ssl.set_private_key_file(
-            format!(
-                "{}",
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("components/test_util/data/key.pem")
-                    .display()
-            ),
-            SslFiletype::PEM,
-        )
-        .unwrap();
-        ssl.set_ca_file(format!(
-            "{}",
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("components/test_util/data/ca.pem")
-                .display()
-        ))
-        .unwrap();
-
-        let ssl = HttpsConnector::with_connector(connector, ssl).unwrap();
-        let client = Client::builder().build::<_, Body>(ssl);
-
-        let uri = Uri::builder()
-            .scheme("https")
-            .authority(status_server.listening_addr().to_string().as_str())
-            .path_and_query("/metrics")
-            .build()
-            .unwrap();
-
-        if expected {
-            let handle = status_server.thread_pool.spawn_handle(lazy(move || {
-                client
-                    .get(uri)
-                    .map(|res| {
-                        assert_eq!(res.status(), StatusCode::OK);
-                    })
-                    .map_err(|err| {
-                        panic!("response status is not OK: {:?}", err);
-                    })
-            }));
-            handle.wait().unwrap();
-        } else {
-            let handle = status_server.thread_pool.spawn_handle(lazy(move || {
-                client
-                    .get(uri)
-                    .map(|_| {
-                        panic!("response status should be err");
-                    })
-                    .map_err(|err| {
-                        assert!(err.is_connect());
-                    })
-            }));
-            let _ = handle.wait();
-        }
-        status_server.stop();
-    }
->>>>>>> d1eadfb... config: move config update interface from pd to status server (#7495)
 }
