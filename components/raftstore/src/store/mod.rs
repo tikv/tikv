@@ -43,6 +43,6 @@ pub use self::snap::{
     SnapManagerBuilder, Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::worker::{DynamicConfig, FlowStatistics, FlowStatsReporter, PdTask};
+pub use self::worker::{FlowStatistics, FlowStatsReporter, PdTask};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
