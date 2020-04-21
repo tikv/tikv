@@ -811,17 +811,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return Ok(());
         }
 
-<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
-        if msg.has_extra_msg() {
-            // now noop
-=======
         if self.check_msg(&msg) {
->>>>>>> d37dac2... raftstore: consider wake-up msg when checking stale msg in peer fsm (#7592):components/raftstore/src/store/fsm/peer.rs
             return Ok(());
         }
 
         if msg.has_extra_msg() {
-            self.on_extra_message(&msg);
+            // noop
             return Ok(());
         }
 
@@ -926,7 +921,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if msg.has_extra_msg() {
                 // A learner can't vote so it sends the wake-up msg to others to find out whether
                 // it is removed due to conf change or merge.
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                need_gc_msg |=
+                    msg.get_extra_msg().get_field_type() == ExtraMessageType::MsgRegionWakeUp
             }
             // The message is stale and not in current region.
             self.ctx.handle_stale_msg(
