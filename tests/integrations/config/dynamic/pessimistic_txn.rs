@@ -109,7 +109,7 @@ fn test_lock_manager_cfg_update() {
 
     // only update wake_up_delay_duration
     cfg_controller
-        .update_config("pessimistic-txn.wake-up-delay-duration", "500ms")
+        .update_config("pessimistic-txn.wake-up-delay-duration", "500")
         .unwrap();
     validate_waiter(&waiter, move |timeout: u64, delay: u64| {
         assert_eq!(timeout, DEFAULT_TIMEOUT);
@@ -122,7 +122,7 @@ fn test_lock_manager_cfg_update() {
 
     // only update wait_for_lock_timeout
     cfg_controller
-        .update_config("pessimistic-txn.wait-for-lock-timeout", "4000ms")
+        .update_config("pessimistic-txn.wait-for-lock-timeout", "4000")
         .unwrap();
     validate_waiter(&waiter, move |timeout: u64, delay: u64| {
         assert_eq!(timeout, 4000);
@@ -137,11 +137,11 @@ fn test_lock_manager_cfg_update() {
     let mut m = std::collections::HashMap::new();
     m.insert(
         "pessimistic-txn.wait-for-lock-timeout".to_owned(),
-        "4321ms".to_owned(),
+        "4321".to_owned(),
     );
     m.insert(
         "pessimistic-txn.wake-up-delay-duration".to_owned(),
-        "123ms".to_owned(),
+        "123".to_owned(),
     );
     cfg_controller.update(m).unwrap();
     validate_waiter(&waiter, move |timeout: u64, delay: u64| {
