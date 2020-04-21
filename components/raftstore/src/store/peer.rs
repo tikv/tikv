@@ -2167,7 +2167,7 @@ impl Peer {
 
         poll_ctx.raft_metrics.propose.build_cache += 1;
         let current_time = poll_ctx.current_time.unwrap();
-        if current_time.sec - self.last_propose_time.sec < 300 || self.region_cache.is_some() {
+        if current_time.sec - self.last_propose_time.sec < 100 || self.region_cache.is_some() {
             info!("skip building a in-memory-table for region"; "region_id" => self.region_id, "elaspe" => (current_time.sec - self.last_propose_time.sec));
             return;
         }

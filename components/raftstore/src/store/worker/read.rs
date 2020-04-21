@@ -338,7 +338,9 @@ where
                         return;
                     }
 
-                    if *delegate.read_times.borrow() > CACHE_SAMPLE {
+                    let mut count = delegate.read_times.borrow_mut();
+                    if *count > CACHE_SAMPLE {
+                        count = 0;
                         build_cache_region = Some(delegate.region.clone());
                     }
                     break;
@@ -351,6 +353,8 @@ where
                     let meta = self.store_meta.lock().unwrap();
                     match meta.readers.get(&region_id).cloned() {
                         Some(reader) => {
+                            let mut count = reader.read_times.borrow_mut();
+                            *count = 0;
                             self.delegates.borrow_mut().insert(region_id, Some(reader));
                         }
                         None => {
