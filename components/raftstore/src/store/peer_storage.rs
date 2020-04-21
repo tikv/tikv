@@ -184,9 +184,12 @@ impl EntryCache {
                 self.cache.clear();
             }
         }
+        let mut cache_increment = 0;
         for e in &entries[start_idx..] {
+            cache_increment += e.compute_size();
             self.cache.push_back(e.to_owned());
         }
+        RAFT_ENTRIES_CACHE_GAGUE.add(cache_increment as i64);
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -197,14 +200,17 @@ impl EntryCache {
         let cache_last_idx = self.cache.back().unwrap().get_index();
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
         // if necessary.
+        let mut cache_decrement = 0;
         self.cache
-            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
+            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
+            .for_each(|e| cache_decrement += e.compute_size());
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
             self.cache.shrink_to_fit();
         }
+        RAFT_ENTRIES_CACHE_GAGUE.sub(cache_decrement as i64);
     }
 
     #[inline]

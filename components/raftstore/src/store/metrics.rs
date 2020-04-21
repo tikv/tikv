@@ -415,4 +415,10 @@ lazy_static! {
             "tikv_raftstore_read_index_pending",
             "pending read index count"
         ).unwrap();
+
+    pub static ref RAFT_ENTRIES_CACHE_GAGUE: IntGauge = register_int_gauge!(
+        "tikv_server_raft_entries_cache",
+        "Memory usage of raft entries cache"
+    )
+    .unwrap();
 }
