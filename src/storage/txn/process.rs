@@ -645,8 +645,16 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             let mut keys = vec![key];
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
+<<<<<<< HEAD
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts)?;
+=======
+            let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
+            // The rollback must be protected, see more on
+            // [issue #7364](https://github.com/tikv/tikv/issues/7364)
+            released_locks.push(txn.cleanup(key, current_ts, true)?);
+            released_locks.wake_up(lock_mgr.as_ref());
+>>>>>>> f9e4923... txn: don't protect rollback for BatchRollback (#7494)
 
             wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());
