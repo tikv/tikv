@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use kvproto::metapb;
 use kvproto::replication_modepb::ReplicationMode;
-
 use pd_client::{take_peer_address, PdClient};
 use raftstore::store::GlobalReplicationState;
 use tikv_util::collections::HashMap;
@@ -75,7 +74,7 @@ impl<T: PdClient> Runner<T> {
         let mut s = box_try!(pd_client.get_store(store_id));
         let mut state = self.state.lock().unwrap();
         let label_key = &state.status.get_dr_auto_sync().label_key;
-        if state.status.mode == ReplicationMode::DrAutoSync {
+        if state.status.get_mode() == ReplicationMode::DrAutoSync {
             if state.group.group_id(store_id).is_none() {
                 for l in s.get_labels() {
                     if l.key == *label_key {
