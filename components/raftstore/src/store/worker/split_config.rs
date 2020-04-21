@@ -7,7 +7,7 @@ use tikv_util::config::VersionTrack;
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: i32 = 100;
 pub(crate) const DEFAULT_SAMPLE_NUM: usize = 20;
-const DEFAULT_QPS_THRESHOLD: usize = 1500;
+const DEFAULT_QPS_THRESHOLD: usize = 3000;
 
 // We get balance score by abs(sample.left-sample.right)/(sample.right+sample.left). It will be used to measure left and right balance
 const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.25;

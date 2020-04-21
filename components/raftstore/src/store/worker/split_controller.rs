@@ -16,7 +16,7 @@ use tikv_util::config::Tracker;
 use txn_types::Key;
 
 use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
-use crate::store::worker::{SplitConfig, SplitConfigManager};
+use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
 
@@ -252,25 +252,27 @@ impl Recorder {
     }
 }
 
-#[derive(Clone)]
-pub struct QpsStats {
+#[derive(Clone, Debug)]
+pub struct ReadStats {
+    pub flows: HashMap<u64, FlowStatistics>,
     pub region_infos: HashMap<u64, RegionInfo>,
     pub sample_num: usize,
 }
 
-impl QpsStats {
-    pub fn new() -> QpsStats {
-        QpsStats {
+impl ReadStats {
+    pub fn default() -> ReadStats {
+        ReadStats {
             sample_num: DEFAULT_SAMPLE_NUM,
             region_infos: HashMap::default(),
+            flows: HashMap::default(),
         }
     }
 
-    pub fn add(&mut self, region_id: u64, peer: &Peer, key_range: KeyRange) {
-        self.batch_add(region_id, peer, vec![key_range]);
+    pub fn add_qps(&mut self, region_id: u64, peer: &Peer, key_range: KeyRange) {
+        self.add_qps_batch(region_id, peer, vec![key_range]);
     }
 
-    pub fn batch_add(&mut self, region_id: u64, peer: &Peer, key_ranges: Vec<KeyRange>) {
+    pub fn add_qps_batch(&mut self, region_id: u64, peer: &Peer, key_ranges: Vec<KeyRange>) {
         let num = self.sample_num;
         let region_info = self
             .region_infos
@@ -280,8 +282,21 @@ impl QpsStats {
         region_info.add_key_ranges(key_ranges);
     }
 
+    pub fn add_flow(&mut self, region_id: u64, write: &FlowStatistics, data: &FlowStatistics) {
+        let flow_stats = self
+            .flows
+            .entry(region_id)
+            .or_insert_with(FlowStatistics::default);
+        flow_stats.add(write);
+        flow_stats.add(data);
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.region_infos.is_empty()
+        self.region_infos.is_empty() && self.flows.is_empty()
+    }
+
+    pub fn set_flows(&mut self, flows: HashMap<u64, FlowStatistics>) {
+        self.flows = flows;
     }
 }
 
@@ -304,7 +319,7 @@ impl AutoSplitController {
         AutoSplitController::new(SplitConfigManager::default())
     }
 
-    pub fn flush(&mut self, others: Vec<QpsStats>) -> (Vec<usize>, Vec<SplitInfo>) {
+    pub fn flush(&mut self, others: Vec<ReadStats>) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut split_infos = Vec::default();
         let mut top = BinaryHeap::with_capacity(TOP_N as usize);
 
@@ -461,10 +476,10 @@ mod tests {
         hub.cfg.sample_threshold = 0;
 
         for i in 0..100 {
-            let mut qps_stats = QpsStats::new();
+            let mut qps_stats = ReadStats::default();
             for _ in 0..100 {
-                qps_stats.add(1, &Peer::default(), build_key_range(b"a", b"b", false));
-                qps_stats.add(1, &Peer::default(), build_key_range(b"b", b"c", false));
+                qps_stats.add_qps(1, &Peer::default(), build_key_range(b"a", b"b", false));
+                qps_stats.add_qps(1, &Peer::default(), build_key_range(b"b", b"c", false));
             }
             let (_, split_infos) = hub.flush(vec![qps_stats]);
             if (i + 1) % hub.cfg.detect_times == 0 {
@@ -482,11 +497,11 @@ mod tests {
     const REGION_NUM: u64 = 1000;
     const KEY_RANGE_NUM: u64 = 1000;
 
-    fn default_qps_stats() -> QpsStats {
-        let mut qps_stats = QpsStats::new();
+    fn default_qps_stats() -> ReadStats {
+        let mut qps_stats = ReadStats::default();
         for i in 0..REGION_NUM {
             for _j in 0..KEY_RANGE_NUM {
-                qps_stats.add(i, &Peer::default(), build_key_range(b"a", b"b", false))
+                qps_stats.add_qps(i, &Peer::default(), build_key_range(b"a", b"b", false))
             }
         }
         qps_stats
@@ -527,7 +542,7 @@ mod tests {
                         key = end_key;
                     }
                 }
-                qps_stats.add(
+                qps_stats.add_qps(
                     0,
                     &Peer::default(),
                     build_key_range(&start_key, &key, false),
@@ -540,7 +555,7 @@ mod tests {
     fn qps_add(b: &mut test::Bencher) {
         let mut qps_stats = default_qps_stats();
         b.iter(|| {
-            qps_stats.add(0, &Peer::default(), build_key_range(b"a", b"b", false));
+            qps_stats.add_qps(0, &Peer::default(), build_key_range(b"a", b"b", false));
         });
     }
 }

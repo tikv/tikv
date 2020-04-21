@@ -27,7 +27,7 @@ use crate::store::metrics::*;
 use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
-use crate::store::worker::{AutoSplitController, QpsStats};
+use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
@@ -56,27 +56,17 @@ impl FlowStatistics {
 
 // Reports flow statistics to outside.
 pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
-    // Reports read flow statistics, the argument `read_stats` is a hash map
-    // saves the flow statistics of different region.
     // TODO: maybe we need to return a Result later?
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
-
-    fn report_qps_stats(&self, qps_stats: QpsStats);
+    fn report_read_stats(&self, read_stats: ReadStats);
 }
 
 impl<E> FlowStatsReporter for Scheduler<Task<E>>
 where
     E: KvEngine,
 {
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
+    fn report_read_stats(&self, read_stats: ReadStats) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
-        }
-    }
-
-    fn report_qps_stats(&self, qps_stats: QpsStats) {
-        if let Err(e) = self.schedule(Task::QpsStats { qps_stats }) {
-            error!("Failed to send qps statistics"; "err" => ?e);
         }
     }
 }
@@ -135,10 +125,7 @@ where
         merge_source: Option<u64>,
     },
     ReadStats {
-        read_stats: HashMap<u64, FlowStatistics>,
-    },
-    QpsStats {
-        qps_stats: QpsStats,
+        read_stats: ReadStats,
     },
     DestroyPeer {
         region_id: u64,
@@ -262,9 +249,6 @@ where
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
-            Task::QpsStats { ref qps_stats } => {
-                write!(f, "get the qps statistics {:?}", qps_stats.region_infos)
-            }
             Task::DestroyPeer { ref region_id } => {
                 write!(f, "destroy peer of region {}", region_id)
             }
@@ -305,7 +289,7 @@ where
     scheduler: Scheduler<Task<E>>,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
-    sender: Option<Sender<QpsStats>>,
+    sender: Option<Sender<ReadStats>>,
     thread_info_interval: Duration,
     qps_info_interval: Duration,
     collect_interval: Duration,
@@ -420,7 +404,7 @@ where
         }
     }
 
-    pub fn get_sender(&self) -> &Option<Sender<QpsStats>> {
+    pub fn get_sender(&self) -> &Option<Sender<ReadStats>> {
         &self.sender
     }
 }
@@ -896,22 +880,21 @@ where
         self.is_hb_receiver_scheduled = true;
     }
 
-    fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
-        for (region_id, stats) in read_stats {
+    fn handle_read_stats(&mut self, read_stats: ReadStats) {
+        for (region_id, stats) in &read_stats.flows {
             let peer_stat = self
                 .region_peers
-                .entry(region_id)
+                .entry(*region_id)
                 .or_insert_with(PeerStat::default);
             peer_stat.read_bytes += stats.read_bytes as u64;
             peer_stat.read_keys += stats.read_keys as u64;
             self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
             self.store_stat.engine_total_keys_read += stats.read_keys as u64;
         }
-    }
-
-    fn handle_qps_stats(&mut self, qps_stats: QpsStats) {
-        if let Some(sender) = self.stats_monitor.get_sender() {
-            sender.send(qps_stats).unwrap();
+        if !read_stats.region_infos.is_empty() {
+            if let Some(sender) = self.stats_monitor.get_sender() {
+                sender.send(read_stats).unwrap();
+            }
         }
     }
 
@@ -1094,7 +1077,6 @@ where
                 merge_source,
             } => self.handle_validate_peer(handle, region, peer, merge_source),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
-            Task::QpsStats { qps_stats } => self.handle_qps_stats(qps_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
             Task::StoreInfos {
                 cpu_usages,
