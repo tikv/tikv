@@ -1791,6 +1791,16 @@ impl Display for Decimal {
     }
 }
 
+<<<<<<< HEAD:src/coprocessor/codec/mysql/decimal.rs
+=======
+impl crate::codec::data_type::AsMySQLBool for Decimal {
+    #[inline]
+    fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> tidb_query_common::error::Result<bool> {
+        Ok(!self.is_zero())
+    }
+}
+
+>>>>>>> 6b60d57... tidb_query: fix the logical behavior of floats (#7342):components/tidb_query_datatype/src/codec/mysql/decimal.rs
 macro_rules! write_u8 {
     ($writer:ident, $b:expr, $written:ident) => {{
         let mut b = $b;
