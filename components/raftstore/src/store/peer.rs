@@ -2226,9 +2226,9 @@ impl Peer {
     }
 
     pub fn invalid_cache(&mut self) {
-        if let Some(cache) = self.region_cache.take() {
-            cache.set_valid(false);
-        }
+        //        if let Some(cache) = self.region_cache.take() {
+        //            cache.set_valid(false);
+        //        }
     }
 
     // For now, it is only used in merge.

@@ -1,7 +1,9 @@
-use crate::storage::kv::{self, ScanMode, Snapshot, Statistics};
+use crate::server::gc_worker::GcSafePointProvider;
+use crate::storage::kv::{self, ErrorInner, ScanMode, Snapshot, Statistics};
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{IterOptions, Snapshot as SnapshotTrait, CF_DEFAULT, CF_WRITE};
 use kvproto::metapb;
+use pd_client::RpcClient;
 use raftstore::store::{
     RegionCache, RegionCacheBuilder, RegionCacheBuilderFactory, RegionSnapshot,
 };
@@ -44,6 +46,7 @@ impl RegionCache for TxnRegionCache {
 
 pub struct TxnRegionCacheBuilder {
     region: metapb::Region,
+    pd_client: Arc<RpcClient>,
 }
 
 impl RegionCacheBuilder<RocksEngine> for TxnRegionCacheBuilder {
@@ -61,6 +64,10 @@ impl RegionCacheBuilder<RocksEngine> for TxnRegionCacheBuilder {
 
 impl TxnRegionCacheBuilder {
     fn do_build<S: Snapshot>(&self, snap: S) -> kv::Result<Arc<dyn RegionCache>> {
+        let safe_ts = self
+            .pd_client
+            .get_safe_point()
+            .map_err(|e| ErrorInner::Other(box_err!(e)))?;
         let iter_opt = IterOptions::new(None, None, false);
         let mut write_cursor = snap.iter_cf(CF_WRITE, iter_opt, ScanMode::Forward)?;
         let mut stats = Statistics::default();
@@ -70,10 +77,13 @@ impl TxnRegionCacheBuilder {
         let mut last_key = vec![];
         while write_cursor.valid()? {
             let key = write_cursor.key(&mut stats.write);
-            let (user_key, _) = Key::split_on_ts_for(key).unwrap();
+            let (user_key, ts) = Key::split_on_ts_for(key).unwrap();
             if user_key.to_vec() == last_key {
                 write_cursor.next(&mut stats.write);
                 continue;
+            }
+            if ts > safe_ts {
+                return Err(kv::Error(Box::new(ErrorInner::Other("".into()))));
             }
             let value = write_cursor.value(&mut stats.write);
             let write = WriteRef::parse(value).unwrap();
@@ -100,17 +110,22 @@ impl TxnRegionCacheBuilder {
     }
 }
 
-pub struct TxnRegionCacheBuilderFactory {}
+pub struct TxnRegionCacheBuilderFactory {
+    pd_client: Arc<RpcClient>,
+}
 
 impl TxnRegionCacheBuilderFactory {
-    pub fn new() -> TxnRegionCacheBuilderFactory {
-        Self {}
+    pub fn new(pd_client: Arc<RpcClient>) -> TxnRegionCacheBuilderFactory {
+        Self { pd_client }
     }
 }
 
 impl RegionCacheBuilderFactory<RocksEngine> for TxnRegionCacheBuilderFactory {
     fn create_builder(&self, region: metapb::Region) -> Box<dyn RegionCacheBuilder<RocksEngine>> {
-        Box::new(TxnRegionCacheBuilder { region })
+        Box::new(TxnRegionCacheBuilder {
+            region,
+            pd_client: self.pd_client.clone(),
+        })
     }
 }
 

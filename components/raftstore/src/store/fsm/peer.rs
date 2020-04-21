@@ -638,7 +638,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.ctx.has_ready = true;
         if let Some(p) = self.fsm.peer.take_apply_proposals() {
             proposals.push(p);
-        } else {
             self.fsm.peer.invalid_cache();
         }
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
