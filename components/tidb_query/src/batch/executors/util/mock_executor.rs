@@ -47,4 +47,8 @@ impl BatchExecutor for MockExecutor {
         // Do nothing
         unreachable!()
     }
+
+    fn can_be_cached(&self) -> bool {
+        false
+    }
 }

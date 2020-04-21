@@ -40,6 +40,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<RocksSyncSnapshot>, Vec<Key>) {
         IsolationLevel::Si,
         true,
         Default::default(),
+        false,
     );
 
     // Keys are given in order, and are far away from each other to simulate a normal table lookup
