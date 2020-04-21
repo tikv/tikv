@@ -10,7 +10,10 @@ extern crate failure;
 extern crate fail;
 #[macro_use]
 extern crate tikv_util;
+#[macro_use]
+extern crate serde_derive;
 
+pub mod config;
 mod delegate;
 mod endpoint;
 mod errors;
@@ -18,6 +21,7 @@ mod metrics;
 mod observer;
 mod service;
 
+pub use config::Config;
 pub use endpoint::{Endpoint, Task};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;

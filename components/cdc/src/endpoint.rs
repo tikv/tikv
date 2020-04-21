@@ -26,6 +26,7 @@ use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
+use crate::config::Config;
 use crate::delegate::{Delegate, Downstream, DownstreamID};
 use crate::metrics::*;
 use crate::service::{Conn, ConnID};
@@ -207,12 +208,16 @@ pub struct Endpoint<T> {
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     pub fn new(
+        config: &Config,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         raft_router: T,
         observer: CdcObserver,
     ) -> Endpoint<T> {
-        let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
+        let workers = Builder::new()
+            .name_prefix("cdcwkr")
+            .pool_size(config.cdc_scan_worker_pool_size)
+            .build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
         let ep = Endpoint {
             capture_regions: HashMap::default(),
@@ -225,7 +230,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             raft_router,
             observer,
             scan_batch_size: 1024,
-            min_ts_interval: Duration::from_secs(1),
+            min_ts_interval: config.cdc_min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
         };

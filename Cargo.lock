@@ -483,6 +483,8 @@ dependencies = [
  "raft",
  "raftstore",
  "resolved_ts",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
