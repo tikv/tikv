@@ -29,11 +29,11 @@ use crate::store::RegionCache;
 use tikv_util::time::monotonic_raw_now;
 
 #[cfg(not(test))]
-const CACHE_SAMPLE: u64 = 60 * 50;
+const CACHE_SAMPLE: u64 = 4 * 150;
 #[cfg(test)]
 const CACHE_SAMPLE: u64 = 4;
 
-const MIN_CACHE_TIME: f64 = 60.0;
+const MIN_CACHE_TIME: f64 = 4.0;
 
 /// A read only delegate of `Peer`.
 #[derive(Derivative)]
@@ -102,13 +102,16 @@ impl ReadDelegate {
         *count += 1;
         if *count > CACHE_SAMPLE {
             let mut t = self.last_check_time.borrow_mut();
-            if t.elapsed_secs() < MIN_CACHE_TIME {
-                *t = Instant::now();
-                *count = 0;
-                return Some(self.region.clone());
-            }
+            let region = if self.region.get_id() == 124 {
+                Some(self.region.clone())
+            } else if t.elapsed_secs() < MIN_CACHE_TIME {
+                Some(self.region.clone())
+            } else {
+                None
+            };
             *count = 0;
             *t = Instant::now();
+            return region;
         }
         None
     }
