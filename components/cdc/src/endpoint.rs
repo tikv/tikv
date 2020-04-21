@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,8 +21,8 @@ use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
+use tikv_util::timer::{SteadyTimer, Timer};
+use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -39,6 +40,7 @@ pub enum Deregister {
     },
     Region {
         region_id: u64,
+        observe_id: ObserveID,
         err: Error,
     },
     Conn(ConnID),
@@ -68,10 +70,12 @@ impl fmt::Debug for Deregister {
                 .finish(),
             Deregister::Region {
                 ref region_id,
+                ref observe_id,
                 ref err,
             } => de
                 .field("deregister", &"region")
                 .field("region_id", region_id)
+                .field("observe_id", observe_id)
                 .field("err", err)
                 .finish(),
             Deregister::Conn(ref conn_id) => de
@@ -180,6 +184,8 @@ impl fmt::Debug for Task {
     }
 }
 
+const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+
 pub struct Endpoint<T> {
     capture_regions: HashMap<u64, Delegate>,
     connections: HashMap<ConnID, Conn>,
@@ -199,7 +205,7 @@ pub struct Endpoint<T> {
     min_ts_region_id: u64,
 }
 
-impl<T: 'static + RaftStoreRouter> Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -225,6 +231,14 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         };
         ep.register_min_ts_event();
         ep
+    }
+
+    pub fn new_timer(&self) -> Timer<()> {
+        // Currently there is only one timeout for CDC.
+        let cdc_timer_cap = 1;
+        let mut timer = Timer::new(cdc_timer_cap);
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+        timer
     }
 
     pub fn set_min_ts_interval(&mut self, dur: Duration) {
@@ -257,21 +271,46 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                     }
                 }
                 if is_last {
-                    self.capture_regions.remove(&region_id);
+                    let delegate = self.capture_regions.remove(&region_id).unwrap();
                     // Do not continue to observe the events of the region.
-                    self.observer.unsubscribe_region(region_id);
+                    let oid = self.observer.unsubscribe_region(region_id, delegate.id);
+                    assert!(
+                        oid.is_some(),
+                        "unsubscribe region {} failed, ObserveID {:?}",
+                        region_id,
+                        delegate.id
+                    );
                 }
             }
-            Deregister::Region { region_id, err } => {
+            Deregister::Region {
+                region_id,
+                observe_id,
+                err,
+            } => {
                 // Something went wrong, deregister all downstreams of the region.
-                if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
-                    delegate.stop(err);
+
+                // To avoid ABA problem, we must check the unique ObserveID.
+                let need_remove = self
+                    .capture_regions
+                    .get(&region_id)
+                    .map_or(false, |d| d.id == observe_id);
+                if need_remove {
+                    if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
+                        delegate.stop(err);
+                    }
                 }
                 self.connections
                     .iter_mut()
                     .for_each(|(_, conn)| conn.unsubscribe(region_id));
                 // Do not continue to observe the events of the region.
-                self.observer.unsubscribe_region(region_id);
+                let oid = self.observer.unsubscribe_region(region_id, observe_id);
+                assert_eq!(
+                    need_remove,
+                    oid.is_some(),
+                    "unsubscribe region {} failed, ObserveID {:?}",
+                    region_id,
+                    observe_id
+                );
             }
             Deregister::Conn(conn_id) => {
                 // The connection is closed, deregister all downstreams of the connection.
@@ -281,9 +320,16 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                         .for_each(|(region_id, downstream_id)| {
                             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                                 if delegate.unsubscribe(downstream_id, None) {
-                                    self.capture_regions.remove(&region_id);
+                                    let delegate = self.capture_regions.remove(&region_id).unwrap();
                                     // Do not continue to observe the events of the region.
-                                    self.observer.unsubscribe_region(region_id);
+                                    let oid =
+                                        self.observer.unsubscribe_region(region_id, delegate.id);
+                                    assert!(
+                                        oid.is_some(),
+                                        "unsubscribe region {} failed, ObserveID {:?}",
+                                        region_id,
+                                        delegate.id
+                                    );
                                 }
                             }
                         });
@@ -302,22 +348,27 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
             None => {
-                error!("register for a nonexistent connection"; "region_id" => region_id, "conn_id" => ?conn_id);
+                error!("register for a nonexistent connection";
+                    "region_id" => region_id, "conn_id" => ?conn_id);
                 return;
             }
         };
         downstream.set_sink(conn.get_sink());
         if !conn.subscribe(request.get_region_id(), downstream.get_id()) {
             downstream.sink_duplicate_error(request.get_region_id());
+            error!("duplicate register";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream.get_id());
             return;
         }
 
-        info!("cdc register region"; "region_id" => region_id, "conn_id" => ?conn.get_id(), "downstream_id" => ?downstream.get_id());
-        let mut enabled = None;
+        info!("cdc register region";
+            "region_id" => region_id,
+            "conn_id" => ?conn.get_id(),
+            "downstream_id" => ?downstream.get_id());
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
             let d = Delegate::new(region_id);
-            enabled = Some(d.enabled());
             is_new_delegate = true;
             d
         });
@@ -335,7 +386,9 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             batch_size,
             observe_id: delegate.id,
             checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: enabled.is_some(),
+            build_resolver: is_new_delegate,
+            // TODO: make the cancellation at Downstream level instead of Region level.
+            proceed: delegate.enabled(),
         };
         if !delegate.subscribe(downstream) {
             conn.unsubscribe(request.get_region_id());
@@ -344,15 +397,22 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             }
             return;
         }
-        let change_cmd = if let Some(enabled) = enabled {
+        let change_cmd = if is_new_delegate {
             // The region has never been registered.
             // Subscribe the change events of the region.
-            self.observer.subscribe_region(region_id);
+            let old_id = self.observer.subscribe_region(region_id, delegate.id);
+            assert!(
+                old_id.is_none(),
+                "region {} must not be observed twice, old ObserveID {:?}, new ObserveID {:?}",
+                region_id,
+                old_id,
+                delegate.id
+            );
 
             ChangeCmd::RegisterObserver {
                 observe_id: delegate.id,
                 region_id,
-                enabled,
+                enabled: delegate.enabled(),
             }
         } else {
             ChangeCmd::Snapshot {
@@ -399,6 +459,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
         for batch in multi {
             let region_id = batch.region_id;
+            let mut deregister = None;
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 if delegate.has_failed() {
                     // Skip the batch if the delegate has failed.
@@ -407,11 +468,15 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 if let Err(e) = delegate.on_batch(batch) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
-                    let deregister = Deregister::Region { region_id, err: e };
-                    if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e);
-                    }
+                    deregister = Some(Deregister::Region {
+                        region_id,
+                        observe_id: delegate.id,
+                        err: e,
+                    });
                 }
+            }
+            if let Some(deregister) = deregister {
+                self.on_deregister(deregister);
             }
         }
     }
@@ -436,14 +501,22 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 if let Err(e) = delegate.on_region_ready(resolver, region) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
-                    let deregister = Deregister::Region { region_id, err: e };
+                    let deregister = Deregister::Region {
+                        region_id,
+                        observe_id: delegate.id,
+                        err: e,
+                    };
                     self.on_deregister(deregister);
                 }
             } else {
-                debug!("stale region ready"; "region_id" => region.get_id(), "observe_id" => ?observe_id, "current_id" => ?delegate.id);
+                debug!("stale region ready";
+                    "region_id" => region.get_id(),
+                    "observe_id" => ?observe_id,
+                    "current_id" => ?delegate.id);
             }
         } else {
-            debug!("region not found on region ready (finish building resolver)"; "region_id" => region.get_id());
+            debug!("region not found on region ready (finish building resolver)";
+                "region_id" => region.get_id());
         }
     }
 
@@ -453,8 +526,6 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 if resolved_ts < self.min_resolved_ts {
                     self.min_resolved_ts = resolved_ts;
                     self.min_ts_region_id = region_id;
-                    CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
-                    CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
                 }
             }
         }
@@ -531,6 +602,7 @@ struct Initializer {
     batch_size: usize,
 
     build_resolver: bool,
+    proceed: Arc<AtomicBool>,
 }
 
 impl Initializer {
@@ -548,6 +620,7 @@ impl Initializer {
             let err = resp.response.take_header().take_error();
             let deregister = Deregister::Region {
                 region_id: self.region_id,
+                observe_id: self.observe_id,
                 err: Error::Request(err),
             };
             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
@@ -565,8 +638,6 @@ impl Initializer {
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id);
 
-        // TODO: Add a cancellation mechanism so that the scanning can be canceled if it doesn't
-        // finish when the region is deregistered.
         let mut resolver = if self.build_resolver {
             Some(Resolver::new(region_id))
         } else {
@@ -584,6 +655,13 @@ impl Initializer {
             .unwrap();
         let mut done = false;
         while !done {
+            if !self.proceed.load(Ordering::SeqCst) {
+                info!("async incremental scan canceled";
+                    "region_id" => region_id,
+                    "downstream_id" => ?downstream_id,
+                    "observe_id" => ?self.observe_id);
+                return;
+            }
             let entries = match Self::scan_batch(&mut scanner, self.batch_size, resolver.as_mut()) {
                 Ok(res) => res,
                 Err(e) => {
@@ -696,7 +774,7 @@ impl Initializer {
     }
 }
 
-impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
@@ -727,6 +805,20 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
             }
         }
         self.flush_all();
+    }
+}
+
+impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for Endpoint<T> {
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
+        if self.min_resolved_ts != TimeStamp::max() {
+            CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
+            CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
+        }
+        self.min_resolved_ts = TimeStamp::max();
+        self.min_ts_region_id = 0;
+
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
     }
 }
 
@@ -790,6 +882,7 @@ mod tests {
             batch_size: 1,
 
             build_resolver: true,
+            proceed: Arc::new(AtomicBool::new(true)),
         };
 
         (receiver_worker, pool, initializer, rx)
@@ -852,12 +945,25 @@ mod tests {
         check_result();
 
         initializer.build_resolver = false;
-        initializer.async_incremental_scan(snap, region);
+        initializer.async_incremental_scan(snap.clone(), region.clone());
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
             match task {
                 Ok(Task::IncrementalScan { .. }) => continue,
+                Ok(t) => panic!("unepxected task {} received", t),
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(e) => panic!("unexpected err {:?}", e),
+            }
+        }
+
+        // Test cancellation.
+        initializer.proceed.store(false, Ordering::SeqCst);
+        initializer.async_incremental_scan(snap, region);
+
+        loop {
+            let task = rx.recv_timeout(Duration::from_secs(1));
+            match task {
                 Ok(t) => panic!("unepxected task {} received", t),
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(e) => panic!("unexpected err {:?}", e),

@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::hash_map::Entry;
+use std::fs::File;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -13,7 +14,9 @@ use protobuf::Message;
 use crate::config::{EncryptionConfig, MasterKeyConfig};
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
+use crate::io::EncrypterWriter;
 use crate::master_key::{create_backend, Backend, PlaintextBackend};
+use crate::metrics::*;
 use crate::{Error, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
@@ -63,6 +66,10 @@ impl Dicts {
                 file_dict.merge_from_bytes(&file_bytes)?;
                 let mut key_dict = KeyDictionary::default();
                 key_dict.merge_from_bytes(&key_bytes)?;
+
+                ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
+                ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
+
                 Ok(Some(Dicts {
                     file_dict,
                     key_dict,
@@ -100,6 +107,12 @@ impl Dicts {
         }
         let key_bytes = self.key_dict.write_to_bytes()?;
         file.write(&key_bytes, master_key)?;
+
+        ENCRYPTION_FILE_SIZE_GAUGE
+            .with_label_values(&["key_dictionary"])
+            .set(key_bytes.len() as _);
+        ENCRYPTION_DATA_KEY_GAUGE.set(self.key_dict.keys.len() as _);
+
         Ok(())
     }
 
@@ -108,6 +121,12 @@ impl Dicts {
         let file_bytes = self.file_dict.write_to_bytes()?;
         // File dict is saved in plaintext.
         file.write(&file_bytes, &PlaintextBackend::default())?;
+
+        ENCRYPTION_FILE_SIZE_GAUGE
+            .with_label_values(&["file_dictionary"])
+            .set(file_bytes.len() as _);
+        ENCRYPTION_FILE_NUM_GAUGE.set(self.file_dict.files.len() as _);
+
         Ok(())
     }
 
@@ -141,17 +160,24 @@ impl Dicts {
     }
 
     fn new_file(&mut self, fname: &str, method: EncryptionMethod) -> Result<&FileInfo> {
+        let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
-        file.iv = Iv::new().as_slice().to_vec();
+        file.iv = iv.as_slice().to_vec();
         file.key_id = self.key_dict.current_key_id;
         file.method = compat(method);
         self.file_dict.files.insert(fname.to_owned(), file);
         self.save_file_dict()?;
+        if method != EncryptionMethod::Plaintext {
+            info!("new encrypted file"; 
+                  "fname" => fname, 
+                  "method" => format!("{:?}", method), 
+                  "iv" => hex::encode(iv.as_slice()));
+        }
         Ok(self.file_dict.files.get(fname).unwrap())
     }
 
     fn delete_file(&mut self, fname: &str) -> Result<()> {
-        self.file_dict.files.remove(fname).ok_or_else(|| {
+        let file = self.file_dict.files.remove(fname).ok_or_else(|| {
             Error::Io(IoError::new(
                 ErrorKind::NotFound,
                 format!("file not found, {}", fname),
@@ -159,7 +185,11 @@ impl Dicts {
         })?;
 
         // TOOD GC unused data keys.
-        self.save_file_dict()
+        self.save_file_dict()?;
+        if file.method != compat(EncryptionMethod::Plaintext) {
+            info!("delete encrypted file"; "fname" => fname);
+        }
+        Ok(())
     }
 
     fn link_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
@@ -180,8 +210,13 @@ impl Dicts {
                 format!("file already exists, {}", dst_fname),
             )));
         }
+        let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict()
+        self.save_file_dict()?;
+        if method != compat(EncryptionMethod::Plaintext) {
+            info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        }
+        Ok(())
     }
 
     fn rename_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
@@ -191,8 +226,13 @@ impl Dicts {
                 format!("file not found, {}", src_fname),
             ))
         })?;
+        let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
-        self.save_file_dict()
+        self.save_file_dict()?;
+        if method != compat(EncryptionMethod::Plaintext) {
+            info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        }
+        Ok(())
     }
 
     fn rotate_key(&mut self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
@@ -202,7 +242,6 @@ impl Dicts {
             Entry::Occupied(_) => return Ok(false),
             Entry::Vacant(e) => e.insert(key),
         };
-
         // Update current data key id.
         self.key_dict.current_key_id = key_id;
         // re-encrypt key dict file.
@@ -265,9 +304,7 @@ impl Dicts {
             }
             return Ok(());
         }
-        Err(Error::Other(
-            format!("key id collides {} times!", generate_limit).into(),
-        ))
+        Err(box_err!("key id collides {} times!", generate_limit))
     }
 }
 
@@ -296,7 +333,7 @@ impl DataKeyManager {
         Self::new(
             &config.master_key,
             &config.previous_master_key,
-            config.method,
+            config.data_encryption_method,
             config.data_key_rotation_period.into(),
             dict_path,
         )
@@ -314,10 +351,8 @@ impl DataKeyManager {
             e
         })?;
         if method != EncryptionMethod::Plaintext && !master_key.is_secure() {
-            return Err(Error::Other(
+            return Err(box_err!(
                 "encryption is to enable but master key is either absent or insecure."
-                    .to_owned()
-                    .into(),
             ));
         }
         let mut dicts = match (
@@ -359,11 +394,8 @@ impl DataKeyManager {
                             }
                         })?
                         .ok_or_else(|| {
-                            Error::Other(
-                            "Fallback to previous master key but find dictionaries to be empty."
-                                .to_owned()
-                                .into(),
-                        )
+                            Error::Other(box_err!(
+                            "Fallback to previous master key but find dictionaries to be empty."))
                         })?;
                 // Rewrite key_dict after replace master key.
                 dicts.save_key_dict(master_key.as_ref())?;
@@ -375,11 +407,31 @@ impl DataKeyManager {
             (Err(e), _) => return Err(e),
         };
         dicts.maybe_rotate_data_key(method, master_key.as_ref())?;
+
+        ENCRYPTION_INITIALIZED_GAUGE.set(1);
+
         Ok(Some(DataKeyManager {
             dicts: Arc::new(RwLock::new(dicts)),
             master_key,
             method,
         }))
+    }
+
+    pub fn create_file<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
+        let fname = path.as_ref().to_str().ok_or_else(|| {
+            Error::Other(box_err!(
+                "failed to convert path to string {:?}",
+                path.as_ref()
+            ))
+        })?;
+        let file = self.new_file(fname)?;
+        let file_writer = File::create(path)?;
+        EncrypterWriter::new(
+            file_writer,
+            crypter::encryption_method_from_db_encryption_method(file.method),
+            &file.key,
+            Iv::from_slice(&file.iv)?,
+        )
     }
 }
 
@@ -453,7 +505,7 @@ impl EncryptionKeyManager for DataKeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Mock;
+    use crate::config::{FileCofnig, Mock};
     use crate::master_key::tests::MockBackend;
 
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
@@ -812,8 +864,9 @@ mod tests {
     fn test_key_manager_rotate_on_key_expose() {
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key = MasterKeyConfig::File {
-            method: EncryptionMethod::Aes256Ctr,
-            path: key_path.to_str().unwrap().to_owned(),
+            config: FileCofnig {
+                path: key_path.to_str().unwrap().to_owned(),
+            },
         };
         let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);
         let manager = manager.unwrap().unwrap();
@@ -857,8 +910,9 @@ mod tests {
     fn test_expose_keys_on_insecure_backend() {
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key = MasterKeyConfig::File {
-            method: EncryptionMethod::Aes256Ctr,
-            path: key_path.to_str().unwrap().to_owned(),
+            config: FileCofnig {
+                path: key_path.to_str().unwrap().to_owned(),
+            },
         };
 
         let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);
