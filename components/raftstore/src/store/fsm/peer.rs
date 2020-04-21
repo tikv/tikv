@@ -58,7 +58,7 @@ use crate::store::{
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
-const REGION_SPLIT_SKIP_MAX_COUNT: u8 = 3;
+const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -101,7 +101,7 @@ pub struct PeerFsm<E: KvEngine> {
     mailbox: Option<BasicMailbox<PeerFsm<E>>>,
     pub receiver: Receiver<PeerMsg<E>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
-    skip_split_count: u8,
+    skip_split_count: usize,
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -133,7 +133,7 @@ impl<E: KvEngine> PeerFsm<E> {
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask>,
+        sched: Scheduler<RegionTask<RocksEngine>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<E>> {
@@ -177,7 +177,7 @@ impl<E: KvEngine> PeerFsm<E> {
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask>,
+        sched: Scheduler<RegionTask<RocksEngine>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region_id: u64,
         peer: metapb::Peer,
@@ -620,7 +620,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    pub fn collect_ready(&mut self, proposals: &mut Vec<RegionProposal>) {
+    pub fn collect_ready(&mut self, proposals: &mut Vec<RegionProposal<RocksEngine>>) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
@@ -835,7 +835,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_apply_res(&mut self, res: ApplyTaskRes) {
+    fn on_apply_res(&mut self, res: ApplyTaskRes<RocksEngine>) {
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
@@ -2182,7 +2182,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         assert_eq!(prev, Some(prev_region));
     }
 
-    fn on_ready_result(&mut self, exec_results: &mut VecDeque<ExecResult>, metrics: &ApplyMetrics) {
+    fn on_ready_result(
+        &mut self,
+        exec_results: &mut VecDeque<ExecResult<RocksEngine>>,
+        metrics: &ApplyMetrics,
+    ) {
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
@@ -2206,6 +2210,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     region,
                     index,
                     snap,
+                    _phantom,
                 } => self.on_ready_compute_hash(region, index, snap),
                 ExecResult::VerifyHash { index, hash } => self.on_ready_verify_hash(index, hash),
                 ExecResult::DeleteRange { .. } => {
@@ -2565,8 +2570,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     #[inline]
-    fn region_split_skip_max_count(&self) -> u8 {
-        fail_point!("region_split_skip_max_count", |_| { u8::max_value() });
+    fn region_split_skip_max_count(&self) -> usize {
+        fail_point!("region_split_skip_max_count", |_| { usize::max_value() });
         REGION_SPLIT_SKIP_MAX_COUNT
     }
 

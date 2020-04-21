@@ -584,10 +584,7 @@ impl FutureRunnable<Task> for WaiterManager {
             } => {
                 let waiter = Waiter::new(start_ts, cb, pr, lock, self.normalize_deadline(timeout));
                 self.handle_wait_for(handle, waiter);
-                TASK_COUNTER_METRICS.with(|m| {
-                    m.wait_for.inc();
-                    m.may_flush_all()
-                });
+                TASK_COUNTER_METRICS.wait_for.inc();
             }
             Task::WakeUp {
                 lock_ts,
@@ -595,17 +592,11 @@ impl FutureRunnable<Task> for WaiterManager {
                 commit_ts,
             } => {
                 self.handle_wake_up(lock_ts, hashes, commit_ts);
-                TASK_COUNTER_METRICS.with(|m| {
-                    m.wake_up.inc();
-                    m.may_flush_all()
-                });
+                TASK_COUNTER_METRICS.wake_up.inc();
             }
             Task::Dump { cb } => {
                 self.handle_dump(cb);
-                TASK_COUNTER_METRICS.with(|m| {
-                    m.dump.inc();
-                    m.may_flush_all()
-                });
+                TASK_COUNTER_METRICS.dump.inc();
             }
             Task::Deadlock {
                 start_ts,
