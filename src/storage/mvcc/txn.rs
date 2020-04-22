@@ -1040,7 +1040,7 @@ fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) -> ErrorInn
                 key: key.to_raw().unwrap(),
                 min_commit_ts: TimeStamp::zero(),
             },
-            "pessimisticlocknotfound" => ErrorInner::PessimisticLockRolledBack {
+            "pessimisticlocknotfound" => ErrorInner::PessimisticLockNotFound {
                 start_ts,
                 key: key.to_raw().unwrap(),
             },
