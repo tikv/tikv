@@ -563,8 +563,8 @@ fn test_serde_custom_tikv_config() {
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         enabled: false,
-        wait_for_lock_timeout: 10,
-        wake_up_delay_duration: 100,
+        wait_for_lock_timeout: ReadableDuration::millis(10),
+        wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: true,
     };
 
