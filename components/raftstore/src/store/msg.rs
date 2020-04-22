@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
@@ -55,18 +55,18 @@ pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
-pub enum Callback<E: KvEngine> {
+pub enum Callback<S: Snapshot> {
     /// No callback.
     None,
     /// Read callback.
-    Read(ReadCallback<E::Snapshot>),
+    Read(ReadCallback<S>),
     /// Write callback.
     Write(WriteCallback),
 }
 
-impl<E> Callback<E>
+impl<S> Callback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
@@ -85,7 +85,7 @@ where
         }
     }
 
-    pub fn invoke_read(self, args: ReadResponse<E::Snapshot>) {
+    pub fn invoke_read(self, args: ReadResponse<S>) {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),
@@ -100,9 +100,9 @@ where
     }
 }
 
-impl<E> fmt::Debug for Callback<E>
+impl<S> fmt::Debug for Callback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
@@ -194,9 +194,9 @@ pub enum SignificantMsg {
     CaptureChange {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        callback: Callback<RocksEngine>,
+        callback: Callback<RocksSnapshot>,
     },
-    LeaderCallback(Callback<RocksEngine>),
+    LeaderCallback(Callback<RocksSnapshot>),
 }
 
 /// Message that will be sent to a peer.
@@ -209,7 +209,7 @@ pub enum CasualMessage<E: KvEngine> {
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
 
     /// Hash result of ComputeHash command.
@@ -297,12 +297,12 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
 pub struct RaftCommand<E: KvEngine> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
-    pub callback: Callback<E>,
+    pub callback: Callback<E::Snapshot>,
 }
 
 impl<E: KvEngine> RaftCommand<E> {
     #[inline]
-    pub fn new(request: RaftCmdRequest, callback: Callback<E>) -> RaftCommand<E> {
+    pub fn new(request: RaftCmdRequest, callback: Callback<E::Snapshot>) -> RaftCommand<E> {
         RaftCommand {
             request,
             callback,

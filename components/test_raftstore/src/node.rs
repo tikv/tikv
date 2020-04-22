@@ -13,7 +13,7 @@ use raft::SnapshotStatus;
 
 use super::*;
 use engine::*;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::Peekable;
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
@@ -325,7 +325,7 @@ impl Simulator for NodeCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
         if !self
             .trans

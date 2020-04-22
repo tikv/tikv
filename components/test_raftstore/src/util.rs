@@ -324,7 +324,7 @@ pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResp
     resp
 }
 
-pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksEngine>, mpsc::Receiver<RaftCmdResponse>) {
+pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver<RaftCmdResponse>) {
     let mut is_read;
     let mut is_write;
     is_read = cmd.has_status_request();

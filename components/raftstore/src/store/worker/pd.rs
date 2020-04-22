@@ -78,7 +78,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -86,7 +86,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
     Heartbeat {
         term: u64,
@@ -388,7 +388,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     ) {
         let router = self.router.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -429,7 +429,7 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -1009,7 +1009,7 @@ fn send_admin_request<E>(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<E>,
+    callback: Callback<E::Snapshot>,
 ) where
     E: KvEngine,
 {

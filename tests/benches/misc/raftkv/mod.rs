@@ -69,7 +69,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
         Ok(())
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> Result<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
         self.invoke(RaftCommand::new(req, cb));
         Ok(())
     }
@@ -117,7 +117,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
                     cb1((ctx, Ok(snap)));
                 }
             });
-        let cb: Callback<RocksEngine> =
+        let cb: Callback<RocksSnapshot> =
             Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let res = CmdRes::Snap(resp.snapshot.unwrap());
                 cb2((CbContext::new(), Ok(res)));

@@ -64,14 +64,14 @@ where
 {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback<E>>,
+    pub cb: Option<Callback<E::Snapshot>>,
 }
 
 impl<E> PendingCmd<E>
 where
     E: KvEngine,
 {
-    fn new(index: u64, term: u64, cb: Callback<E>) -> PendingCmd<E> {
+    fn new(index: u64, term: u64, cb: Callback<E::Snapshot>) -> PendingCmd<E> {
         PendingCmd {
             index,
             term,
@@ -267,7 +267,7 @@ where
     E: KvEngine,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<E>>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<E::Snapshot>>, RaftCmdResponse)>,
 }
 
 impl<E> ApplyCallback<E>
@@ -288,7 +288,7 @@ where
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<E>>, resp: RaftCmdResponse) {
+    fn push(&mut self, cb: Option<Callback<E::Snapshot>>, resp: RaftCmdResponse) {
         self.cbs.push((cb, resp));
     }
 }
@@ -571,7 +571,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl 
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl KvEngine>) {
+pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl Snapshot>) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
     cb.invoke_with_response(resp);
@@ -594,7 +594,7 @@ fn notify_stale_command(
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback<impl KvEngine>) {
+pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -978,7 +978,7 @@ where
         }
     }
 
-    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback<E>> {
+    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback<E::Snapshot>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -2311,14 +2311,14 @@ where
     is_conf_change: bool,
     index: u64,
     term: u64,
-    pub cb: Callback<E>,
+    pub cb: Callback<E::Snapshot>,
 }
 
 impl<E> Proposal<E>
 where
     E: KvEngine,
 {
-    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<E>) -> Proposal<E> {
+    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<E::Snapshot>) -> Proposal<E> {
         Proposal {
             is_conf_change,
             index,
@@ -2481,7 +2481,7 @@ where
     Change {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<E>,
+        cb: Callback<E::Snapshot>,
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
@@ -2680,7 +2680,7 @@ where
         assert_eq!(self.delegate.id, region_proposal.id);
         if self.delegate.stopped {
             for p in region_proposal.props {
-                let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::<E>::new(p.index, p.term, p.cb);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
@@ -2880,7 +2880,7 @@ where
         apply_ctx: &mut ApplyContext<E, W>,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<E>,
+        cb: Callback<E::Snapshot>,
     ) {
         let (observe_id, region_id, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
@@ -3223,7 +3223,7 @@ impl ApplyRouter {
                         "region_id" => region_id
                     );
                     for p in props.props {
-                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                        let cmd = PendingCmd::<RocksEngine>::new(p.index, p.term, p.cb);
                         notify_region_removed(props.region_id, props.id, cmd);
                     }
                     return;

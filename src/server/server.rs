@@ -289,7 +289,7 @@ mod tests {
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
 
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
@@ -326,7 +326,7 @@ mod tests {
             Ok(())
         }
 
-        fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksEngine>) -> RaftStoreResult<()> {
+        fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksSnapshot>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }

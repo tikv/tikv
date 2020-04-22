@@ -1673,7 +1673,7 @@ impl Peer {
     pub fn propose<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
     ) -> bool {
@@ -1734,7 +1734,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         mut meta: ProposalMeta,
         is_conf_change: bool,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
@@ -1934,7 +1934,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         ctx.raft_metrics.propose.local_read += 1;
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
@@ -1998,7 +1998,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
             debug!(
@@ -2363,7 +2363,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> bool {
         ctx.raft_metrics.propose.transfer_leader += 1;
 

@@ -15,7 +15,7 @@ use tempfile::{Builder, TempDir};
 
 use super::*;
 use engine::Engines;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
@@ -370,7 +370,7 @@ impl Simulator for ServerCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
         let router = match self.metas.get(&node_id) {
             None => return Err(box_err!("missing sender for store {}", node_id)),
