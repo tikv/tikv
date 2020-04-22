@@ -7,19 +7,23 @@ use std::cell::RefCell;
 use std::mem;
 
 use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
-use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
+use crate::storage::kv::{FlowStatsReporter, Statistics};
+use kvproto::kvrpcpb::KeyRange;
+use kvproto::metapb;
+use raftstore::store::util::build_key_range;
+use raftstore::store::ReadStats;
 use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
-    local_read_flow_stats: HashMap<u64, FlowStatistics>,
+    local_read_stats: ReadStats,
 }
 
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
             local_scan_details: HashMap::default(),
-            local_read_flow_stats: HashMap::default(),
+            local_read_stats:ReadStats::default(),
         }
     );
 }
@@ -41,15 +45,11 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         }
 
         // Report PD metrics
-        if m.local_read_flow_stats.is_empty() {
-            // Stats to report to PD is empty, ignore.
-            return;
+        if !m.local_read_stats.is_empty() {
+            let mut read_stats = ReadStats::default();
+            mem::swap(&mut read_stats, &mut m.local_read_stats);
+            reporter.report_read_stats(read_stats);
         }
-
-        let mut read_stats = HashMap::default();
-        mem::swap(&mut read_stats, &mut m.local_read_flow_stats);
-
-        reporter.report_read_stats(read_stats);
     });
 }
 
@@ -65,10 +65,34 @@ pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
 
 pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     TLS_STORAGE_METRICS.with(|m| {
-        let map = &mut m.borrow_mut().local_read_flow_stats;
-        let flow_stats = map.entry(region_id).or_insert_with(FlowStatistics::default);
-        flow_stats.add(&statistics.write.flow_stats);
-        flow_stats.add(&statistics.data.flow_stats);
+        let mut m = m.borrow_mut();
+        m.local_read_stats.add_flow(
+            region_id,
+            &statistics.write.flow_stats,
+            &statistics.data.flow_stats,
+        );
+    });
+}
+
+pub fn tls_collect_qps(
+    region_id: u64,
+    peer: &metapb::Peer,
+    start_key: &[u8],
+    end_key: &[u8],
+    reverse_scan: bool,
+) {
+    TLS_STORAGE_METRICS.with(|m| {
+        let mut m = m.borrow_mut();
+        let key_range = build_key_range(start_key, end_key, reverse_scan);
+        m.local_read_stats.add_qps(region_id, peer, key_range);
+    });
+}
+
+pub fn tls_collect_qps_batch(region_id: u64, peer: &metapb::Peer, key_ranges: Vec<KeyRange>) {
+    TLS_STORAGE_METRICS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.local_read_stats
+            .add_qps_batch(region_id, peer, key_ranges);
     });
 }
 

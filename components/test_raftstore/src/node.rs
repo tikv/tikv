@@ -256,6 +256,7 @@ impl Simulator for NodeCluster {
             coprocessor_host,
             importer,
             split_check_worker,
+            AutoSplitController::default(),
         )?;
         assert!(engines
             .kv
