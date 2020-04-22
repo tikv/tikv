@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
@@ -501,7 +501,7 @@ impl<E: Engine> GcRunner<E> {
         let mut fake_region = metapb::Region::default();
         // Add a peer to pass initialized check.
         fake_region.mut_peers().push(metapb::Peer::default());
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, fake_region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, fake_region);
 
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false, IsolationLevel::Si);
         let (locks, _) = reader.scan_locks(Some(start_key), |l| l.ts <= max_ts, limit)?;
@@ -939,7 +939,7 @@ mod tests {
 
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
-        type Snap = RegionSnapshot<RocksEngine>;
+        type Snap = RegionSnapshot<RocksSnapshot>;
 
         fn async_write(
             &self,

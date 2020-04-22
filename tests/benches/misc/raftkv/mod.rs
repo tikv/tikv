@@ -106,8 +106,8 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     };
 
     b.iter(|| {
-        let cb1: EngineCallback<RegionSnapshot<RocksEngine>> = Box::new(
-            move |(_, res): (CbContext, EngineResult<RegionSnapshot<RocksEngine>>)| {
+        let cb1: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(
+            move |(_, res): (CbContext, EngineResult<RegionSnapshot<RocksSnapshot>>)| {
                 assert!(res.is_ok());
             },
         );
@@ -147,7 +147,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader);
     b.iter(|| {
-        let on_finished: EngineCallback<RegionSnapshot<RocksEngine>> = Box::new(move |results| {
+        let on_finished: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |results| {
             let _ = test::black_box(results);
         });
         kv.async_snapshot(&ctx, on_finished).unwrap();

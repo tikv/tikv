@@ -24,15 +24,27 @@ use tikv_util::escape;
 
 use super::RegionSnapshot;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ReadResponse<E: KvEngine> {
     pub response: RaftCmdResponse,
-    pub snapshot: Option<RegionSnapshot<E>>,
+    pub snapshot: Option<RegionSnapshot<E::Snapshot>>,
 }
 
 #[derive(Debug)]
 pub struct WriteResponse {
     pub response: RaftCmdResponse,
+}
+
+// This is only necessary because of seeming limitations in derive(Clone) w/r/t
+// generics. If it can be deleted in the future in favor of derive, it should
+// be.
+impl<E> Clone for ReadResponse<E> where E: KvEngine {
+    fn clone(&self) -> ReadResponse<E> {
+        ReadResponse {
+            response: self.response.clone(),
+            snapshot: self.snapshot.clone(),
+        }
+    }
 }
 
 pub type ReadCallback<E> = Box<dyn FnOnce(ReadResponse<E>) + Send>;
