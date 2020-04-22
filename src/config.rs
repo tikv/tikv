@@ -1085,7 +1085,7 @@ impl Default for RaftDbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             enable_unordered_write: false,
-            allow_concurrent_memtable_write: false,
+            allow_concurrent_memtable_write: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
