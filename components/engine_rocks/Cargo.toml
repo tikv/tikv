@@ -29,6 +29,6 @@ features = ["encryption"]
 branch = "tikv-4.x"
 
 [dev-dependencies]
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 tempfile = "3.0"
 rand = "0.7"

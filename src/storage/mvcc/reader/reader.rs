@@ -1043,11 +1043,11 @@ mod tests {
 
         let (commit_ts, write) = reader.seek_write(&k, 3.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 3.into());
-        assert_eq!(write, Write::new_rollback(3.into(), true));
+        assert_eq!(write, Write::new_rollback(3.into(), false));
 
         let (commit_ts, write) = reader.seek_write(&k, 16.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 7.into());
-        assert_eq!(write, Write::new_rollback(7.into(), true));
+        assert_eq!(write, Write::new_rollback(7.into(), false));
 
         let (commit_ts, write) = reader.seek_write(&k, 6.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 5.into());
