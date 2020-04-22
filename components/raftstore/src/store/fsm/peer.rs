@@ -1947,16 +1947,25 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.rollback_merge();
                 }
             } else if !self.fsm.peer.peer.get_is_learner() {
-                self.ctx.need_flush_trans = true;
-                self.fsm.peer.send_want_rollback_merge(
-                    self.fsm
-                        .peer
-                        .pending_merge_state
-                        .as_ref()
-                        .unwrap()
-                        .get_commit(),
-                    &mut self.ctx.trans,
+                info!(
+                    "want to rollback merge";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "leader_id" => self.fsm.peer.leader_id(),
+                    "err" => %e,
                 );
+                if self.fsm.peer.leader_id() != raft::INVALID_ID {
+                    self.ctx.need_flush_trans = true;
+                    self.fsm.peer.send_want_rollback_merge(
+                        self.fsm
+                            .peer
+                            .pending_merge_state
+                            .as_ref()
+                            .unwrap()
+                            .get_commit(),
+                        &mut self.ctx.trans,
+                    );
+                }
             }
         }
     }
