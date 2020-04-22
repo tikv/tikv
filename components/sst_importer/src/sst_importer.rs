@@ -77,10 +77,7 @@ impl SSTImporter {
     }
 
     pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
-        match self
-            .dir
-            .ingest(meta, engine, self.key_manager.as_ref().map(|r| r.as_ref()))
-        {
+        match self.dir.ingest(meta, engine, self.key_manager.as_ref()) {
             Ok(_) => {
                 info!("ingest"; "meta" => ?meta);
                 Ok(())
@@ -428,7 +425,7 @@ impl ImportDir {
         &self,
         meta: &SstMeta,
         engine: &E,
-        key_manager: Option<&DataKeyManager>,
+        key_manager: Option<&Arc<DataKeyManager>>,
     ) -> Result<()> {
         let start = Instant::now();
         let path = self.join(meta)?;

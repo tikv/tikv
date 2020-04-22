@@ -4,6 +4,7 @@ use std::{
     fs::{self, File},
     io,
     path::Path,
+    sync::Arc,
 };
 
 use encryption::DataKeyManager;
@@ -24,7 +25,7 @@ use super::Result;
 pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     path: P,
     clone: Q,
-    encryption_key_manager: Option<&DataKeyManager>,
+    encryption_key_manager: Option<&Arc<DataKeyManager>>,
 ) -> Result<()> {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;

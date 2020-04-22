@@ -260,7 +260,7 @@ fn enc_err_to_raftstore(e: EncryptionError) -> RaftStoreError {
 
 fn get_decrypter_reader(
     file: &str,
-    encryption_key_manager: &DataKeyManager,
+    encryption_key_manager: &Arc<DataKeyManager>,
 ) -> RaftStoreResult<Box<dyn Read + Send>> {
     let enc_info = encryption_key_manager.get_file(file)?;
     let mthd = encryption_method_from_db_encryption_method(enc_info.method);
@@ -281,7 +281,7 @@ fn get_decrypter_reader(
 
 fn calc_checksum_and_size(
     path: &PathBuf,
-    encryption_key_manager: Option<&DataKeyManager>,
+    encryption_key_manager: Option<&Arc<DataKeyManager>>,
 ) -> RaftStoreResult<(u32, u64)> {
     let (checksum, size) = if let Some(mgr) = encryption_key_manager {
         // Crc32 and file size need to be calculated based on decrypted contents.
@@ -326,7 +326,7 @@ fn check_file_size_and_checksum(
     path: &PathBuf,
     expected_size: u64,
     expected_checksum: u32,
-    encryption_key_manager: Option<&DataKeyManager>,
+    encryption_key_manager: Option<&Arc<DataKeyManager>>,
 ) -> RaftStoreResult<()> {
     let (checksum, size) = calc_checksum_and_size(path, encryption_key_manager)?;
     check_file_size(size, expected_size, path)?;
@@ -520,7 +520,7 @@ impl Snap {
                 write_digest: crc32fast::Hasher::new(),
             });
 
-            if let Some(mgr) = s.mgr.rl().encryption_key_manager() {
+            if let Some(mgr) = s.mgr.rl().encryption_key_manager.clone() {
                 let path = cf_file.path.to_str().unwrap();
                 let enc_info = mgr.new_file(path)?;
                 let mthd = encryption_method_from_db_encryption_method(enc_info.method);
@@ -593,9 +593,8 @@ impl Snap {
             cf_file.size = meta.get_size();
             cf_file.checksum = meta.get_checksum();
             if file_exists(&cf_file.path) {
-                let mgr: Option<Arc<DataKeyManager>> = self.mgr.rl().encryption_key_manager.clone();
-                let mgr_ref: Option<&DataKeyManager> = mgr.as_ref().map(|r| r.as_ref());
-                let (_, size) = calc_checksum_and_size(&cf_file.path, mgr_ref)?;
+                let mgr = self.mgr.rl().encryption_key_manager.clone();
+                let (_, size) = calc_checksum_and_size(&cf_file.path, mgr.as_ref())?;
                 check_file_size(size, cf_file.size, &cf_file.path)?;
             }
         }
@@ -647,14 +646,18 @@ impl Snap {
                 )?;
             }
             let mgr = self.mgr.rl().encryption_key_manager.clone();
-            let key_mgr = mgr.as_ref().map(|r| r.as_ref());
-            check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum, key_mgr)?;
+            check_file_size_and_checksum(
+                &cf_file.path,
+                cf_file.size,
+                cf_file.checksum,
+                mgr.as_ref(),
+            )?;
 
             if !for_send && !plain_file_used(cf_file.cf) {
                 sst_importer::prepare_sst_for_ingestion(
                     &cf_file.path,
                     &cf_file.clone_path,
-                    key_mgr,
+                    mgr.as_ref(),
                 )?;
             }
         }
@@ -747,7 +750,7 @@ impl Snap {
                     cf_file.cf,
                     &begin_key,
                     &end_key,
-                    &self.mgr.rl().limiter,
+                    &self.mgr.rl().limiter.clone(),
                 )?
             };
             cf_file.kv_count = cf_stat.key_count as u64;
@@ -1290,7 +1293,7 @@ impl<E: KvEngine> SnapManager<E> {
         let base = self.core.rl().base.clone();
         let mut s = Snap::new_for_sending(&base, key, self.core.clone())?;
         let key_manager = self.core.rl().encryption_key_manager.clone();
-        let key_manager = match key_manager.as_ref().map(|t| t.as_ref()) {
+        let key_manager = match key_manager.as_ref() {
             Some(m) => m,
             None => return Ok(Box::new(s)),
         };
@@ -1473,14 +1476,10 @@ impl SnapManagerCore {
         true
     }
 
-    fn encryption_key_manager(&self) -> Option<&DataKeyManager> {
-        self.encryption_key_manager.as_ref().map(|x| x.as_ref())
-    }
-
     fn rename_tmp_cf_file_for_send(&self, cf_file: &mut CfFile) -> RaftStoreResult<()> {
         fs::rename(&cf_file.tmp_path, &cf_file.path)?;
         if !plain_file_used(cf_file.cf) {
-            if let Some(mgr) = self.encryption_key_manager() {
+            if let Some(mgr) = self.encryption_key_manager.as_ref() {
                 let src = cf_file.tmp_path.to_str().unwrap();
                 let dst = cf_file.path.to_str().unwrap();
                 // It's ok that the cf file is moved but machine fails before `mgr.rename_file`
@@ -1488,7 +1487,7 @@ impl SnapManagerCore {
                 mgr.rename_file(src, dst)?;
             }
         }
-        let mgr = self.encryption_key_manager();
+        let mgr = self.encryption_key_manager.as_ref();
         let (checksum, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
         cf_file.checksum = checksum;
         cf_file.size = size;
