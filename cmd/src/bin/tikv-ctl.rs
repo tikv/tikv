@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::iter::FromIterator;
+use std::path::PathBuf;
 use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
@@ -74,9 +75,12 @@ fn new_debug_executor(
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
             let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
-            let raft_path = raft_db
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("{}/raft", &cfg.storage.data_dir));
+            let raft_path = raft_db.map(ToString::to_string).unwrap_or_else(|| {
+                let db_path = PathBuf::from(format!("{}/../raft", kv_path))
+                    .canonicalize()
+                    .unwrap();
+                format!("{}/raft", db_path.to_str().unwrap())
+            });
             let mut raft_db_opts = cfg.raftdb.build_opt();
             raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
