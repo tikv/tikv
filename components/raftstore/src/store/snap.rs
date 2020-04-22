@@ -217,6 +217,30 @@ pub fn copy_snapshot(
     Ok(())
 }
 
+// Try to delete the specified snapshot using deleter, return true if the deletion is done.
+fn retry_delete_snapshot<E: KvEngine>(
+    mgr: &SnapManager<E>,
+    key: &SnapKey,
+    snap: &dyn GenericSnapshot,
+) -> bool {
+    do_retry_delete_snapshot(&mgr.core, key, snap)
+}
+
+fn do_retry_delete_snapshot(
+    mgr: &Arc<RwLock<SnapManagerCore>>,
+    key: &SnapKey,
+    snap: &dyn GenericSnapshot,
+) -> bool {
+    let d = time::Duration::from_millis(DELETE_RETRY_TIME_MILLIS);
+    for _ in 0..DELETE_RETRY_MAX_TIMES {
+        if mgr.rl().delete_snapshot(key, snap, true) {
+            return true;
+        }
+        thread::sleep(d);
+    }
+    false
+}
+
 fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());
     for cf_file in cf_files {
@@ -427,7 +451,7 @@ impl Snap {
                     "snapshot" => %s.path(),
                     "err" => ?e,
                 );
-                if !mgr.rl().retry_delete_snapshot(key, &s) {
+                if !do_retry_delete_snapshot(&mgr, key, &s) {
                     warn!(
                         "failed to delete snapshot because it's already registered elsewhere";
                         "snapshot" => %s.path(),
@@ -702,7 +726,7 @@ impl Snap {
                         "snapshot" => %self.path(),
                         "err" => ?e,
                     );
-                    if !self.mgr.rl().retry_delete_snapshot(&self.key, self) {
+                    if !do_retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
                             "failed to delete corrupted snapshot because it's \
                              already registered elsewhere";
@@ -1424,10 +1448,6 @@ impl<E: KvEngine> SnapManager<E> {
     ) -> bool {
         self.core.rl().delete_snapshot(key, snap, check_entry)
     }
-
-    pub fn retry_delete_snapshot(&self, key: &SnapKey, snap: &dyn GenericSnapshot) -> bool {
-        self.core.rl().retry_delete_snapshot(key, snap)
-    }
 }
 
 impl SnapManagerCore {
@@ -1458,17 +1478,6 @@ impl SnapManagerCore {
         }
         snap.delete();
         true
-    }
-
-    pub fn retry_delete_snapshot(&self, key: &SnapKey, snap: &dyn GenericSnapshot) -> bool {
-        let d = time::Duration::from_millis(DELETE_RETRY_TIME_MILLIS);
-        for _ in 0..DELETE_RETRY_MAX_TIMES {
-            if self.delete_snapshot(key, snap, true) {
-                return true;
-            }
-            thread::sleep(d);
-        }
-        false
     }
 
     fn encryption_key_manager(&self) -> Option<&DataKeyManager> {
