@@ -112,26 +112,26 @@ where
 
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
-pub struct PendingCmdQueue<E>
+pub struct PendingCmdQueue<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    normals: VecDeque<PendingCmd<E::Snapshot>>,
-    conf_change: Option<PendingCmd<E::Snapshot>>,
+    normals: VecDeque<PendingCmd<S>>,
+    conf_change: Option<PendingCmd<S>>,
 }
 
-impl<E> PendingCmdQueue<E>
+impl<S> PendingCmdQueue<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn new() -> PendingCmdQueue<E> {
+    fn new() -> PendingCmdQueue<S> {
         PendingCmdQueue {
             normals: VecDeque::new(),
             conf_change: None,
         }
     }
 
-    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<E::Snapshot>> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<S>> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
@@ -146,18 +146,18 @@ where
         })
     }
 
-    fn append_normal(&mut self, cmd: PendingCmd<E::Snapshot>) {
+    fn append_normal(&mut self, cmd: PendingCmd<S>) {
         self.normals.push_back(cmd);
     }
 
-    fn take_conf_change(&mut self) -> Option<PendingCmd<E::Snapshot>> {
+    fn take_conf_change(&mut self) -> Option<PendingCmd<S>> {
         // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
         self.conf_change.take()
     }
 
     // TODO: seems we don't need to separate conf change from normal entries.
-    fn set_conf_change(&mut self, cmd: PendingCmd<E::Snapshot>) {
+    fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
     }
 }
@@ -729,7 +729,7 @@ where
     pending_remove: bool,
 
     /// The commands waiting to be committed and applied
-    pending_cmds: PendingCmdQueue<E>,
+    pending_cmds: PendingCmdQueue<E::Snapshot>,
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
