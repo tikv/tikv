@@ -961,7 +961,8 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.cleanup(Key::from_raw(key), current_ts.into()).unwrap();
+        txn.cleanup(Key::from_raw(key), current_ts.into(), true)
+            .unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -974,7 +975,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.cleanup(Key::from_raw(key), current_ts.into())
+        txn.cleanup(Key::from_raw(key), current_ts.into(), true)
             .unwrap_err()
     }
 

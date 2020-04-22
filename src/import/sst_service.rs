@@ -21,6 +21,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::time::{Instant, Limiter};
 
 use sst_importer::import_mode::*;
@@ -41,6 +42,7 @@ pub struct ImportSSTService<Router> {
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
     limiter: Limiter,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl<Router: RaftStoreRouter> ImportSSTService<Router> {
@@ -49,6 +51,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
         router: Router,
         engine: Arc<DB>,
         importer: Arc<SSTImporter>,
+        security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<Router> {
         let threads = Builder::new()
             .name_prefix("sst-importer")
@@ -62,6 +65,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
             importer,
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
             limiter: Limiter::new(INFINITY),
+            security_mgr,
         }
     }
 }
@@ -73,6 +77,9 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let label = "switch_mode";
         let timer = Instant::now_coarse();
 
@@ -110,6 +117,9 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         stream: RequestStream<UploadRequest>,
         sink: ClientStreamingSink<UploadResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
@@ -161,6 +171,9 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         req: DownloadRequest,
         sink: UnarySink<DownloadResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let label = "download";
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
@@ -213,6 +226,9 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         mut req: IngestRequest,
         sink: UnarySink<IngestResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let label = "ingest";
         let timer = Instant::now_coarse();
 
@@ -279,6 +295,9 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         req: CompactRequest,
         sink: UnarySink<CompactResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let label = "compact";
         let timer = Instant::now_coarse();
         let engine = Arc::clone(&self.engine);
@@ -327,6 +346,9 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         req: SetDownloadSpeedLimitRequest,
         sink: UnarySink<SetDownloadSpeedLimitResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let label = "set_download_speed_limit";
         let timer = Instant::now_coarse();
 
