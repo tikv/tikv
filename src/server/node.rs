@@ -21,6 +21,7 @@ use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::AutoSplitController;
 use raftstore::store::PdTask;
 use raftstore::store::SplitCheckTask;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
@@ -126,6 +127,7 @@ where
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -161,6 +163,7 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
+            auto_split_controller,
         )?;
 
         // Put store only if the cluster is bootstrapped.
@@ -340,6 +343,7 @@ where
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -365,6 +369,7 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
+            auto_split_controller,
         )?;
         Ok(())
     }
