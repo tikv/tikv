@@ -368,7 +368,7 @@ where
                             }
                         }
                     }
-                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
+                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval); // modules timer_cnt with the least common multiple of intervals to avoid overflow
                     auto_split_controller.refresh_cfg();
                 }
             })?;
