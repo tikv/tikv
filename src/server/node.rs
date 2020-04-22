@@ -16,14 +16,14 @@ use engine_rocks::{CloneCompat, Compat, RocksEngine};
 use engine_traits::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::PdTask;
 use raftstore::store::SplitCheckTask;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{DynamicConfig, PdTask};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
 use tikv_util::worker::Worker;
@@ -41,7 +41,7 @@ pub fn create_raft_storage<S>(
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
-    S: RaftStoreRouter + 'static,
+    S: RaftStoreRouter<RocksEngine> + 'static,
 {
     let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
     Ok(store)
@@ -49,7 +49,7 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + ConfigClient + 'static> {
+pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
@@ -61,7 +61,7 @@ pub struct Node<C: PdClient + ConfigClient + 'static> {
 
 impl<C> Node<C>
 where
-    C: PdClient + ConfigClient,
+    C: PdClient,
 {
     /// Creates a new Node.
     pub fn new(
@@ -81,7 +81,9 @@ where
         store.set_status_address(cfg.status_addr.clone());
 
         if let Ok(path) = std::env::current_exe() {
-            store.set_binary_path(path.to_string_lossy().to_string());
+            if let Some(path) = path.parent() {
+                store.set_deploy_path(path.to_string_lossy().to_string());
+            }
         };
 
         store.set_start_timestamp(chrono::Local::now().timestamp());
@@ -118,13 +120,12 @@ where
         &mut self,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask>,
+        snap_mgr: SnapManager<RocksEngine>,
+        pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost,
+        coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
-        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -160,7 +161,6 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
-            dyn_cfg,
         )?;
 
         // Put store only if the cluster is bootstrapped.
@@ -334,13 +334,12 @@ where
         store_id: u64,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask>,
+        snap_mgr: SnapManager<RocksEngine>,
+        pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost,
+        coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
-        dyn_cfg: Box<dyn DynamicConfig>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -366,7 +365,6 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
-            dyn_cfg,
         )?;
         Ok(())
     }
