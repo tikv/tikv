@@ -176,8 +176,8 @@ impl<E: KvEngine> RaftRouter<E> {
     #[inline]
     pub fn send_raft_command(
         &self,
-        cmd: RaftCommand<E>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<E>>> {
+        cmd: RaftCommand<E::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<E::Snapshot>>> {
         let region_id = cmd.request.get_header().get_region_id();
         match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
