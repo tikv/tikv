@@ -383,6 +383,9 @@ name = "bytes"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bzip2-sys"
@@ -572,6 +575,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -995,18 +999,37 @@ name = "encryption"
 version = "0.0.1"
 dependencies = [
  "byteorder",
+ "bytes 0.4.12",
+ "configuration",
  "crc32fast",
  "engine_traits",
  "failure",
- "hex 0.3.2",
+ "futures 0.3.4",
+ "futures-util",
+ "hex 0.4.2",
  "kvproto",
+ "lazy_static",
+ "matches",
  "openssl",
+ "prometheus",
  "protobuf",
  "rand 0.7.3",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kms",
+ "rusoto_mock",
+ "rusoto_util",
+ "rust-ini",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
+ "structopt",
  "tempfile",
  "tikv_alloc",
+ "tikv_util",
+ "tokio 0.2.13",
+ "toml",
 ]
 
 [[package]]
@@ -1014,6 +1037,7 @@ name = "engine"
 version = "0.0.1"
 dependencies = [
  "configuration",
+ "encryption",
  "engine_traits",
  "hex 0.4.2",
  "kvproto",
@@ -1049,6 +1073,7 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine",
  "engine_traits",
  "kvproto",
@@ -1979,7 +2004,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#c7c1a9cd0ab1e4cb21ad24f09bb83a2838a5bd62"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#440860ffb5084693c452bd042cf9dac00a534238"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1998,7 +2023,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#c7c1a9cd0ab1e4cb21ad24f09bb83a2838a5bd62"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#440860ffb5084693c452bd042cf9dac00a534238"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2954,6 +2979,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -2969,6 +2995,7 @@ dependencies = [
  "lazy_static",
  "log",
  "log_wrappers",
+ "openssl",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -3344,7 +3371,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#c7c1a9cd0ab1e4cb21ad24f09bb83a2838a5bd62"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#440860ffb5084693c452bd042cf9dac00a534238"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3397,6 +3424,20 @@ dependencies = [
  "shlex",
  "tokio 0.2.13",
  "zeroize",
+]
+
+[[package]]
+name = "rusoto_kms"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "167c735c81ca560f7cd9914f99eabada7b5b66b3b14d7e4401507c68ebca02bb"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "futures 0.3.4",
+ "rusoto_core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3814,6 +3855,8 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "encryption",
+ "engine_rocks",
  "engine_traits",
  "external_storage",
  "futures 0.1.29",
@@ -4163,6 +4206,7 @@ dependencies = [
  "criterion-cpu-time",
  "criterion-papi",
  "crossbeam",
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",

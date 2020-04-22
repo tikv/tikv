@@ -70,7 +70,7 @@ fn start_raftstore(
     let host = CoprocessorHost::default();
     let importer = {
         let dir = Builder::new().prefix("store-config").tempdir().unwrap();
-        Arc::new(SSTImporter::new(dir.path()).unwrap())
+        Arc::new(SSTImporter::new(dir.path(), None).unwrap())
     };
     let snap_mgr = {
         let tmp = Builder::new().prefix("store-config").tempdir().unwrap();
