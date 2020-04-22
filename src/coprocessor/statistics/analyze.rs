@@ -41,10 +41,11 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
+            false,
         );
         Ok(Self {
             req,
-            storage: Some(store.into()),
+            storage: Some(TiKVStorage::new(store, false)),
             ranges,
             storage_stats: Statistics::default(),
         })
