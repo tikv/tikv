@@ -120,6 +120,7 @@ fn test_replica_read_not_applied() {
 #[test]
 fn test_replica_read_on_hibernate() {
     let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.hibernate_regions = true;
 
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
     // let max_lease = Duration::from_secs(2);
@@ -184,6 +185,7 @@ fn test_replica_read_on_hibernate() {
 #[test]
 fn test_read_hibernated_region() {
     let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.hibernate_regions = true;
     // Initialize the cluster.
     configure_for_lease_read(&mut cluster, Some(100), Some(8));
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(Duration::from_millis(1));
