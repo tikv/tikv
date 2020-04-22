@@ -58,20 +58,20 @@ const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
-pub struct PendingCmd<E>
+pub struct PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback<E::Snapshot>>,
+    pub cb: Option<Callback<S>>,
 }
 
-impl<E> PendingCmd<E>
+impl<S> PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn new(index: u64, term: u64, cb: Callback<E::Snapshot>) -> PendingCmd<E> {
+    fn new(index: u64, term: u64, cb: Callback<S>) -> PendingCmd<S> {
         PendingCmd {
             index,
             term,
@@ -80,9 +80,9 @@ where
     }
 }
 
-impl<E> Drop for PendingCmd<E>
+impl<S> Drop for PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     fn drop(&mut self) {
         if self.cb.is_some() {
@@ -95,9 +95,9 @@ where
     }
 }
 
-impl<E> Debug for PendingCmd<E>
+impl<S> Debug for PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
@@ -116,8 +116,8 @@ pub struct PendingCmdQueue<E>
 where
     E: KvEngine,
 {
-    normals: VecDeque<PendingCmd<E>>,
-    conf_change: Option<PendingCmd<E>>,
+    normals: VecDeque<PendingCmd<E::Snapshot>>,
+    conf_change: Option<PendingCmd<E::Snapshot>>,
 }
 
 impl<E> PendingCmdQueue<E>
@@ -131,7 +131,7 @@ where
         }
     }
 
-    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<E>> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<E::Snapshot>> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
@@ -146,18 +146,18 @@ where
         })
     }
 
-    fn append_normal(&mut self, cmd: PendingCmd<E>) {
+    fn append_normal(&mut self, cmd: PendingCmd<E::Snapshot>) {
         self.normals.push_back(cmd);
     }
 
-    fn take_conf_change(&mut self) -> Option<PendingCmd<E>> {
+    fn take_conf_change(&mut self) -> Option<PendingCmd<E::Snapshot>> {
         // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
         self.conf_change.take()
     }
 
     // TODO: seems we don't need to separate conf change from normal entries.
-    fn set_conf_change(&mut self, cmd: PendingCmd<E>) {
+    fn set_conf_change(&mut self, cmd: PendingCmd<E::Snapshot>) {
         self.conf_change = Some(cmd);
     }
 }
@@ -560,7 +560,7 @@ where
 }
 
 /// Calls the callback of `cmd` when the Region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl KvEngine>) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl Snapshot>) {
     debug!(
         "region is removed, notify commands";
         "region_id" => region_id,
@@ -582,7 +582,7 @@ fn notify_stale_command(
     region_id: u64,
     peer_id: u64,
     term: u64,
-    mut cmd: PendingCmd<impl KvEngine>,
+    mut cmd: PendingCmd<impl Snapshot>,
 ) {
     info!(
         "command is stale, skip";
@@ -2680,7 +2680,7 @@ where
         assert_eq!(self.delegate.id, region_proposal.id);
         if self.delegate.stopped {
             for p in region_proposal.props {
-                let cmd = PendingCmd::<E>::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
@@ -3223,7 +3223,7 @@ impl ApplyRouter {
                         "region_id" => region_id
                     );
                     for p in props.props {
-                        let cmd = PendingCmd::<RocksEngine>::new(p.index, p.term, p.cb);
+                        let cmd = PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb);
                         notify_region_removed(props.region_id, props.id, cmd);
                     }
                     return;
@@ -4580,7 +4580,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksEngine>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
         });
         res.unwrap_err();
     }
@@ -4588,7 +4588,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksEngine>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });
