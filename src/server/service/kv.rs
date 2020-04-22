@@ -21,7 +21,9 @@ use crate::storage::{
     lock_manager::LockManager,
     PointGetCommand, Storage, TxnStatus,
 };
+use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
+use futures::future::Either;
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
@@ -47,7 +49,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
+pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E>,
     // For handling KV requests.
@@ -72,7 +74,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L>,
@@ -142,7 +144,9 @@ macro_rules! handle_request {
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
+    for Service<T, E, L>
+{
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(
@@ -935,6 +939,69 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             );
         }));
     }
+
+    fn ver_get(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerGetRequest,
+        _sink: UnarySink<VerGetResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_batch_get(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerBatchGetRequest,
+        _sink: UnarySink<VerBatchGetResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_mut(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerMutRequest,
+        _sink: UnarySink<VerMutResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_batch_mut(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerBatchMutRequest,
+        _sink: UnarySink<VerBatchMutResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_scan(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerScanRequest,
+        _sink: UnarySink<VerScanResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_delete_range(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerDeleteRangeRequest,
+        _sink: UnarySink<VerDeleteRangeResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn batch_coprocessor(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: BatchRequest,
+        _sink: ServerStreamingSink<BatchResponse>,
+    ) {
+        unimplemented!()
+    }
 }
 
 fn response_batch_commands_request<F>(
@@ -1050,6 +1117,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         RawScan, future_raw_scan(storage), raw_scan;
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
+        VerGet, future_ver_get(storage), ver_get;
+        VerBatchGet, future_ver_batch_get(storage), ver_batch_get;
+        VerMut, future_ver_mut(storage), ver_mut;
+        VerBatchMut, future_ver_batch_mut(storage), ver_batch_mut;
+        VerScan, future_ver_scan(storage), ver_scan;
+        VerDeleteRange, future_ver_delete_range(storage), ver_delete_range;
         Coprocessor, future_cop(cop, Some(peer.to_string())), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
@@ -1060,14 +1133,23 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
 fn future_handle_empty(
     req: BatchCommandsEmptyRequest,
 ) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
-    tikv_util::timer::GLOBAL_TIMER_HANDLE
-        .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
-        .map(move |_| {
-            let mut res = BatchCommandsEmptyResponse::default();
-            res.set_test_id(req.get_test_id());
-            res
-        })
-        .map_err(|_| unreachable!())
+    let mut res = BatchCommandsEmptyResponse::default();
+    res.set_test_id(req.get_test_id());
+    // `BatchCommandsNotify` processes futures in notify. If delay_time is too small, notify
+    // can be called immediately, so the future is polled recursively and lead to deadlock.
+    if req.get_delay_time() < 10 {
+        Either::A(future::result(Ok(res)))
+    } else {
+        Either::B(
+            tikv_util::timer::GLOBAL_TIMER_HANDLE
+                .delay(
+                    std::time::Instant::now()
+                        + std::time::Duration::from_millis(req.get_delay_time()),
+                )
+                .map(move |_| res)
+                .map_err(|_| unreachable!()),
+        )
+    }
 }
 
 fn future_get<E: Engine, L: LockManager>(
@@ -1498,6 +1580,60 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
         }
         resp
     })
+}
+
+// unimplemented
+fn future_ver_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerGetRequest,
+) -> impl Future<Item = VerGetResponse, Error = Error> {
+    let resp = VerGetResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_batch_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerBatchGetRequest,
+) -> impl Future<Item = VerBatchGetResponse, Error = Error> {
+    let resp = VerBatchGetResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerMutRequest,
+) -> impl Future<Item = VerMutResponse, Error = Error> {
+    let resp = VerMutResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_batch_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerBatchMutRequest,
+) -> impl Future<Item = VerBatchMutResponse, Error = Error> {
+    let resp = VerBatchMutResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_scan<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerScanRequest,
+) -> impl Future<Item = VerScanResponse, Error = Error> {
+    let resp = VerScanResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_delete_range<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerDeleteRangeRequest,
+) -> impl Future<Item = VerDeleteRangeResponse, Error = Error> {
+    let resp = VerDeleteRangeResponse::default();
+    future::ok(resp)
 }
 
 fn future_cop<E: Engine>(

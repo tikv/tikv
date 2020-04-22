@@ -16,16 +16,14 @@ use tempfile::{Builder, TempDir};
 use super::*;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
-use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
-use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SplitCheckRunner;
 use raftstore::store::{Callback, LocalReader, SnapManager};
 use raftstore::Result;
-use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
+use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
@@ -45,7 +43,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
+type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
@@ -62,7 +60,7 @@ struct ServerMeta {
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
-type CopHooks = Vec<Box<dyn Fn(&mut CoprocessorHost)>>;
+type CopHooks = Vec<Box<dyn Fn(&mut CoprocessorHost<RocksEngine>)>>;
 
 pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
@@ -196,7 +194,7 @@ impl Simulator for ServerCluster {
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir).unwrap())
+            Arc::new(SSTImporter::new(dir, None).unwrap())
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
@@ -290,34 +288,15 @@ impl Simulator for ServerCluster {
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
         let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
-        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             engines.kv.c().clone(),
             router.clone(),
             coprocessor_host.clone(),
-            cfg.coprocessor.clone(),
+            cfg.coprocessor,
         );
         split_check_worker.start(split_check_runner).unwrap();
-        cfg_controller.register(
-            Module::Coprocessor,
-            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
-        );
-
-        let mut raftstore_cfg = cfg.raft_store.clone();
-        raftstore_cfg.validate().unwrap();
-        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
-        cfg_controller.register(
-            Module::Raftstore,
-            Box::new(RaftstoreConfigManager(raft_store)),
-        );
-        let config_client = ConfigHandler::start(
-            cfg.server.advertise_addr,
-            cfg_controller,
-            pd_worker.scheduler(),
-        )
-        .unwrap();
 
         node.start(
             engines,
@@ -328,7 +307,6 @@ impl Simulator for ServerCluster {
             coprocessor_host,
             importer.clone(),
             split_check_worker,
-            Box::new(config_client) as _,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
