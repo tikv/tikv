@@ -889,6 +889,13 @@ impl GenericSnapshot for Snap {
                     .snap_size
                     .fetch_sub(cf_file.size, Ordering::SeqCst);
             }
+
+            // Delete keys from key manager.
+            if let Some(mgr) = self.mgr.rl().encryption_key_manager.clone() {
+                mgr.delete_file(cf_file.path.to_str().unwrap()).unwrap();
+                mgr.delete_file(cf_file.tmp_path.to_str().unwrap()).unwrap();
+                mgr.delete_file(cf_file.clone_path.to_str().unwrap()).unwrap();
+            }
         }
         delete_file_if_exist(&self.meta_file.path).unwrap();
         if self.hold_tmp_files {

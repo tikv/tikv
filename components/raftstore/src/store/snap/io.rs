@@ -269,6 +269,7 @@ mod tests {
                     let plain_file_path = snap_cf_dir.path().join("plain");
                     let stats = build_plain_cf_file::<RocksEngine>(
                         &plain_file_path.to_str().unwrap(),
+                        None,
                         &snap,
                         cf,
                         &keys::data_key(b"a"),
@@ -286,6 +287,7 @@ mod tests {
                     let detector = TestStaleDetector {};
                     apply_plain_cf_file(
                         &plain_file_path.to_str().unwrap(),
+                        None,
                         &detector,
                         db1.c(),
                         cf,
