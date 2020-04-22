@@ -19,7 +19,7 @@ use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::codec::collation::{match_template_collator, SortKey};
 use crate::codec::data_type::*;
 use crate::expr::{EvalConfig, EvalContext};
-use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use crate::storage::IntervalRange;
 use crate::Result;
 
@@ -63,6 +63,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.0.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.0.can_be_cached()
+    }
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
@@ -92,9 +97,6 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         }
 
         RpnExpressionBuilder::check_expr_tree_supported(def)?;
-        if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-            return Err(other_err!("Group by expression is not a column"));
-        }
 
         let aggr_definitions = descriptor.get_agg_func();
         for def in aggr_definitions {
@@ -240,7 +242,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     ) -> Result<()> {
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_logical_row.clear();
-
         let group_by_result = self.group_by_exp.eval(
             &mut entities.context,
             entities.src.schema(),
@@ -248,57 +249,82 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
             input_logical_rows,
             input_logical_rows.len(),
         )?;
-        // Unwrap is fine because we have verified the group by expression before.
-        let group_by_value = group_by_result.vector_value().unwrap();
-        let group_by_physical_vec = group_by_value.as_ref();
-        let group_by_logical_rows = group_by_value.logical_rows();
 
-        match_template::match_template! {
-            TT = [Int, Real, Duration, Decimal, DateTime],
-            match group_by_physical_vec {
-                VectorValue::TT(v) => {
-                    if let Groups::TT(group) = &mut self.groups {
-                        calc_groups_each_row(
-                            v,
-                            group_by_logical_rows,
-                            &entities.each_aggr_fn,
-                            group,
-                            &mut self.states,
-                            &mut self.states_offset_each_logical_row,
-                            |val| Ok(val)
-                        )?;
-                    } else {
-                        panic!();
-                    }
-                },
-                VectorValue::Bytes(v) => {
-                    if let Groups::Bytes(group) = &mut self.groups {
-                        match_template_collator!(
-                            TT,
-                            match self.group_by_field_type.collation().map_err(crate::codec::Error::from)? {
-                                Collation::TT => {
-                                    #[allow(clippy::transmute_ptr_to_ptr)]
-                                    let group: &mut HashMap<Option<SortKey<Bytes, TT>>, usize> =
-                                        unsafe { std::mem::transmute(group) };
-                                    calc_groups_each_row(
-                                        v,
-                                        group_by_logical_rows,
-                                        &entities.each_aggr_fn,
-                                        group,
-                                        &mut self.states,
-                                        &mut self.states_offset_each_logical_row,
-                                        |val| Ok(SortKey::map_option(val)?)
-                                    )?;
-                                }
+        match group_by_result {
+            RpnStackNode::Scalar { value, .. } => {
+                match_template::match_template! {
+                    TT = [Int, Bytes, Real, Duration, Decimal, DateTime],
+                    match value {
+                        ScalarValue::TT(v) => {
+                            if let Groups::TT(group) = &mut self.groups {
+                                handle_scalar_group_each_row(
+                                    v,
+                                    &entities.each_aggr_fn,
+                                    group,
+                                    &mut self.states,
+                                    input_logical_rows.len(),
+                                    &mut self.states_offset_each_logical_row,
+                                )?;
+                            } else {
+                                panic!();
                             }
-                        )
-                    } else {
-                        panic!();
+                        },
+                        _ => unreachable!(),
                     }
-                },
-                _ => unreachable!(),
+                }
             }
-        }
+            RpnStackNode::Vector { value, .. } => {
+                let group_by_physical_vec = value.as_ref();
+                let group_by_logical_rows = value.logical_rows();
+
+                match_template::match_template! {
+                    TT = [Int, Real, Duration, Decimal, DateTime],
+                    match group_by_physical_vec {
+                        VectorValue::TT(v) => {
+                            if let Groups::TT(group) = &mut self.groups {
+                                calc_groups_each_row(
+                                    v,
+                                    group_by_logical_rows,
+                                    &entities.each_aggr_fn,
+                                    group,
+                                    &mut self.states,
+                                    &mut self.states_offset_each_logical_row,
+                                    |val| Ok(val)
+                                )?;
+                            } else {
+                                panic!();
+                            }
+                        },
+                        VectorValue::Bytes(v) => {
+                            if let Groups::Bytes(group) = &mut self.groups {
+                                match_template_collator!(
+                                    TT,
+                                    match self.group_by_field_type.collation().map_err(crate::codec::Error::from)? {
+                                        Collation::TT => {
+                                            #[allow(clippy::transmute_ptr_to_ptr)]
+                                            let group: &mut HashMap<Option<SortKey<Bytes, TT>>, usize> =
+                                                unsafe { std::mem::transmute(group) };
+                                            calc_groups_each_row(
+                                                v,
+                                                group_by_logical_rows,
+                                                &entities.each_aggr_fn,
+                                                group,
+                                                &mut self.states,
+                                                &mut self.states_offset_each_logical_row,
+                                                |val| Ok(SortKey::map_option(val)?)
+                                            )?;
+                                        }
+                                    }
+                                )
+                            } else {
+                                panic!();
+                            }
+                        },
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        };
 
         // 2. Update states according to the group.
         HashAggregationHelper::update_each_row_states_by_offset(
@@ -394,6 +420,35 @@ where
     Ok(())
 }
 
+fn handle_scalar_group_each_row<T>(
+    scalar_value: &Option<T>,
+    aggr_fns: &[Box<dyn AggrFunction>],
+    group: &mut HashMap<Option<T>, usize>,
+    states: &mut Vec<Box<dyn AggrFunctionState>>,
+    logical_row_len: usize,
+    states_offset_each_logical_row: &mut Vec<usize>,
+) -> Result<()>
+where
+    T: Hash + Eq + Clone,
+{
+    if group.is_empty() {
+        group.insert(scalar_value.clone(), 0);
+        for aggr_fn in aggr_fns {
+            states.push(aggr_fn.create_state());
+        }
+    } else if !group.contains_key(scalar_value) {
+        // As a constant group-by expression, all scalar results it produce
+        // should be the same.
+        panic!();
+    }
+
+    for _ in 0..logical_row_len {
+        states_offset_each_logical_row.push(0);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,14 +462,13 @@ mod tests {
     use crate::expr::EvalWarnings;
     use crate::rpn_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
     use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+    use tipb::ExprType;
+    use tipb_helper::ExprDefBuilder;
 
     // Test cases also cover BatchSlowHashAggregationExecutor.
 
     #[test]
     fn test_it_works_integration() {
-        use tipb::ExprType;
-        use tipb_helper::ExprDefBuilder;
-
         // This test creates a hash aggregation executor with the following aggregate functions:
         // - COUNT(1)
         // - COUNT(col_1 + 5.0)
@@ -539,6 +593,99 @@ mod tests {
             assert_eq!(
                 &ordered_column,
                 &[Real::new(7.0).ok(), Real::new(1.5).ok(), None]
+            );
+        }
+    }
+
+    #[test]
+    fn test_group_by_a_constant() {
+        // This test creates a hash aggregation executor with the following aggregate functions:
+        // - COUNT(1)
+        // - COUNT(col_1 + 5.0)
+        // - AVG(col_0)
+        // And group by:
+        // - 1 (Constant)
+
+        use tipb::ExprType;
+        use tipb_helper::ExprDefBuilder;
+
+        let group_by_exp = || {
+            RpnExpressionBuilder::new()
+                .push_constant(1) // Group by a constant
+                .build()
+        };
+
+        let aggr_definitions = || {
+            vec![
+                ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                    .push_child(ExprDefBuilder::constant_int(1))
+                    .build(),
+                ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                    .push_child(
+                        ExprDefBuilder::scalar_func(ScalarFuncSig::PlusReal, FieldTypeTp::Double)
+                            .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+                            .push_child(ExprDefBuilder::constant_real(5.0)),
+                    )
+                    .build(),
+                ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                    .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
+                    .build(),
+            ]
+        };
+
+        let exec_fast = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                group_by_exp(),
+                aggr_definitions(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![group_by_exp()],
+                aggr_definitions(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
+            // vec![Box::new(exec_fast)];
+            vec![Box::new(exec_fast), Box::new(exec_slow)];
+
+        for exec_builder in executor_builders {
+            let src_exec = make_src_executor_1();
+            let mut exec = exec_builder(src_exec);
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let mut r = exec.next_batch(1);
+            assert_eq!(&r.logical_rows, &[0]);
+            assert_eq!(r.physical_columns.rows_len(), 1);
+            assert_eq!(r.physical_columns.columns_len(), 5); // 4 result column, 1 group by column
+
+            r.physical_columns[4]
+                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[4])
+                .unwrap();
+
+            // Group by a constant, So should be only one group.
+            assert_eq!(r.physical_columns[4].decoded().as_int_slice().len(), 1);
+
+            assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(5)]);
+            assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(4)]);
+            assert_eq!(r.physical_columns[2].decoded().as_int_slice(), &[Some(2)]);
+            assert_eq!(
+                r.physical_columns[3].decoded().as_real_slice(),
+                &[Real::new(8.5).ok()]
             );
         }
     }
@@ -678,7 +825,7 @@ mod tests {
             }
         }
 
-        let exec_fast = |src_exec| {
+        let exec_fast_col = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
                 RpnExpressionBuilder::new().push_column_ref(0).build(),
@@ -687,7 +834,16 @@ mod tests {
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
-        let exec_slow = |src_exec| {
+        let exec_fast_const = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                RpnExpressionBuilder::new().push_constant(1).build(),
+                vec![Expr::default()],
+                MyParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow_col = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
                 vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
@@ -696,8 +852,34 @@ mod tests {
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
-        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
-            vec![Box::new(exec_fast), Box::new(exec_slow)];
+        let exec_slow_const = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![RpnExpressionBuilder::new().push_constant(0).build()],
+                vec![Expr::default()],
+                MyParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow_col_const = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![
+                    RpnExpressionBuilder::new().push_column_ref(0).build(),
+                    RpnExpressionBuilder::new().push_constant(0).build(),
+                ],
+                vec![Expr::default()],
+                MyParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> = vec![
+            Box::new(exec_fast_col),
+            Box::new(exec_fast_const),
+            Box::new(exec_slow_col),
+            Box::new(exec_slow_const),
+            Box::new(exec_slow_col_const),
+        ];
 
         for exec_builder in executor_builders {
             let src_exec = MockExecutor::new(
@@ -736,28 +918,26 @@ mod tests {
     /// E.g. SELECT 1 FROM t GROUP BY x
     #[test]
     fn test_no_aggr_fn() {
-        let group_by_exp = || RpnExpressionBuilder::new().push_column_ref(0).build();
-
-        let exec_fast = |src_exec| {
+        let exec_fast_col = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                group_by_exp(),
+                RpnExpressionBuilder::new().push_column_ref(0).build(),
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
-        let exec_slow = |src_exec| {
+        let exec_slow_col = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![group_by_exp()],
+                vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
         let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
-            vec![Box::new(exec_fast), Box::new(exec_slow)];
+            vec![Box::new(exec_fast_col), Box::new(exec_slow_col)];
 
         for exec_builder in executor_builders {
             let src_exec = make_src_executor_1();
@@ -801,6 +981,51 @@ mod tests {
                 &ordered_column,
                 &[Real::new(1.5).ok(), None, Real::new(7.0).ok()]
             );
+        }
+
+        let exec_fast_const = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                RpnExpressionBuilder::new().push_constant(1).build(),
+                vec![],
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow_const = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![RpnExpressionBuilder::new().push_constant(1).build()],
+                vec![],
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
+            vec![Box::new(exec_fast_const), Box::new(exec_slow_const)];
+
+        for exec_builder in executor_builders {
+            let src_exec = make_src_executor_1();
+            let mut exec = exec_builder(src_exec);
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let mut r = exec.next_batch(1);
+            assert_eq!(&r.logical_rows, &[0]);
+            assert_eq!(r.physical_columns.rows_len(), 1);
+            assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
+            r.physical_columns[0]
+                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[0])
+                .unwrap();
+            assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(1)]);
         }
     }
 }

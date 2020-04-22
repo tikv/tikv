@@ -36,14 +36,7 @@
 ## Set it small are good to debug and tuning.
 # refresh-config-interval = "30s"
 
-[readpool]
-## (Experimental) Whether to use a single thread pool to serve all the read requests. If it is
-## set to `true`, the `readpool.storage` and `readpool.coprocessor` sections will be invalid and
-## be ignored automatically.
-# unify-read-pool = true
-
 # Configurations for the single thread pool serving read requests.
-# It only takes effect when `unify-read-pool` is `true`.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
 # min-thread-count = 1
@@ -59,6 +52,11 @@
 # max-tasks-per-worker = 2000
 
 [readpool.storage]
+## Whether to use the unified read pool to handle storage requests.
+# use-unified-pool = false
+
+## The following configurations only take effect when `use-unified-pool` is false.
+
 ## Size of the thread pool for high-priority operations.
 # high-concurrency = 4
 
@@ -81,6 +79,11 @@
 # stack-size = "10MB"
 
 [readpool.coprocessor]
+## Whether to use the unified read pool to handle coprocessor requests.
+# use-unified-pool = true
+
+## The following configurations only take effect when `use-unified-pool` is false.
+
 ## Most read requests from TiDB are sent to the coprocessor of TiKV. high/normal/low-concurrency is
 ## used to set the number of threads of the coprocessor.
 ## If there are many read requests, you can increase these config values (but keep it within the
@@ -94,7 +97,6 @@
 # max-tasks-per-worker-high = 2000
 # max-tasks-per-worker-normal = 2000
 # max-tasks-per-worker-low = 2000
-# stack-size = "10MB"
 
 [server]
 ## Listening address.
@@ -791,15 +793,15 @@
 ## Enable pessimistic transaction
 # enabled = true
 
-## The default and maximum delay in milliseconds before responding to TiDB when pessimistic
+## The default and maximum delay before responding to TiDB when pessimistic
 ## transactions encounter locks
-# wait-for-lock-timeout = 1000
+# wait-for-lock-timeout = "1s"
 
 ## If more than one transaction is waiting for the same lock, only the one with smallest
 ## start timestamp will be waked up immediately when the lock is released. Others will
-## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
+## be waked up after `wake_up_delay_duration` to reduce contention and make the oldest
 ## one more likely acquires the lock.
-# wake-up-delay-duration = 20
+# wake-up-delay-duration = "20ms"
 
 ## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
 ## Enabled this will improve performance, but slightly increase the transcation failure rate
