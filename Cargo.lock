@@ -1635,9 +1635,16 @@ version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+<<<<<<< HEAD
 name = "num_cpus"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+=======
+name = "openssl-src"
+version = "111.9.0+1.1.1g"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2dbe10ddd1eb335aba3780eb2eaa13e1b7b441d2562fd962398740927f39ec4"
+>>>>>>> fdec54b... Cargo: upgrade openssl to 1.1.1g (#7617)
 dependencies = [
  "libc 0.2.64 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
