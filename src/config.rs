@@ -48,7 +48,7 @@ use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::sys::sys_quota::SysQuota;
@@ -1850,6 +1850,9 @@ mod readpool_tests {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[config(hidden)]
+    pub cfg_path: String,
+
     #[config(skip)]
     pub enable_dynamic_config: bool,
 
@@ -1924,6 +1927,7 @@ pub struct TiKvConfig {
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
+            cfg_path: "".to_owned(),
             enable_dynamic_config: true,
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
@@ -1982,6 +1986,14 @@ impl TiKvConfig {
         self.storage.validate()?;
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
+
+        if self.cfg_path.is_empty() {
+            self.cfg_path = Path::new(&self.storage.data_dir)
+                .join(LAST_CONFIG_FILE)
+                .to_str()
+                .unwrap()
+                .to_owned();
+        }
 
         let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
         if self.raft_store.raftdb_path.is_empty() {
@@ -2200,7 +2212,9 @@ impl TiKvConfig {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
         (|| -> Result<Self, Box<dyn Error>> {
             let s = fs::read_to_string(&path)?;
-            Ok(::toml::from_str(&s)?)
+            let mut cfg: TiKvConfig = toml::from_str(&s)?;
+            cfg.cfg_path = path.as_ref().display().to_string();
+            Ok(cfg)
         })()
         .unwrap_or_else(|e| {
             panic!(
@@ -2295,6 +2309,17 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
+pub fn write_config<P: AsRef<Path>>(tem_dir: P, path: P, content: &[u8]) -> CfgResult<()> {
+    let tmp_cfg_path = tem_dir.as_ref().join(TMP_CONFIG_FILE);
+    {
+        let mut f = fs::File::create(&tmp_cfg_path)?;
+        f.write_all(content)?;
+        f.sync_all()?;
+    }
+    fs::rename(&tmp_cfg_path, &path)?;
+    Ok(())
+}
+
 lazy_static! {
     pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
 }
@@ -2368,6 +2393,49 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
     Ok(res)
 }
 
+fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, String>> {
+    fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
+        if let Some(mut f) = fields.pop() {
+            if f == "raftstore" {
+                f = "raft_store".to_owned();
+            } else {
+                f = f.replace("-", "_");
+            }
+            match typed.get(&f) {
+                None | Some(ConfigValue::Skip) => {
+                    Err(format!("failed to get fields: {}", f).into())
+                }
+                Some(ConfigValue::Module(m)) => helper(fields, m),
+                Some(c) => {
+                    if !fields.is_empty() {
+                        return Err(format!("unexpect fields: {:?}", fields).into());
+                    }
+                    match c {
+                        ConfigValue::Duration(_)
+                        | ConfigValue::Size(_)
+                        | ConfigValue::String(_)
+                        | ConfigValue::Other(_) => Ok(true),
+                        _ => Ok(false),
+                    }
+                }
+            }
+        } else {
+            Err("failed to get field".to_owned().into())
+        }
+    };
+    let mut dst = HashMap::new();
+    for (name, value) in change {
+        let fields: Vec<_> = name.as_str().split('.').collect();
+        let fields: Vec<_> = fields.into_iter().map(|s| s.to_owned()).rev().collect();
+        if helper(fields, &TIKVCONFIG_TYPED)? {
+            dst.insert(name, format!("\"{}\"", value));
+        } else {
+            dst.insert(name, value);
+        }
+    }
+    Ok(dst)
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Module {
     Readpool,
@@ -2427,7 +2495,7 @@ impl ConfigController {
     }
 
     pub fn update(&mut self, change: HashMap<String, String>) -> CfgResult<()> {
-        let diff = to_config_change(change)?;
+        let diff = to_config_change(change.clone())?;
         {
             let mut incoming = self.current.clone();
             incoming.update(diff.clone());
@@ -2454,10 +2522,19 @@ impl ConfigController {
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
         self.current.update(to_update);
-        // TODO: persist config to the orignal config file
-        if let Err(e) = persist_config(&self.current) {
-            return Err(e.into());
-        }
+        // Write change to the config file
+        let content = {
+            let change = to_toml_encode(change)?;
+            let src = fs::read_to_string(&self.current.cfg_path)?;
+            let mut t = TomlWriter::new();
+            t.write_change(src, change);
+            t.finish()
+        };
+        write_config(
+            &self.current.storage.data_dir,
+            &self.current.cfg_path,
+            &content,
+        )?;
         Ok(())
     }
 
@@ -2696,6 +2773,43 @@ mod tests {
             change.insert(name, value);
             assert!(to_config_change(change).is_err());
         }
+    }
+
+    #[test]
+    fn test_to_toml_encode() {
+        let mut change = HashMap::new();
+        change.insert(
+            "raftstore.pd-heartbeat-tick-interval".to_owned(),
+            "1h".to_owned(),
+        );
+        change.insert(
+            "coprocessor.region-split-keys".to_owned(),
+            "10000".to_owned(),
+        );
+        change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
+        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
+        change.insert(
+            "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
+            "false".to_owned(),
+        );
+        let res = to_toml_encode(change.clone()).unwrap();
+        assert_eq!(
+            res.get("raftstore.pd-heartbeat-tick-interval"),
+            Some(&"\"1h\"".to_owned())
+        );
+        assert_eq!(
+            res.get("coprocessor.region-split-keys"),
+            Some(&"10000".to_owned())
+        );
+        assert_eq!(
+            res.get("gc.max-write-bytes-per-sec"),
+            Some(&"\"100MB\"".to_owned())
+        );
+        assert_eq!(res.get("raftstore.sync-log"), Some(&"false".to_owned()));
+        assert_eq!(
+            res.get("rocksdb.defaultcf.titan.blob-run-mode"),
+            Some(&"\"read-only\"".to_owned())
+        );
     }
 
     fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {

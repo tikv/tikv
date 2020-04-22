@@ -966,10 +966,14 @@ impl<T> Tracker<T> {
 
 use std::collections::HashMap;
 
+/// TomlLine use to parse one line content of a toml file
 #[derive(Debug)]
 enum TomlLine {
+    // the `Keys` from "[`Keys`]"
     Table(String),
+    // the `Keys` from "`Keys` = value"
     KVPair(String),
+    // Comment, empty line, etc.
     Unknown,
 }
 
@@ -978,9 +982,10 @@ impl TomlLine {
         format!("{} = {}", key, val)
     }
 
+    // parse kv pair from format of "`Keys` = value"
     fn parse_kv(s: &str) -> TomlLine {
         let mut v: Vec<_> = s.split('=').map(|s| s.trim().to_owned()).rev().collect();
-        if v.is_empty() || v.len() > 2 || !TomlLine::is_valid_key(v[v.len() - 1].as_str()) {
+        if v.is_empty() || v.len() > 2 || TomlLine::parse_key(v[v.len() - 1].as_str()).is_none() {
             return TomlLine::Unknown;
         }
         TomlLine::KVPair(v.pop().unwrap())
@@ -988,25 +993,34 @@ impl TomlLine {
 
     fn parse(s: &str) -> TomlLine {
         let s = s.trim();
-        if let Some(k) = s
-            .strip_prefix('[')
-            .map(|s| s.strip_suffix(']'))
-            .flatten()
-            .map(str::trim)
-        {
-            return if TomlLine::is_valid_key(k) {
-                TomlLine::Table(k.to_owned())
-            } else {
-                TomlLine::Unknown
+        // try to parse table from format of "[`Keys`]"
+        if let Some(k) = s.strip_prefix('[').map(|s| s.strip_suffix(']')).flatten() {
+            return match TomlLine::parse_key(k) {
+                Some(k) => TomlLine::Table(k),
+                None => TomlLine::Unknown,
             };
         }
-        TomlLine::parse_kv(s.strip_prefix('#').unwrap_or(s))
+        // remove one prefix of '#' if exist
+        let kv = s.strip_prefix('#').unwrap_or(s);
+        TomlLine::parse_kv(kv)
     }
 
-    fn is_valid_key(s: &str) -> bool {
-        !(s.is_empty() || s.starts_with('.') || s.ends_with('.'))
-            && s.chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+    // Parse `Keys`, only bare keys and dotted keys are supportted
+    // bare keys only contains chars of A-Za-z0-9_-
+    // dotted keys are a sequence of bare key joined with a '.'
+    fn parse_key(s: &str) -> Option<String> {
+        if s.is_empty() || s.starts_with('.') || s.ends_with('.') {
+            return None;
+        }
+        let ks: Vec<_> = s.split('.').map(str::trim).collect();
+        let is_valid_key = |s: &str| -> bool {
+            s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
+        };
+        if ks.iter().all(is_valid_key) {
+            return Some(ks.join("."));
+        }
+        None
     }
 
     fn concat_key(k1: &str, k2: &str) -> String {
@@ -1016,22 +1030,30 @@ impl TomlLine {
             (true, _) => k2.to_owned(),
         }
     }
+
+    // get the prefix keys: "`Keys`.bare_key" -> Keys
+    fn get_prefix(key: &str) -> String {
+        key.rsplitn(2, '.').last().unwrap().to_owned()
+    }
 }
 
-struct TomlWriter {
+/// TomlWriter use to update the config file and only cover the most commom toml
+/// format that used by tikv config filetoml format like: quoted keys, multi-line value,
+/// inline table, etc, are not supported, see https://github.com/toml-lang/toml for more detail.
+pub struct TomlWriter {
     dst: Vec<u8>,
     current_table: String,
 }
 
 impl TomlWriter {
-    fn new() -> TomlWriter {
+    pub fn new() -> TomlWriter {
         TomlWriter {
             dst: Vec::new(),
             current_table: "".to_owned(),
         }
     }
 
-    fn write_change(&mut self, src: String, mut change: HashMap<String, String>) {
+    pub fn write_change(&mut self, src: String, mut change: HashMap<String, String>) {
         for line in src.lines() {
             match TomlLine::parse(&line) {
                 TomlLine::Table(keys) => {
@@ -1040,10 +1062,7 @@ impl TomlWriter {
                     self.current_table = keys;
                 }
                 TomlLine::KVPair(keys) => {
-                    match change.remove(&TomlLine::concat_key(
-                        self.current_table.as_str(),
-                        keys.as_str(),
-                    )) {
+                    match change.remove(&TomlLine::concat_key(&self.current_table, &keys)) {
                         None => self.write(line.as_bytes()),
                         Some(chg) => self.write(TomlLine::encode_kv(&keys, &chg).as_bytes()),
                     }
@@ -1051,11 +1070,16 @@ impl TomlWriter {
                 TomlLine::Unknown => self.write(line.as_bytes()),
             }
         }
-        if !change.is_empty() {
-            for (k, chg) in change {
-                self.write(TomlLine::encode_kv(k.as_str(), &chg).as_bytes());
-            }
+        if change.is_empty() {
+            return;
         }
+        while !change.is_empty() {
+            self.current_table = TomlLine::get_prefix(change.keys().last().unwrap());
+            self.new_line();
+            self.write(format!("[{}]", self.current_table).as_bytes());
+            self.write_current_table(&mut change);
+        }
+        self.new_line();
     }
 
     fn write_current_table(&mut self, change: &mut HashMap<String, String>) {
@@ -1065,18 +1089,22 @@ impl TomlWriter {
             .map(str::to_owned)
             .collect();
         for k in keys {
-            if let Some(chg) = change.remove(&TomlLine::concat_key(
-                self.current_table.as_str(),
-                k.as_str(),
-            )) {
-                self.write(TomlLine::encode_kv(k.as_str(), &chg).as_bytes());
+            if let Some(chg) = change.remove(&TomlLine::concat_key(&self.current_table, &k)) {
+                self.write(TomlLine::encode_kv(&k, &chg).as_bytes());
             }
         }
     }
 
     fn write(&mut self, s: &[u8]) {
         self.dst.extend_from_slice(s);
+        self.new_line();
+    }
+    fn new_line(&mut self) {
         self.dst.push(b'\n');
+    }
+
+    pub fn finish(self) -> Vec<u8> {
+        self.dst
     }
 }
 
@@ -1431,10 +1459,11 @@ mod tests {
     }
 
     #[test]
-    fn test_toml_expr() {
+    fn test_toml_writer() {
         let cfg = r#"
 ## commet1
 log-level = "info"
+
 [readpool.storage]
 ## commet2
 normal-concurrency = 1
@@ -1456,12 +1485,14 @@ normal-concurrency = 1
             "readpool.coprocessor.normal-concurrency".to_owned(),
             "123".to_owned(),
         );
+        m.insert("not-in-file-config1.xxx.yyy".to_owned(), "100".to_owned());
 
         let mut t = TomlWriter::new();
         t.write_change(cfg.to_owned(), m);
         let expect = r#"
 ## commet1
 log-level = "info"
+
 log-file = log-file-name
 [readpool.storage]
 ## commet2
@@ -1473,7 +1504,12 @@ xxx = zzz
 yyy = zzz
 [readpool.coprocessor]
 normal-concurrency = 123
+
+[not-in-file-config1.xxx]
+yyy = 100
+
 "#;
-        assert_eq!(expect.as_bytes(), t.dst.as_slice());
+        println!("{}", String::from_utf8_lossy(t.dst.as_slice()));
+        assert_eq!(expect.as_bytes(), t.finish().as_slice());
     }
 }
