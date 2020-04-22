@@ -109,6 +109,8 @@ impl Builder {
             on_tick: self.on_tick.take(),
             metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
+            metrics_pool_schedule_duration: FUTUREPOOL_SCHEDULE_DURATION_VEC
+                .with_label_values(&[name]),
         });
         let pool = Arc::new(self.inner_builder.build());
         super::FuturePool {

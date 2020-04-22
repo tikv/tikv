@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
-use grpcio::{ClientDuplexReceiver, ClientDuplexSender};
+use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     create_change_data, event::Event as Event_oneof_event, ChangeDataClient, ChangeDataEvent,
@@ -27,6 +27,7 @@ use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
+use tikv_util::security::*;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -100,12 +101,13 @@ impl TestSuite {
             let mut sim = cluster.sim.wl();
 
             // Register cdc service to gRPC server.
+            let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
             let scheduler = worker.scheduler();
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone()))
+                    create_change_data(cdc::Service::new(scheduler.clone(), security_mgr.clone()))
                 }));
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
@@ -198,6 +200,23 @@ impl TestSuite {
             commit_resp.get_region_error()
         );
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+    }
+
+    pub fn async_kv_commit(
+        &mut self,
+        region_id: u64,
+        keys: Vec<Vec<u8>>,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+    ) -> ClientUnaryReceiver<CommitResponse> {
+        let mut commit_req = CommitRequest::default();
+        commit_req.set_context(self.get_context(region_id));
+        commit_req.start_version = start_ts.into_inner();
+        commit_req.set_keys(keys.into_iter().collect());
+        commit_req.commit_version = commit_ts.into_inner();
+        self.get_tikv_client(region_id)
+            .kv_commit_async(&commit_req)
+            .unwrap()
     }
 
     pub fn get_context(&mut self, region_id: u64) -> Context {

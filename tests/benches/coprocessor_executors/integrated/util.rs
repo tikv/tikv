@@ -77,7 +77,7 @@ where
         crate::util::bencher::NormalNextAllBencher::new(|| {
             tidb_query::executor::runner::build_executors::<_, ExecSummaryCollectorDisabled>(
                 black_box(executors.to_vec()),
-                black_box(TiKVStorage::from(ToTxnStore::<T>::to_store(store))),
+                black_box(TiKVStorage::new(ToTxnStore::<T>::to_store(store), false)),
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(false),
@@ -124,7 +124,7 @@ where
         crate::util::bencher::BatchNextAllBencher::new(|| {
             tidb_query::batch::runner::build_executors(
                 black_box(executors.to_vec()),
-                black_box(TiKVStorage::from(ToTxnStore::<T>::to_store(store))),
+                black_box(TiKVStorage::new(ToTxnStore::<T>::to_store(store), false)),
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
             )
