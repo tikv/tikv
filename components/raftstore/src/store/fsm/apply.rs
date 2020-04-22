@@ -188,9 +188,7 @@ impl Range {
 }
 
 #[derive(Debug)]
-pub enum ExecResult<E>
-where
-    E: KvEngine,
+pub enum ExecResult<S>
 {
     ChangePeer(ChangePeer),
     CompactLog {
@@ -216,8 +214,7 @@ where
     ComputeHash {
         region: Region,
         index: u64,
-        snap: E::Snapshot,
-        _phantom: PhantomData<E>,
+        snap: S,
     },
     VerifyHash {
         index: u64,
@@ -239,7 +236,7 @@ where
     None,
     Yield,
     /// Additional result that needs to be sent back to raftstore.
-    Res(ExecResult<E>),
+    Res(ExecResult<E::Snapshot>),
     /// It is unable to apply the `CommitMerge` until the source peer
     /// has applied to the required position and sets the atomic boolean
     /// to true.
@@ -485,7 +482,7 @@ where
     pub fn finish_for(
         &mut self,
         delegate: &mut ApplyDelegate<E>,
-        results: VecDeque<ExecResult<E>>,
+        results: VecDeque<ExecResult<E::Snapshot>>,
     ) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
@@ -2156,7 +2153,6 @@ where
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
                 snap: ctx.engine.snapshot(),
-                _phantom: PhantomData,
             }),
         ))
     }
@@ -2562,7 +2558,7 @@ where
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult<E>>,
+    pub exec_res: VecDeque<ExecResult<E::Snapshot>>,
     pub metrics: ApplyMetrics,
 }
 

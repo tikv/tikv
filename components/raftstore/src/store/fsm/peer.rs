@@ -2189,7 +2189,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<RocksEngine>>,
+        exec_results: &mut VecDeque<ExecResult<RocksSnapshot>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
@@ -2215,7 +2215,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     region,
                     index,
                     snap,
-                    _phantom,
                 } => self.on_ready_compute_hash(region, index, snap),
                 ExecResult::VerifyHash { index, hash } => self.on_ready_verify_hash(index, hash),
                 ExecResult::DeleteRange { .. } => {
