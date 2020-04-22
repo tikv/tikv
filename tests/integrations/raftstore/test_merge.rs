@@ -944,8 +944,6 @@ fn test_merge_isolated_store_with_no_target_peer() {
 
     must_get_equal(&cluster.get_engine(4), b"k345", b"v345");
 }
-<<<<<<< HEAD
-=======
 
 /// Test whether a isolated peer can recover when two other regions merge to its region
 #[test]
@@ -1085,4 +1083,3 @@ fn test_merge_isloated_stale_learner() {
     // We can see if the old peer 2 is destroyed
     must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
 }
->>>>>>> d37dac2... raftstore: consider wake-up msg when checking stale msg in peer fsm (#7592)
