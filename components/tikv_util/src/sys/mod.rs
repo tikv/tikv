@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod cpu_time;
+
 #[cfg(target_os = "linux")]
 mod cgroup;
 
