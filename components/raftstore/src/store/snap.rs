@@ -1719,8 +1719,9 @@ pub mod tests {
         }
     }
 
-    fn create_manager_core() -> Arc<RwLock<SnapManagerCore>> {
+    fn create_manager_core(path: &str) -> Arc<RwLock<SnapManagerCore>> {
         Arc::new(RwLock::new(SnapManagerCore {
+            base: path.to_owned(),
             registry: map![],
             limiter: Limiter::new(INFINITY),
             snap_size: Arc::new(AtomicU64::new(0)),
@@ -1817,7 +1818,7 @@ pub mod tests {
 
         let key = SnapKey::new(region_id, 1, 1);
 
-        let mgr_core = create_manager_core();
+        let mgr_core = create_manager_core(src_dir.path().to_str().unwrap());
 
         let mut s1 = Snap::new_for_building(src_dir.path(), &key, mgr_core.clone()).unwrap();
 
@@ -1942,7 +1943,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let mgr_core = create_manager_core();
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
 
         let mut s1 = Snap::new_for_building(dir.path(), &key, mgr_core.clone()).unwrap();
         assert!(!s1.exists());
@@ -2109,7 +2110,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let mgr_core = create_manager_core();
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
         let mut s1 = Snap::new_for_building(dir.path(), &key, mgr_core.clone()).unwrap();
         assert!(!s1.exists());
 
@@ -2200,7 +2201,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let mgr_core = create_manager_core();
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
         let mut s1 = Snap::new_for_building(dir.path(), &key, mgr_core.clone()).unwrap();
         assert!(!s1.exists());
 
@@ -2293,7 +2294,7 @@ pub mod tests {
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
         let snapshot = RocksSnapshot::new(db.clone());
         let key1 = SnapKey::new(1, 1, 1);
-        let mgr_core = create_manager_core();
+        let mgr_core = create_manager_core(&path);
         let mut s1 = Snap::new_for_building(&path, &key1, mgr_core.clone()).unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::default();
