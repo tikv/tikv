@@ -1013,7 +1013,7 @@ impl TomlLine {
             return None;
         }
         let ks: Vec<_> = s.split('.').map(str::trim).collect();
-        let is_valid_key = |s: &str| -> bool {
+        let is_valid_key = |s: &&str| -> bool {
             s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
         };
