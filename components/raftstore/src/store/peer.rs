@@ -8,7 +8,7 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
@@ -2448,7 +2448,7 @@ impl Peer {
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
-    ) -> ReadResponse<RocksEngine> {
+    ) -> ReadResponse<RocksSnapshot> {
         let mut resp = ReadExecutor::new(
             ctx.engines.kv.clone(),
             check_epoch,
@@ -2813,7 +2813,7 @@ where
         msg: &RaftCmdRequest,
         region: &metapb::Region,
         read_index: Option<u64>,
-    ) -> ReadResponse<E> {
+    ) -> ReadResponse<E::Snapshot> {
         if self.check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
                 debug!(

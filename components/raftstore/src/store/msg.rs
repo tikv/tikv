@@ -4,7 +4,7 @@ use std::fmt;
 use std::time::Instant;
 
 use engine_rocks::RocksEngine;
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
@@ -25,9 +25,9 @@ use tikv_util::escape;
 use super::RegionSnapshot;
 
 #[derive(Debug)]
-pub struct ReadResponse<E: KvEngine> {
+pub struct ReadResponse<S: Snapshot> {
     pub response: RaftCmdResponse,
-    pub snapshot: Option<RegionSnapshot<E::Snapshot>>,
+    pub snapshot: Option<RegionSnapshot<S>>,
 }
 
 #[derive(Debug)]
@@ -38,8 +38,8 @@ pub struct WriteResponse {
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
 // generics. If it can be deleted in the future in favor of derive, it should
 // be.
-impl<E> Clone for ReadResponse<E> where E: KvEngine {
-    fn clone(&self) -> ReadResponse<E> {
+impl<S> Clone for ReadResponse<S> where S: Snapshot {
+    fn clone(&self) -> ReadResponse<S> {
         ReadResponse {
             response: self.response.clone(),
             snapshot: self.snapshot.clone(),
@@ -47,7 +47,7 @@ impl<E> Clone for ReadResponse<E> where E: KvEngine {
     }
 }
 
-pub type ReadCallback<E> = Box<dyn FnOnce(ReadResponse<E>) + Send>;
+pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 /// Variants of callbacks for `Msg`.
@@ -59,7 +59,7 @@ pub enum Callback<E: KvEngine> {
     /// No callback.
     None,
     /// Read callback.
-    Read(ReadCallback<E>),
+    Read(ReadCallback<E::Snapshot>),
     /// Write callback.
     Write(WriteCallback),
 }
@@ -85,7 +85,7 @@ where
         }
     }
 
-    pub fn invoke_read(self, args: ReadResponse<E>) {
+    pub fn invoke_read(self, args: ReadResponse<E::Snapshot>) {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),

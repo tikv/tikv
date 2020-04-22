@@ -118,7 +118,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
                 }
             });
         let cb: Callback<RocksEngine> =
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let res = CmdRes::Snap(resp.snapshot.unwrap());
                 cb2((CbContext::new(), Ok(res)));
             }));

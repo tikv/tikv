@@ -146,7 +146,7 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
 }
 
 fn on_read_result(
-    mut read_resp: ReadResponse<RocksEngine>,
+    mut read_resp: ReadResponse<RocksSnapshot>,
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
     let cb_ctx = new_ctx(&read_resp.response);

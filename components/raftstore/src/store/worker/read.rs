@@ -85,7 +85,7 @@ impl ReadDelegate {
         req: &RaftCmdRequest,
         executor: &mut ReadExecutor<E>,
         metrics: &mut ReadMetrics,
-    ) -> Option<ReadResponse<E>> {
+    ) -> Option<ReadResponse<E::Snapshot>> {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
@@ -556,7 +556,7 @@ mod tests {
     use crate::store::util::Lease;
     use crate::store::Callback;
     use engine::rocks;
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
 
@@ -712,7 +712,7 @@ mod tests {
         let region = region1;
         let task = RaftCommand::<RocksEngine>::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let snap = resp.snapshot.unwrap();
                 assert_eq!(snap.get_region(), &region);
             })),
@@ -735,7 +735,7 @@ mod tests {
             .set_store_id(store_id + 1);
         let task = RaftCommand::<RocksEngine>::new(
             cmd_store_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_store_not_match());
                 assert!(resp.snapshot.is_none());
@@ -753,7 +753,7 @@ mod tests {
             .set_id(leader2.get_id() + 1);
         let task = RaftCommand::<RocksEngine>::new(
             cmd_peer_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 assert!(
                     resp.response.get_header().has_error(),
                     "{:?}",
@@ -777,7 +777,7 @@ mod tests {
         cmd_term.mut_header().set_term(term6 - 2);
         let task = RaftCommand::<RocksEngine>::new(
             cmd_term,
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_stale_command(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
@@ -811,7 +811,7 @@ mod tests {
         let task1 = RaftCommand::<RocksEngine>::new(cmd.clone(), Callback::None);
         let task_full = RaftCommand::<RocksEngine>::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_server_is_busy(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
