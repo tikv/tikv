@@ -2792,7 +2792,7 @@ mod tests {
             "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
             "false".to_owned(),
         );
-        let res = to_toml_encode(change.clone()).unwrap();
+        let res = to_toml_encode(change).unwrap();
         assert_eq!(
             res.get("raftstore.pd-heartbeat-tick-interval"),
             Some(&"\"1h\"".to_owned())
