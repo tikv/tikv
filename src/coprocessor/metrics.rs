@@ -28,6 +28,13 @@ lazy_static! {
     pub static ref COPR_REQ_WAIT_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_wait_seconds",
         "Bucketed histogram of coprocessor request wait duration",
+        &["req", "type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref COPR_REQ_HANDLER_BUILD_TIME: HistogramVec = register_histogram_vec!(
+        "tikv_coprocessor_request_handler_build_seconds",
+        "Bucketed histogram of coprocessor request handler build duration",
         &["req"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
@@ -98,6 +105,7 @@ pub struct CopLocalMetrics {
     pub local_copr_req_histogram_vec: LocalHistogramVec,
     pub local_copr_req_handle_time: LocalHistogramVec,
     pub local_copr_req_wait_time: LocalHistogramVec,
+    pub local_copr_req_handler_build_time: LocalHistogramVec,
     pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
     local_scan_details: HashMap<&'static str, Statistics>,
@@ -113,6 +121,8 @@ thread_local! {
                 COPR_REQ_HANDLE_TIME.local(),
             local_copr_req_wait_time:
                 COPR_REQ_WAIT_TIME.local(),
+            local_copr_req_handler_build_time:
+                COPR_REQ_HANDLER_BUILD_TIME.local(),
             local_copr_scan_keys:
                 COPR_SCAN_KEYS.local(),
             local_copr_rocksdb_perf_counter:
@@ -132,6 +142,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         m.local_copr_req_histogram_vec.flush();
         m.local_copr_req_handle_time.flush();
         m.local_copr_req_wait_time.flush();
+        m.local_copr_req_handler_build_time.flush();
         m.local_copr_scan_keys.flush();
         m.local_copr_rocksdb_perf_counter.flush();
 
