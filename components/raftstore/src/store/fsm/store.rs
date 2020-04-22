@@ -2,7 +2,7 @@
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec};
+use engine_rocks::{RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec, RocksSnapshot};
 use engine_traits::{
     CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
     WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
@@ -205,7 +205,7 @@ pub struct PollContext<T, C: 'static> {
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
+    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     pub apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
@@ -728,7 +728,7 @@ pub struct RaftPollerBuilder<T, C> {
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
+    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
@@ -972,7 +972,7 @@ struct Workers {
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
-    region_worker: Worker<RegionTask<RocksEngine>>,
+    region_worker: Worker<RegionTask<RocksSnapshot>>,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     future_poller: ThreadPool,
 }

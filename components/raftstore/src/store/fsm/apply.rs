@@ -15,7 +15,7 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -327,7 +327,7 @@ where
     timer: Option<Instant>,
     host: CoprocessorHost<RocksEngine>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<E>>,
+    region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
     router: ApplyRouter,
     notifier: Notifier<E>,
     engine: E,
@@ -359,7 +359,7 @@ where
         tag: String,
         host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        region_scheduler: Scheduler<RegionTask<E>>,
+        region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
         router: ApplyRouter,
         notifier: Notifier<E>,
@@ -2400,7 +2400,7 @@ impl GenSnapTask {
         kv_snap: E::Snapshot,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        region_sched: &Scheduler<RegionTask<E>>,
+        region_sched: &Scheduler<RegionTask<E::Snapshot>>,
     ) -> Result<()>
     where
         E: KvEngine,
@@ -2852,7 +2852,7 @@ where
             self.delegate.last_sync_apply_index = applied_index;
         }
 
-        if let Err(e) = snap_task.generate_and_schedule_snapshot(
+        if let Err(e) = snap_task.generate_and_schedule_snapshot::<E>(
             apply_ctx.engine.snapshot(),
             self.delegate.applied_index_term,
             self.delegate.apply_state.clone(),
@@ -3140,7 +3140,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<RocksEngine>>,
+    region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
     sender: Notifier<RocksEngine>,
     router: ApplyRouter,
