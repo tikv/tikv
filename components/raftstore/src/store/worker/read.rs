@@ -157,7 +157,7 @@ impl Progress {
 
 pub struct LocalReader<C, E>
 where
-    C: ProposalRouter<E>,
+    C: ProposalRouter<E::Snapshot>,
     E: KvEngine,
 {
     store_id: Cell<Option<u64>>,
@@ -187,7 +187,7 @@ impl<E: KvEngine> LocalReader<RaftRouter<E>, E> {
 
 impl<C, E> LocalReader<C, E>
 where
-    C: ProposalRouter<E>,
+    C: ProposalRouter<E::Snapshot>,
     E: KvEngine,
 {
     fn redirect(&self, mut cmd: RaftCommand<E::Snapshot>) {
@@ -389,7 +389,7 @@ where
 
 impl<C, E> Clone for LocalReader<C, E>
 where
-    C: ProposalRouter<E> + Clone,
+    C: ProposalRouter<E::Snapshot> + Clone,
     E: KvEngine,
 {
     fn clone(&self) -> Self {
