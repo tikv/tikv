@@ -164,7 +164,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
 }
 
 pub struct EncrypterWriter<W: Write> {
-    writer: W,
+    writer: Option<W>,
     crypter: OCrypter,
     block_size: usize,
 }
@@ -180,10 +180,26 @@ impl<W: Write> EncrypterWriter<W> {
         let (cipher, crypter) = create_aes_ctr_crypter(method, key, Mode::Encrypt, iv)?;
         let block_size = cipher.block_size();
         Ok(EncrypterWriter {
-            writer,
+            writer: Some(writer),
             crypter,
             block_size,
         })
+    }
+
+    pub fn finalize(&mut self) -> W {
+        self.do_finalize();
+        self.writer.take().unwrap()
+    }
+
+    fn do_finalize(&mut self) {
+        let _ = self.flush();
+        let mut encrypt_buffer = vec![0; self.block_size];
+        let bytes = self.crypter.finalize(&mut encrypt_buffer).unwrap();
+        if bytes != 0 {
+            // The EncrypterWriter current only support crypters that always return the same amount
+            // of data. This is true for CTR mode.
+            panic!("unsupported encryption");
+        }
     }
 }
 
@@ -203,23 +219,19 @@ impl<W: Write> Write for EncrypterWriter<W> {
                 ),
             ));
         }
-        self.writer.write_all(&encrypt_buffer[0..bytes])?;
+        let writer = self.writer.as_mut().unwrap();
+        writer.write_all(&encrypt_buffer[0..bytes])?;
         Ok(bytes)
     }
 
     fn flush(&mut self) -> IoResult<()> {
-        self.writer.flush()
+        let writer = self.writer.as_mut().unwrap();
+        writer.flush()
     }
 }
 
 impl<W: Write> Drop for EncrypterWriter<W> {
     fn drop(&mut self) {
-        let mut encrypt_buffer = vec![0; self.block_size];
-        let bytes = self.crypter.finalize(&mut encrypt_buffer).unwrap();
-        if bytes != 0 {
-            // The EncrypterWriter current only support crypters that always return the same amount
-            // of data. This is true for CTR mode.
-            panic!("unsupported encryption");
-        }
+        self.do_finalize();
     }
 }
