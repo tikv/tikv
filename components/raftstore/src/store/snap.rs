@@ -217,16 +217,8 @@ pub fn copy_snapshot(
     Ok(())
 }
 
-// Try to delete the specified snapshot using deleter, return true if the deletion is done.
-fn retry_delete_snapshot<E: KvEngine>(
-    mgr: &SnapManager<E>,
-    key: &SnapKey,
-    snap: &dyn GenericSnapshot,
-) -> bool {
-    do_retry_delete_snapshot(&mgr.core, key, snap)
-}
-
-fn do_retry_delete_snapshot(
+// Try to delete the specified snapshot, return true if the deletion is done.
+fn retry_delete_snapshot(
     mgr: &Arc<RwLock<SnapManagerCore>>,
     key: &SnapKey,
     snap: &dyn GenericSnapshot,
@@ -451,7 +443,7 @@ impl Snap {
                     "snapshot" => %s.path(),
                     "err" => ?e,
                 );
-                if !do_retry_delete_snapshot(&mgr, key, &s) {
+                if !retry_delete_snapshot(&mgr, key, &s) {
                     warn!(
                         "failed to delete snapshot because it's already registered elsewhere";
                         "snapshot" => %s.path(),
@@ -726,7 +718,7 @@ impl Snap {
                         "snapshot" => %self.path(),
                         "err" => ?e,
                     );
-                    if !do_retry_delete_snapshot(&self.mgr, &self.key, self) {
+                    if !retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
                             "failed to delete corrupted snapshot because it's \
                              already registered elsewhere";
@@ -1128,6 +1120,9 @@ pub struct SnapStats {
 }
 
 struct SnapManagerCore {
+    // directory to store snapfile.
+    base: String,
+
     registry: HashMap<SnapKey, Vec<SnapEntry>>,
     limiter: Limiter,
     snap_size: Arc<AtomicU64>,
@@ -1148,8 +1143,6 @@ fn notify_stats(ch: Option<&RaftRouter<impl KvEngine>>) {
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
 pub struct SnapManager<E: KvEngine> {
-    // directory to store snapfile.
-    base: String,
     core: Arc<RwLock<SnapManagerCore>>,
     router: Option<RaftRouter<E>>,
     max_total_size: u64,
@@ -1163,7 +1156,7 @@ impl<E: KvEngine> SnapManager<E> {
     pub fn init(&self) -> io::Result<()> {
         // Use write lock so only one thread initialize the directory at a time.
         let core = self.core.wl();
-        let path = Path::new(&self.base);
+        let path = Path::new(&core.base);
         if !path.exists() {
             fs::create_dir_all(path)?;
             return Ok(());
@@ -1193,8 +1186,9 @@ impl<E: KvEngine> SnapManager<E> {
     // Return all snapshots which is idle not being used.
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         // Use a lock to protect the directory when scanning.
-        let registry = &self.core.rl().registry;
-        let path = Path::new(&self.base);
+        let core = self.core.rl();
+        let registry = &core.registry;
+        let path = Path::new(&core.base);
         let read_dir = fs::read_dir(path)?;
         // Remove the duplicate snap keys.
         let mut v: Vec<_> = read_dir
@@ -1203,7 +1197,7 @@ impl<E: KvEngine> SnapManager<E> {
                     Err(e) => {
                         error!(
                             "failed to list content of directory";
-                            "directory" => %self.base,
+                            "directory" => %core.base,
                             "err" => ?e,
                         );
                         return None;
@@ -1284,7 +1278,8 @@ impl<E: KvEngine> SnapManager<E> {
             };
         }
 
-        let f = Snap::new_for_building(&self.base, key, self.core.clone())?;
+        let base = self.core.rl().base.clone();
+        let f = Snap::new_for_building(&base, key, self.core.clone())?;
         Ok(Box::new(f))
     }
 
@@ -1292,7 +1287,8 @@ impl<E: KvEngine> SnapManager<E> {
         &self,
         key: &SnapKey,
     ) -> RaftStoreResult<Box<dyn GenericSnapshot>> {
-        let mut s = Snap::new_for_sending(&self.base, key, self.core.clone())?;
+        let base = self.core.rl().base.clone();
+        let mut s = Snap::new_for_sending(&base, key, self.core.clone())?;
         let key_manager = self.core.rl().encryption_key_manager.clone();
         let key_manager = match key_manager.as_ref().map(|t| t.as_ref()) {
             Some(m) => m,
@@ -1316,17 +1312,14 @@ impl<E: KvEngine> SnapManager<E> {
     ) -> RaftStoreResult<Box<dyn GenericSnapshot>> {
         let mut snapshot_data = RaftSnapshotData::default();
         snapshot_data.merge_from_bytes(data)?;
-        let f = Snap::new_for_receiving(
-            &self.base,
-            key,
-            self.core.clone(),
-            snapshot_data.take_meta(),
-        )?;
+        let base = self.core.rl().base.clone();
+        let f = Snap::new_for_receiving(&base, key, self.core.clone(), snapshot_data.take_meta())?;
         Ok(Box::new(f))
     }
 
     fn get_concrete_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snap>> {
-        let s = Snap::new_for_applying(&self.base, key, self.core.clone())?;
+        let base = self.core.rl().base.clone();
+        let s = Snap::new_for_applying(&base, key, self.core.clone())?;
         if !s.exists() {
             return Err(RaftStoreError::Other(From::from(format!(
                 "snapshot of {:?} not exists.",
@@ -1539,8 +1532,8 @@ impl SnapManagerBuilder {
             u64::MAX
         };
         SnapManager {
-            base: path.into(),
             core: Arc::new(RwLock::new(SnapManagerCore {
+                base: path.into(),
                 registry: map![],
                 limiter,
                 snap_size: Arc::new(AtomicU64::new(0)),
