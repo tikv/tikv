@@ -1558,7 +1558,6 @@ pub mod tests {
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
     use tikv_util::time::Limiter;
-    use tikv_util::HandyRwLock;
 
     use super::{
         ApplyOptions, GenericSnapshot, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
