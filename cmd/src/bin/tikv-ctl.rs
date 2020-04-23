@@ -79,7 +79,7 @@ fn new_debug_executor(
                 let db_path = PathBuf::from(format!("{}/../raft", kv_path))
                     .canonicalize()
                     .unwrap();
-                format!("{}/raft", db_path.to_str().unwrap())
+                String::from(db_path.to_str().unwrap())
             });
             let mut raft_db_opts = cfg.raftdb.build_opt();
             raft_db_opts.set_env(env);
