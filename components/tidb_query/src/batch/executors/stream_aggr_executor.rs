@@ -50,6 +50,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.0.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.0.can_be_cached()
+    }
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
@@ -62,7 +67,6 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
         assert!(!group_by_definitions.is_empty());
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
-            // Works for both vector and scalar. No need to check as other aggregation executor.
         }
 
         let aggr_definitions = descriptor.get_agg_func();
