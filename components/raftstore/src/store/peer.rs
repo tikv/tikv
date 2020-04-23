@@ -177,7 +177,7 @@ pub struct Peer {
     pub peer_heartbeats: HashMap<u64, Instant>,
 
     proposals: ProposalQueue,
-    apply_proposals: Vec<Proposal<RocksEngine>>,
+    apply_proposals: Vec<Proposal<RocksSnapshot>>,
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
