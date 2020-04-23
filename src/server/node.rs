@@ -22,6 +22,7 @@ use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
@@ -129,6 +130,7 @@ where
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -169,6 +171,7 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
+            auto_split_controller,
         )?;
 
         Ok(())
@@ -372,6 +375,7 @@ where
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -397,6 +401,7 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
+            auto_split_controller,
         )?;
         Ok(())
     }

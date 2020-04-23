@@ -13,7 +13,7 @@ use engine_rocks::{CloneCompat, Compat};
 use engine_traits::{Peekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::{bootstrap_store, fsm, SnapManager};
+use raftstore::store::{bootstrap_store, fsm, AutoSplitController, SnapManager};
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::server::Node;
@@ -105,6 +105,7 @@ fn test_node_bootstrap_with_prepared_data() {
         coprocessor_host,
         importer,
         Worker::new("split"),
+        AutoSplitController::default(),
     )
     .unwrap();
     assert!(Arc::clone(&engine)
