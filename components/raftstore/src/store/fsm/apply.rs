@@ -2322,20 +2322,20 @@ where
     }
 }
 
-pub struct RegionProposal<E>
+pub struct RegionProposal<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub id: u64,
     pub region_id: u64,
-    pub props: Vec<Proposal<E::Snapshot>>,
+    pub props: Vec<Proposal<S>>,
 }
 
-impl<E> RegionProposal<E>
+impl<S> RegionProposal<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    pub fn new(id: u64, region_id: u64, props: Vec<Proposal<E::Snapshot>>) -> RegionProposal<E> {
+    pub fn new(id: u64, region_id: u64, props: Vec<Proposal<S>>) -> RegionProposal<S> {
         RegionProposal {
             id,
             region_id,
@@ -2467,7 +2467,7 @@ where
         apply: Apply,
     },
     Registration(Registration),
-    Proposal(RegionProposal<E>),
+    Proposal(RegionProposal<E::Snapshot>),
     LogsUpToDate(CatchUpLogs),
     Noop,
     Destroy(Destroy),
@@ -2668,7 +2668,7 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn handle_proposal(&mut self, region_proposal: RegionProposal<E>) {
+    fn handle_proposal(&mut self, region_proposal: RegionProposal<E::Snapshot>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = region_proposal.props.len();
         assert_eq!(self.delegate.id, region_proposal.id);

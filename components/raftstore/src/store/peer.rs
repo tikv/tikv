@@ -1074,7 +1074,7 @@ impl Peer {
         self.get_store().last_index() >= index && self.get_store().last_term() >= term
     }
 
-    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal<RocksEngine>> {
+    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal<RocksSnapshot>> {
         if self.apply_proposals.is_empty() {
             return None;
         }
