@@ -1935,11 +1935,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-<<<<<<< HEAD
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#104857294b03016733aadebeb69fc2257f5df1e3"
-=======
-source = "git+https://github.com/pingcap/kvproto.git#038e31959c2a66085aad455db6e34fa4e98a58f9"
->>>>>>> 30198b2... external_storage: pass sse_kms_key_id to S3 (#7627)
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#3500763f0214225246d8822fe467733a20ded8c7"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
