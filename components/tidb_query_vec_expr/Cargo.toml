@@ -6,6 +6,7 @@ publish = false
 description = "Vector expressions of query engine to run TiDB pushed down executors"
 
 [dependencies]
+base64 = "0.10"
 byteorder = "1.2"
 codec = { path = "../codec" }
 derive_more = "0.15.0"
@@ -15,6 +16,7 @@ num = { version = "0.2", default-features = false }
 num-traits = "0.2"
 openssl = { version = "0.10" }
 protobuf = "2"
+safemem = { version = "0.3", default-features = false }
 tidb_query_codegen = { path = "../tidb_query_codegen" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 tidb_query_common = { path = "../tidb_query_common" }

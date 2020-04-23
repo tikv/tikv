@@ -4555,6 +4555,7 @@ dependencies = [
 name = "tidb_query_vec_expr"
 version = "0.0.1"
 dependencies = [
+ "base64 0.10.1",
  "bstr",
  "byteorder",
  "chrono",
@@ -4569,6 +4570,7 @@ dependencies = [
  "profiler",
  "prometheus-static-metric",
  "protobuf",
+ "safemem",
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
