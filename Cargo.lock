@@ -4667,6 +4667,7 @@ dependencies = [
  "url",
  "uuid",
  "vlog",
+ "walkdir",
  "yatp",
  "zipf",
 ]
