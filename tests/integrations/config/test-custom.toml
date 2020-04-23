@@ -470,10 +470,20 @@ gc-merge-rewrite = true
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
-cipher-file = "invalid path"
 cert-allowed-cn = [
     "example.tikv.com",
 ]
+
+[encryption]
+data-encryption-method = "aes128-ctr"
+data-key-rotation-period = "14d"
+
+[encryption.master-key]
+type = "file"
+path = "/master/key/path"
+
+[encryption.previous-master-key]
+type = "plaintext"
 
 [import]
 num-threads = 123
