@@ -969,7 +969,7 @@ fn test_merge_isloated_not_in_merge_learner() {
     pd_client.must_add_peer(right.get_id(), new_learner_peer(2, 5));
 
     cluster.must_put(b"k123", b"v123");
-    
+
     cluster.run_node(2).unwrap();
     // We can see if the old peer 2 is destroyed
     must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
