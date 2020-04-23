@@ -257,19 +257,19 @@ impl ExecContext {
     }
 }
 
-struct ApplyCallback<E>
+struct ApplyCallback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<E::Snapshot>>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<S>>, RaftCmdResponse)>,
 }
 
-impl<E> ApplyCallback<E>
+impl<S> ApplyCallback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn new(region: Region) -> ApplyCallback<E> {
+    fn new(region: Region) -> ApplyCallback<S> {
         let cbs = vec![];
         ApplyCallback { region, cbs }
     }
@@ -283,7 +283,7 @@ where
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<E::Snapshot>>, resp: RaftCmdResponse) {
+    fn push(&mut self, cb: Option<Callback<S>>, resp: RaftCmdResponse) {
         self.cbs.push((cb, resp));
     }
 }
@@ -326,7 +326,7 @@ where
     router: ApplyRouter,
     notifier: Notifier<E>,
     engine: E,
-    cbs: MustConsumeVec<ApplyCallback<E>>,
+    cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
     apply_res: Vec<ApplyRes<E>>,
     exec_ctx: Option<ExecContext>,
 
