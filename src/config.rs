@@ -33,6 +33,7 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+use encryption::EncryptionConfig;
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, get_cf_handle, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
@@ -102,6 +103,14 @@ pub struct TitanCfConfig {
     #[config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
+    #[config(skip)]
+    pub level_merge: bool,
+    #[config(skip)]
+    pub range_merge: bool,
+    #[config(skip)]
+    pub max_sorted_runs: i32,
+    #[config(skip)]
+    pub gc_merge_rewrite: bool,
 }
 
 impl Default for TitanCfConfig {
@@ -116,6 +125,10 @@ impl Default for TitanCfConfig {
             sample_ratio: 0.1,
             merge_small_file_threshold: ReadableSize::mb(8),
             blob_run_mode: BlobRunMode::Normal,
+            level_merge: false,
+            range_merge: true,
+            max_sorted_runs: 20,
+            gc_merge_rewrite: false,
         }
     }
 }
@@ -132,6 +145,10 @@ impl TitanCfConfig {
         opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
         opts.set_blob_run_mode(self.blob_run_mode.into());
+        opts.set_level_merge(self.level_merge);
+        opts.set_range_merge(self.range_merge);
+        opts.set_max_sorted_runs(self.max_sorted_runs);
+        opts.set_gc_merge_rewrite(self.gc_merge_rewrite);
         opts
     }
 }
@@ -1857,6 +1874,9 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
 
     #[config(skip)]
+    pub encryption: EncryptionConfig,
+
+    #[config(skip)]
     pub import: ImportConfig,
 
     #[config(submodule)]
@@ -1888,6 +1908,7 @@ impl Default for TiKvConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
+            encryption: EncryptionConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
@@ -2324,6 +2345,7 @@ pub enum Module {
     Raftdb,
     Storage,
     Security,
+    Encryption,
     Import,
     PessimisticTxn,
     Gc,
@@ -2343,6 +2365,7 @@ impl From<&str> for Module {
             "raftdb" => Module::Raftdb,
             "storage" => Module::Storage,
             "security" => Module::Security,
+            "encryption" => Module::Encryption,
             "import" => Module::Import,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,

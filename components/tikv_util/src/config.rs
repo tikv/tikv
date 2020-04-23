@@ -336,6 +336,10 @@ impl ReadableDuration {
         ReadableDuration::minutes(hours * 60)
     }
 
+    pub fn days(days: u64) -> ReadableDuration {
+        ReadableDuration::hours(days * 24)
+    }
+
     pub fn as_secs(&self) -> u64 {
         self.0.as_secs()
     }
