@@ -8,7 +8,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{NewerTsCheckState, Result};
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Snapshot, Statistics};
 
@@ -115,6 +115,7 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     is_started: bool,
     statistics: Statistics,
     scan_policy: P,
+    met_newer_ts_data: NewerTsCheckState,
 }
 
 impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
@@ -131,6 +132,11 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             default: default_cursor,
         };
         ForwardScanner {
+            met_newer_ts_data: if cfg.check_has_newer_ts_data {
+                NewerTsCheckState::NotMetYet
+            } else {
+                NewerTsCheckState::Unknown
+            },
             cfg,
             cursors,
             statistics: Statistics::default(),
@@ -142,6 +148,13 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::replace(&mut self.statistics, Statistics::default())
+    }
+
+    /// Whether we met newer ts data.
+    /// The result is always `Unknown` if `check_has_newer_ts_data` is not set.
+    #[inline]
+    pub fn met_newer_ts_data(&self) -> NewerTsCheckState {
+        self.met_newer_ts_data
     }
 
     /// Get the next key-value pair, in forward order.
@@ -239,6 +252,9 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             };
 
             if has_lock {
+                if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                    self.met_newer_ts_data = NewerTsCheckState::Met;
+                }
                 current_user_key = match self.scan_policy.handle_lock(
                     current_user_key,
                     &mut self.cfg,
@@ -296,6 +312,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
+                } else if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                    self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
             }
         }

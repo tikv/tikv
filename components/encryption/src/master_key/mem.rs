@@ -25,6 +25,10 @@ impl MemAesGcmBackend {
 
     pub fn encrypt_content(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {
         let mut content = EncryptedContent::default();
+        content.mut_metadata().insert(
+            MetadataKey::Method.as_str().to_owned(),
+            MetadataMethod::Aes256Gcm.as_slice().to_vec(),
+        );
         let iv_value = iv.as_slice().to_vec();
         content
             .mut_metadata()
@@ -39,6 +43,22 @@ impl MemAesGcmBackend {
     }
 
     pub fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
+        let method = content
+            .get_metadata()
+            .get(MetadataKey::Method.as_str())
+            .ok_or_else(|| {
+                Error::Other(box_err!(
+                    "metadata {} not found",
+                    MetadataKey::Method.as_str()
+                ))
+            })?;
+        if method.as_slice() != MetadataMethod::Aes256Gcm.as_slice() {
+            return Err(Error::WrongMasterKey(box_err!(
+                "encryption method mismatch, expected {:?} vs actual {:?}",
+                MetadataMethod::Aes256Gcm.as_slice(),
+                method
+            )));
+        }
         let key = &self.key;
         let iv_value = content
             .get_metadata()

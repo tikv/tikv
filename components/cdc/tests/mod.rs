@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::*;
 use std::time::Duration;
 
+use engine_rocks::RocksEngine;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, Environment};
 use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
@@ -113,7 +114,7 @@ impl TestSuite {
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
-                move |host: &mut CoprocessorHost| {
+                move |host: &mut CoprocessorHost<RocksEngine>| {
                     cdc_ob.register_to(host);
                 },
             ));

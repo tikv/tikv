@@ -16,6 +16,7 @@ configuration = { path = "../configuration" }
 chrono = "0.4"
 crc32fast = "1.2"
 crossbeam = "0.7.2"
+derive_more = "0.99.3"
 fail = "0.3"
 fs2 = "0.4"
 futures = "0.1"
@@ -27,7 +28,7 @@ lazy_static = "1.3"
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 openssl = "0.10"
-prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
+prometheus = { version = "0.8", features = ["nightly", "push"] }
 quick-error = "1.2.2"
 rand = "0.7"
 serde = "1.0"
