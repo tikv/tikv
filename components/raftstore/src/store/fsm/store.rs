@@ -48,9 +48,9 @@ use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::is_initial_msg;
 use crate::store::worker::{
-    CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask, CompactRunner, CompactTask,
-    ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
-    ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
+    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
+    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
@@ -1020,6 +1020,7 @@ impl RaftBatchSystem {
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1065,7 +1066,7 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        self.start_system(workers, region_peers, builder)?;
+        self.start_system(workers, region_peers, builder, auto_split_controller)?;
         Ok(())
     }
 
@@ -1074,6 +1075,7 @@ impl RaftBatchSystem {
         mut workers: Workers,
         region_peers: Vec<SenderFsmPair<RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1164,6 +1166,7 @@ impl RaftBatchSystem {
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
+            auto_split_controller,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 

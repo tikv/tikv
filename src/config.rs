@@ -50,6 +50,7 @@ use pd_client::Config as PdConfig;
 use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
+use raftstore::store::SplitConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
@@ -1884,6 +1885,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub gc: GcConfig,
+
+    #[config(submodule)]
+    pub split: SplitConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1912,6 +1916,7 @@ impl Default for TiKvConfig {
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
+            split: SplitConfig::default(),
         }
     }
 }
@@ -2349,6 +2354,7 @@ pub enum Module {
     Import,
     PessimisticTxn,
     Gc,
+    Split,
     Unknown(String),
 }
 
@@ -2361,6 +2367,7 @@ impl From<&str> for Module {
             "raft_store" => Module::Raftstore,
             "coprocessor" => Module::Coprocessor,
             "pd" => Module::Pd,
+            "split" => Module::Split,
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "storage" => Module::Storage,
