@@ -853,7 +853,7 @@ pub struct DbConfig {
     #[config(submodule)]
     pub raftcf: RaftCfConfig,
     #[config(submodule)]
-    pub ver_default: VersionCfConfig,
+    pub ver_defaultcf: VersionCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
 }
@@ -896,7 +896,7 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
-            ver_default: VersionCfConfig::default(),
+            ver_defaultcf: VersionCfConfig::default(),
             titan: titan_config,
         }
     }
@@ -968,7 +968,7 @@ impl DbConfig {
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             // TODO: remove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
-            CFOptions::new(CF_VER_DEFAULT, self.ver_default.build_opt(cache)),
+            CFOptions::new(CF_VER_DEFAULT, self.ver_defaultcf.build_opt(cache)),
         ]
     }
 
@@ -978,7 +978,7 @@ impl DbConfig {
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
-            CFOptions::new(CF_VER_DEFAULT, self.ver_default.build_opt(cache)),
+            CFOptions::new(CF_VER_DEFAULT, self.ver_defaultcf.build_opt(cache)),
         ]
     }
 
@@ -987,7 +987,7 @@ impl DbConfig {
         self.lockcf.validate()?;
         self.writecf.validate()?;
         self.raftcf.validate()?;
-        self.ver_default.validate()?;
+        self.ver_defaultcf.validate()?;
         self.titan.validate()?;
         if self.enable_unordered_write {
             if self.titan.enabled {
@@ -1005,7 +1005,7 @@ impl DbConfig {
         write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.raftcf, CF_RAFT, CONFIG_ROCKSDB_GAUGE);
-        write_into_metrics!(self.ver_default, CF_VER_DEFAULT, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.ver_defaultcf, CF_VER_DEFAULT, CONFIG_ROCKSDB_GAUGE);
     }
 }
 

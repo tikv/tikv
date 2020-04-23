@@ -454,7 +454,7 @@ fn test_serde_custom_tikv_config() {
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
         },
-        ver_default: VersionCfConfig {
+        ver_defaultcf: VersionCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
             disable_block_cache: false,
