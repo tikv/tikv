@@ -894,7 +894,8 @@ impl GenericSnapshot for Snap {
             if let Some(mgr) = self.mgr.rl().encryption_key_manager.clone() {
                 mgr.delete_file(cf_file.path.to_str().unwrap()).unwrap();
                 mgr.delete_file(cf_file.tmp_path.to_str().unwrap()).unwrap();
-                mgr.delete_file(cf_file.clone_path.to_str().unwrap()).unwrap();
+                mgr.delete_file(cf_file.clone_path.to_str().unwrap())
+                    .unwrap();
             }
         }
         delete_file_if_exist(&self.meta_file.path).unwrap();
