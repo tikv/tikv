@@ -1038,8 +1038,9 @@ impl TomlLine {
 }
 
 /// TomlWriter use to update the config file and only cover the most commom toml
-/// format that used by tikv config filetoml format like: quoted keys, multi-line value,
-/// inline table, etc, are not supported, see https://github.com/toml-lang/toml for more detail.
+/// format that used by tikv config file, toml format like: quoted keys, multi-line
+/// value, inline table, etc, are not supported, see https://github.com/toml-lang/toml
+/// for more detail.
 pub struct TomlWriter {
     dst: Vec<u8>,
     current_table: String,
@@ -1472,11 +1473,13 @@ normal-concurrency = 1
 ## commet3
 [readpool.coprocessor]
 normal-concurrency = 1
+
+[rocksdb.defaultcf]
+compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
 "#;
         let mut m = HashMap::new();
         m.insert("log-file".to_owned(), "log-file-name".to_owned());
         m.insert("readpool.storage.xxx".to_owned(), "zzz".to_owned());
-        m.insert("readpool.storage.yyy".to_owned(), "zzz".to_owned());
         m.insert(
             "readpool.storage.high-concurrency".to_owned(),
             "345".to_owned(),
@@ -1486,6 +1489,10 @@ normal-concurrency = 1
             "123".to_owned(),
         );
         m.insert("not-in-file-config1.xxx.yyy".to_owned(), "100".to_owned());
+        m.insert(
+            "rocksdb.defaultcf.compression-per-level".to_owned(),
+            "[\"no\", \"no\", \"lz4\", \"lz4\", \"lz4\", \"zstd\", \"zstd\"]".to_owned(),
+        );
 
         let mut t = TomlWriter::new();
         t.write_change(cfg.to_owned(), m);
@@ -1501,15 +1508,16 @@ high-concurrency = 345
 
 ## commet3
 xxx = zzz
-yyy = zzz
 [readpool.coprocessor]
 normal-concurrency = 123
+
+[rocksdb.defaultcf]
+compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
 
 [not-in-file-config1.xxx]
 yyy = 100
 
 "#;
-        println!("{}", String::from_utf8_lossy(t.dst.as_slice()));
         assert_eq!(expect.as_bytes(), t.finish().as_slice());
     }
 }
