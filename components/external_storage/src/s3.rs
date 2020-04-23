@@ -94,6 +94,7 @@ impl ExternalStorage for S3Storage {
             content_length: Some(content_length as i64),
             acl: get_var(&self.config.acl),
             server_side_encryption: get_var(&self.config.sse),
+            ssekms_key_id: get_var(&self.config.sse_kms_key_id),
             storage_class: get_var(&self.config.storage_class),
             ..Default::default()
         };
