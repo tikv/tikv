@@ -2243,6 +2243,7 @@ impl TiKvConfig {
         let tmp = tempfile::tempdir()?;
         let mut cfg = TiKvConfig::default();
         cfg.storage.data_dir = tmp.path().display().to_string();
+        cfg.cfg_path = tmp.path().join(LAST_CONFIG_FILE).display().to_string();
         Ok((cfg, tmp))
     }
 }
@@ -2525,7 +2526,11 @@ impl ConfigController {
         // Write change to the config file
         let content = {
             let change = to_toml_encode(change)?;
-            let src = fs::read_to_string(&self.current.cfg_path)?;
+            let src = if Path::new(&self.current.cfg_path).exists() {
+                fs::read_to_string(&self.current.cfg_path)?
+            } else {
+                String::new()
+            };
             let mut t = TomlWriter::new();
             t.write_change(src, change);
             t.finish()
