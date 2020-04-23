@@ -292,6 +292,17 @@ impl Tracker {
         tls_collect_scan_details(req_tag, &total_storage_stats);
         tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);
 
+        let peer = self.req_ctx.context.get_peer();
+        let region_id = self.req_ctx.context.get_region_id();
+        let start_key = &self.req_ctx.lower_bound;
+        let end_key = &self.req_ctx.upper_bound;
+        let reverse_scan = if let Some(reverse_scan) = self.req_ctx.is_desc_scan {
+            reverse_scan
+        } else {
+            false
+        };
+
+        tls_collect_qps(region_id, peer, start_key, end_key, reverse_scan);
         self.current_stage = TrackerState::Tracked;
     }
 }

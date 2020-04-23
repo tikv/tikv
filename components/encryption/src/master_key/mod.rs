@@ -4,7 +4,7 @@ use kvproto::encryptionpb::EncryptedContent;
 
 #[cfg(test)]
 use crate::config::Mock;
-use crate::{MasterKeyConfig, Result};
+use crate::{Error, MasterKeyConfig, Result};
 
 use std::path::Path;
 use std::sync::Arc;
@@ -32,6 +32,7 @@ mod kms;
 pub use self::kms::KmsBackend;
 
 mod metadata;
+use self::metadata::*;
 
 #[derive(Default)]
 pub(crate) struct PlaintextBackend {}
@@ -39,10 +40,30 @@ pub(crate) struct PlaintextBackend {}
 impl Backend for PlaintextBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
         let mut content = EncryptedContent::default();
+        content.mut_metadata().insert(
+            MetadataKey::Method.as_str().to_owned(),
+            MetadataMethod::Plaintext.as_slice().to_vec(),
+        );
         content.set_content(plaintext.to_owned());
         Ok(content)
     }
     fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
+        let method = ciphertext
+            .get_metadata()
+            .get(MetadataKey::Method.as_str())
+            .ok_or_else(|| {
+                Error::Other(box_err!(
+                    "metadata {} not found",
+                    MetadataKey::Method.as_str()
+                ))
+            })?;
+        if method.as_slice() != MetadataMethod::Plaintext.as_slice() {
+            return Err(Error::WrongMasterKey(box_err!(
+                "encryption method mismatch, expected {:?} vs actual {:?}",
+                MetadataMethod::Plaintext.as_slice(),
+                method
+            )));
+        }
         Ok(ciphertext.get_content().to_owned())
     }
     fn is_secure(&self) -> bool {
