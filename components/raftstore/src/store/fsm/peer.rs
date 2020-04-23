@@ -364,7 +364,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.register_raft_base_tick();
 
                 if self.fsm.peer.peer.get_is_learner() {
-                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx.trans);
+                    self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
                 }
             }
             CasualMessage::SnapshotGenerated => {
@@ -947,11 +947,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_extra_message(&mut self, msg: &RaftMessage) {
         let extra_msg = msg.get_extra_msg();
         match extra_msg.get_type() {
-            ExtraMessageType::MsgRegionWakeUp => {
+            ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 self.reset_raft_tick(GroupState::Ordered);
             }
             ExtraMessageType::MsgWantRollbackMerge => {
                 unimplemented!("remove this after #6584 merged")
+            }
+            ExtraMessageType::MsgCheckStalePeerResponse => {
+                self.fsm.peer.on_check_stale_peer_response(
+                    &mut self.ctx,
+                    msg.get_region_epoch().get_conf_ver(),
+                    extra_msg.get_check_peers(),
+                );
             }
         }
     }
@@ -1021,9 +1028,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             let mut need_gc_msg = util::is_vote_msg(msg.get_message());
             if msg.has_extra_msg() {
-                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
                 // it is removed due to conf change or merge.
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer
             }
             // The message is stale and not in current region.
             self.ctx.handle_stale_msg(
@@ -2882,11 +2889,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // for peer B in case 1 above
                 warn!(
                     "leader missing longer than max_leader_missing_duration. \
-                     To check with pd whether it's still valid";
+                     To check with pd and other peers whether it's still valid";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "expect" => %self.ctx.cfg.max_leader_missing_duration,
                 );
+
+                self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
+
                 let task = PdTask::ValidatePeer {
                     peer: self.fsm.peer.peer.clone(),
                     region: self.fsm.peer.region().clone(),

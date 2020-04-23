@@ -1953,7 +1953,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#e0c6e8842f22790e4f26ba3abbd9e01983ab95f1"
+source = "git+https://github.com/gengliqi/kvproto.git?branch=add-check-stale-msg#7130d12228773aedbda43338dc7b1015f02b3f79"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
