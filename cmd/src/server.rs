@@ -346,7 +346,7 @@ impl TiKVServer {
                 self.store_path.display()
             );
         }
-        self.lock_file.push(f);
+        self.lock_files.push(f);
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
             fatal!(
