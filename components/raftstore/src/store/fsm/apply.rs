@@ -229,14 +229,12 @@ pub enum ExecResult<S>
 }
 
 /// The possible returned value when applying logs.
-pub enum ApplyResult<E>
-where
-    E: KvEngine,
+pub enum ApplyResult<S>
 {
     None,
     Yield,
     /// Additional result that needs to be sent back to raftstore.
-    Res(ExecResult<E::Snapshot>),
+    Res(ExecResult<S>),
     /// It is unable to apply the `CommitMerge` until the source peer
     /// has applied to the required position and sets the atomic boolean
     /// to true.
@@ -899,7 +897,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
-    ) -> ApplyResult<E> {
+    ) -> ApplyResult<E::Snapshot> {
         fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
             ApplyResult::Yield
         });
@@ -945,7 +943,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
-    ) -> ApplyResult<E> {
+    ) -> ApplyResult<E::Snapshot> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
@@ -1012,7 +1010,7 @@ where
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
-    ) -> ApplyResult<E> {
+    ) -> ApplyResult<E::Snapshot> {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -1067,7 +1065,7 @@ where
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyResult<E>) {
+    ) -> (RaftCmdResponse, ApplyResult<E::Snapshot>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1176,7 +1174,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
@@ -1192,7 +1190,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
@@ -1235,7 +1233,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
         fail_point!(
             "on_apply_write_cmd",
             cfg!(release) || self.id() == 3,
@@ -1505,7 +1503,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1704,7 +1702,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         info!(
             "split is deprecated, redirect to use batch split";
             "region_id" => self.region_id(),
@@ -1726,7 +1724,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         fail_point!(
             "apply_before_split_1_3",
             { self.id == 3 && self.region_id() == 1 },
@@ -1835,7 +1833,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         fail_point!("apply_before_prepare_merge");
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
@@ -1906,7 +1904,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         {
             let apply_before_commit_merge = || {
                 fail_point!(
@@ -2039,7 +2037,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
@@ -2081,7 +2079,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
@@ -2141,7 +2139,7 @@ where
         &self,
         ctx: &ApplyContext<E, W>,
         _: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         let resp = AdminResponse::default();
         Ok((
             resp,
@@ -2161,7 +2159,7 @@ where
         &self,
         _: &ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
