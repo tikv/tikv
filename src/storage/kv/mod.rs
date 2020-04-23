@@ -26,6 +26,7 @@ pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
 use into_other::IntoOther;
+use time::Timespec;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -74,6 +75,19 @@ pub trait Engine: Send + Clone + 'static {
 
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
+    fn async_cache_snapshot(
+        &self,
+        _cache: Option<Self::Snap>,
+        ctx: &Context,
+        callback: Callback<Self::Snap>,
+    ) -> Result<()> {
+        self.async_snapshot(ctx, callback)
+    }
+    fn get_snapshot_cache(&self) -> Result<Self::Snap> {
+        Err(Error(Box::new(ErrorInner::Other(box_err!(
+            "not supported"
+        )))))
+    }
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -121,7 +135,7 @@ pub trait Engine: Send + Clone + 'static {
     }
 }
 
-pub trait Snapshot: Send + Clone {
+pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
@@ -133,6 +147,9 @@ pub trait Snapshot: Send + Clone {
         iter_opt: IterOptions,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>>;
+    fn get_create_time(&self) -> Timespec {
+        Timespec::new(0, 0)
+    }
     // The minimum key this snapshot can retrieve.
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {

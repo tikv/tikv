@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -2449,13 +2449,13 @@ impl Peer {
         check_epoch: bool,
         read_index: Option<u64>,
     ) -> ReadResponse<RocksEngine> {
-        let mut resp = ReadExecutor::new(
-            ctx.engines.kv.clone(),
+        let mut resp = ReadExecutor::execute(
+            &ctx.engines.kv,
+            &req,
+            self.region(),
             check_epoch,
-            false, /* we don't need snapshot time */
-        )
-        .execute(&req, self.region(), read_index);
-
+            read_index,
+        );
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
     }
@@ -2767,18 +2767,17 @@ where
         }
     }
 
-    fn do_get(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
+    fn do_get(engine: &E, req: &Request, region: &metapb::Region) -> Result<Response> {
         // TODO: the get_get looks weird, maybe we should figure out a better name later.
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, region)?;
 
         let mut resp = Response::default();
-        let snapshot = self.snapshot.as_ref().unwrap();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
             // TODO: check whether cf exists or not.
-            snapshot
+            engine
                 .get_value_cf(cf, &keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -2790,16 +2789,14 @@ where
                     )
                 })
         } else {
-            snapshot
-                .get_value(&keys::data_key(key))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "[region {}] failed to get {}: {:?}",
-                        region.get_id(),
-                        hex::encode_upper(key),
-                        e
-                    )
-                })
+            engine.get_value(&keys::data_key(key)).unwrap_or_else(|e| {
+                panic!(
+                    "[region {}] failed to get {}: {:?}",
+                    region.get_id(),
+                    hex::encode_upper(key),
+                    e
+                )
+            })
         };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
@@ -2809,12 +2806,13 @@ where
     }
 
     pub fn execute(
-        &mut self,
+        engine: &E,
         msg: &RaftCmdRequest,
         region: &metapb::Region,
+        check_epoch: bool,
         read_index: Option<u64>,
     ) -> ReadResponse<E> {
-        if self.check_epoch {
+        if check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
                 debug!(
                     "epoch not match";
@@ -2827,14 +2825,13 @@ where
                 };
             }
         }
-        self.maybe_update_snapshot();
         let mut need_snapshot = false;
         let requests = msg.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => match self.do_get(req, region) {
+                CmdType::Get => match Self::do_get(engine, req, region) {
                     Ok(resp) => resp,
                     Err(e) => {
                         error!(
@@ -2859,7 +2856,7 @@ where
                         res.set_read_index(read_index);
                         resp.set_read_index(res);
                     } else {
-                        panic!("[region {}] can not get readindex", region.get_id(),);
+                        panic!("[region {}] can not get readindex", region.get_id());
                     }
                     resp
                 }
@@ -2877,9 +2874,11 @@ where
         let mut response = RaftCmdResponse::default();
         response.set_responses(responses.into());
         let snapshot = if need_snapshot {
+            let snapshot = engine.snapshot().into_sync();
             Some(RegionSnapshot::from_snapshot(
-                self.snapshot.clone().unwrap(),
-                region.to_owned(),
+                snapshot,
+                Arc::new(region.clone()),
+                Timespec::new(0, 0),
             ))
         } else {
             None

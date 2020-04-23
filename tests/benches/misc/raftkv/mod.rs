@@ -25,6 +25,7 @@ use raftstore::Result;
 use tikv::server::raftkv::{CmdRes, RaftKv};
 use tikv::storage::kv::{Callback as EngineCallback, CbContext, Modify, Result as EngineResult};
 use tikv::storage::Engine;
+use time::Timespec;
 use txn_types::Key;
 
 #[derive(Clone)]
@@ -46,10 +47,14 @@ impl SyncBenchRouter {
         match cmd.callback {
             Callback::Read(cb) => {
                 let snapshot = RocksSnapshot::new(Arc::clone(&self.db));
-                let region = self.region.to_owned();
+                let region = Arc::new(self.region.to_owned());
                 cb(ReadResponse {
                     response,
-                    snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                    snapshot: Some(RegionSnapshot::from_snapshot(
+                        snapshot.into_sync(),
+                        region,
+                        Timespec::new(0, 0),
+                    )),
                 })
             }
             Callback::Write(cb) => {
@@ -101,7 +106,8 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
             snapshot.into_sync(),
-            Region::default(),
+            Arc::new(Region::default()),
+            Timespec::new(0, 0),
         )),
     };
 

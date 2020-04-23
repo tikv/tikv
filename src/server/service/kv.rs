@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tikv_util::time::{duration_to_sec, Instant};
@@ -9,7 +8,6 @@ use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
-use crate::server::service::batch::ReqBatcher;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
 use crate::storage::{
@@ -39,7 +37,6 @@ use raftstore::store::{Callback, CasualMessage};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::security::{check_common_name, SecurityManager};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{self, Key};
@@ -832,66 +829,40 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let cop = self.cop.clone();
         let gc_worker = self.gc_worker.clone();
         if self.enable_req_batch {
-            let stopped = Arc::new(AtomicBool::new(false));
-            let req_batcher = ReqBatcher::new(
-                tx.clone(),
-                self.req_batch_wait_duration,
-                Arc::clone(&self.readpool_normal_thread_load),
-            );
-            let req_batcher = Arc::new(Mutex::new(req_batcher));
-            if let Some(duration) = self.req_batch_wait_duration {
-                let storage = storage.clone();
-                let req_batcher = req_batcher.clone();
-                let req_batcher2 = req_batcher.clone();
-                let stopped = Arc::clone(&stopped);
-                let start = std::time::Instant::now();
-                let timer = GLOBAL_TIMER_HANDLE.clone();
-                self.timer_pool.lock().unwrap().spawn(
-                    timer
-                        .interval(start, duration)
-                        .take_while(move |_| {
-                            // only stop timer when no more incoming and old batch is submitted.
-                            future::ok(
-                                !stopped.load(Ordering::Relaxed)
-                                    || !req_batcher2.lock().unwrap().is_empty(),
-                            )
-                        })
-                        .for_each(move |_| {
-                            req_batcher.lock().unwrap().should_submit(&storage);
-                            Ok(())
-                        })
-                        .map_err(|e| error!("batch_commands timer errored"; "err" => ?e)),
-                );
-            }
             let request_handler = stream.for_each(move |mut req| {
                 let request_ids = req.take_request_ids();
                 let requests: Vec<_> = req.take_requests().into();
-                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-                for (id, mut req) in request_ids.into_iter().zip(requests) {
-                    if !req_batcher.lock().unwrap().filter(id, &mut req) {
-                        handle_batch_commands_request(
-                            &storage,
-                            &gc_worker,
-                            &cop,
-                            &peer,
-                            id,
-                            req,
-                            tx.clone(),
-                        );
+                let mut batch_commands = Vec::default();
+                let mut reqs = Vec::default();
+                for (mut req, id) in requests.into_iter().zip(request_ids) {
+                    if let Some(ref mut cmd) = req.cmd {
+                        match cmd {
+                            batch_commands_request::request::Cmd::Get(get_req)
+                                if get_req.get_context().get_priority() == CommandPri::Normal =>
+                            {
+                                batch_commands.push(PointGetCommand::from_get(get_req));
+                                reqs.push(id);
+                                continue;
+                            }
+                            _ => (),
+                        }
                     }
+                    handle_batch_commands_request(
+                        &storage,
+                        &gc_worker,
+                        &cop,
+                        &peer,
+                        id,
+                        req,
+                        tx.clone(),
+                    );
                 }
-                req_batcher.lock().unwrap().maybe_submit(&storage);
+                if !batch_commands.is_empty() {
+                    future_batch_get_command(&storage, reqs, batch_commands, tx.clone());
+                }
                 future::ok(())
             });
-            ctx.spawn(
-                request_handler
-                    .map_err(|e| error!("batch_commands error"; "err" => %e))
-                    .and_then(move |_| {
-                        // signal timer guard to stop polling
-                        stopped.store(true, Ordering::Relaxed);
-                        Ok(())
-                    }),
-            );
+            ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));
         } else {
             let request_handler = stream.for_each(move |mut req| {
                 let request_ids = req.take_request_ids();
@@ -1053,6 +1024,58 @@ pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: 
     notify.notify(0);
 }
 
+fn future_batch_get_command<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    requests: Vec<u64>,
+    commands: Vec<PointGetCommand>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
+) {
+    let begin_instant = Instant::now_coarse();
+    let f = storage.batch_get_command(commands).then(move |ret| {
+        match ret {
+            Ok(ret) => {
+                for (v, req) in ret.into_iter().zip(requests) {
+                    let mut resp = GetResponse::default();
+                    if let Some(err) = extract_region_error(&v) {
+                        resp.set_region_error(err);
+                    } else {
+                        match v {
+                            Ok(Some(val)) => resp.set_value(val),
+                            Ok(None) => resp.set_not_found(true),
+                            Err(e) => resp.set_error(extract_key_error(&e)),
+                        }
+                    }
+                    let mut res = batch_commands_response::Response::default();
+                    res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                    if tx.send_and_notify((req, res)).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+            e => {
+                let mut resp = GetResponse::default();
+                if let Some(err) = extract_region_error(&e) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = e {
+                    resp.set_error(extract_key_error(&e));
+                }
+                let mut res = batch_commands_response::Response::default();
+                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                for req in requests {
+                    if tx.send_and_notify((req, res.clone())).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+        }
+        GRPC_MSG_HISTOGRAM_STATIC
+            .kv_batch_get_command
+            .observe(begin_instant.elapsed_secs());
+        Ok(())
+    });
+    poll_future_notify(f);
+}
+
 fn handle_batch_commands_request<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     gc_worker: &GcWorker<E>,
@@ -1175,61 +1198,6 @@ fn future_get<E: Engine, L: LockManager>(
             }
             Ok(resp)
         })
-}
-
-pub fn future_batch_get_command<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
-    tx: Sender<(u64, batch_commands_response::Response)>,
-    requests: Vec<u64>,
-    commands: Vec<PointGetCommand>,
-) -> impl Future<Item = (), Error = ()> {
-    let begin_instant = Instant::now_coarse();
-
-    storage.batch_get_command(commands).then(move |v| {
-        match v {
-            Ok(v) => {
-                if requests.len() != v.len() {
-                    error!("KvService batch response size mismatch");
-                }
-                for (req, v) in requests.into_iter().zip(v.into_iter()) {
-                    let mut resp = GetResponse::default();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else {
-                        match v {
-                            Ok(Some(val)) => resp.set_value(val),
-                            Ok(None) => resp.set_not_found(true),
-                            Err(e) => resp.set_error(extract_key_error(&e)),
-                        }
-                    }
-                    let mut res = batch_commands_response::Response::default();
-                    res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
-                    if tx.send_and_notify((req, res)).is_err() {
-                        error!("KvService response batch commands fail");
-                    }
-                }
-            }
-            e => {
-                let mut resp = GetResponse::default();
-                if let Some(err) = extract_region_error(&e) {
-                    resp.set_region_error(err);
-                } else if let Err(e) = e {
-                    resp.set_error(extract_key_error(&e));
-                }
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
-                for req in requests {
-                    if tx.send_and_notify((req, res.clone())).is_err() {
-                        error!("KvService response batch commands fail");
-                    }
-                }
-            }
-        }
-        GRPC_MSG_HISTOGRAM_STATIC
-            .kv_batch_get_command
-            .observe(begin_instant.elapsed_secs());
-        Ok(())
-    })
 }
 
 fn future_scan<E: Engine, L: LockManager>(

@@ -52,6 +52,7 @@ use tikv_util::MustConsumeVec;
 use super::metrics::*;
 
 use super::super::RegionTask;
+use time::Timespec;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
@@ -2924,7 +2925,8 @@ where
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::<E>::from_snapshot(
                         apply_ctx.engine.snapshot().into_sync(),
-                        self.delegate.region.clone(),
+                        Arc::new(self.delegate.region.clone()),
+                        Timespec::new(0, 0),
                     )),
                 }
             }

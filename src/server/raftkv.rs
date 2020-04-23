@@ -1,12 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
-use engine_traits::CfName;
 use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;
+use engine_traits::{CfName, KvEngine, Snapshot as SnapshotTrait};
 use engine_traits::{Peekable, TablePropertiesExt};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
+use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
@@ -14,6 +15,7 @@ use kvproto::raft_cmdpb::{
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
+use std::sync::Arc;
 use std::time::Duration;
 use txn_types::{Key, Value};
 
@@ -27,7 +29,9 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
+use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::Instant;
+use time::Timespec;
 
 quick_error! {
     #[derive(Debug)]
@@ -108,6 +112,7 @@ impl From<RaftServerError> for KvError {
 pub struct RaftKv<S: RaftStoreRouter<RocksEngine> + 'static> {
     router: S,
     engine: RocksEngine,
+    region: Arc<Region>,
 }
 
 pub enum CmdRes {
@@ -164,7 +169,11 @@ fn on_read_result(
 impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
-        RaftKv { router, engine }
+        RaftKv {
+            router,
+            engine,
+            region: Arc::new(Region::default()),
+        }
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -180,23 +189,23 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         header
     }
 
-    fn exec_read_requests(
+    fn exec_snapshot(
         &self,
+        cache: Option<RegionSnapshot<RocksEngine>>,
         ctx: &Context,
-        reqs: Vec<Request>,
+        req: Request,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
-        let len = reqs.len();
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
-        cmd.set_requests(reqs.into());
-
+        cmd.set_requests(vec![req].into());
         self.router
-            .send_command(
+            .read(
+                cache,
                 cmd,
                 StoreCallback::Read(Box::new(move |resp| {
-                    let (cb_ctx, res) = on_read_result(resp, len);
+                    let (cb_ctx, res) = on_read_result(resp, 1);
                     cb((cb_ctx, res.map_err(Error::into)));
                 })),
             )
@@ -351,17 +360,30 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         })
     }
 
-    fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> kv::Result<()> {
-        fail_point!("raftkv_async_snapshot");
+    fn get_snapshot_cache(&self) -> kv::Result<Self::Snap> {
+        let snapshot = self.engine.snapshot();
+        let ts = monotonic_raw_now();
+        Ok(RegionSnapshot::from_snapshot(
+            snapshot.into_sync(),
+            self.region.clone(),
+            ts,
+        ))
+    }
+
+    fn async_cache_snapshot(
+        &self,
+        cache: Option<Self::Snap>,
+        ctx: &Context,
+        cb: Callback<Self::Snap>,
+    ) -> kv::Result<()> {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
-
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
         let begin_instant = Instant::now_coarse();
-
-        self.exec_read_requests(
+        self.exec_snapshot(
+            cache,
             ctx,
-            vec![req],
+            req,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(r)) => cb((
                     cb_ctx,
@@ -386,6 +408,11 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
             e.into()
         })
+    }
+
+    fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> kv::Result<()> {
+        fail_point!("raftkv_async_snapshot");
+        self.async_cache_snapshot(None, ctx, cb)
     }
 
     fn get_properties_cf(
@@ -419,6 +446,10 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
         )));
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_create_time(&self) -> Timespec {
+        self.get_ts()
     }
 
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {

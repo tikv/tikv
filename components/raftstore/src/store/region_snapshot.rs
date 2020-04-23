@@ -18,12 +18,14 @@ use keys::DATA_PREFIX_KEY;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+use time::Timespec;
 
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot<E: KvEngine> {
+    ts: Timespec,
     snap: <E::Snapshot as Snapshot>::SyncSnapshot,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
@@ -35,24 +37,42 @@ where
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
     pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine>) -> RegionSnapshot<RocksEngine> {
-        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
+        RegionSnapshot::from_snapshot(
+            ps.raw_snapshot().into_sync(),
+            Arc::new(ps.region().clone()),
+            Timespec::new(0, 0),
+        )
     }
 
     pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksEngine> {
-        RegionSnapshot::from_snapshot(db.snapshot().into_sync(), region)
+        RegionSnapshot::from_snapshot(
+            db.snapshot().into_sync(),
+            Arc::new(region),
+            Timespec::new(0, 0),
+        )
     }
 
     pub fn from_snapshot(
         snap: <E::Snapshot as Snapshot>::SyncSnapshot,
-        region: Region,
+        region: Arc<Region>,
+        ts: Timespec,
     ) -> RegionSnapshot<E> {
         RegionSnapshot {
+            ts,
             snap,
-            region: Arc::new(region),
+            region,
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    pub fn set_region(&mut self, region: Arc<Region>) {
+        self.region = region;
+    }
+
+    pub fn get_ts(&self) -> Timespec {
+        self.ts.clone()
     }
 
     #[inline]
@@ -158,6 +178,7 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
+            ts: self.ts.clone(),
         }
     }
 }

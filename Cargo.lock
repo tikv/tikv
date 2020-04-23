@@ -4335,6 +4335,7 @@ dependencies = [
  "tidb_query_vec_expr",
  "tikv",
  "tikv_util",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "tokio-threadpool",

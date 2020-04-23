@@ -185,6 +185,29 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.clone()
     }
 
+    /// Get a snapshot cache of `engine`.
+    fn get_snapshot_cache(engine: &E) -> Result<E::Snap> {
+        engine.get_snapshot_cache().map_err(Error::from)
+    }
+
+    /// Get a snapshot of `engine`.
+    fn snapshot_with_cache(
+        engine: &E,
+        cache: &E::Snap,
+        ctx: &Context,
+    ) -> impl std::future::Future<Output = Result<E::Snap>> {
+        let (callback, future) = tikv_util::future::paired_std_future_callback();
+        let val = engine.async_cache_snapshot(Some(cache.clone()), ctx, callback);
+        // make engine not cross yield point
+        async move {
+            val?;
+            let (_ctx, result) = future
+                .map_err(|cancel| EngineError::from(EngineErrorInner::Other(box_err!(cancel))))
+                .await?;
+            result.map_err(txn::Error::from).map_err(Error::from)
+        }
+    }
+
     /// Get a snapshot of `engine`.
     fn snapshot(engine: &E, ctx: &Context) -> impl std::future::Future<Output = Result<E::Snap>> {
         let (callback, future) = tikv_util::future::paired_std_future_callback();
@@ -283,53 +306,53 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
-        let ctx = gets[0].ctx.clone();
-        let priority = ctx.get_priority();
-        let priority_tag = get_priority_tag(priority);
+        let priority = CommandPri::Normal;
         let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
-                    .get(priority_tag)
-                    .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
-
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                {
-                    let begin_instant = Instant::now_coarse();
-                    let mut statistics = Statistics::default();
-                    let mut snap_store = SnapshotStore::new(
-                        snapshot,
-                        TimeStamp::zero(),
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                        Default::default(),
-                        false,
-                    );
-                    let mut results = vec![];
-                    // TODO: optimize using seek.
-                    for mut get in gets {
-                        snap_store.set_start_ts(get.ts.unwrap());
-                        snap_store.set_isolation_level(get.ctx.get_isolation_level());
-                        // The bypass_locks set will be checked at most once. `TsSet::vec`
-                        // is more efficient here.
+                let cache = Self::with_tls_engine(|engine| Self::get_snapshot_cache(engine))?;
+                let mut statistics = Statistics::default();
+                let mut results = Vec::default();
+                for mut req in gets {
+                    let start_ts = req.ts.unwrap();
+                    let isolation_level = req.ctx.get_isolation_level();
+                    let fill_cache = !req.ctx.get_not_fill_cache();
+                    let bypass_locks = TsSet::vec_from_u64s(req.ctx.take_resolved_locks());
+                    let snapshot = Self::with_tls_engine(|engine| {
+                        Self::snapshot_with_cache(engine, &cache, &req.ctx)
+                    })
+                    .await?;
+                    let snap_store = if snapshot.get_create_time() == cache.get_create_time() {
+                        SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            isolation_level,
+                            fill_cache,
+                            bypass_locks,
+                            false,
+                        )
+                    } else {
+                        SnapshotStore::new(
+                            cache.clone(),
+                            start_ts,
+                            isolation_level,
+                            fill_cache,
+                            bypass_locks,
+                            false,
+                        )
+                    };
+                    results.push(
                         snap_store
-                            .set_bypass_locks(TsSet::vec_from_u64s(get.ctx.take_resolved_locks()));
-                        results.push(
-                            snap_store
-                                .get(&get.key, &mut statistics)
-                                .map_err(Error::from),
-                        );
-                    }
-                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.elapsed_secs());
-
-                    Ok(results)
+                            .get(&req.key, &mut statistics)
+                            .map_err(Error::from),
+                    );
                 }
+
+                SCHED_HISTOGRAM_VEC_STATIC
+                    .get(CMD)
+                    .observe(command_duration.elapsed_secs());
+                Ok(results)
             },
             priority,
             thread_rng().next_u64(),

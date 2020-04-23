@@ -975,7 +975,11 @@ mod tests {
                             let mut fake_region = metapb::Region::default();
                             // Add a peer to pass initialized check.
                             fake_region.mut_peers().push(metapb::Peer::default());
-                            RegionSnapshot::from_snapshot(snap, fake_region)
+                            RegionSnapshot::from_snapshot(
+                                snap,
+                                Arc::new(fake_region),
+                                Timespec::new(0, 0),
+                            )
                         }),
                     ))
                 }),

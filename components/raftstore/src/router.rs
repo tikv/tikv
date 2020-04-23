@@ -6,7 +6,8 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use crate::store::fsm::RaftRouter;
 use crate::store::{
-    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
+    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, RegionSnapshot, SignificantMsg,
+    StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_traits::KvEngine;
@@ -22,6 +23,16 @@ where
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()>;
+
+    /// Sends Snapshot to local store.
+    fn read(
+        &self,
+        _snap: Option<RegionSnapshot<E>>,
+        req: RaftCmdRequest,
+        cb: Callback<E>,
+    ) -> RaftStoreResult<()> {
+        self.send_command(req, cb)
+    }
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -153,6 +164,17 @@ where
                 .send_raft_command(cmd)
                 .map_err(|e| handle_send_error(region_id, e))
         }
+    }
+
+    fn read(
+        &self,
+        snap: Option<RegionSnapshot<E>>,
+        req: RaftCmdRequest,
+        cb: Callback<E>,
+    ) -> RaftStoreResult<()> {
+        let cmd = RaftCommand::new(req, cb);
+        self.local_reader.read(snap, cmd);
+        Ok(())
     }
 
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
