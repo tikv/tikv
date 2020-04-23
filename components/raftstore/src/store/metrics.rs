@@ -448,4 +448,11 @@ lazy_static! {
 
     pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration=
         auto_flush_from!(STORE_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
+
+    pub static ref READ_QPS_TOPN: GaugeVec =
+        register_gauge_vec!(
+            "tikv_read_qps_topn",
+            "collect topN of read qps",
+        &["order"]
+        ).unwrap();
 }

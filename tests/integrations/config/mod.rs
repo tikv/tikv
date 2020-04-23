@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-use encryption::{EncryptionConfig, MasterKeyConfig};
+use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
+use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
@@ -89,7 +90,7 @@ fn test_serde_custom_tikv_config() {
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
-        request_batch_enable_cross_command: false,
+        request_batch_enable_cross_command: true,
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
@@ -479,7 +480,7 @@ fn test_serde_custom_tikv_config() {
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
         enable_unordered_write: false,
-        allow_concurrent_memtable_write: true,
+        allow_concurrent_memtable_write: false,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         defaultcf: RaftDefaultCfConfig {
@@ -563,11 +564,12 @@ fn test_serde_custom_tikv_config() {
         cert_allowed_cn,
     };
     value.encryption = EncryptionConfig {
-        method: EncryptionMethod::Aes128Ctr,
+        data_encryption_method: EncryptionMethod::Aes128Ctr,
         data_key_rotation_period: ReadableDuration::days(14),
         master_key: MasterKeyConfig::File {
-            method: EncryptionMethod::Aes256Ctr,
-            path: "/master/key/path".to_owned(),
+            config: FileCofnig {
+                path: "/master/key/path".to_owned(),
+            },
         },
         previous_master_key: MasterKeyConfig::Plaintext,
     };
