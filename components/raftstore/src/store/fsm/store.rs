@@ -1066,7 +1066,7 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        self.start_system(workers, region_peers, builder,auto_split_controller)?;
+        self.start_system(workers, region_peers, builder, auto_split_controller)?;
         Ok(())
     }
 

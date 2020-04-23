@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::mem;
 use std::time::Duration;
 
-use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
+use crate::storage::kv::{FlowStatsReporter, Statistics};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use raftstore::store::util::build_key_range;

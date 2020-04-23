@@ -31,7 +31,7 @@ use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
-
+use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
@@ -60,7 +60,7 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
 }
 
 impl FlowStatsReporter for Scheduler<Task> {
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
+    fn report_read_stats(&self, read_stats: ReadStats) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
         }
