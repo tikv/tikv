@@ -3,19 +3,21 @@
 use crate::codec::{Error, Result};
 use codec::prelude::*;
 use num_traits::PrimInt;
+use std::cmp::Ordering::{Equal, Greater, Less};
+use std::marker::PhantomData;
 
 pub enum RowSlice<'a> {
     Small {
-        non_null_ids: &'a [u8],
-        null_ids: &'a [u8],
-        offsets: &'a [u16],
-        values: &'a [u8],
+        non_null_ids: LEBytes<'a, u8>,
+        null_ids: LEBytes<'a, u8>,
+        offsets: LEBytes<'a, u16>,
+        values: LEBytes<'a, u8>,
     },
     Big {
-        non_null_ids: &'a [u32],
-        null_ids: &'a [u32],
-        offsets: &'a [u32],
-        values: &'a [u8],
+        non_null_ids: LEBytes<'a, u32>,
+        null_ids: LEBytes<'a, u32>,
+        offsets: LEBytes<'a, u32>,
+        values: LEBytes<'a, u8>,
     },
 }
 
@@ -32,17 +34,17 @@ impl RowSlice<'_> {
         let null_cnt = data.read_u16_le()? as usize;
         let row = if is_big {
             RowSlice::Big {
-                non_null_ids: read_ints_le(&mut data, non_null_cnt)?,
-                null_ids: read_ints_le(&mut data, null_cnt)?,
-                offsets: read_ints_le(&mut data, non_null_cnt)?,
-                values: data,
+                non_null_ids: read_le_bytes(&mut data, non_null_cnt)?,
+                null_ids: read_le_bytes(&mut data, null_cnt)?,
+                offsets: read_le_bytes(&mut data, non_null_cnt)?,
+                values: LEBytes::new(data),
             }
         } else {
             RowSlice::Small {
-                non_null_ids: read_ints_le(&mut data, non_null_cnt)?,
-                null_ids: read_ints_le(&mut data, null_cnt)?,
-                offsets: read_ints_le(&mut data, non_null_cnt)?,
-                values: data,
+                non_null_ids: read_le_bytes(&mut data, non_null_cnt)?,
+                null_ids: read_le_bytes(&mut data, null_cnt)?,
+                offsets: read_le_bytes(&mut data, non_null_cnt)?,
+                values: LEBytes::new(data),
             }
         };
         Ok(row)
@@ -69,11 +71,11 @@ impl RowSlice<'_> {
                 if let Ok(idx) = non_null_ids.binary_search(&(id as u32)) {
                     let offset = offsets.get(idx).ok_or(Error::ColumnOffset(idx))?;
                     let start = if idx > 0 {
-                        offsets[idx - 1] as usize
+                        offsets.get_unchecked(idx - 1) as usize
                     } else {
                         0usize
                     };
-                    return Ok(Some((start, (*offset as usize))));
+                    return Ok(Some((start, (offset as usize))));
                 }
             }
             RowSlice::Small {
@@ -84,11 +86,11 @@ impl RowSlice<'_> {
                 if let Ok(idx) = non_null_ids.binary_search(&(id as u8)) {
                     let offset = offsets.get(idx).ok_or(Error::ColumnOffset(idx))?;
                     let start = if idx > 0 {
-                        offsets[idx - 1] as usize
+                        offsets.get_unchecked(idx - 1) as usize
                     } else {
                         0usize
                     };
-                    return Ok(Some((start, (*offset as usize))));
+                    return Ok(Some((start, (offset as usize))));
                 }
             }
         }
@@ -126,8 +128,8 @@ impl RowSlice<'_> {
     #[inline]
     pub fn values(&self) -> &[u8] {
         match self {
-            RowSlice::Big { values, .. } => values,
-            RowSlice::Small { values, .. } => values,
+            RowSlice::Big { values, .. } => values.slice,
+            RowSlice::Small { values, .. } => values.slice,
         }
     }
 }
@@ -138,7 +140,7 @@ impl RowSlice<'_> {
 /// This method is only implemented on little endianness currently, since x86 use little endianness.
 #[cfg(target_endian = "little")]
 #[inline]
-fn read_ints_le<'a, T>(buf: &mut &'a [u8], len: usize) -> Result<&'a [T]>
+fn read_le_bytes<'a, T>(buf: &mut &'a [u8], len: usize) -> Result<LEBytes<'a, T>>
 where
     T: PrimInt,
 {
@@ -146,36 +148,90 @@ where
     if buf.len() < bytes_len {
         return Err(Error::unexpected_eof());
     }
-    let slice = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, len) };
+    let slice = &buf[..bytes_len];
     buf.advance(bytes_len);
-    Ok(slice)
+    Ok(LEBytes::new(slice))
+}
+
+#[cfg(target_endian = "little")]
+pub struct LEBytes<'a, T: PrimInt> {
+    slice: &'a [u8],
+    _marker: PhantomData<T>,
+}
+
+#[cfg(target_endian = "little")]
+impl<'a, T: PrimInt> LEBytes<'a, T> {
+    fn new(slice: &'a [u8]) -> Self {
+        Self {
+            slice,
+            _marker: PhantomData::default(),
+        }
+    }
+
+    #[inline]
+    fn get(&self, index: usize) -> Option<T> {
+        if std::mem::size_of::<T>() * index >= self.slice.len() {
+            None
+        } else {
+            Some(self.get_unchecked(index))
+        }
+    }
+
+    #[inline]
+    fn get_unchecked(&self, index: usize) -> T {
+        let ptr = self.slice.as_ptr() as *const T;
+        unsafe {
+            let ptr = ptr.add(index);
+            std::ptr::read_unaligned(ptr)
+        }
+    }
+
+    #[inline]
+    fn binary_search(&self, value: &T) -> std::result::Result<usize, usize> {
+        let mut size = self.slice.len() / std::mem::size_of::<T>();
+        if size == 0 {
+            return Err(0);
+        }
+        let mut base = 0usize;
+        while size > 1 {
+            let half = size / 2;
+            let mid = base + half;
+            let cmp = self.get_unchecked(mid).cmp(value);
+            base = if cmp == Greater { base } else { mid };
+            size -= half;
+        }
+        let cmp = self.get_unchecked(base).cmp(value);
+        if cmp == Equal {
+            Ok(base)
+        } else {
+            Err(base + (cmp == Less) as usize)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::encoder::{Column, RowEncoder};
-    use super::{read_ints_le, RowSlice};
+    use super::{read_le_bytes, RowSlice};
     use crate::codec::data_type::ScalarValue;
     use crate::expr::EvalContext;
     use codec::prelude::NumberEncoder;
     use std::u16;
 
     #[test]
-    fn test_read_ints() {
+    fn test_read_le_bytes() {
         let data = vec![1, 128, 512, u16::MAX, 256];
         let mut buf = vec![];
         for n in &data {
             buf.write_u16_le(*n).unwrap();
         }
 
-        assert_eq!(
-            &data[0..3],
-            read_ints_le::<u16>(&mut buf.as_slice(), 3).unwrap()
-        );
-        assert_eq!(
-            &data[0..4],
-            read_ints_le::<u16>(&mut buf.as_slice(), 4).unwrap()
-        );
+        for i in 3..=data.len() {
+            let le_bytes = read_le_bytes::<u16>(&mut buf.as_slice(), i).unwrap();
+            for j in 0..i {
+                assert_eq!(le_bytes.get_unchecked(j), data[j]);
+            }
+        }
     }
 
     fn encoded_data_big() -> Vec<u8> {
