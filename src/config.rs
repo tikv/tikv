@@ -2795,7 +2795,7 @@ mod tests {
         change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
-            "false".to_owned(),
+            "read-only".to_owned(),
         );
         let res = to_toml_encode(change).unwrap();
         assert_eq!(
