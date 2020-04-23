@@ -10,13 +10,13 @@ use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
 use crossbeam::channel::SendError;
+use engine_rocks::RocksEngine;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
-use protobuf::Message;
 use raftstore::router::RaftStoreRouter;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, BatchCollector, Sender as BatchSender};
@@ -27,7 +27,7 @@ use tokio_timer::timer::Handle;
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 // When merge raft messages into a batch message, leave a buffer.
-const GRPC_SEND_MSG_BUF: usize = 4096;
+const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
 
 const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 const RAFT_MSG_NOTIFY_SIZE: usize = 8;
@@ -40,7 +40,7 @@ struct Conn {
 }
 
 impl Conn {
-    fn new<T: RaftStoreRouter + 'static>(
+    fn new<T: RaftStoreRouter<RocksEngine> + 'static>(
         env: Arc<Environment>,
         router: T,
         addr: &str,
@@ -150,7 +150,7 @@ pub struct RaftClient<T: 'static> {
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter> RaftClient<T> {
+impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,
@@ -242,9 +242,9 @@ impl<T: RaftStoreRouter> RaftClient<T> {
 struct RaftMsgCollector(usize);
 impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
     fn collect(&mut self, v: &mut Vec<RaftMessage>, e: RaftMessage) -> Option<RaftMessage> {
-        let mut msg_size = 0;
+        let mut msg_size = e.start_key.len() + e.end_key.len();
         for entry in e.get_message().get_entries() {
-            msg_size += entry.compute_size() as usize;
+            msg_size += entry.data.len();
         }
         if self.0 > 0 && self.0 + msg_size + GRPC_SEND_MSG_BUF >= MAX_GRPC_SEND_MSG_LEN as usize {
             self.0 = 0;
