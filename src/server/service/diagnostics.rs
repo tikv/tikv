@@ -399,17 +399,13 @@ mod sys {
                 "cpu-logical-cores",
                 SysQuota::new().cpu_cores_quota().to_string(),
             ),
-            (
-                "cpu-physical-cores",
-                sysinfo::get_physical_cores().to_string(),
-            ),
+            ("cpu-physical-cores", num_cpus::get_physical().to_string()),
             (
                 "cpu-frequency",
                 format!("{}MHz", sysinfo::get_cpu_frequency()),
             ),
         ];
         // cache
-        use sysinfo::cache_size;
         let caches = vec![
             ("l1-cache-size", cache_size::l1_cache_size()),
             ("l1-cache-line-size", cache_size::l1_cache_line_size()),
@@ -502,7 +498,7 @@ mod sys {
     }
 
     fn nic_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-        let nics = sysinfo::datalink::interfaces();
+        let nics = pnet_datalink::interfaces();
         for nic in nics.into_iter() {
             let mut infos = vec![
                 ("mac", nic.mac_address().to_string()),
@@ -567,14 +563,17 @@ mod sys {
     /// Current only can be used in operating system mounted `procfs`
     fn get_sysctl_list() -> HashMap<String, String> {
         const DIR: &str = "/proc/sys/";
-        WalkDir::new(DIR).into_iter().filter_map(|entry| {
-            let entry = entry.ok()?;
-            let content = std::fs::read_to_string(entry.path()).ok()?;
-            let path = entry.path().to_str()?;
+        WalkDir::new(DIR)
+            .into_iter()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let content = std::fs::read_to_string(entry.path()).ok()?;
+                let path = entry.path().to_str()?;
 
-            let name = path.trim_start_matches(DIR).replace("/", ".");
-            Some((name, content.trim().to_string()))
-        }).collect()
+                let name = path.trim_start_matches(DIR).replace("/", ".");
+                Some((name, content.trim().to_string()))
+            })
+            .collect()
     }
 
     /// process_info collects all process list

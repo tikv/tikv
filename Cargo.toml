@@ -63,6 +63,7 @@ async-trait = "0.1"
 batch-system = { path = "components/batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
+cache-size = "0.5"
 chrono = "0.4"
 codec = { path = "components/codec" }
 configuration = { path = "components/configuration" }
@@ -101,8 +102,10 @@ mime = "0.3.13"
 more-asserts = "0.1"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
+num_cpus = "1"
 pd_client = { path = "components/pd_client" }
 pin-project = "0.4.8"
+pnet_datalink = "0.23"
 prost = "0.6"
 pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
