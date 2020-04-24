@@ -20,10 +20,11 @@ use tokio_threadpool::{Builder, ThreadPool};
 
 use std::error::Error as StdError;
 use std::net::SocketAddr;
+use std::result::Result as StdResult;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
-use super::debug::Debugger;
+use super::debug::{self, Debugger, RegionInfo};
 use super::Result;
 use crate::config::ConfigController;
 use tikv_alloc::error::ProfError;
@@ -406,16 +407,55 @@ impl StatusServer {
         )
     }
 
+    fn region_json(size_info: Vec<(&str, usize)>, region_info: RegionInfo) -> serde_json::Value {
+        unimplemented!()
+    }
+
     pub fn dump_region_info(
         req: Request<Body>,
         debugger: Option<&Debugger>,
-    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+    ) -> StdResult<Response<Body>, debug::Error> {
+        fn to_debug_error(err: impl 'static + StdError + Sync + Send) -> debug::Error {
+            debug::Error::Other(Box::new(err))
+        }
         match debugger {
-            None => Box::new(ok(StatusServer::err_response(
+            None => Ok(StatusServer::err_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "debugger uninitialized",
-            ))),
-            Some(debugger) => unimplemented!(),
+            )),
+            Some(debugger) => {
+                let cfs = vec!["default", "write", "lock"];
+                let id: Option<u64> = req
+                    .uri()
+                    .query()
+                    .and_then(|query| {
+                        url::form_urlencoded::parse(query.as_bytes())
+                            .find(|(key, _)| key == "id")
+                    })
+                    .and_then(|(_, value)| value.parse().ok());
+                let body = match id {
+                    Some(id) => serde_json::to_vec(&Self::region_json(
+                        debugger.region_size(id, cfs)?,
+                        debugger.region_info(id)?,
+                    )),
+                    None => {
+                        let region_ids = debugger.get_all_meta_regions()?;
+                        let mut regions = Vec::with_capacity(region_ids.len());
+                        for id in region_ids {
+                            regions.push(Self::region_json(
+                                debugger.region_size(id, cfs.clone())?,
+                                debugger.region_info(id)?,
+                            ));
+                        }
+                        serde_json::to_vec(&regions)
+                    }
+                }
+                .map_err(to_debug_error)?;
+                Response::builder()
+                    .header("content-type", "application/json")
+                    .body(body.into())
+                    .map_err(to_debug_error)
+            }
         }
     }
 
@@ -429,11 +469,12 @@ impl StatusServer {
         let cfg_controller = Arc::new(RwLock::new(self.cfg_controller.take().unwrap()));
         let debugger = self.debugger.clone();
         // Start to serve.
-        let server = builder.serve(move || {
-            let cfg_controller = cfg_controller.clone();
-            let debugger = debugger.clone();
-            // Create a status service.
-            service_fn(
+        let server =
+            builder.serve(move || {
+                let cfg_controller = cfg_controller.clone();
+                let debugger = debugger.clone();
+                // Create a status service.
+                service_fn(
                     move |req: Request<Body>| -> Box<
                         dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
                     > {
@@ -452,7 +493,16 @@ impl StatusServer {
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/region") => {
-                                Self::dump_region_info(req, debugger.as_ref())
+                                Box::new(ok(match Self::dump_region_info(req, debugger.as_ref()) {
+                                    Ok(resp) => resp,
+                                    Err(debug::Error::NotFound(msg)) => {
+                                        Self::err_response(StatusCode::NOT_FOUND, msg)
+                                    }
+                                    Err(err) => Self::err_response(
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        err.to_string(),
+                                    ),
+                                }))
                             }
                             (Method::GET, "/config") => {
                                 Self::get_config(&cfg_controller.read().unwrap())
@@ -468,7 +518,7 @@ impl StatusServer {
                         }
                     },
                 )
-        });
+            });
 
         let graceful = server
             .with_graceful_shutdown(self.rx.take().unwrap())
