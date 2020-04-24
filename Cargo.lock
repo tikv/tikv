@@ -5174,6 +5174,9 @@ dependencies = [
 name = "tracer_pb"
 version = "0.1.0"
 dependencies = [
+ "lazy_static",
+ "prost",
+ "prost-derive",
  "protobuf",
  "protobuf-build",
  "tikv_alloc",

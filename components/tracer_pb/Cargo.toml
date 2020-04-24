@@ -3,10 +3,18 @@ name = "tracer_pb"
 version = "0.1.0"
 edition = "2018"
 
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = ["protobuf-build/protobuf-codec"]
+prost-codec = ["prost", "prost-derive", "lazy_static", "protobuf-build/prost-codec"]
+
 [dependencies]
 protobuf = "=2.8.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tracer = { path = "../tracer" }
+prost = { version = "0.6", optional = true }
+prost-derive = { version = "0.6", optional = true }
+lazy_static = { version = "1.3", optional = true }
 
 [build-dependencies]
 protobuf-build = { version = "0.11", default-features = false }
