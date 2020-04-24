@@ -33,6 +33,7 @@ prost-codec = [
   "tipb/prost-codec",
   "txn_types/prost-codec",
   "encryption/prost-codec",
+  "tracer_pb/prost-codec",
 ]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
@@ -46,7 +47,8 @@ protobuf-codec = [
   "tidb_query_datatype/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
-  "encryption/protobuf-codec"
+  "encryption/protobuf-codec",
+  "tracer_pb/protobuf-codec",
 ]
 testexport = ["raftstore/testexport"]
 
