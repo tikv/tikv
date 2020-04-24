@@ -20,6 +20,7 @@ prost-codec = [
 
 [dependencies]
 configuration = { path = "../configuration" }
+encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
 hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }

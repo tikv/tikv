@@ -44,8 +44,10 @@ crc32fast = "1.2"
 crossbeam = "0.7.2"
 engine = { path = "../engine" }
 engine_rocks = { path = "../engine_rocks" }
+encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
 fail = "0.3"
+openssl = "0.10"
 fs2 = "0.4"
 futures = "0.1"
 futures-executor = "0.3.1"
@@ -63,6 +65,7 @@ prost = { version = "0.6", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.2"
 raft = { version = "0.6.0-alpha", default-features = false }
+rand = "0.6.5"
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

@@ -19,10 +19,9 @@ use engine_traits::Peekable;
 use engine_traits::{SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::SnapManager;
+use raftstore::store::{AutoSplitController, SnapManager};
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::ConfigHandler;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
@@ -920,13 +919,10 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router);
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(dir).unwrap())
+        Arc::new(SSTImporter::new(dir, None).unwrap())
     };
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
-    let cfg_controller = Default::default();
-    let config_client =
-        ConfigHandler::start(String::new(), cfg_controller, pd_worker.scheduler()).unwrap();
     let e = node
         .start(
             engines,
@@ -937,7 +933,7 @@ fn test_double_run_node() {
             coprocessor_host,
             importer,
             Worker::new("split"),
-            Box::new(config_client),
+            AutoSplitController::default(),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

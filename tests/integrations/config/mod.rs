@@ -6,10 +6,12 @@ use std::path::PathBuf;
 
 use slog::Level;
 
+use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
 use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::{Config as RaftstoreConfig, QuorumAlgorithm};
@@ -20,6 +22,7 @@ use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
+use tikv_util::collections::HashSet;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
@@ -194,6 +197,10 @@ fn test_serde_custom_tikv_config() {
         sample_ratio: 0.982,
         merge_small_file_threshold: ReadableSize::kb(21),
         blob_run_mode: BlobRunMode::Fallback,
+        level_merge: true,
+        range_merge: true,
+        max_sorted_runs: 100,
+        gc_merge_rewrite: true,
     };
     let titan_db_config = TitanDBConfig {
         enabled: true,
@@ -322,6 +329,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly,
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -376,6 +387,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -430,6 +445,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -533,12 +552,24 @@ fn test_serde_custom_tikv_config() {
         region_max_keys: 100000,
         region_split_keys: 100000,
     };
+    let mut cert_allowed_cn = HashSet::default();
+    cert_allowed_cn.insert("example.tikv.com".to_owned());
     value.security = SecurityConfig {
         ca_path: "invalid path".to_owned(),
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
-        cipher_file: "invalid path".to_owned(),
+        cert_allowed_cn,
+    };
+    value.encryption = EncryptionConfig {
+        data_encryption_method: EncryptionMethod::Aes128Ctr,
+        data_key_rotation_period: ReadableDuration::days(14),
+        master_key: MasterKeyConfig::File {
+            config: FileCofnig {
+                path: "/master/key/path".to_owned(),
+            },
+        },
+        previous_master_key: MasterKeyConfig::Plaintext,
     };
     value.import = ImportConfig {
         num_threads: 123,

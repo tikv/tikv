@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{Future, Sink, Stream};
@@ -9,6 +10,8 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
+
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
@@ -18,11 +21,16 @@ use crate::server::{Error, Result};
 pub struct Service {
     pool: CpuPool,
     log_file: String,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(pool: CpuPool, log_file: String) -> Self {
-        Service { pool, log_file }
+    pub fn new(pool: CpuPool, log_file: String, security_mgr: Arc<SecurityManager>) -> Self {
+        Service {
+            pool,
+            log_file,
+            security_mgr,
+        }
     }
 }
 
@@ -33,6 +41,9 @@ impl Diagnostics for Service {
         req: SearchLogRequest,
         sink: ServerStreamingSink<SearchLogResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let log_file = self.log_file.to_owned();
         let stream = self
             .pool
@@ -70,6 +81,9 @@ impl Diagnostics for Service {
         req: ServerInfoRequest,
         sink: UnarySink<ServerInfoResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let tp = req.get_tp();
         let collect = self
             .pool
@@ -428,7 +442,7 @@ mod sys {
             let free = disk.get_available_space();
             let used = total - free;
             let free_pct = (free as f64) / (total as f64);
-            let used_pct = (free as f64) / (total as f64);
+            let used_pct = (used as f64) / (total as f64);
             let infos = vec![
                 ("type", format!("{:?}", disk.get_type())),
                 (
