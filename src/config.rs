@@ -2392,8 +2392,8 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::I32(_) => ConfigValue::from(v.parse::<i32>()?),
         ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
         ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
+        ConfigValue::BlobRunMode(_) => ConfigValue::from(v.parse::<BlobRunMode>()?),
         ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
-        ConfigValue::Other(_) => ConfigValue::Other(v.to_owned()),
         _ => unreachable!(),
     };
     Ok(res)
@@ -2420,7 +2420,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                         ConfigValue::Duration(_)
                         | ConfigValue::Size(_)
                         | ConfigValue::String(_)
-                        | ConfigValue::Other(_) => Ok(true),
+                        | ConfigValue::BlobRunMode(_) => Ok(true),
                         _ => Ok(false),
                     }
                 }

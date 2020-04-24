@@ -116,6 +116,9 @@ block-cache-size = "512MB"
 [gc]
 ## config should be update in place
 max-write-bytes-per-sec = "1KB"
+
+[rocksdb.defaultcf.titan]
+blob-run-mode = "normal"
 "#;
         let mut f = File::create(&cfg.cfg_path).unwrap();
         f.write_all(c.as_bytes()).unwrap();
@@ -137,6 +140,10 @@ max-write-bytes-per-sec = "1KB"
         change.insert(
             "rocksdb.defaultcf.block-cache-size".to_owned(),
             "1GB".to_owned(),
+        );
+        change.insert(
+            "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
+            "read-only".to_owned(),
         );
         change
     };
@@ -177,6 +184,9 @@ region-split-keys = 10000
 [gc]
 ## config should be update in place
 max-write-bytes-per-sec = "100MB"
+
+[rocksdb.defaultcf.titan]
+blob-run-mode = "read-only"
 "#;
     assert_eq!(expect.as_bytes(), res.as_slice());
 }
