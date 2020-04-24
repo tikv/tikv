@@ -616,6 +616,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "coarsetime"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
+dependencies = [
+ "lazy_static",
+ "libc",
+]
+
+[[package]]
 name = "codec"
 version = "0.0.1"
 dependencies = [
@@ -1056,8 +1066,6 @@ dependencies = [
  "prometheus",
  "protobuf",
  "rocksdb",
- "serde",
- "serde_derive",
  "slog",
  "slog-global",
  "sysinfo",
@@ -1081,6 +1089,8 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "coarsetime",
+ "configuration",
  "encryption",
  "engine",
  "engine_traits",
@@ -1092,12 +1102,15 @@ dependencies = [
  "prometheus-static-metric",
  "rand 0.7.3",
  "rocksdb",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
+ "toml",
  "txn_types",
 ]
 

@@ -33,10 +33,10 @@ use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use encryption::EncryptionConfig;
-use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
     RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
