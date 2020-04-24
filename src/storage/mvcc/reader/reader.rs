@@ -200,7 +200,7 @@ impl<S: Snapshot> MvccReader<S> {
                     WriteType::Delete => {
                         return Ok(None);
                     }
-                    WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
+                    WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev().unwrap(),
                 },
                 None => return Ok(None),
             }
@@ -225,7 +225,7 @@ impl<S: Snapshot> MvccReader<S> {
             if commit_ts <= start_ts {
                 break;
             }
-            seek_ts = commit_ts.prev();
+            seek_ts = commit_ts.prev().unwrap();
         }
         Ok(None)
     }

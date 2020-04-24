@@ -332,7 +332,7 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
                 .bypass_locks(self.bypass_locks.clone())
-                .hint_min_ts(Some(after_ts.next()))
+                .hint_min_ts(Some(after_ts.next().unwrap()))
                 .hint_max_ts(Some(self.start_ts))
                 .build_entry_scanner(after_ts, output_delete)?;
 
@@ -643,7 +643,7 @@ mod tests {
         fn store(&self) -> SnapshotStore<RocksSnapshot> {
             SnapshotStore::new(
                 self.snapshot.clone(),
-                COMMIT_TS.next(),
+                COMMIT_TS.next().unwrap(),
                 IsolationLevel::Si,
                 true,
                 Default::default(),

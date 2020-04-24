@@ -223,7 +223,9 @@ impl<S: Snapshot> MvccTxn<S> {
         // The current key exists under any of the following conditions:
         // 1.The current write type is `PUT`
         // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
-        if write.write_type == WriteType::Put || self.key_exist(&key, write_commit_ts.prev())? {
+        if write.write_type == WriteType::Put
+            || self.key_exist(&key, write_commit_ts.prev().unwrap())?
+        {
             return Err(ErrorInner::AlreadyExist { key: key.to_raw()? }.into());
         }
 
@@ -372,7 +374,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     WriteType::Put => Some(self.reader.load_data(&key, write)?),
                     WriteType::Delete => None,
                     WriteType::Lock | WriteType::Rollback => {
-                        self.reader.get(&key, commit_ts.prev(), true)?
+                        self.reader.get(&key, commit_ts.prev().unwrap(), true)?
                     }
                 };
             }
@@ -900,7 +902,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 // during rolling update.
                 // If this is a large transaction and the lock is active, push forward the minCommitTS.
                 if !lock.min_commit_ts.is_zero() && caller_start_ts >= lock.min_commit_ts {
-                    lock.min_commit_ts = caller_start_ts.next();
+                    lock.min_commit_ts = caller_start_ts
+                        .next()
+                        .ok_or_else(|| ErrorInner::Other(box_err!("invalid max ts")))?;
 
                     if lock.min_commit_ts < current_ts {
                         lock.min_commit_ts = current_ts;
@@ -928,7 +932,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut latest_delete = None;
         let mut is_completed = true;
         while let Some((commit, write)) = self.reader.seek_write(&key, ts)? {
-            ts = commit.prev();
+            ts = commit.prev().unwrap();
             found_versions += 1;
 
             if self.write_size >= MAX_TXN_WRITE_SIZE {
@@ -2593,6 +2597,21 @@ mod tests {
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
         must_rollback(&engine, k, ts(300, 0));
+
+        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(310, 0), 100, 0);
+        must_large_txn_locked(&engine, k, ts(310, 0), 100, ts(310, 1), false);
+        // Don't push forward the min_commit_ts if caller_start_ts is max.
+        must_check_txn_status_err(&engine, k, ts(310, 0), TimeStamp::max(), ts(320, 0), r);
+        // If the lock is expired, don't return error.
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(310, 0),
+            TimeStamp::max(),
+            ts(510, 0),
+            r,
+            TtlExpire,
+        );
     }
 
     #[test]

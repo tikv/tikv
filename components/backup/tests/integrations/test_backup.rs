@@ -364,7 +364,7 @@ fn test_backup_and_import() {
         vec![],   // end
         0.into(), // begin_ts
         backup_ts,
-        &tmp.path().join(format!("{}", backup_ts.next())),
+        &tmp.path().join(format!("{}", backup_ts.next().unwrap())),
     );
     let resps2 = block_on(rx.collect::<Vec<_>>());
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
@@ -422,7 +422,8 @@ fn test_backup_and_import() {
         vec![],   // end
         0.into(), // begin_ts
         backup_ts,
-        &tmp.path().join(format!("{}", backup_ts.next().next())),
+        &tmp.path()
+            .join(format!("{}", backup_ts.next().unwrap().next().unwrap())),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
     assert_eq!(files1, resps3[0].files);
@@ -523,7 +524,7 @@ fn test_backup_rawkv() {
         vec![], // start
         vec![], // end
         cf.clone(),
-        &tmp.path().join(format!("{}", backup_ts.next())),
+        &tmp.path().join(format!("{}", backup_ts.next().unwrap())),
     );
     let resps2 = block_on(rx.collect::<Vec<_>>());
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
@@ -581,7 +582,8 @@ fn test_backup_rawkv() {
         vec![b'a'], // start
         vec![b'z'], // end
         cf,
-        &tmp.path().join(format!("{}", backup_ts.next().next())),
+        &tmp.path()
+            .join(format!("{}", backup_ts.next().unwrap().next().unwrap())),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
     assert_eq!(files1, resps3[0].files);

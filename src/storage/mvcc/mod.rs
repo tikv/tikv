@@ -812,7 +812,7 @@ pub mod tests {
         lock_ttl: u64,
     ) {
         let for_update_ts = for_update_ts.into();
-        let min_commit_ts = for_update_ts.next();
+        let min_commit_ts = for_update_ts.next().unwrap();
         must_acquire_pessimistic_lock_impl(
             engine,
             key,

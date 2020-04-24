@@ -926,7 +926,7 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
         let opt = reader.seek_write(key, ts)?;
         match opt {
             Some((commit_ts, write)) => {
-                ts = commit_ts.prev();
+                ts = commit_ts.prev().unwrap();
                 writes.push((commit_ts, write));
             }
             None => break,

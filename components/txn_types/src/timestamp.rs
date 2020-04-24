@@ -32,21 +32,23 @@ impl TimeStamp {
         self.0 >> TSO_PHYSICAL_SHIFT_BITS
     }
 
-    pub fn next(self) -> TimeStamp {
-        TimeStamp(self.0 + 1)
+    pub fn next(self) -> Option<TimeStamp> {
+        self.0.checked_add(1).map(TimeStamp)
     }
 
-    pub fn prev(self) -> TimeStamp {
-        TimeStamp(self.0 - 1)
+    pub fn prev(self) -> Option<TimeStamp> {
+        self.0.checked_sub(1).map(TimeStamp)
     }
 
+    // Only used in tests.
     pub fn incr(&mut self) -> &mut TimeStamp {
-        self.0 += 1;
+        *self = self.next().unwrap();
         self
     }
 
+    // Only used in tests.
     pub fn decr(&mut self) -> &mut TimeStamp {
-        self.0 -= 1;
+        *self = self.prev().unwrap();
         self
     }
 

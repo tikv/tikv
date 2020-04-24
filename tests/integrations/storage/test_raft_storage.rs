@@ -210,7 +210,7 @@ fn write_test_data<E: Engine>(
             .into_iter()
             .for_each(|res| res.unwrap());
         storage
-            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts.next())
+            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts.next().unwrap())
             .unwrap();
         ts.incr().incr();
     }

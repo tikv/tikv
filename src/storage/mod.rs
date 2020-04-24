@@ -4055,7 +4055,7 @@ mod tests {
                 for_update_ts,
                 None,
                 return_values,
-                for_update_ts.next(),
+                for_update_ts.next().unwrap(),
                 Context::default(),
             )
         }
