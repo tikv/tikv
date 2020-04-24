@@ -37,6 +37,7 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
+use metrics::ReqTag;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
@@ -80,7 +81,7 @@ type RequestHandlerBuilder<Snap> =
 #[derive(Debug, Clone)]
 pub struct ReqContext {
     /// The tag of the request
-    pub tag: &'static str,
+    pub tag: ReqTag,
 
     /// The rpc context carried in the request
     pub context: kvrpcpb::Context,
@@ -121,7 +122,7 @@ pub struct ReqContext {
 
 impl ReqContext {
     pub fn new(
-        tag: &'static str,
+        tag: ReqTag,
         mut context: kvrpcpb::Context,
         ranges: &[coppb::KeyRange],
         max_handle_duration: Duration,
@@ -159,7 +160,7 @@ impl ReqContext {
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self::new(
-            "test",
+            ReqTag::test,
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),
