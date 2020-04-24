@@ -48,7 +48,8 @@ use tikv::{
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
-        gc_worker::{AutoGcConfig, GcWorker},
+        debug::Debugger,
+        gc_worker::{AutoGcConfig, GcWorker, GcWorkerConfigManager},
         lock_manager::LockManager,
         resolve,
         service::{DebugService, DiagnosticsService},
@@ -97,11 +98,12 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv.init_encryption();
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
+    let gc_worker_cfg = gc_worker.get_config_manager();
     let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services(gc_worker);
     tikv.init_metrics_flusher();
-
     tikv.run_server(server_config);
+    tikv.run_status_server(gc_worker_cfg);
 
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
 
@@ -763,7 +765,9 @@ impl TiKVServer {
             .server
             .start(server_config, self.security_mgr.clone())
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
+    }
 
+    fn run_status_server(&mut self, gc_worker_cfg: GcWorkerConfigManager) {
         // Create a status server.
         let status_enabled =
             self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
@@ -772,6 +776,12 @@ impl TiKVServer {
                 self.config.server.status_thread_pool_size,
                 self.cfg_controller.take().unwrap(),
             ));
+            let debugger = self
+                .engines
+                .as_ref()
+                .map(|e| e.engines.clone())
+                .map(move |engines| Debugger::new(engines, Some(gc_worker_cfg)));
+            status_server.set_debugger(debugger);
             // Start the status server.
             if let Err(e) = status_server.start(
                 self.config.server.status_addr.clone(),
