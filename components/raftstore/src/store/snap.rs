@@ -543,7 +543,8 @@ impl Snap {
         key: &SnapKey,
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let s = Self::new(dir, key, false, false, mgr)?;
+        let mut s = Self::new(dir, key, false, false, mgr)?;
+        s.mgr.limiter = Limiter::new(INFINITY);
         Ok(s)
     }
 
@@ -642,19 +643,18 @@ impl Snap {
                     cf_file.checksum,
                 )?;
             }
-            let mgr = self.mgr.encryption_key_manager.clone();
             check_file_size_and_checksum(
                 &cf_file.path,
                 cf_file.size,
                 cf_file.checksum,
-                mgr.as_ref(),
+                self.mgr.encryption_key_manager.as_ref(),
             )?;
 
             if !for_send && !plain_file_used(cf_file.cf) {
                 sst_importer::prepare_sst_for_ingestion(
                     &cf_file.path,
                     &cf_file.clone_path,
-                    mgr.as_ref(),
+                    self.mgr.encryption_key_manager.as_ref(),
                 )?;
             }
         }
