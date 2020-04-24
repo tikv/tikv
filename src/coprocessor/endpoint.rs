@@ -182,7 +182,11 @@ impl<E: Engine> Endpoint<E> {
                 if start_ts == 0 {
                     start_ts = dag.get_start_ts_fallback();
                 }
-                let tag = if table_scan { "select" } else { "index" };
+                let tag = if table_scan {
+                    ReqTag::select
+                } else {
+                    ReqTag::index
+                };
 
                 req_ctx = ReqContext::new(
                     tag,
@@ -230,9 +234,9 @@ impl<E: Engine> Endpoint<E> {
                 }
 
                 let tag = if table_scan {
-                    "analyze_table"
+                    ReqTag::analyze_table
                 } else {
-                    "analyze_index"
+                    ReqTag::analyze_index
                 };
                 req_ctx = ReqContext::new(
                     tag,
@@ -261,9 +265,9 @@ impl<E: Engine> Endpoint<E> {
                 }
 
                 let tag = if table_scan {
-                    "checksum_table"
+                    ReqTag::checksum_table
                 } else {
-                    "checksum_index"
+                    ReqTag::checksum_index
                 };
                 req_ctx = ReqContext::new(
                     tag,
@@ -740,7 +744,7 @@ mod tests {
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
-            "test",
+            ReqTag::test,
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(0),
