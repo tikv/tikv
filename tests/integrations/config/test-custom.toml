@@ -152,6 +152,7 @@ store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
+perf-level = 5
 
 [coprocessor]
 split-region-on-table = false

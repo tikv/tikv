@@ -21,6 +21,15 @@ extern crate tikv_util;
 #[macro_use]
 extern crate slog_global;
 
+<<<<<<< HEAD
+=======
+#[macro_use]
+extern crate serde_derive;
+
+#[cfg(test)]
+extern crate test;
+
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 mod cf_handle;
 pub use crate::cf_handle::*;
 mod cf_names;
@@ -73,4 +82,9 @@ pub use rocks_metrics_defs::*;
 pub mod event_listener;
 pub use event_listener::*;
 
+pub mod config;
+pub use config::*;
 pub mod encryption;
+
+pub use rocksdb::set_perf_level;
+pub use rocksdb::PerfContext;

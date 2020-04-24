@@ -1054,8 +1054,6 @@ dependencies = [
  "quick-error",
  "raft",
  "rocksdb",
- "serde",
- "serde_derive",
  "slog",
  "slog-global",
  "sysinfo",
@@ -1079,6 +1077,8 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "coarsetime",
+ "configuration",
  "encryption",
  "engine",
  "engine_traits",
@@ -1087,12 +1087,19 @@ dependencies = [
  "prometheus",
  "rand 0.7.3",
  "rocksdb",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
+<<<<<<< HEAD
+=======
+ "toml",
+ "txn_types",
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 ]
 
 [[package]]

@@ -6,12 +6,17 @@ use std::path::PathBuf;
 
 use slog::Level;
 
+<<<<<<< HEAD
 use batch_system::Config as BatchSystemConfig;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine::rocks::util::config::{BlobRunMode, CompressionType};
+=======
+use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use engine_rocks::config::{BlobRunMode, CompressionType, PerfLevel};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -192,7 +197,11 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
+<<<<<<< HEAD
         apply_yield_duration: ReadableDuration::millis(333),
+=======
+        perf_level: PerfLevel::EnableTime,
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

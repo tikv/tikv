@@ -1,6 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 pub mod config;
+=======
+pub mod engine_metrics;
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 pub mod stats;
 
 use std::cmp;
