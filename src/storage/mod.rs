@@ -213,6 +213,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get value of the given key from a snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
+    #[tracer::tracer_attribute::instrument("Storage.get")]
     pub fn get(
         &self,
         mut ctx: Context,
@@ -283,6 +284,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get values of a set of keys with seperate context from a snapshot, return a list of `Result`s.
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
+    #[tracer::tracer_attribute::instrument("Storage.batch_get_command")]
     pub fn batch_get_command(
         &self,
         gets: Vec<PointGetCommand>,
@@ -360,6 +362,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get values of a set of keys in a batch from the snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
+    #[tracer::tracer_attribute::instrument("Storage.batch_get")]
     pub fn batch_get(
         &self,
         mut ctx: Context,
@@ -447,6 +450,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// If `end_key` is `None`, it means the upper bound is unbounded.
     ///
     /// Only writes committed before `start_ts` are visible.
+    #[tracer::tracer_attribute::instrument("Storage.scan")]
     pub fn scan(
         &self,
         mut ctx: Context,
@@ -539,6 +543,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .flatten()
     }
 
+    #[tracer::tracer_attribute::instrument("Storage.sched_txn_command")]
     pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
@@ -594,6 +599,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
     /// still be replicated via Raft. This is used to notify that the data will be deleted by
     /// `unsafe_destroy_range` soon.
+    #[tracer::tracer_attribute::instrument("Storage.delete_range")]
     pub fn delete_range(
         &self,
         ctx: Context,
@@ -677,6 +683,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Get the values of a set of raw keys, return a list of `Result`s.
+    #[tracer::tracer_attribute::instrument("Storage.raw_batch_get_command")]
     pub fn raw_batch_get_command(
         &self,
         cf: String,
@@ -736,6 +743,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Get the values of some raw keys in a batch.
+    #[tracer::tracer_attribute::instrument("Storage.raw_batch_get")]
     pub fn raw_batch_get(
         &self,
         ctx: Context,
@@ -807,6 +815,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Write a raw key to the storage.
+    #[tracer::tracer_attribute::instrument("Storage.raw_put")]
     pub fn raw_put(
         &self,
         ctx: Context,
@@ -831,6 +840,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Write some keys to the storage in a batch.
+    #[tracer::tracer_attribute::instrument("Storage.raw_batch_put")]
     pub fn raw_batch_put(
         &self,
         ctx: Context,
@@ -879,6 +889,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Delete all raw keys in [`start_key`, `end_key`).
+    #[tracer::tracer_attribute::instrument("Storage.raw_delete_range")]
     pub fn raw_delete_range(
         &self,
         ctx: Context,
@@ -909,6 +920,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Delete some raw keys in a batch.
+    #[tracer::tracer_attribute::instrument("Storage.raw_batch_delete")]
     pub fn raw_batch_delete(
         &self,
         ctx: Context,
@@ -1018,6 +1030,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///
     /// If `key_only` is true, the value
     /// corresponding to the key will not be read out. Only scanned keys will be returned.
+    #[tracer::tracer_attribute::instrument("Storage.raw_scan")]
     pub fn raw_scan(
         &self,
         ctx: Context,
@@ -1146,6 +1159,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Scan raw keys in multiple ranges in a batch.
+    #[tracer::tracer_attribute::instrument("Storage.raw_batch_scan")]
     pub fn raw_batch_scan(
         &self,
         ctx: Context,

@@ -31,6 +31,7 @@ use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+use tracer::future::Instrument;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -98,6 +99,7 @@ impl<E: Engine> Endpoint<E> {
 
     /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
     /// Returns `Err` if fails.
+    #[tracer::tracer_attribute::instrument]
     fn parse_request(
         &self,
         mut req: coppb::Request,
@@ -323,6 +325,7 @@ impl<E: Engine> Endpoint<E> {
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
     /// the given `handler_builder`. Finally, it calls the unary request interface of the
     /// `RequestHandler` to process the request and produce a result.
+    #[tracer::tracer_attribute::instrument]
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
@@ -338,23 +341,31 @@ impl<E: Engine> Endpoint<E> {
         let snapshot = unsafe {
             with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
         }
+        .in_current_span("snapshot")
         .await?;
+
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
 
-        let mut handler = if tracker.req_ctx.cache_match_version.is_some()
-            && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
-        {
-            // Build a cached request handler instead if cache version is matching.
-            CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
-        } else {
-            handler_builder(snapshot, &tracker.req_ctx)?
+        let mut handler = {
+            let span = tracer::new_span("build_handler");
+            let _g = span.enter();
+
+            if tracker.req_ctx.cache_match_version.is_some()
+                && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
+            {
+                // Build a cached request handler instead if cache version is matching.
+                CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
+            } else {
+                handler_builder(snapshot, &tracker.req_ctx)?
+            }
         };
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = track(handler.handle_request(), &mut tracker);
+        let handle_request_future =
+            track(handler.handle_request(), &mut tracker).in_current_span("handle_request_future");
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
@@ -398,7 +409,8 @@ impl<E: Engine> Endpoint<E> {
 
         self.read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .in_current_span("spawn_read_pool"),
                 priority,
                 task_id,
             )

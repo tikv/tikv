@@ -1,0 +1,16 @@
+syntax = "proto3";
+package tracer_pb;
+
+message TracerResp {
+    repeated Span spans = 1;
+}
+
+message Span {
+    uint32 id = 1;
+    oneof parent {
+        bool parent_none = 2;
+        uint32 parent_value = 3;
+    }
+    uint64 start = 4;
+    uint64 end = 5;
+}

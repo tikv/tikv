@@ -1,0 +1,12 @@
+[package]
+name = "tracer-attribute"
+version = "0.1.0"
+authors = ["zhongzc <zhongzc_arch@outlook.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "1", features = ["full", "extra-traits"] }
+quote = "1"

@@ -90,6 +90,7 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
         self.0.schema()
     }
 
+    #[tracer::tracer_attribute::instrument("BatchIndexScanExecutor.next_batch")]
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
@@ -145,6 +146,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     ///
     /// Note: the structure of the constructed column is the same as table scan executor but due
     /// to different reasons.
+    #[tracer::tracer_attribute::instrument("IndexScanExecutorImpl.build_column_vec")]
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);

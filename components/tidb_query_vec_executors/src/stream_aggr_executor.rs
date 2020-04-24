@@ -31,6 +31,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
         self.0.schema()
     }
 
+    #[tracer::tracer_attribute::instrument("BatchStreamAggregationExecutor.next_batch")]
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
@@ -200,6 +201,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         }
     }
 
+    #[tracer::tracer_attribute::instrument("BatchStreamAggregationImpl.process_batch_input")]
     #[inline]
     fn process_batch_input(
         &mut self,

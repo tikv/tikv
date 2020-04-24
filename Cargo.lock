@@ -3746,6 +3746,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sharded-slab"
+version = "0.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06d5a3f5166fb5b42a5439f2eee8b9de149e235961e3eb21c5808fc3ea17ff3e"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "shlex"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4531,6 +4540,7 @@ dependencies = [
  "tikv_util",
  "tipb",
  "tipb_helper",
+ "tracer",
  "yatp",
 ]
 
@@ -4664,6 +4674,9 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "toml",
+ "tracer",
+ "tracer_codegen",
+ "tracer_pb",
  "txn_types",
  "url",
  "uuid",
@@ -5127,6 +5140,45 @@ name = "tower-service"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e987b6bf443f4b5b3b6f38704195592cca41c5bb7aedd3c3693c7081f8289860"
+
+[[package]]
+name = "tracer"
+version = "0.1.0"
+dependencies = [
+ "crossbeam",
+ "futures 0.1.29",
+ "futures 0.3.4",
+ "lazy_static",
+ "pin-project",
+ "sharded-slab",
+ "tracer-attribute",
+]
+
+[[package]]
+name = "tracer-attribute"
+version = "0.1.0"
+dependencies = [
+ "quote 1.0.3",
+ "syn 1.0.5",
+]
+
+[[package]]
+name = "tracer_codegen"
+version = "0.1.0"
+dependencies = [
+ "quote 1.0.3",
+ "syn 1.0.5",
+]
+
+[[package]]
+name = "tracer_pb"
+version = "0.1.0"
+dependencies = [
+ "protobuf",
+ "protobuf-build",
+ "tikv_alloc",
+ "tracer",
+]
 
 [[package]]
 name = "try-lock"

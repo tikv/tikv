@@ -97,6 +97,7 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
         self.0.schema()
     }
 
+    #[tracer::tracer_attribute::instrument("BatchTableScanExecutor.next_batch")]
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
@@ -239,6 +240,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
+    #[tracer::tracer_attribute::instrument("TableScanExecutorImpl.build_column_vec")]
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);

@@ -30,6 +30,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
         self.src.schema()
     }
 
+    #[tracer::tracer_attribute::instrument("BatchLimitExecutor.next_batch")]
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut result = self.src.next_batch(scan_rows);

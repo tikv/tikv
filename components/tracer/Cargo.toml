@@ -1,0 +1,19 @@
+[package]
+name = "tracer"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+crossbeam = "0.7"
+sharded-slab = "0.0.9"
+lazy_static = "1.4"
+pin-project = "0.4"
+tracer-attribute = { path = "./tracer-attribute" }
+
+[dependencies.futures_01]
+version = "0.1"
+package = "futures"
+
+[dependencies.futures_03]
+version = "0.3.1"
+package = "futures"

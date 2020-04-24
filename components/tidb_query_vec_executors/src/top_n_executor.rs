@@ -148,6 +148,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         })
     }
 
+    #[tracer::tracer_attribute::instrument("BatchTopNExecutor.handle_next_batch")]
     #[inline]
     fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because top N
@@ -169,6 +170,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         }
     }
 
+    #[tracer::tracer_attribute::instrument("BatchTopNExecutor.process_batch_input")]
     fn process_batch_input(
         &mut self,
         mut physical_columns: LazyBatchColumnVec,
@@ -287,6 +289,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
         self.src.schema()
     }
 
+    #[tracer::tracer_attribute::instrument("BatchTopNExecutor.next_batch")]
     #[inline]
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);

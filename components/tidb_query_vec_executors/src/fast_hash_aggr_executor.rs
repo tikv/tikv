@@ -44,6 +44,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
         self.0.schema()
     }
 
+    #[tracer::tracer_attribute::instrument("BatchFastHashAggregationExecutor.next_batch")]
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
@@ -231,6 +232,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         entities.schema.push(self.group_by_field_type.clone());
     }
 
+    #[tracer::tracer_attribute::instrument("FastHashAggregationImpl.process_batch_input")]
     #[inline]
     fn process_batch_input(
         &mut self,
@@ -341,6 +343,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         self.groups.len()
     }
 
+    #[tracer::tracer_attribute::instrument("FastHashAggregationImpl.iterate_available_groups")]
     #[inline]
     fn iterate_available_groups(
         &mut self,

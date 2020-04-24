@@ -1,0 +1,12 @@
+[package]
+name = "tracer_pb"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+protobuf = "=2.8.0"
+tikv_alloc = { path = "../tikv_alloc" }
+tracer = { path = "../tracer" }
+
+[build-dependencies]
+protobuf-build = { version = "0.11", default-features = false }

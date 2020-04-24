@@ -340,6 +340,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         })
     }
 
+    #[tracer::tracer_attribute::instrument("BatchExecutorsRunner.handle_request")]
     pub async fn handle_request(&mut self) -> Result<SelectResponse> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
