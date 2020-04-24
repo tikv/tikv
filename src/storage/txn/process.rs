@@ -726,7 +726,9 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
 
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
-            released_locks.push(txn.cleanup(key, current_ts)?);
+            // The rollback must be protected, see more on
+            // [issue #7364](https://github.com/tikv/tikv/issues/7364)
+            released_locks.push(txn.cleanup(key, current_ts, true)?);
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());
@@ -778,7 +780,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), !cmd.ctx.get_not_fill_cache());
 
             let mut scan_key = scan_key.take();
-            let mut write_size = 0;
             let rows = key_locks.len();
             // Map txn's start_ts to ReleasedLocks
             let mut released_locks = HashMap::default();
@@ -803,8 +804,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     .or_insert_with(|| ReleasedLocks::new(current_lock.ts, commit_ts))
                     .push(released);
 
-                write_size += txn.write_size();
-                if write_size >= MAX_TXN_WRITE_SIZE {
+                if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(current_key);
                     break;
                 }

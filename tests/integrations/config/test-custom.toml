@@ -59,7 +59,7 @@ stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
-request-batch-enable-cross-command = false
+request-batch-enable-cross-command = true
 request-batch-wait-duration = "10ms"
 
 [server.labels]
@@ -398,7 +398,7 @@ max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
-allow-concurrent-memtable-write = true
+allow-concurrent-memtable-write = false
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 

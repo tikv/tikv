@@ -19,7 +19,7 @@ use engine_traits::Peekable;
 use engine_traits::{SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::SnapManager;
+use raftstore::store::{AutoSplitController, SnapManager};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
@@ -933,6 +933,7 @@ fn test_double_run_node() {
             coprocessor_host,
             importer,
             Worker::new("split"),
+            AutoSplitController::default(),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

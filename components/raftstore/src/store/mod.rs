@@ -40,9 +40,12 @@ pub use self::snap::{
     check_abort, copy_snapshot,
     snap_io::{apply_sst_cf_file, build_sst_cf_file},
     ApplyOptions, Error as SnapError, GenericSnapshot, SnapEntry, SnapKey, SnapManager,
-    SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
+    SnapManagerBuilder, Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::worker::{FlowStatistics, FlowStatsReporter, PdTask};
+pub use self::worker::{
+    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadStats, SplitConfig,
+    SplitConfigManager,
+};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
