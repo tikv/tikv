@@ -4491,7 +4491,6 @@ dependencies = [
  "openssl",
  "protobuf",
  "regex",
- "safemem",
  "slog",
  "slog-global",
  "tidb_query_common",
@@ -4508,6 +4507,7 @@ name = "tidb_query_shared_expr"
 version = "0.0.1"
 dependencies = [
  "rand 0.6.5",
+ "safemem",
  "tidb_query_datatype",
  "time 0.1.42",
 ]
@@ -4570,7 +4570,6 @@ dependencies = [
  "profiler",
  "prometheus-static-metric",
  "protobuf",
- "safemem",
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
