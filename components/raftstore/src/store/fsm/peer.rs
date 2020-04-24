@@ -948,7 +948,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let extra_msg = msg.get_extra_msg();
         match extra_msg.get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
-                self.reset_raft_tick(GroupState::Ordered);
+                if self.fsm.group_state == GroupState::Idle {
+                    self.reset_raft_tick(GroupState::Ordered);
+                }
             }
             ExtraMessageType::MsgWantRollbackMerge => {
                 unimplemented!("remove this after #6584 merged")
