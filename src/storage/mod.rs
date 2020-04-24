@@ -309,46 +309,45 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = CommandPri::Normal;
         let res = self.read_pool.spawn_handle(
             async move {
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let cache = Self::with_tls_engine(|engine| Self::get_snapshot_cache(engine))?;
                 let mut statistics = Statistics::default();
                 let mut results = Vec::default();
+                let mut batch_count = 0;
                 for mut req in gets {
                     let start_ts = req.ts.unwrap();
                     let isolation_level = req.ctx.get_isolation_level();
                     let fill_cache = !req.ctx.get_not_fill_cache();
                     let bypass_locks = TsSet::vec_from_u64s(req.ctx.take_resolved_locks());
-                    let snapshot = Self::with_tls_engine(|engine| {
+                    match Self::with_tls_engine(|engine| {
                         Self::snapshot_with_cache(engine, &cache, &req.ctx)
                     })
-                    .await?;
-                    let snap_store = if snapshot.get_create_time() == cache.get_create_time() {
-                        SnapshotStore::new(
-                            snapshot,
-                            start_ts,
-                            isolation_level,
-                            fill_cache,
-                            bypass_locks,
-                            false,
-                        )
-                    } else {
-                        SnapshotStore::new(
-                            cache.clone(),
-                            start_ts,
-                            isolation_level,
-                            fill_cache,
-                            bypass_locks,
-                            false,
-                        )
-                    };
-                    results.push(
-                        snap_store
-                            .get(&req.key, &mut statistics)
-                            .map_err(Error::from),
-                    );
+                    .await
+                    {
+                        Ok(snapshot) => {
+                            if snapshot.get_create_time() == cache.get_create_time() {
+                                batch_count += 1;
+                            }
+                            let snap_store = SnapshotStore::new(
+                                snapshot,
+                                start_ts,
+                                isolation_level,
+                                fill_cache,
+                                bypass_locks,
+                                false,
+                            );
+                            results.push(
+                                snap_store
+                                    .get(&req.key, &mut statistics)
+                                    .map_err(Error::from),
+                            );
+                        }
+                        Err(e) => {
+                            results.push(Err(e));
+                        }
+                    }
                 }
-
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc_by(batch_count);
                 SCHED_HISTOGRAM_VEC_STATIC
                     .get(CMD)
                     .observe(command_duration.elapsed_secs());

@@ -69,6 +69,8 @@ impl ReadDelegate {
 
     pub fn fresh_valid_ts(&mut self) {
         self.last_valid_ts = monotonic_raw_now();
+        // We add one second to make sure that snapshot-cache sent by other thread is really created after this region has applied to current term exactly
+        self.last_valid_ts.sec += 1;
     }
 
     pub fn update(&mut self, progress: Progress) {

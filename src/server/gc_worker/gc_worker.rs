@@ -927,6 +927,7 @@ mod tests {
     use std::sync::mpsc::channel;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
+    use time::Timespec;
     use txn_types::Mutation;
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.

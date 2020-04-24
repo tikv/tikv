@@ -362,11 +362,10 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
 
     fn get_snapshot_cache(&self) -> kv::Result<Self::Snap> {
         let snapshot = self.engine.snapshot();
-        let ts = monotonic_raw_now();
         Ok(RegionSnapshot::from_snapshot(
             snapshot.into_sync(),
             self.region.clone(),
-            ts,
+            monotonic_raw_now(),
         ))
     }
 
