@@ -551,7 +551,7 @@ impl ScalarFunc {
         let time = Time::from_days(ctx, days)?;
         Ok(Some(Cow::Owned(time)))
     }
-    
+
     #[inline]
     pub fn make_date<'a>(
         &self,
@@ -566,14 +566,14 @@ impl ScalarFunc {
         if year < 70 {
             year += 2000;
         } else if year < 100 {
-           year += 1900;
+            year += 1900;
         }
         year -= 1;
-        let d4 = year/4;
-        let d100 = year/100;
-        let d400 = year/400;
-        let leap = d4-d100+d400;
-        days = days + leap + year*365 + 365;
+        let d4 = year / 4;
+        let d100 = year / 100;
+        let d400 = year / 400;
+        let leap = d4 - d100 + d400;
+        days = days + leap + year * 365 + 365;
         let time = Time::from_days(ctx, days)?;
         Ok(Some(Cow::Owned(time)))
     }
@@ -1823,7 +1823,7 @@ mod tests {
         // test NULL case
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Month, Datum::Null);
     }
-    
+
     #[test]
     fn test_make_date() {
         let cases = vec![
