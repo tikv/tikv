@@ -193,13 +193,21 @@ impl<'a, T: PrimInt> LEBytes<'a, T> {
             return Err(0);
         }
         let mut base = 0usize;
-        while size > 1 {
+
+        // Note that the count of ids is not greater than (2 >> 16). The number
+        // of binary search steps will not over 16 unless the data is corruted.
+        // Let's relex to 20.
+        let mut steps = 20usize;
+
+        while steps > 0 && size > 1 {
             let half = size / 2;
             let mid = base + half;
             let cmp = self.get_unchecked(mid).cmp(value);
             base = if cmp == Greater { base } else { mid };
             size -= half;
+            steps -= 1;
         }
+
         let cmp = self.get_unchecked(base).cmp(value);
         if cmp == Equal {
             Ok(base)
