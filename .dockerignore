@@ -1,3 +1,5 @@
+# This file is almost the same as .gitignore expect the next line.
+.git
 
 # OSX leaves these everywhere on SMB shares
 ._*
@@ -22,9 +24,9 @@ out/
 .vscode/**
 
 target
+dist
 tmp
 /bin
-/dist
 
 # fuzzing hack, see fuzz/cli.rs
 fuzz-incremental/

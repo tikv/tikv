@@ -15,7 +15,7 @@ use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use protobuf::Message;
 use raft::{Ready, StateRole};
 use std::cmp::{Ord, Ordering as CmpOrdering};
@@ -48,11 +48,10 @@ use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::is_initial_msg;
 use crate::store::worker::{
-    CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask, CompactRunner, CompactTask,
-    ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
-    ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
+    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
+    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
-use crate::store::DynamicConfig;
 use crate::store::PdTask;
 use crate::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
@@ -62,7 +61,7 @@ use crate::Result;
 use engine::Engines;
 use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::{ConfigClient, PdClient};
+use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
@@ -1008,7 +1007,7 @@ impl RaftBatchSystem {
     }
 
     // TODO: reduce arguments
-    pub fn spawn<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
+    pub fn spawn<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
@@ -1021,7 +1020,7 @@ impl RaftBatchSystem {
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
-        dyn_cfg: Box<dyn DynamicConfig>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1067,16 +1066,16 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        self.start_system(workers, region_peers, builder, dyn_cfg)?;
+        self.start_system(workers, region_peers, builder, auto_split_controller)?;
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + ConfigClient + 'static>(
+    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         mut workers: Workers,
         region_peers: Vec<SenderFsmPair<RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
-        dyn_cfg: Box<dyn DynamicConfig>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1163,11 +1162,11 @@ impl RaftBatchSystem {
         let pd_runner = PdRunner::new(
             store.get_id(),
             Arc::clone(&pd_client),
-            dyn_cfg,
             self.router.clone(),
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
+            auto_split_controller,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
@@ -1236,7 +1235,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
-        let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Check if the target peer is tombstone.
@@ -1311,9 +1309,15 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "msg_type" => ?msg_type,
             );
 
+            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
+            if msg.has_extra_msg() {
+                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // it is removed due to conf change or merge.
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+            }
             let not_exist = util::find_peer(region, from_store_id).is_none();
             self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), is_vote_msg && not_exist, None);
+                .handle_stale_msg(msg, region_epoch.clone(), need_gc_msg && not_exist, None);
 
             return Ok(true);
         }

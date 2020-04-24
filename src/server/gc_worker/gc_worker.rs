@@ -759,7 +759,10 @@ impl<E: Engine> GcWorker<E> {
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
-            self.config_manager.0.clone().tracker("gc-woker".to_owned()),
+            self.config_manager
+                .0
+                .clone()
+                .tracker("gc-worker".to_owned()),
             self.region_info_accessor.take(),
             self.config_manager.value().clone(),
         );
