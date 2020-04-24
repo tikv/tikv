@@ -23,6 +23,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
+use super::debug::Debugger;
 use super::Result;
 use crate::config::ConfigController;
 use tikv_alloc::error::ProfError;
@@ -86,6 +87,7 @@ pub struct StatusServer {
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
     cfg_controller: Option<ConfigController>,
+    debugger: Option<Debugger>,
 }
 
 impl StatusServer {
@@ -107,7 +109,12 @@ impl StatusServer {
             rx: Some(rx),
             addr: None,
             cfg_controller: Some(cfg_controller),
+            debugger: None,
         }
+    }
+
+    pub fn set_debugger(&mut self, debugger: Option<Debugger>) {
+        self.debugger = debugger
     }
 
     pub fn dump_prof(seconds: u64) -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
@@ -399,6 +406,19 @@ impl StatusServer {
         )
     }
 
+    pub fn dump_region_info(
+        req: Request<Body>,
+        debugger: Option<&Debugger>,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        match debugger {
+            None => Box::new(ok(StatusServer::err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "debugger uninitialized",
+            ))),
+            Some(debugger) => unimplemented!(),
+        }
+    }
+
     fn start_serve<I>(&mut self, builder: HyperBuilder<I>)
     where
         I: Stream + Send + 'static,
@@ -407,9 +427,11 @@ impl StatusServer {
     {
         // TODO: use future lock
         let cfg_controller = Arc::new(RwLock::new(self.cfg_controller.take().unwrap()));
+        let debugger = self.debugger.clone();
         // Start to serve.
         let server = builder.serve(move || {
             let cfg_controller = cfg_controller.clone();
+            let debugger = debugger.clone();
             // Create a status service.
             service_fn(
                     move |req: Request<Body>| -> Box<
@@ -429,6 +451,9 @@ impl StatusServer {
                             (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
+                            (Method::GET, "/region") => {
+                                Self::dump_region_info(req, debugger.as_ref())
+                            }
                             (Method::GET, "/config") => {
                                 Self::get_config(&cfg_controller.read().unwrap())
                             }
