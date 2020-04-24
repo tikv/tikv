@@ -1178,4 +1178,26 @@ mod tests {
         }
         status_server.stop();
     }
+
+    #[test]
+    fn test_region_info_json() {
+        use kvproto::metapb::*;
+        use kvproto::raft_serverpb::*;
+        use serde_json::json;
+        use super::RegionInfo;
+
+        let expect = json!({
+            "size": {
+                "default": 4096,
+                "write": 2048,
+                "lock": 1024
+            },
+            "region_local_state": {
+                "state": "normal",
+                "merge_state": {
+                    "min_index": 0
+                }
+            }
+        });
+    }
 }
