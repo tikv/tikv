@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use slog::Level;
 
 use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
-use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
