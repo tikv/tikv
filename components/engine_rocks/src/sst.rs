@@ -35,12 +35,22 @@ pub struct RocksSstReader {
     inner: Rc<SstFileReader>,
 }
 
-impl SstReader for RocksSstReader {
-    fn open(path: &str) -> Result<Self> {
-        let mut reader = SstFileReader::new(ColumnFamilyOptions::new());
+impl RocksSstReader {
+    pub fn open_with_env(path: &str, env: Option<Arc<Env>>) -> Result<Self> {
+        let mut cf_options = ColumnFamilyOptions::new();
+        if let Some(env) = env {
+            cf_options.set_env(env);
+        }
+        let mut reader = SstFileReader::new(cf_options);
         reader.open(path)?;
         let inner = Rc::new(reader);
         Ok(RocksSstReader { inner })
+    }
+}
+
+impl SstReader for RocksSstReader {
+    fn open(path: &str) -> Result<Self> {
+        Self::open_with_env(path, None)
     }
     fn verify_checksum(&self) -> Result<()> {
         self.inner.verify_checksum()?;
