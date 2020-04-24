@@ -6,10 +6,22 @@ use std::path::PathBuf;
 
 use slog::Level;
 
+<<<<<<< HEAD
 use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+=======
+use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
+use engine::rocks::{
+    CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+};
+use engine_rocks::config::{BlobRunMode, CompressionType, PerfLevel};
+use kvproto::encryptionpb::EncryptionMethod;
+use pd_client::Config as PdConfig;
+use raftstore::coprocessor::Config as CopConfig;
+use raftstore::store::Config as RaftstoreConfig;
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
@@ -160,7 +172,13 @@ fn test_serde_custom_tikv_config() {
         store_max_batch_size: 21,
         store_pool_size: 3,
         future_poll_size: 2,
+<<<<<<< HEAD
         hibernate_regions: true,
+=======
+        hibernate_regions: false,
+        early_apply: false,
+        perf_level: PerfLevel::EnableTime,
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     value.rocksdb = DbConfig {

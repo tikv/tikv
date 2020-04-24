@@ -13,6 +13,7 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
 use engine::rocks;
 use engine::rocks::Writable;
 use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
@@ -21,6 +22,15 @@ use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
+=======
+
+use engine_rocks::RocksEngine;
+use engine_rocks::{PerfContext, PerfLevel};
+use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use kvproto::import_sstpb::SstMeta;
+use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/fsm/apply.rs
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -30,6 +40,7 @@ use kvproto::raft_serverpb::{
 };
 use protobuf::RepeatedField;
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
 use uuid::Uuid;
 
 use crate::import::SSTImporter;
@@ -43,6 +54,27 @@ use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
+=======
+use uuid::Builder as UuidBuilder;
+
+use crate::coprocessor::{Cmd, CoprocessorHost};
+use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
+use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
+use crate::store::metrics::*;
+use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
+use crate::store::peer::Peer;
+use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
+use crate::store::util::{check_region_epoch, compare_region_epoch};
+use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
+
+use crate::observe_perf_context_type;
+use crate::report_perf_context;
+
+use crate::store::{cmd_resp, util, Config, RegionSnapshot};
+use crate::{Error, Result};
+use sst_importer::SSTImporter;
+use tikv_util::config::{Tracker, VersionTrack};
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/fsm/apply.rs
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
@@ -299,6 +331,8 @@ struct ApplyContext {
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+
+    perf_context_statistics: PerfContextStatistics,
 }
 
 impl ApplyContext {
@@ -332,6 +366,7 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
+            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
         }
     }
 
@@ -384,6 +419,10 @@ impl ApplyContext {
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
+            report_perf_context!(
+                self.perf_context_statistics,
+                APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            );
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -2652,8 +2691,33 @@ pub struct ApplyPoller {
     messages_per_tick: usize,
 }
 
+<<<<<<< HEAD:src/raftstore/store/fsm/apply.rs
 impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn begin(&mut self, _batch_size: usize) {}
+=======
+impl<E, W> PollHandler<ApplyFsm<E>, ControlFsm> for ApplyPoller<E, W>
+where
+    E: KvEngine,
+    W: WriteBatch + WriteBatchVecExt<E>,
+{
+    fn begin(&mut self, _batch_size: usize) {
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
+                CmpOrdering::Greater => {
+                    self.msg_buf.reserve(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+                CmpOrdering::Less => {
+                    self.msg_buf.shrink_to(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+                _ => {}
+            }
+            self.apply_ctx.enable_sync_log = incoming.sync_log;
+        }
+        self.apply_ctx.perf_context_statistics.start();
+    }
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/fsm/apply.rs
 
     /// There is no control fsm in apply poller.
     fn handle_control(&mut self, _: &mut ControlFsm) -> Option<usize> {

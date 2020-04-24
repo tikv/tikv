@@ -1,0 +1,52 @@
+[package]
+name = "engine_rocks"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[features]
+protobuf-codec = [
+  "keys/protobuf-codec",
+  "txn_types/protobuf-codec",
+]
+prost-codec = [
+  "keys/prost-codec",
+  "txn_types/prost-codec",
+]
+jemalloc = ["rocksdb/jemalloc"]
+portable = ["rocksdb/portable"]
+sse = ["rocksdb/sse"]
+
+[dependencies]
+encryption = { path = "../encryption" }
+engine = { path = "../engine" }
+engine_traits = { path = "../engine_traits" }
+keys = { path = "../keys" }
+num_cpus = "1"
+prometheus = { version = "0.8", features = ["nightly", "push"] }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
+txn_types = { path = "../txn_types"}
+lazy_static = "1.4.0"
+time = "0.1"
+configuration = { path = "../configuration" }
+serde = "1.0"
+serde_derive = "1.0"
+coarsetime = "0.1"
+
+[dependencies.rocksdb]
+git = "https://github.com/tikv/rust-rocksdb.git"
+package = "rocksdb"
+features = ["encryption", "static_libcpp"]
+
+[dependencies.prometheus-static-metric]
+git = "https://github.com/tikv/rust-prometheus.git"
+rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
+
+[dev-dependencies]
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+tempfile = "3.0"
+rand = "0.7"
+toml = "0.4"

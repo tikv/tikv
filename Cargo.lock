@@ -341,9 +341,24 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "cookie"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+=======
+name = "coarsetime"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
+dependencies = [
+ "lazy_static",
+ "libc",
+]
+
+[[package]]
+name = "codec"
+version = "0.0.1"
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 dependencies = [
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
  "url 1.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -769,8 +784,227 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "flate2-crc"
 version = "0.1.1"
+=======
+name = "encryption"
+version = "0.0.1"
+dependencies = [
+ "byteorder",
+ "bytes 0.4.12",
+ "configuration",
+ "crc32fast",
+ "engine_traits",
+ "failure",
+ "futures 0.3.4",
+ "futures-util",
+ "hex 0.4.2",
+ "kvproto",
+ "lazy_static",
+ "matches",
+ "openssl",
+ "prometheus",
+ "protobuf",
+ "rand 0.7.3",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kms",
+ "rusoto_mock",
+ "rusoto_util",
+ "rust-ini",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "structopt",
+ "tempfile",
+ "tikv_alloc",
+ "tikv_util",
+ "tokio 0.2.13",
+ "toml",
+]
+
+[[package]]
+name = "engine"
+version = "0.0.1"
+dependencies = [
+ "configuration",
+ "encryption",
+ "engine_traits",
+ "hex 0.4.2",
+ "lazy_static",
+ "prometheus",
+ "protobuf",
+ "rocksdb",
+ "slog",
+ "slog-global",
+ "sysinfo",
+ "tempfile",
+ "tikv_alloc",
+ "tikv_util",
+ "time 0.1.42",
+ "toml",
+]
+
+[[package]]
+name = "engine_panic"
+version = "0.0.1"
+dependencies = [
+ "engine_traits",
+ "tikv_alloc",
+ "tikv_util",
+]
+
+[[package]]
+name = "engine_rocks"
+version = "0.0.1"
+dependencies = [
+ "coarsetime",
+ "configuration",
+ "encryption",
+ "engine",
+ "engine_traits",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "num_cpus",
+ "prometheus",
+ "prometheus-static-metric",
+ "rand 0.7.3",
+ "rocksdb",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv_alloc",
+ "tikv_util",
+ "time 0.1.42",
+ "toml",
+ "txn_types",
+]
+
+[[package]]
+name = "engine_traits"
+version = "0.0.1"
+dependencies = [
+ "hex 0.4.2",
+ "protobuf",
+ "quick-error",
+ "slog",
+ "slog-global",
+ "tikv_alloc",
+ "tikv_util",
+]
+
+[[package]]
+name = "env_logger"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aafcde04e90a5226a6443b7aabdb016ba2f8307c847d524724bd9b346dd1a2d3"
+dependencies = [
+ "atty",
+ "humantime",
+ "log",
+ "regex",
+ "termcolor",
+]
+
+[[package]]
+name = "error-chain"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ab49e9dcb602294bc42f9a7dfc9bc6e936fca4418ea300dbfb84fe16de0b7d9"
+dependencies = [
+ "backtrace",
+ "version_check 0.1.5",
+]
+
+[[package]]
+name = "external_storage"
+version = "0.0.1"
+dependencies = [
+ "bytes 0.5.3",
+ "futures 0.3.4",
+ "futures-executor",
+ "futures-io",
+ "futures-util",
+ "http 0.2.0",
+ "kvproto",
+ "rand 0.7.3",
+ "reqwest",
+ "rusoto_core",
+ "rusoto_mock",
+ "rusoto_s3",
+ "rusoto_util",
+ "rust-ini",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "structopt",
+ "tame-gcs",
+ "tame-oauth",
+ "tempfile",
+ "tikv_alloc",
+ "tokio 0.2.13",
+ "url",
+]
+
+[[package]]
+name = "fail"
+version = "0.3.0"
+source = "git+https://github.com/tikv/fail-rs.git?rev=2cf1175a1a5cc2c70bd20ebd45313afd69b558fc#2cf1175a1a5cc2c70bd20ebd45313afd69b558fc"
+dependencies = [
+ "lazy_static",
+ "log",
+ "rand 0.7.3",
+]
+
+[[package]]
+name = "failure"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8529c2421efa3066a5cbd8063d2244603824daccb6936b079010bb2aa89464b"
+dependencies = [
+ "backtrace",
+ "failure_derive",
+]
+
+[[package]]
+name = "failure_derive"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "030a733c8287d6213886dd487564ff5c8f6aae10278b3588ed177f9d18f8d231"
+dependencies = [
+ "proc-macro2 1.0.9",
+ "quote 1.0.3",
+ "syn 1.0.5",
+ "synstructure",
+]
+
+[[package]]
+name = "fake-simd"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e88a8acf291dafb59c2d96e8f59828f3838bb1a70398823ade51a84de6a6deed"
+
+[[package]]
+name = "farmhash"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
+
+[[package]]
+name = "fixedbitset"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
+
+[[package]]
+name = "flate2"
+version = "1.0.11"
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "cfg-if 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",

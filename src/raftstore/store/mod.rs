@@ -6,6 +6,8 @@ pub mod fsm;
 pub mod keys;
 pub mod msg;
 pub mod transport;
+
+#[macro_use]
 pub mod util;
 
 mod bootstrap;

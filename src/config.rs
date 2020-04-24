@@ -36,6 +36,7 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
+<<<<<<< HEAD
 use crate::storage::config::DEFAULT_DATA_DIR;
 use crate::storage::gc_worker::GCConfig;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
@@ -43,6 +44,18 @@ use engine::rocks::util::config::{self as rocks_config, BlobRunMode, Compression
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
+=======
+use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+use encryption::EncryptionConfig;
+use engine::rocks::util::{
+    db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
+};
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
+use engine_rocks::properties::MvccPropertiesCollectorFactory;
+use engine_rocks::{
+    RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+>>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
