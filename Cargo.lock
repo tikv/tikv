@@ -5151,6 +5151,7 @@ dependencies = [
  "lazy_static",
  "pin-project",
  "sharded-slab",
+ "tikv_alloc",
  "tracer-attribute",
 ]
 

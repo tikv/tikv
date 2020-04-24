@@ -9,6 +9,7 @@ sharded-slab = "0.0.9"
 lazy_static = "1.4"
 pin-project = "0.4"
 tracer-attribute = { path = "./tracer-attribute" }
+tikv_alloc = { path = "../tikv_alloc" }
 
 [dependencies.futures_01]
 version = "0.1"

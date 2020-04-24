@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate lazy_static;
 
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
 pub mod future;
 pub mod util;
 pub type ID = usize;
