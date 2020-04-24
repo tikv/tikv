@@ -467,6 +467,7 @@ impl Snap {
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, true, false, mgr)?;
+        s.mgr.limiter = Limiter::new(INFINITY);
 
         if !s.exists() {
             // Skip the initialization below if it doesn't exists.
@@ -516,7 +517,7 @@ impl Snap {
                 write_digest: crc32fast::Hasher::new(),
             });
 
-            if let Some(mgr) = s.mgr.encryption_key_manager.clone() {
+            if let Some(mgr) = &s.mgr.encryption_key_manager {
                 let path = cf_file.path.to_str().unwrap();
                 let enc_info = mgr.new_file(path)?;
                 let mthd = encryption_method_from_db_encryption_method(enc_info.method);
@@ -589,8 +590,8 @@ impl Snap {
             cf_file.size = meta.get_size();
             cf_file.checksum = meta.get_checksum();
             if file_exists(&cf_file.path) {
-                let mgr = self.mgr.encryption_key_manager.clone();
-                let (_, size) = calc_checksum_and_size(&cf_file.path, mgr.as_ref())?;
+                let mgr = self.mgr.encryption_key_manager.as_ref();
+                let (_, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
                 check_file_size(size, cf_file.size, &cf_file.path)?;
             }
         }
@@ -746,7 +747,7 @@ impl Snap {
                     cf_file.cf,
                     &begin_key,
                     &end_key,
-                    &self.mgr.limiter.clone(),
+                    &self.mgr.limiter,
                 )?
             };
             cf_file.kv_count = cf_stat.key_count as u64;
