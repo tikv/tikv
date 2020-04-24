@@ -178,6 +178,10 @@ pub enum SignificantMsg {
         // False means it came from target region.
         stale: bool,
     },
+    StoreResolved {
+        store_id: u64,
+        group_id: u64,
+    },
     /// Capture the changes of the region.
     CaptureChange {
         cmd: ChangeCmd,

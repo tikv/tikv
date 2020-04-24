@@ -20,12 +20,16 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
+use kvproto::replication_modepb::{
+    DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
+};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
+use smallvec::SmallVec;
 use time::Timespec;
 use uuid::Uuid;
 
@@ -36,7 +40,9 @@ use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
+use crate::store::{
+    Callback, Config, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
+};
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -243,6 +249,7 @@ pub struct Peer {
 
     /// Time of the last attempt to wake up inactive leader.
     pub bcast_wake_up_time: Option<UtilInstant>,
+    pub replication_mode_version: u64,
 }
 
 impl Peer {
@@ -321,6 +328,7 @@ impl Peer {
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
+            replication_mode_version: 0,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -329,6 +337,28 @@ impl Peer {
         }
 
         Ok(peer)
+    }
+
+    /// Sets commit group to the peer.
+    pub fn init_commit_group(&mut self, state: &mut GlobalReplicationState) {
+        debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
+        if state.status.mode == ReplicationMode::Majority {
+            self.raft_group.raft.enable_group_commit(false);
+            self.replication_mode_version = 0;
+            return;
+        }
+        self.raft_group.raft.enable_group_commit(true);
+        if self.get_store().region().get_peers().is_empty() {
+            return;
+        }
+        self.replication_mode_version = state.status.get_dr_auto_sync().state_id;
+        if state.status.get_dr_auto_sync().state == DrAutoSyncState::Async {
+            return;
+        }
+        state.calculate_commit_group(self.get_store().region().get_peers());
+        self.raft_group
+            .raft
+            .assign_commit_groups(&state.group_buffer);
     }
 
     /// Register self to apply_scheduler so that the peer is then usable.
@@ -1821,8 +1851,7 @@ impl Peer {
                 return Ok(());
             }
         }
-        let promoted_commit_index =
-            progress.maximal_committed_index(self.raft_group.raft.quorum_fn());
+        let promoted_commit_index = progress.maximal_committed_index().0;
         if promoted_commit_index >= self.get_store().truncated_index() {
             return Ok(());
         }
@@ -2499,6 +2528,30 @@ impl Peer {
         None
     }
 
+    fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {
+        if self.replication_mode_version == 0 {
+            return None;
+        }
+        let mut status = RegionReplicationStatus::default();
+        status.state_id = self.replication_mode_version;
+        let res = self.raft_group.raft.check_group_commit_consistent();
+        if Some(true) != res {
+            let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
+            if self.get_store().applied_index_term() >= self.term() {
+                for (id, p) in self.raft_group.raft.prs().voters() {
+                    buffer.push((*id, p.commit_group_id, p.matched));
+                }
+            };
+            info!("still not reach integrity over label"; "region_id" => self.region_id, "peer_id" => self.peer.id, "progress" => ?buffer);
+        }
+        status.state = match res {
+            Some(true) => RegionReplicationState::IntegrityOverLabel,
+            Some(false) => RegionReplicationState::SimpleMajority,
+            None => RegionReplicationState::Unknown,
+        };
+        Some(status)
+    }
+
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
             term: self.term(),
@@ -2510,6 +2563,7 @@ impl Peer {
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
+            replication_status: self.region_replication_status(),
         };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(

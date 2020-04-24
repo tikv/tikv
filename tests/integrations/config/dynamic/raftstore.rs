@@ -102,6 +102,7 @@ fn start_raftstore(
             importer,
             Worker::new("split"),
             AutoSplitController::default(),
+            Arc::default(),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)
