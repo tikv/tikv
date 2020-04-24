@@ -18,6 +18,12 @@ enum TrackerState {
     /// The tracker is initialized.
     Initialized,
 
+    /// The tracker is notified that the task is scheduled on a thread pool and start running.
+    Scheduled(Instant),
+
+    /// The tracker is notified that the snapshot needed by the task is ready.
+    SnapshotRetrieved(Instant),
+
     /// The tracker is notified that all items just began.
     AllItemsBegan,
 
@@ -43,7 +49,10 @@ pub struct Tracker {
 
     // Intermediate results
     current_stage: TrackerState,
-    wait_time: Duration,
+    wait_time: Duration,          // Total wait time
+    schedule_wait_time: Duration, // Wait time spent on waiting for scheduling
+    snapshot_wait_time: Duration, // Wait time spent on waiting for a snapshot
+    handler_build_time: Duration, // Time spent on building the handler (not included in total wait time)
     req_time: Duration,
     item_process_time: Duration,
     total_process_time: Duration,
@@ -59,13 +68,17 @@ impl Tracker {
     /// because the future pool might be full and we need to wait it. This kind of wait time
     /// has to be recorded.
     pub fn new(req_ctx: ReqContext) -> Tracker {
+        let now = Instant::now_coarse();
         Tracker {
-            request_begin_at: Instant::now_coarse(),
-            item_begin_at: Instant::now_coarse(),
+            request_begin_at: now,
+            item_begin_at: now,
             perf_statistics_start: None,
 
             current_stage: TrackerState::Initialized,
             wait_time: Duration::default(),
+            schedule_wait_time: Duration::default(),
+            snapshot_wait_time: Duration::default(),
+            handler_build_time: Duration::default(),
             req_time: Duration::default(),
             item_process_time: Duration::default(),
             total_process_time: Duration::default(),
@@ -76,10 +89,32 @@ impl Tracker {
         }
     }
 
-    pub fn on_begin_all_items(&mut self) {
+    pub fn on_scheduled(&mut self) {
         assert_eq!(self.current_stage, TrackerState::Initialized);
-        self.wait_time = Instant::now_coarse() - self.request_begin_at;
-        self.current_stage = TrackerState::AllItemsBegan;
+        let now = Instant::now_coarse();
+        self.schedule_wait_time = now - self.request_begin_at;
+        self.current_stage = TrackerState::Scheduled(now);
+    }
+
+    pub fn on_snapshot_finished(&mut self) {
+        if let TrackerState::Scheduled(at) = self.current_stage {
+            let now = Instant::now_coarse();
+            self.snapshot_wait_time = now - at;
+            self.wait_time = now - self.request_begin_at;
+            self.current_stage = TrackerState::SnapshotRetrieved(now);
+        } else {
+            unreachable!()
+        }
+    }
+
+    pub fn on_begin_all_items(&mut self) {
+        if let TrackerState::SnapshotRetrieved(at) = self.current_stage {
+            let now = Instant::now_coarse();
+            self.handler_build_time = now - at;
+            self.current_stage = TrackerState::AllItemsBegan;
+        } else {
+            unreachable!()
+        }
     }
 
     pub fn on_begin_item(&mut self) {
@@ -149,9 +184,13 @@ impl Tracker {
 
             info!("slow-query";
                 "region_id" => self.req_ctx.context.get_region_id(),
-                "peer_id" => &self.req_ctx.peer,
+                "remote_host" => &self.req_ctx.peer,
+                "req_time" => ?self.req_time,
                 "total_process_time" => ?self.total_process_time,
                 "wait_time" => ?self.wait_time,
+                "schedule_wait_time" => ?self.schedule_wait_time,
+                "snapshot_wait_time" => ?self.snapshot_wait_time,
+                "handler_build_time" => ?self.handler_build_time,
                 "txn_start_ts" => self.req_ctx.txn_start_ts,
                 "table_id" => some_table_id,
                 "tag" => self.req_ctx.tag,
@@ -179,8 +218,26 @@ impl Tracker {
             // wait time
             cop_metrics
                 .local_copr_req_wait_time
-                .with_label_values(&[self.req_ctx.tag])
+                .with_label_values(&[self.req_ctx.tag, "all"])
                 .observe(time::duration_to_sec(self.wait_time));
+
+            // schedule wait time
+            cop_metrics
+                .local_copr_req_wait_time
+                .with_label_values(&[self.req_ctx.tag, "schedule"])
+                .observe(time::duration_to_sec(self.schedule_wait_time));
+
+            // snapshot wait time
+            cop_metrics
+                .local_copr_req_wait_time
+                .with_label_values(&[self.req_ctx.tag, "snapshot"])
+                .observe(time::duration_to_sec(self.snapshot_wait_time));
+
+            // handler build time
+            cop_metrics
+                .local_copr_req_handler_build_time
+                .with_label_values(&[self.req_ctx.tag])
+                .observe(time::duration_to_sec(self.handler_build_time));
 
             // handle time
             cop_metrics
@@ -235,17 +292,18 @@ impl Drop for Tracker {
     /// `Tracker` may be dropped without even calling `on_begin_all_items`. For example, if
     /// get snapshot failed. So we fast-forward if some steps are missing.
     fn drop(&mut self) {
-        // If `on_begin_all_items` is not called after `new` and attached a ctxd, call it.
         if self.current_stage == TrackerState::Initialized {
+            self.on_scheduled();
+        }
+        if let TrackerState::Scheduled(_) = self.current_stage {
+            self.on_snapshot_finished();
+        }
+        if let TrackerState::SnapshotRetrieved(_) = self.current_stage {
             self.on_begin_all_items();
         }
-        // If `on_finish_item` is not called after `on_begin_item`, call it.
         if self.current_stage == TrackerState::ItemBegan {
-            // TODO: We should never meet this scenario?
             self.on_finish_item(None);
         }
-        // If `on_finish_all_items` is not called after `on_begin_all_items` or after `on_finish_item`,
-        // call it.
         if self.current_stage == TrackerState::AllItemsBegan
             || self.current_stage == TrackerState::ItemFinished
         {

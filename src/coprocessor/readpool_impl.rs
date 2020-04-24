@@ -20,6 +20,7 @@ pub struct CopLocalMetrics {
     pub local_outdated_req_wait_time: LocalHistogramVec,
     pub local_copr_req_handle_time: LocalHistogramVec,
     pub local_copr_req_wait_time: LocalHistogramVec,
+    pub local_copr_req_handler_build_time: LocalHistogramVec,
     pub local_copr_req_error: LocalIntCounterVec,
     pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_scan_details: LocalIntCounterVec,
@@ -40,6 +41,8 @@ thread_local! {
                 COPR_REQ_HANDLE_TIME.local(),
             local_copr_req_wait_time:
                 COPR_REQ_WAIT_TIME.local(),
+            local_copr_req_handler_build_time:
+                COPR_REQ_HANDLER_BUILD_TIME.local(),
             local_copr_req_error:
                 COPR_REQ_ERROR.local(),
             local_copr_scan_keys:
@@ -94,6 +97,7 @@ fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
         cop_metrics.local_copr_req_histogram_vec.flush();
         cop_metrics.local_copr_req_handle_time.flush();
         cop_metrics.local_copr_req_wait_time.flush();
+        cop_metrics.local_copr_req_handler_build_time.flush();
         cop_metrics.local_copr_scan_keys.flush();
         cop_metrics.local_copr_rocksdb_perf_counter.flush();
         cop_metrics.local_copr_scan_details.flush();
