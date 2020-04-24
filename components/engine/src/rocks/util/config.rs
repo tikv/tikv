@@ -2,6 +2,7 @@
 
 use crate::rocks::{DBCompressionType, DBTitanDBBlobRunMode};
 use configuration::ConfigValue;
+use std::str::FromStr;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -127,13 +128,13 @@ pub enum BlobRunMode {
 
 impl From<BlobRunMode> for ConfigValue {
     fn from(mode: BlobRunMode) -> ConfigValue {
-        ConfigValue::Other(format!("k{:?}", mode))
+        ConfigValue::BlobRunMode(format!("k{:?}", mode))
     }
 }
 
 impl Into<BlobRunMode> for ConfigValue {
     fn into(self) -> BlobRunMode {
-        if let ConfigValue::Other(s) = self {
+        if let ConfigValue::BlobRunMode(s) = self {
             match s.as_str() {
                 "kNormal" => BlobRunMode::Normal,
                 "kReadOnly" => BlobRunMode::ReadOnly,
@@ -141,7 +142,22 @@ impl Into<BlobRunMode> for ConfigValue {
                 m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
             }
         } else {
-            panic!("expect: ConfigValue::Other, got: {:?}", self);
+            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", self);
+        }
+    }
+}
+
+impl FromStr for BlobRunMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<BlobRunMode, String> {
+        match s {
+            "normal" => Ok(BlobRunMode::Normal),
+            "read-only" => Ok(BlobRunMode::ReadOnly),
+            "fallback" => Ok(BlobRunMode::Fallback),
+            m => Err(format!(
+                "expect: normal, read-only or fallback, got: {:?}",
+                m
+            )),
         }
     }
 }
