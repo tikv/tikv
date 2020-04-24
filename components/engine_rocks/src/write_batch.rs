@@ -222,7 +222,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     }
 
     fn should_write_to_engine(&self) -> bool {
-        self.wbs.len() > WRITE_BATCH_MAX_BATCH
+        self.index >= WRITE_BATCH_MAX_BATCH
     }
 
     fn clear(&mut self) {
@@ -341,5 +341,7 @@ mod tests {
         assert!(!wb.should_write_to_engine());
         wb.put(b"aaa", b"bbb").unwrap();
         assert!(wb.should_write_to_engine());
+        wb.clear();
+        assert!(!wb.should_write_to_engine());
     }
 }
