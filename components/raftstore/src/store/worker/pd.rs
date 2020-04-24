@@ -5,12 +5,10 @@ use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use futures::sync::oneshot;
 use futures::Future;
 use tokio_core::reactor::Handle;
-use tokio_timer::Delay;
 
 use engine_traits::KvEngine;
 use fs2;
@@ -23,13 +21,17 @@ use raft::eraftpb::ConfChangeType;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
+use crate::store::metrics::*;
 use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
+use crate::store::worker::split_controller::{SplitInfo, TOP_N};
+use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+
 use pd_client::metrics::*;
-use pd_client::{ConfigClient, Error, PdClient, RegionStat};
+use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
@@ -52,27 +54,19 @@ impl FlowStatistics {
 
 // Reports flow statistics to outside.
 pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
-    // Reports read flow statistics, the argument `read_stats` is a hash map
-    // saves the flow statistics of different region.
     // TODO: maybe we need to return a Result later?
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
+    fn report_read_stats(&self, read_stats: ReadStats);
 }
 
 impl<E> FlowStatsReporter for Scheduler<Task<E>>
 where
     E: KvEngine,
 {
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
+    fn report_read_stats(&self, read_stats: ReadStats) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
         }
     }
-}
-
-pub trait DynamicConfig: Send + 'static {
-    fn refresh(&mut self, cfg_client: &dyn ConfigClient);
-    fn refresh_interval(&self) -> Duration;
-    fn get(&self) -> String;
 }
 
 /// Uses an asynchronous thread to tell PD something.
@@ -95,6 +89,9 @@ where
         // If true, right Region derives origin region_id.
         right_derive: bool,
         callback: Callback<E>,
+    },
+    AutoSplit {
+        split_infos: Vec<SplitInfo>,
     },
     Heartbeat {
         term: u64,
@@ -120,7 +117,7 @@ where
         merge_source: Option<u64>,
     },
     ReadStats {
-        read_stats: HashMap<u64, FlowStatistics>,
+        read_stats: ReadStats,
     },
     DestroyPeer {
         region_id: u64,
@@ -129,10 +126,6 @@ where
         cpu_usages: RecordPairVec,
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
-    },
-    RefreshConfig,
-    GetConfig {
-        cfg_sender: oneshot::Sender<String>,
     },
 }
 
@@ -201,6 +194,13 @@ where
                 region.get_id(),
                 hex::encode_upper(&split_key),
             ),
+            Task::AutoSplit {
+                ref split_infos,
+            } => write!(
+                f,
+                "auto split split regions, num is {}",
+                split_infos.len(),
+            ),
             Task::AskBatchSplit {
                 ref region,
                 ref split_keys,
@@ -249,11 +249,12 @@ where
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
             ),
-            Task::RefreshConfig => write!(f, "refresh config"),
-            Task::GetConfig {..} => write!(f, "get config"),
         }
     }
 }
+
+const DEFAULT_QPS_INFO_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_COLLECT_INTERVAL: Duration = Duration::from_secs(1);
 
 #[inline]
 fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
@@ -273,8 +274,11 @@ where
 {
     scheduler: Scheduler<Task<E>>,
     handle: Option<JoinHandle<()>>,
-    sender: Option<Sender<bool>>,
-    interval: Duration,
+    timer: Option<Sender<bool>>,
+    sender: Option<Sender<ReadStats>>,
+    thread_info_interval: Duration,
+    qps_info_interval: Duration,
+    collect_interval: Duration,
 }
 
 impl<E> StatsMonitor<E>
@@ -285,39 +289,87 @@ where
         StatsMonitor {
             scheduler,
             handle: None,
+            timer: None,
             sender: None,
-            interval,
+            thread_info_interval: interval,
+            qps_info_interval: DEFAULT_QPS_INFO_INTERVAL,
+            collect_interval: DEFAULT_COLLECT_INTERVAL,
         }
     }
 
-    pub fn start(&mut self) -> Result<(), io::Error> {
+    // Collecting thread information and obtaining qps information for auto split.
+    // They run together in the same thread by taking modulo at different intervals.
+    pub fn start(
+        &mut self,
+        mut auto_split_controller: AutoSplitController,
+    ) -> Result<(), io::Error> {
+        let mut timer_cnt = 0; // to run functions with different intervals in a loop
+        let collect_interval = self.collect_interval;
+        let thread_info_interval = self
+            .thread_info_interval
+            .div_duration_f64(self.collect_interval) as i32;
+        let qps_info_interval = self
+            .qps_info_interval
+            .div_duration_f64(self.collect_interval) as i32;
         let (tx, rx) = mpsc::channel();
-        let interval = self.interval;
+        self.timer = Some(tx);
+
+        let (sender, receiver) = mpsc::channel();
+        self.sender = Some(sender);
+
         let scheduler = self.scheduler.clone();
-        self.sender = Some(tx);
+
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
                 let mut thread_stats = ThreadInfoStatistics::new();
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
+                    if timer_cnt % thread_info_interval == 0 {
+                        thread_stats.record();
+                        let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
+                        let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
+                        let write_io_rates =
+                            convert_record_pairs(thread_stats.get_write_io_rates());
 
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                    thread_stats.record();
-
-                    let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
-                    let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
-                    let write_io_rates = convert_record_pairs(thread_stats.get_write_io_rates());
-
-                    let task = Task::StoreInfos {
-                        cpu_usages,
-                        read_io_rates,
-                        write_io_rates,
-                    };
-                    if let Err(e) = scheduler.schedule(task) {
-                        error!(
-                            "failed to send store infos to pd worker";
-                            "err" => ?e,
-                        );
+                        let task = Task::StoreInfos {
+                            cpu_usages,
+                            read_io_rates,
+                            write_io_rates,
+                        };
+                        if let Err(e) = scheduler.schedule(task) {
+                            error!(
+                                "failed to send store infos to pd worker";
+                                "err" => ?e,
+                            );
+                        }
                     }
+                    if timer_cnt % qps_info_interval == 0 {
+                        let mut others = vec![];
+                        while let Ok(other) = receiver.try_recv() {
+                            others.push(other);
+                        }
+                        let (top, split_infos) = auto_split_controller.flush(others);
+                        auto_split_controller.clear();
+                        let task = Task::AutoSplit { split_infos };
+                        if let Err(e) = scheduler.schedule(task) {
+                            error!(
+                                "failed to send split infos to pd worker";
+                                "err" => ?e,
+                            );
+                        }
+
+                        for i in 0..TOP_N {
+                            if i < top.len() {
+                                READ_QPS_TOPN
+                                    .with_label_values(&[&i.to_string()])
+                                    .set(top[i] as f64);
+                            } else {
+                                READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
+                            }
+                        }
+                    }
+                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval); // modules timer_cnt with the least common multiple of intervals to avoid overflow
+                    auto_split_controller.refresh_cfg();
                 }
             })?;
 
@@ -330,22 +382,26 @@ where
         if h.is_none() {
             return;
         }
+        drop(self.timer.take().unwrap());
         drop(self.sender.take().unwrap());
         if let Err(e) = h.unwrap().join() {
             error!("join stats collector failed"; "err" => ?e);
             return;
         }
     }
+
+    pub fn get_sender(&self) -> &Option<Sender<ReadStats>> {
+        &self.sender
+    }
 }
 
 pub struct Runner<E, T>
 where
     E: KvEngine,
-    T: PdClient + ConfigClient,
+    T: PdClient,
 {
     store_id: u64,
     pd_client: Arc<T>,
-    config_handler: Box<dyn DynamicConfig>,
     router: RaftRouter<E>,
     db: E,
     region_peers: HashMap<u64, PeerStat>,
@@ -364,29 +420,28 @@ where
 impl<E, T> Runner<E, T>
 where
     E: KvEngine,
-    T: PdClient + ConfigClient,
+    T: PdClient,
 {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        config_handler: Box<dyn DynamicConfig>,
         router: RaftRouter<E>,
         db: E,
         scheduler: Scheduler<Task<E>>,
         store_heartbeat_interval: u64,
+        auto_split_controller: AutoSplitController,
     ) -> Runner<E, T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
-        if let Err(e) = stats_monitor.start() {
+        if let Err(e) = stats_monitor.start(auto_split_controller) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
         Runner {
             store_id,
             pd_client,
-            config_handler,
             router,
             db,
             is_hb_receiver_scheduled: false,
@@ -406,6 +461,7 @@ where
         peer: metapb::Peer,
         right_derive: bool,
         callback: Callback<E>,
+        task: String,
     ) {
         let router = self.router.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -415,7 +471,8 @@ where
                         "try to split region";
                         "region_id" => region.get_id(),
                         "new_region_id" => resp.get_new_region_id(),
-                        "region" => ?region
+                        "region" => ?region,
+                        "task"=>task,
                     );
 
                     let req = new_split_region_request(
@@ -431,7 +488,8 @@ where
                 Err(e) => {
                     warn!("failed to ask split";
                     "region_id" => region.get_id(),
-                    "err" => ?e);
+                    "err" => ?e,
+                    "task"=>task);
                 }
             }
             Ok(())
@@ -769,7 +827,7 @@ where
                     let mut split_region = resp.take_split_region();
                     info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
                     let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
-                        CasualMessage::SplitRegion{
+                        CasualMessage::SplitRegion {
                             region_epoch: epoch,
                             split_keys: split_region.take_keys().into(),
                             callback: Callback::None,
@@ -805,16 +863,21 @@ where
         self.is_hb_receiver_scheduled = true;
     }
 
-    fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
-        for (region_id, stats) in read_stats {
+    fn handle_read_stats(&mut self, read_stats: ReadStats) {
+        for (region_id, stats) in &read_stats.flows {
             let peer_stat = self
                 .region_peers
-                .entry(region_id)
+                .entry(*region_id)
                 .or_insert_with(PeerStat::default);
             peer_stat.read_bytes += stats.read_bytes as u64;
             peer_stat.read_keys += stats.read_keys as u64;
             self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
             self.store_stat.engine_total_keys_read += stats.read_keys as u64;
+        }
+        if !read_stats.region_infos.is_empty() {
+            if let Some(sender) = self.stats_monitor.get_sender() {
+                sender.send(read_stats).unwrap();
+            }
         }
     }
 
@@ -835,35 +898,12 @@ where
         self.store_stat.store_read_io_rates = read_io_rates;
         self.store_stat.store_write_io_rates = write_io_rates;
     }
-
-    fn handle_refresh_config(&mut self, handle: &Handle) {
-        self.config_handler.refresh(self.pd_client.as_ref() as _);
-
-        let scheduler = self.scheduler.clone();
-        let when = Instant::now() + self.config_handler.refresh_interval();
-        let f = Delay::new(when)
-            .map_err(|e| warn!("timeout timer delay errored"; "err" => ?e))
-            .then(move |_| {
-                if let Err(e) = scheduler.schedule(Task::RefreshConfig) {
-                    error!("failed to schedule refresh config task"; "err" => ?e)
-                }
-                Ok(())
-            });
-        handle.spawn(f);
-    }
-
-    fn handle_get_config(&self, cfg_sender: oneshot::Sender<String>) {
-        let cfg = self.config_handler.get();
-        let _ = cfg_sender
-            .send(cfg)
-            .map_err(|_| error!("failed to send config"));
-    }
 }
 
 impl<E, T> Runnable<Task<E>> for Runner<E, T>
 where
     E: KvEngine,
-    T: PdClient + ConfigClient,
+    T: PdClient,
 {
     fn run(&mut self, task: Task<E>, handle: &Handle) {
         debug!("executing task"; "task" => %task);
@@ -879,7 +919,15 @@ where
                 peer,
                 right_derive,
                 callback,
-            } => self.handle_ask_split(handle, region, split_key, peer, right_derive, callback),
+            } => self.handle_ask_split(
+                handle,
+                region,
+                split_key,
+                peer,
+                right_derive,
+                callback,
+                String::from("AskSplit"),
+            ),
             Task::AskBatchSplit {
                 region,
                 split_keys,
@@ -894,6 +942,24 @@ where
                 right_derive,
                 callback,
             ),
+            Task::AutoSplit { split_infos } => {
+                for split_info in split_infos {
+                    if let Ok(Some(region)) =
+                        self.pd_client.get_region_by_id(split_info.region_id).wait()
+                    {
+                        self.handle_ask_split(
+                            handle,
+                            region,
+                            split_info.split_key,
+                            split_info.peer,
+                            true,
+                            Callback::None,
+                            String::from("AutoSplit"),
+                        );
+                    }
+                }
+            }
+
             Task::Heartbeat {
                 term,
                 region,
@@ -977,8 +1043,6 @@ where
                 read_io_rates,
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
-            Task::RefreshConfig => self.handle_refresh_config(handle),
-            Task::GetConfig { cfg_sender } => self.handle_get_config(cfg_sender),
         };
     }
 
@@ -1137,7 +1201,8 @@ mod tests {
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
             let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
-            if let Err(e) = stats_monitor.start() {
+
+            if let Err(e) = stats_monitor.start(AutoSplitController::default()) {
                 error!("failed to start stats collector, error = {:?}", e);
             }
 

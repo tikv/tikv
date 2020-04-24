@@ -52,13 +52,12 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
-    SnapshotDeleter, StoreMsg,
+    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
-const REGION_SPLIT_SKIP_MAX_COUNT: u8 = 3;
+const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -101,7 +100,7 @@ pub struct PeerFsm<E: KvEngine> {
     mailbox: Option<BasicMailbox<PeerFsm<E>>>,
     pub receiver: Receiver<PeerMsg<E>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
-    skip_split_count: u8,
+    skip_split_count: usize,
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -896,12 +895,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return Ok(());
         }
 
-        if msg.has_extra_msg() {
-            self.on_extra_message(&msg);
+        if self.check_msg(&msg) {
             return Ok(());
         }
 
-        if self.check_msg(&msg) {
+        if msg.has_extra_msg() {
+            self.on_extra_message(&msg);
             return Ok(());
         }
 
@@ -996,7 +995,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     /// Returns true means that the message can be dropped silently.
     fn check_msg(&mut self, msg: &RaftMessage) -> bool {
         let from_epoch = msg.get_region_epoch();
-        let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -1020,11 +1018,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if util::is_epoch_stale(from_epoch, self.fsm.peer.region().get_region_epoch())
             && util::find_peer(self.fsm.peer.region(), from_store_id).is_none()
         {
+            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
+            if msg.has_extra_msg() {
+                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // it is removed due to conf change or merge.
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+            }
             // The message is stale and not in current region.
             self.ctx.handle_stale_msg(
                 msg,
                 self.fsm.peer.region().get_region_epoch().clone(),
-                is_vote_msg,
+                need_gc_msg,
                 None,
             );
             return true;
@@ -2570,8 +2574,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     #[inline]
-    fn region_split_skip_max_count(&self) -> u8 {
-        fail_point!("region_split_skip_max_count", |_| { u8::max_value() });
+    fn region_split_skip_max_count(&self) -> usize {
+        fail_point!("region_split_skip_max_count", |_| { usize::max_value() });
         REGION_SPLIT_SKIP_MAX_COUNT
     }
 

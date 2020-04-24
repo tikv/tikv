@@ -15,7 +15,9 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
+
 use engine_rocks::RocksEngine;
+use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -32,12 +34,17 @@ use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
+use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
-use crate::store::util::KeysInfoFormatter;
 use crate::store::util::{check_region_epoch, compare_region_epoch};
+use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
+
+use crate::observe_perf_context_type;
+use crate::report_perf_context;
+
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
@@ -348,6 +355,8 @@ where
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+
+    perf_context_statistics: PerfContextStatistics,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -385,6 +394,7 @@ where
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
+            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
         }
     }
 
@@ -458,6 +468,10 @@ where
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
+            report_perf_context!(
+                self.perf_context_statistics,
+                APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            );
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -3069,6 +3083,7 @@ where
             }
             self.apply_ctx.enable_sync_log = incoming.sync_log;
         }
+        self.apply_ctx.perf_context_statistics.start();
     }
 
     /// There is no control fsm in apply poller.
@@ -3366,7 +3381,7 @@ mod tests {
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
-        let importer = Arc::new(SSTImporter::new(dir.path()).unwrap());
+        let importer = Arc::new(SSTImporter::new(dir.path(), None).unwrap());
         (dir, importer)
     }
 
