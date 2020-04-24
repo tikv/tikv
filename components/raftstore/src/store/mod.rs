@@ -5,6 +5,8 @@ pub mod config;
 pub mod fsm;
 pub mod msg;
 pub mod transport;
+
+#[macro_use]
 pub mod util;
 
 mod bootstrap;
@@ -40,7 +42,7 @@ pub use self::snap::{
     check_abort, copy_snapshot,
     snap_io::{apply_sst_cf_file, build_sst_cf_file},
     ApplyOptions, Error as SnapError, GenericSnapshot, SnapEntry, SnapKey, SnapManager,
-    SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
+    SnapManagerBuilder, Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::worker::{
