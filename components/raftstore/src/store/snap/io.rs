@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, Read, Write};
+use std::sync::Arc;
 use std::{fs, usize};
 
 use encryption::{
@@ -33,7 +34,7 @@ pub struct BuildStatistics {
 /// otherwise the file will be created and synchronized.
 pub fn build_plain_cf_file<E>(
     path: &str,
-    key_mgr: Option<&DataKeyManager>,
+    key_mgr: Option<&Arc<DataKeyManager>>,
     snap: &E::Snapshot,
     cf: &str,
     start_key: &[u8],
@@ -133,7 +134,7 @@ where
 /// key value pairs written to db.
 pub fn apply_plain_cf_file<E, F>(
     path: &str,
-    key_mgr: Option<&DataKeyManager>,
+    key_mgr: Option<&Arc<DataKeyManager>>,
     stale_detector: &impl StaleDetector,
     db: &E,
     cf: &str,
