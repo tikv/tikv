@@ -2,6 +2,12 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.1.0]
+### Bug Fixes
++ Fix the panic issue caused by replica read [#7418](https://github.com/tikv/tikv/pull/7418) [#7369](https://github.com/tikv/tikv/pull/7369)
++ Fix the issue that the restoration process creates empty regions [#7419](https://github.com/tikv/tikv/pull/7419)
++ Fix the issue that repeated resolve lock requests might harm the atomicity of pessimistic transactions [#7389](https://github.com/tikv/tikv/pull/7389)
+
 ## [3.1.0-rc]
 ### New Features
 + Support backing up data with the Raw KV API [#7051](https://github.com/tikv/tikv/pull/7051)
