@@ -348,10 +348,10 @@ impl Peer {
             return;
         }
         self.raft_group.raft.enable_group_commit(true);
+        self.replication_mode_version = state.status.get_dr_auto_sync().state_id;
         if self.get_store().region().get_peers().is_empty() {
             return;
         }
-        self.replication_mode_version = state.status.get_dr_auto_sync().state_id;
         if state.status.get_dr_auto_sync().state == DrAutoSyncState::Async {
             return;
         }
