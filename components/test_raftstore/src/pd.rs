@@ -14,6 +14,7 @@ use tokio_timer::timer::Handle;
 
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
+use kvproto::replication_modepb::ReplicationStatus;
 use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
@@ -228,6 +229,8 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+
+    replication_status: Option<ReplicationStatus>,
 }
 
 impl Cluster {
@@ -256,6 +259,7 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+            replication_status: None,
         }
     }
 
@@ -309,6 +313,20 @@ impl Cluster {
             Some(s) if s.store.get_id() != 0 => Ok(s.store.clone()),
             _ => Err(box_err!("store {} not found", store_id)),
         }
+    }
+
+    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+        Ok(self
+            .stores
+            .values()
+            .filter_map(|s| {
+                if s.store.get_id() != 0 {
+                    Some(s.store.clone())
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 
     fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
@@ -1012,15 +1030,19 @@ impl PdClient for TestPdClient {
         Ok(self.cluster_id)
     }
 
-    fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &self,
+        store: metapb::Store,
+        region: metapb::Region,
+    ) -> Result<Option<ReplicationStatus>> {
         if self.is_cluster_bootstrapped().unwrap() || !self.is_regions_empty() {
             self.cluster.wl().set_bootstrap(true);
             return Err(Error::ClusterBootstrapped(self.cluster_id));
         }
 
-        self.cluster.wl().bootstrap(store, region);
-
-        Ok(())
+        let mut cluster = self.cluster.wl();
+        cluster.bootstrap(store, region);
+        Ok(cluster.replication_status.clone())
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
@@ -1031,9 +1053,16 @@ impl PdClient for TestPdClient {
         self.cluster.rl().alloc_id()
     }
 
-    fn put_store(&self, store: metapb::Store) -> Result<()> {
+    fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         self.check_bootstrap()?;
-        self.cluster.wl().put_store(store)
+        let mut cluster = self.cluster.wl();
+        cluster.put_store(store)?;
+        Ok(cluster.replication_status.clone())
+    }
+
+    fn get_all_stores(&self, _exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
+        self.check_bootstrap()?;
+        self.cluster.rl().get_all_stores()
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
