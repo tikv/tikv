@@ -407,8 +407,88 @@ impl StatusServer {
         )
     }
 
-    fn region_json(size_info: Vec<(&str, usize)>, region_info: RegionInfo) -> serde_json::Value {
-        unimplemented!()
+    fn region_info_json(
+        size_info: Vec<(&str, usize)>,
+        region_info: RegionInfo,
+    ) -> serde_json::Value {
+        use kvproto::metapb::Region;
+        use kvproto::raft_serverpb::PeerState::*;
+        use serde_json::{json, Map, Value};
+
+        fn region_to_json(region: &Region) -> Value {
+            let peers: Vec<_> = region
+                .get_peers()
+                .iter()
+                .map(|peer| {
+                    json!({
+                        "id": peer.get_id(),
+                        "store_id": peer.get_store_id(),
+                        "is_learner": peer.get_is_learner()
+                    })
+                })
+                .collect();
+            json!({
+                "id": region.get_id(),
+                "start_key": region.get_start_key(),
+                "end_key": region.get_end_key(),
+                "region_epoch": {
+                    "conf_ver": region.get_region_epoch().get_conf_ver(),
+                    "version": region.get_region_epoch().get_version()
+                },
+                "peers": peers
+            })
+        }
+
+        let mut size_map = Map::new();
+        for (cf, size) in size_info {
+            size_map.insert(cf.to_string(), size.into());
+        }
+        let region_local_state = region_info.region_local_state.map(|state| {
+            json!({
+                "state": match state.get_state() {
+                    Normal => "normal",
+                    Applying => "applying",
+                    Tombstone => "tombstone",
+                    Merging => "merging"
+                },
+                "region": region_to_json(state.get_region()),
+                "merge_state": {
+                    "min_index": state.get_merge_state().get_min_index(),
+                    "commit": state.get_merge_state().get_commit(),
+                    "target": region_to_json(state.get_merge_state().get_target())
+                }
+            })
+        });
+
+        let raft_apply_state = region_info.raft_apply_state.map(|state| {
+            json!({
+                "applied_index": state.get_applied_index(),
+                "last_commit_index": state.get_last_commit_index(),
+                "commit_index": state.get_commit_index(),
+                "commit_term": state.get_commit_term(),
+                "truncated_state": {
+                    "index": state.get_truncated_state().get_index(),
+                    "term": state.get_truncated_state().get_term()
+                }
+            })
+        });
+
+        let raft_local_state = region_info.raft_local_state.map(|state| {
+            json!({
+                "last_index": state.get_last_index(),
+                "hard_state": {
+                    "term": state.get_hard_state().get_term(),
+                    "vote": state.get_hard_state().get_vote(),
+                    "commit": state.get_hard_state().get_commit()
+                }
+            })
+        });
+        json!({
+            "size": size_map,
+            "region_local_state": region_local_state,
+            "raft_local_state": raft_local_state,
+            "raft_apply_state": raft_apply_state
+        })
     }
 
     pub fn dump_region_info(
@@ -429,12 +509,11 @@ impl StatusServer {
                     .uri()
                     .query()
                     .and_then(|query| {
-                        url::form_urlencoded::parse(query.as_bytes())
-                            .find(|(key, _)| key == "id")
+                        url::form_urlencoded::parse(query.as_bytes()).find(|(key, _)| key == "id")
                     })
                     .and_then(|(_, value)| value.parse().ok());
                 let body = match id {
-                    Some(id) => serde_json::to_vec(&Self::region_json(
+                    Some(id) => serde_json::to_vec(&Self::region_info_json(
                         debugger.region_size(id, cfs)?,
                         debugger.region_info(id)?,
                     )),
@@ -442,7 +521,7 @@ impl StatusServer {
                         let region_ids = debugger.get_all_meta_regions()?;
                         let mut regions = Vec::with_capacity(region_ids.len());
                         for id in region_ids {
-                            regions.push(Self::region_json(
+                            regions.push(Self::region_info_json(
                                 debugger.region_size(id, cfs.clone())?,
                                 debugger.region_info(id)?,
                             ));
@@ -469,12 +548,11 @@ impl StatusServer {
         let cfg_controller = Arc::new(RwLock::new(self.cfg_controller.take().unwrap()));
         let debugger = self.debugger.clone();
         // Start to serve.
-        let server =
-            builder.serve(move || {
-                let cfg_controller = cfg_controller.clone();
-                let debugger = debugger.clone();
-                // Create a status service.
-                service_fn(
+        let server = builder.serve(move || {
+            let cfg_controller = cfg_controller.clone();
+            let debugger = debugger.clone();
+            // Create a status service.
+            service_fn(
                     move |req: Request<Body>| -> Box<
                         dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
                     > {
@@ -518,7 +596,7 @@ impl StatusServer {
                         }
                     },
                 )
-            });
+        });
 
         let graceful = server
             .with_graceful_shutdown(self.rx.take().unwrap())
