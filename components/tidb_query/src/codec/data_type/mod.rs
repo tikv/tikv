@@ -16,11 +16,7 @@ pub use crate::codec::mysql::{Decimal, Duration, Json, JsonType, Time as DateTim
 pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
 
-<<<<<<< HEAD:components/tidb_query/src/codec/data_type/mod.rs
-use tidb_query_datatype::{EvalType, FieldTypeTp};
-=======
-use crate::EvalType;
->>>>>>> 4175d68... tidb_query: fix converting bytes to bool (#7486):components/tidb_query_datatype/src/codec/data_type/mod.rs
+use tidb_query_datatype::EvalType;
 
 use crate::codec::convert::ConvertTo;
 use crate::expr::EvalContext;
