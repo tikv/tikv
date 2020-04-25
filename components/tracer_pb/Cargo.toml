@@ -4,9 +4,12 @@ version = "0.1.0"
 edition = "2018"
 
 [features]
-default = ["protobuf-codec"]
+default = []
 protobuf-codec = ["protobuf-build/protobuf-codec"]
 prost-codec = ["prost", "prost-derive", "lazy_static", "protobuf-build/prost-codec"]
+
+[lib]
+name = "tracer_pb"
 
 [dependencies]
 tracer = { path = "../tracer" }

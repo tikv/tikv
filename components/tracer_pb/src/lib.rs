@@ -9,7 +9,6 @@ mod protos {
 
 pub use crate::protos::tracer_pb::*;
 
-use protobuf::{Message, RepeatedField};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn timestamp(time: SystemTime) -> u64 {
@@ -18,7 +17,10 @@ fn timestamp(time: SystemTime) -> u64 {
         .as_nanos() as u64
 }
 
+#[cfg(feature = "protobuf-codec")]
 pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
+    use protobuf::{Message, RepeatedField};
+    
     let spans: Vec<_> = spans
         .map(|span| {
             let mut s = self::Span::default();
@@ -36,4 +38,31 @@ pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
     resp.set_spans(RepeatedField::from_slice(&spans));
 
     resp.write_to_bytes().unwrap()
+}
+
+#[cfg(feature = "prost-codec")]
+pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
+    use prost::Message;
+    
+    let spans: Vec<_> = spans
+        .map(|span| {
+            let mut s = self::Span::default();
+            s.id = span.id as u32;
+            s.parent = if let Some(p) = span.parent {
+                Some(self::span::Parent::ParentValue(p as u32))
+            } else {
+                Some(self::span::Parent::ParentNone(true))
+            };
+            s.start = timestamp(span.start_time);
+            s.end = timestamp(span.end_time);
+            s
+        })
+        .collect();
+
+    let mut resp = self::TracerResp::default();
+    resp.spans = spans;
+
+    let mut res = vec![];
+    let _ = resp.encode(&mut res);
+    res
 }

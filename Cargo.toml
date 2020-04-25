@@ -157,7 +157,7 @@ vlog = "0.1.4"
 walkdir = "2"
 tracer = { path = "components/tracer" }
 tracer_codegen = { path = "components/tracer_codegen" }
-tracer_pb = { path = "components/tracer_pb" }
+tracer_pb = { path = "components/tracer_pb", default-features = false }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
