@@ -407,6 +407,70 @@ impl StatusServer {
         )
     }
 
+    /// Serialize region info to json.
+    ///
+    /// ## Example
+    ///
+    /// ```text
+    /// {
+    ///     "size": {
+    ///         "default": 4096,
+    ///         "write": 2048,
+    ///         "lock": 1024
+    ///     },
+    ///     "region_local_state": {
+    ///         "state": "normal",
+    ///         "merge_state": {
+    ///             "min_index": 0,
+    ///             "commit": 16,
+    ///             "target" {
+    ///                 "id": 1,
+    ///                 "start_key": b"aaa",
+    ///                 "end_key": b"bbb",
+    ///                 "region_epoch": {
+    ///                     "conf_ver": 3,
+    ///                     "version": 4
+    ///                 },
+    ///                 "peers": [
+    ///                     {"id": 0, "store_id": 0, "is_learner": false },
+    ///                     {"id": 2, "store_id": 2, "is_learner": false }
+    ///                 ]
+    ///             }
+    ///         },
+    ///         "region": {
+    ///             "id": 0,
+    ///             "start_key": b"aaa",
+    ///             "end_key": b"ccc",
+    ///             "region_epoch": {
+    ///                 "conf_ver": 3,
+    ///                 "version": 5
+    ///             },
+    ///             "peers": [
+    ///                 {"id": 1, "store_id": 1, "is_learner": false },
+    ///                 {"id": 2, "store_id": 2, "is_learner": false }
+    ///             ]
+    ///         }
+    ///     },
+    ///     "raft_apply_state": {
+    ///         "applied_index": 16,
+    ///         "last_commit_index": 15,
+    ///         "commit_index": 16,
+    ///         "commit_term": 2,
+    ///         "truncated_state": {
+    ///             "index": 16,
+    ///             "term": 2
+    ///         }
+    ///     },
+    ///     "raft_local_state": {
+    ///         "last_index": 16,
+    ///         "hard_state": {
+    ///             "term": 2,
+    ///             "vote": 2,
+    ///             "commit": 16
+    ///         }
+    ///     }
+    /// }
+    /// ```
     fn region_info_json(
         size_info: Vec<(&str, usize)>,
         region_info: RegionInfo,
@@ -1177,27 +1241,5 @@ mod tests {
             let _ = handle.wait();
         }
         status_server.stop();
-    }
-
-    #[test]
-    fn test_region_info_json() {
-        use kvproto::metapb::*;
-        use kvproto::raft_serverpb::*;
-        use serde_json::json;
-        use super::RegionInfo;
-
-        let expect = json!({
-            "size": {
-                "default": 4096,
-                "write": 2048,
-                "lock": 1024
-            },
-            "region_local_state": {
-                "state": "normal",
-                "merge_state": {
-                    "min_index": 0
-                }
-            }
-        });
     }
 }
