@@ -3,6 +3,8 @@
 use configuration::{ConfigChange, Configuration};
 use raftstore::store::Config as RaftstoreConfig;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use tikv::config::*;
 
@@ -79,4 +81,112 @@ fn test_dispatch_change() {
 
     // config change should also dispatch to raftstore config manager
     assert_eq!(mgr.0.lock().unwrap().raft_log_gc_threshold, 2000);
+}
+
+#[test]
+fn test_write_update_to_file() {
+    let (mut cfg, tmp_dir) = TiKvConfig::with_tmp().unwrap();
+    cfg.cfg_path = tmp_dir.path().join("cfg_file").to_str().unwrap().to_owned();
+    {
+        let c = r#"
+## comment should be reserve
+[raftstore]
+
+## comment should be reserve
+# comment with one `#` should also be reserve
+sync-log = true
+
+# config that comment out by one `#` should be update in place
+## pd-heartbeat-tick-interval = "30s"
+# pd-heartbeat-tick-interval = "30s"
+
+[rocksdb.defaultcf]
+## config should be update in place
+block-cache-size = "10GB"
+
+[rocksdb.lockcf]
+## this config will not update even it has the same last 
+## name as `rocksdb.defaultcf.block-cache-size`
+block-cache-size = "512MB"
+
+[coprocessor]
+## the update to `coprocessor.region-split-keys`, which do not show up 
+## as key-value pair after [coprocessor], will be written at the end of [coprocessor]
+
+[gc]
+## config should be update in place
+max-write-bytes-per-sec = "1KB"
+
+[rocksdb.defaultcf.titan]
+blob-run-mode = "normal"
+"#;
+        let mut f = File::create(&cfg.cfg_path).unwrap();
+        f.write_all(c.as_bytes()).unwrap();
+        f.sync_all().unwrap();
+    }
+    let mut cfg_controller = ConfigController::new(cfg);
+    let change = {
+        let mut change = HashMap::new();
+        change.insert(
+            "raftstore.pd-heartbeat-tick-interval".to_owned(),
+            "1h".to_owned(),
+        );
+        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
+        change.insert(
+            "coprocessor.region-split-keys".to_owned(),
+            "10000".to_owned(),
+        );
+        change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
+        change.insert(
+            "rocksdb.defaultcf.block-cache-size".to_owned(),
+            "1GB".to_owned(),
+        );
+        change.insert(
+            "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
+            "read-only".to_owned(),
+        );
+        change
+    };
+    cfg_controller.update(change).unwrap();
+    let res = {
+        let mut buf = Vec::new();
+        let mut f = File::open(&cfg_controller.get_current().cfg_path).unwrap();
+        f.read_to_end(&mut buf).unwrap();
+        buf
+    };
+
+    let expect = r#"
+## comment should be reserve
+[raftstore]
+
+## comment should be reserve
+# comment with one `#` should also be reserve
+sync-log = false
+
+# config that comment out by one `#` should be update in place
+## pd-heartbeat-tick-interval = "30s"
+pd-heartbeat-tick-interval = "1h"
+
+[rocksdb.defaultcf]
+## config should be update in place
+block-cache-size = "1GB"
+
+[rocksdb.lockcf]
+## this config will not update even it has the same last 
+## name as `rocksdb.defaultcf.block-cache-size`
+block-cache-size = "512MB"
+
+[coprocessor]
+## the update to `coprocessor.region-split-keys`, which do not show up 
+## as key-value pair after [coprocessor], will be written at the end of [coprocessor]
+
+region-split-keys = 10000
+[gc]
+## config should be update in place
+max-write-bytes-per-sec = "100MB"
+
+[rocksdb.defaultcf.titan]
+blob-run-mode = "read-only"
+"#;
+    assert_eq!(expect.as_bytes(), res.as_slice());
 }
