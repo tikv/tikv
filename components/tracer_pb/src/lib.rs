@@ -20,7 +20,7 @@ fn timestamp(time: SystemTime) -> u64 {
 #[cfg(feature = "protobuf-codec")]
 pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
     use protobuf::{Message, RepeatedField};
-    
+
     let spans: Vec<_> = spans
         .map(|span| {
             let mut s = self::Span::default();
@@ -43,7 +43,7 @@ pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
 #[cfg(feature = "prost-codec")]
 pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
     use prost::Message;
-    
+
     let spans: Vec<_> = spans
         .map(|span| {
             let mut s = self::Span::default();
