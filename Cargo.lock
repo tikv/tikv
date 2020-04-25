@@ -2586,7 +2586,7 @@ dependencies = [
  "cloudabi",
  "libc",
  "redox_syscall",
- "smallvec 1.1.0",
+ "smallvec 1.4.0",
  "winapi 0.3.8",
 ]
 
@@ -2966,7 +2966,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#b9891b673573fad77ebcf9bbe0969cf945841926"
+source = "git+https://github.com/pingcap/raft-rs#a1cfa634af8275376c120c2d58dcf09bf05c3adc"
 dependencies = [
  "fxhash",
  "getset",
@@ -2980,7 +2980,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#b9891b673573fad77ebcf9bbe0969cf945841926"
+source = "git+https://github.com/pingcap/raft-rs#a1cfa634af8275376c120c2d58dcf09bf05c3adc"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3028,6 +3028,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "smallvec 1.4.0",
  "sst_importer",
  "tempfile",
  "test_sst_importer",
@@ -3847,9 +3848,9 @@ checksum = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
 
 [[package]]
 name = "smallvec"
-version = "1.1.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44e59e0c9fa00817912ae6e4e6e3c4fe04455e75699d06eedc7d85917ed8e8f4"
+checksum = "c7cb5678e1615754284ec264d9bb5b4c27d2018577fd90ac0ceb578591ed5ee4"
 
 [[package]]
 name = "snappy-sys"
@@ -5217,7 +5218,7 @@ version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5479532badd04e128284890390c1e876ef7a993d0570b3597ae43dfa1d59afa4"
 dependencies = [
- "smallvec 1.1.0",
+ "smallvec 1.4.0",
 ]
 
 [[package]]

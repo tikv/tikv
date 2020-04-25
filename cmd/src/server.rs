@@ -165,8 +165,9 @@ impl TiKVServer {
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
-        let (resolve_worker, resolver, state) = resolve::new_resolver(Arc::clone(&pd_client))
-            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
+        let (resolve_worker, resolver, state) =
+            resolve::new_resolver(Arc::clone(&pd_client), router.clone())
+                .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
