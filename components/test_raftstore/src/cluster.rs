@@ -467,7 +467,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // Return first region id.
-    fn bootstrap_conf_change(&mut self) -> u64 {
+    pub fn bootstrap_conf_change(&mut self) -> u64 {
         for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engines.clone());
