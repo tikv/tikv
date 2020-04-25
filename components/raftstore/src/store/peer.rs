@@ -342,7 +342,7 @@ impl Peer {
     /// Sets commit group to the peer.
     pub fn init_commit_group(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
-        if state.status.mode == ReplicationMode::Majority {
+        if state.status.get_mode() == ReplicationMode::Majority {
             self.raft_group.raft.enable_group_commit(false);
             self.replication_mode_version = 0;
             return;
@@ -352,7 +352,7 @@ impl Peer {
         if self.get_store().region().get_peers().is_empty() {
             return;
         }
-        if state.status.get_dr_auto_sync().state == DrAutoSyncState::Async {
+        if state.status.get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
             return;
         }
         state.calculate_commit_group(self.get_store().region().get_peers());
@@ -2544,11 +2544,12 @@ impl Peer {
             };
             info!("still not reach integrity over label"; "region_id" => self.region_id, "peer_id" => self.peer.id, "progress" => ?buffer);
         }
-        status.state = match res {
+        let state = match res {
             Some(true) => RegionReplicationState::IntegrityOverLabel,
             Some(false) => RegionReplicationState::SimpleMajority,
             None => RegionReplicationState::Unknown,
         };
+        status.set_state(state);
         Some(status)
     }
 

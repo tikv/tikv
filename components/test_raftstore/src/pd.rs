@@ -996,7 +996,7 @@ impl TestPdClient {
 
     pub fn configure_dr_auto_sync(&self, label_key: &str) {
         let mut status = ReplicationStatus::default();
-        status.mode = ReplicationMode::DrAutoSync;
+        status.set_mode(ReplicationMode::DrAutoSync);
         status.mut_dr_auto_sync().label_key = label_key.to_owned();
         status.mut_dr_auto_sync().state_id = 1;
         self.cluster.wl().replication_status = Some(status);

@@ -565,10 +565,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             SignificantMsg::StoreResolved { store_id, group_id } => {
                 let state = self.ctx.global_replication_state.lock().unwrap();
-                if state.status.mode != ReplicationMode::DrAutoSync {
+                if state.status.get_mode() != ReplicationMode::DrAutoSync {
                     return;
                 }
-                if state.status.get_dr_auto_sync().state == DrAutoSyncState::Async {
+                if state.status.get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
                     return;
                 }
                 drop(state);
