@@ -193,9 +193,9 @@ impl<'a, T: PrimInt> LEBytes<'a, T> {
             return Err(0);
         }
         let mut base = 0usize;
-
-        // Note that the count of ids is not greater than (2 >> 16). The number
-        // of binary search steps will not over 16 unless the data is corruted.
+        
+        // Note that the count of ids is not greater than u16::MAX. The number
+        // of binary search steps will not over 16 unless the data is corrupted.
         // Let's relex to 20.
         let mut steps = 20usize;
 
