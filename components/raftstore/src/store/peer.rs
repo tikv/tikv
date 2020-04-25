@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic, Arc};
+use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
@@ -250,6 +250,8 @@ pub struct Peer {
     /// Time of the last attempt to wake up inactive leader.
     pub bcast_wake_up_time: Option<UtilInstant>,
     pub replication_mode_version: u64,
+    pub dr_auto_sync_state: DrAutoSyncState,
+    pub replication_sync: bool,
 }
 
 impl Peer {
@@ -329,6 +331,8 @@ impl Peer {
             catch_up_logs: None,
             bcast_wake_up_time: None,
             replication_mode_version: 0,
+            dr_auto_sync_state: DrAutoSyncState::Async,
+            replication_sync: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -342,23 +346,53 @@ impl Peer {
     /// Sets commit group to the peer.
     pub fn init_commit_group(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
+        if !self.get_store().region().get_peers().is_empty() {
+            state.calculate_commit_group(self.get_store().region().get_peers());
+            self.raft_group
+                .raft
+                .assign_commit_groups(&state.group_buffer);
+        }
+        self.replication_sync = false;
         if state.status.get_mode() == ReplicationMode::Majority {
             self.raft_group.raft.enable_group_commit(false);
             self.replication_mode_version = 0;
+            self.dr_auto_sync_state = DrAutoSyncState::Async;
             return;
         }
-        self.raft_group.raft.enable_group_commit(true);
         self.replication_mode_version = state.status.get_dr_auto_sync().state_id;
-        if self.get_store().region().get_peers().is_empty() {
-            return;
+        let enable = state.status.get_dr_auto_sync().get_state() != DrAutoSyncState::Async;
+        self.raft_group.raft.enable_group_commit(enable);
+        self.dr_auto_sync_state = state.status.get_dr_auto_sync().get_state();
+    }
+
+    /// Updates replication mode.
+    pub fn switch_commit_group(&mut self, state: &Mutex<GlobalReplicationState>) {
+        self.replication_sync = false;
+        let mut guard = state.lock().unwrap();
+        let enable_group_commit = if guard.status.mode == ReplicationMode::Majority {
+            self.replication_mode_version = 0;
+            self.dr_auto_sync_state = DrAutoSyncState::Async;
+            false
+        } else {
+            self.dr_auto_sync_state = guard.status.get_dr_auto_sync().get_state();
+            self.replication_mode_version = guard.status.get_dr_auto_sync().state_id;
+            guard.status.get_dr_auto_sync().get_state() != DrAutoSyncState::Async
+        };
+        if enable_group_commit {
+            guard.calculate_commit_group(self.region().get_peers());
+            let ids = mem::replace(
+                &mut guard.group_buffer,
+                Vec::with_capacity(self.region().get_peers().len()),
+            );
+            drop(guard);
+            self.raft_group.raft.assign_commit_groups(&ids);
+        } else {
+            drop(guard);
         }
-        if state.status.get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
-            return;
-        }
-        state.calculate_commit_group(self.get_store().region().get_peers());
         self.raft_group
             .raft
-            .assign_commit_groups(&state.group_buffer);
+            .enable_group_commit(enable_group_commit);
+        info!("switch replication mode"; "version" => self.replication_mode_version, "region_id" => self.region_id, "peer_id" => self.peer.id);
     }
 
     /// Register self to apply_scheduler so that the peer is then usable.
@@ -555,8 +589,8 @@ impl Peer {
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
-            // Only recent active peer is considerred, so that an isolated follower
-            // won't cause a waste of leader's resource.
+            // Only recent active peer is considered, so that an isolated follower
+            // won't waste leader's resource.
             if *id == self.peer.get_id() || !pr.recent_active {
                 continue;
             }
@@ -572,7 +606,16 @@ impl Peer {
             return res;
         }
         // Unapplied entries can change the configuration of the group.
-        res.up_to_date = self.get_store().applied_index() == last_index;
+        if self.get_store().applied_index() < last_index {
+            return res;
+        }
+        if self.replication_mode_version > 0
+            && self.dr_auto_sync_state != DrAutoSyncState::Async
+            && !self.replication_sync
+        {
+            return res;
+        }
+        res.up_to_date = true;
         res
     }
 
@@ -2534,20 +2577,26 @@ impl Peer {
         }
         let mut status = RegionReplicationStatus::default();
         status.state_id = self.replication_mode_version;
-        let res = self.raft_group.raft.check_group_commit_consistent();
-        if Some(true) != res {
-            let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
-            if self.get_store().applied_index_term() >= self.term() {
-                for (id, p) in self.raft_group.raft.prs().voters() {
-                    buffer.push((*id, p.commit_group_id, p.matched));
-                }
-            };
-            info!("still not reach integrity over label"; "region_id" => self.region_id, "peer_id" => self.peer.id, "progress" => ?buffer);
-        }
-        let state = match res {
-            Some(true) => RegionReplicationState::IntegrityOverLabel,
-            Some(false) => RegionReplicationState::SimpleMajority,
-            None => RegionReplicationState::Unknown,
+        let state = if !self.replication_sync {
+            let res = self.raft_group.raft.check_group_commit_consistent();
+            if Some(true) != res {
+                let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
+                if self.get_store().applied_index_term() >= self.term() {
+                    for (id, p) in self.raft_group.raft.prs().voters() {
+                        buffer.push((*id, p.commit_group_id, p.matched));
+                    }
+                };
+                info!("still not reach integrity over label"; "region_id" => self.region_id, "peer_id" => self.peer.id, "progress" => ?buffer);
+            } else {
+                self.replication_sync = true;
+            }
+            match res {
+                Some(true) => RegionReplicationState::IntegrityOverLabel,
+                Some(false) => RegionReplicationState::SimpleMajority,
+                None => RegionReplicationState::Unknown,
+            }
+        } else {
+            RegionReplicationState::IntegrityOverLabel
         };
         status.set_state(state);
         Some(status)

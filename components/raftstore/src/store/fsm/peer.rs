@@ -314,7 +314,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::Noop => {}
+                PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
             }
+        }
+    }
+
+    fn on_update_replication_mode(&mut self) {
+        self.fsm
+            .peer
+            .switch_commit_group(&self.ctx.global_replication_state);
+        if self.fsm.peer.is_leader() {
+            self.reset_raft_tick(GroupState::Ordered);
+            self.register_pd_heartbeat_tick();
         }
     }
 
@@ -847,6 +858,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // to allow it to campaign quickly when abnormal situation is detected.
         if !self.fsm.peer.is_leader() {
             self.register_raft_base_tick();
+        } else {
+            self.register_pd_heartbeat_tick();
         }
     }
 
@@ -2845,6 +2858,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
         self.fsm.peer.heartbeat_pd(self.ctx);
+        if self.ctx.cfg.hibernate_regions
+            && self.fsm.peer.replication_mode_version > 0
+            && self.fsm.peer.dr_auto_sync_state == DrAutoSyncState::SyncRecover
+        {
+            self.register_pd_heartbeat_tick();
+        }
     }
 
     fn register_pd_heartbeat_tick(&mut self) {
