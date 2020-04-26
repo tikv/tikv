@@ -1,20 +1,12 @@
 const BAR_LEN: usize = 70;
 
-fn time_nanos(t: std::time::SystemTime) -> u128 {
-    #[allow(clippy::match_wild_err_arm)]
-    match t.duration_since(std::time::SystemTime::UNIX_EPOCH) {
-        Ok(n) => n.as_nanos(),
-        Err(_) => panic!(),
-    }
-}
-
 pub fn draw_stdout(spans: Vec<crate::Span>) {
     let mut children = std::collections::HashMap::new();
     let mut spans_map = std::collections::HashMap::new();
     let mut root = None;
     for span in spans {
-        let start = time_nanos(span.start_time);
-        let end = time_nanos(span.end_time);
+        let start = span.elapsed_start.as_nanos();
+        let end = span.elapsed_end.as_nanos();
         assert_eq!(
             spans_map.insert(span.id, (span.tag, start, end - start)),
             None,
@@ -37,6 +29,7 @@ pub fn draw_stdout(spans: Vec<crate::Span>) {
     let factor = BAR_LEN as f64 / spans_map.get(&root).unwrap().2 as f64;
 
     draw_rec(root, pivot, factor, &children, &spans_map);
+    println!();
 }
 
 fn draw_rec(
@@ -53,7 +46,7 @@ fn draw_rec(
     print!("{: <1$}", "", leading_space_len);
 
     // draw bar
-    let bar_len = (duration as f64 * factor) as usize;
+    let bar_len = std::cmp::max((duration as f64 * factor) as usize, 1);
     print!("{:=<1$}", "", bar_len);
 
     // draw tailing space

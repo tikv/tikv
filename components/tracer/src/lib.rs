@@ -14,8 +14,8 @@ pub struct Span {
     pub tag: &'static str,
     pub id: ID,
     pub parent: Option<ID>,
-    pub start_time: std::time::SystemTime,
-    pub end_time: std::time::SystemTime,
+    pub elapsed_start: std::time::Duration,
+    pub elapsed_end: std::time::Duration,
 }
 
 pub struct SpanInner {
@@ -23,7 +23,8 @@ pub struct SpanInner {
     sender: crossbeam::channel::Sender<Span>,
     id: Option<ID>,
     parent: Option<ID>,
-    start_time: std::time::SystemTime,
+    root_start_time: std::time::Instant,
+    elapsed_start: std::time::Duration,
     ref_count: std::sync::atomic::AtomicUsize,
 }
 
@@ -33,8 +34,8 @@ impl Drop for SpanInner {
             tag: self.tag,
             id: self.id.unwrap(),
             parent: self.parent,
-            start_time: self.start_time,
-            end_time: std::time::SystemTime::now(),
+            elapsed_start: self.elapsed_start,
+            elapsed_end: self.root_start_time.elapsed(),
         });
 
         if let Some(parent_id) = self.parent {
@@ -76,7 +77,8 @@ pub fn new_span_root(tag: &'static str, sender: crossbeam::channel::Sender<Span>
             sender,
             id: None,
             parent: None,
-            start_time: std::time::SystemTime::now(),
+            root_start_time: std::time::Instant::now(),
+            elapsed_start: std::time::Duration::new(0, 0),
             ref_count: std::sync::atomic::AtomicUsize::new(1),
         })
         .expect("full");
@@ -106,7 +108,8 @@ pub fn new_span(tag: &'static str) -> OSpanGuard {
                 sender,
                 id: None,
                 parent: Some(parent_id),
-                start_time: std::time::SystemTime::now(),
+                root_start_time: span.root_start_time,
+                elapsed_start: span.root_start_time.elapsed(),
                 ref_count: std::sync::atomic::AtomicUsize::new(1),
             })
             .expect("full");
