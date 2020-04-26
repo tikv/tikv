@@ -16,18 +16,10 @@ pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as Date
 pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
 
-<<<<<<< HEAD:src/coprocessor/codec/data_type/mod.rs
 use cop_datatype::EvalType;
 
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
-=======
-use crate::EvalType;
-
-use crate::codec::convert::ConvertTo;
-use crate::expr::EvalContext;
-use tidb_query_common::error::Result;
->>>>>>> 4175d68... tidb_query: fix converting bytes to bool (#7486):components/tidb_query_datatype/src/codec/data_type/mod.rs
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
 /// Rust's `bool` type.
@@ -53,12 +45,8 @@ impl AsMySQLBool for Real {
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-<<<<<<< HEAD:src/coprocessor/codec/data_type/mod.rs
         Ok(!self.is_empty()
-            && crate::coprocessor::codec::convert::bytes_to_int(context, self)? != 0)
-=======
-        Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
->>>>>>> 4175d68... tidb_query: fix converting bytes to bool (#7486):components/tidb_query_datatype/src/codec/data_type/mod.rs
+            && crate::coprocessor::codec::convert::bytes_to_f64(context, self)? != 0f64)
     }
 }
 
