@@ -1980,12 +1980,11 @@ where
                 self.tag, source_region, e
             ),
         };
-        match state.get_state() {
-            PeerState::Normal | PeerState::Merging => {}
-            _ => panic!(
+        if state.get_state() != PeerState::Merging {
+            panic!(
                 "{} unexpected state of merging region {:?}",
                 self.tag, state
-            ),
+            );
         }
         let exist_region = state.get_region().to_owned();
         if *source_region != exist_region {

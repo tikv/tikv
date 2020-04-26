@@ -1098,10 +1098,9 @@ fn test_merge_isloated_stale_learner() {
 fn test_node_merge_write_data_to_source_region_after_merging() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
-    // for snapshot after merging
+    // For snapshot after merging
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    //cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.apply_max_batch_size = 1;
     cluster.cfg.raft_store.apply_pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
